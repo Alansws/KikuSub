@@ -58,7 +58,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# KoeSub Studio Runtime Models & Outputs (Local Only)
+# KikuSub Runtime Models & Outputs (Local Only)
 models/
 outputs/
 *.part_cancelled.srt

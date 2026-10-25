@@ -1,4 +1,10 @@
-# KoeSub Studio
+<p align="center">
+  <img src="docs/logo.png" width="112" alt="KikuSub logo">
+</p>
+
+<h1 align="center">KikuSub</h1>
+
+<p align="center">听清每一句，对准每一帧。</p>
 
 本地运行的日语影视字幕转写与时间轴核对工具，界面基于 Gradio。
 
@@ -6,7 +12,7 @@
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-  <a href="https://github.com/Alansws/KoeSub-Studio/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Alansws/KoeSub-Studio/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/Alansws/KikuSub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Alansws/KikuSub/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 | 3.11">
   <img src="https://img.shields.io/badge/Gradio-4.25%2B-FF7C00?style=flat-square" alt="Gradio 4.25+">
   <img src="https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch 2.1+">
@@ -95,8 +101,8 @@
 Linux / macOS：
 
 ```bash
-git clone https://github.com/Alansws/KoeSub-Studio.git
-cd KoeSub-Studio
+git clone https://github.com/Alansws/KikuSub.git
+cd KikuSub
 chmod +x install.sh
 ./install.sh
 source .venv/bin/activate && python app.py
@@ -105,8 +111,8 @@ source .venv/bin/activate && python app.py
 Windows（脚本会建好环境并直接启动）：
 
 ```cmd
-git clone https://github.com/Alansws/KoeSub-Studio.git
-cd KoeSub-Studio
+git clone https://github.com/Alansws/KikuSub.git
+cd KikuSub
 install.bat
 ```
 
@@ -116,8 +122,8 @@ install.bat
 
 ```bash
 # 1. 虚拟环境
-conda create -n koesub python=3.10 -y
-conda activate koesub
+conda create -n kikusub python=3.10 -y
+conda activate kikusub
 
 # 2. PyTorch（按平台选择其一）
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121   # NVIDIA CUDA 12.1
@@ -268,7 +274,7 @@ export QWEN3_ASR_MODEL=/data/models/qwen3-asr-ja-anime
 ## 项目结构
 
 ```text
-KoeSub-Studio/
+KikuSub/
 ├── app.py                    # Gradio 界面、任务编排、核对台逻辑与前端波形脚本
 ├── transcribe.py             # 数据结构与格式转换、FFmpeg 抽取、VAD 切分、Anime Whisper 流水线
 ├── qwen_ctc.py               # Qwen3-ASR 推理、CTC 对齐头、日语断句动态规划、字幕缝合
@@ -281,7 +287,7 @@ KoeSub-Studio/
 ├── README.md / README_EN.md
 ├── CONTRIBUTING.md
 ├── LICENSE
-├── docs/                     # README 截图
+├── docs/                     # README 截图与 logo
 ├── models/                   # 模型权重，不入库
 └── outputs/                  # 字幕与代理产物，不入库
 ```

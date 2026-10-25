@@ -1,4 +1,4 @@
-# Contributing to KoeSub Studio
+# Contributing to KikuSub
 
 感谢你愿意花时间改进这个项目。Issue 和 Pull Request 都欢迎，中英文均可。
 
@@ -18,8 +18,8 @@
 ## 开发环境
 
 ```bash
-git clone https://github.com/Alansws/KoeSub-Studio.git
-cd KoeSub-Studio
+git clone https://github.com/Alansws/KikuSub.git
+cd KikuSub
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python app.py

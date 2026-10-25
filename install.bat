@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ==========================================================
-echo 🎬 KoeSub Studio (声影) Windows 极速安装向导
+echo 🎬 KikuSub (听幕) Windows 极速安装向导
 echo ==========================================================
 
 where ffmpeg >nul 2>nul
@@ -22,6 +22,6 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 echo.
-echo [*] 环境就绪！正在启动 KoeSub Studio...
+echo [*] 环境就绪！正在启动 KikuSub...
 python app.py
 pause

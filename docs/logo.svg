@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="title desc">
+  <title id="title">KikuSub</title>
+  <desc id="desc">A speech waveform standing on a vermilion subtitle line.</desc>
+  <rect width="512" height="512" rx="116" fill="#161A22"/>
+  <g fill="#F4EFE6">
+    <rect x="108" y="263" width="40" height="96" rx="20"/>
+    <rect x="172" y="191" width="40" height="168" rx="20"/>
+    <rect x="236" y="127" width="40" height="232" rx="20"/>
+    <rect x="300" y="207" width="40" height="152" rx="20"/>
+    <rect x="364" y="287" width="40" height="72" rx="20"/>
+  </g>
+  <rect x="96" y="367" width="320" height="18" rx="9" fill="#E2543C"/>
+</svg>

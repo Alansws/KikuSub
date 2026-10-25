@@ -1,4 +1,10 @@
-# KoeSub Studio
+<p align="center">
+  <img src="docs/logo.png" width="112" alt="KikuSub logo">
+</p>
+
+<h1 align="center">KikuSub</h1>
+
+<p align="center">Hear every line. Align every frame.</p>
 
 A local, browser-based workbench for transcribing Japanese video and audio into subtitles, then fixing the timing by hand.
 
@@ -6,7 +12,7 @@ You upload a file, the app segments speech with Silero VAD, transcribes each seg
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-  <a href="https://github.com/Alansws/KoeSub-Studio/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Alansws/KoeSub-Studio/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/Alansws/KikuSub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Alansws/KikuSub/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 | 3.11">
   <img src="https://img.shields.io/badge/Gradio-4.25%2B-FF7C00?style=flat-square" alt="Gradio 4.25+">
   <img src="https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch 2.1+">
@@ -95,8 +101,8 @@ media file
 Linux / macOS:
 
 ```bash
-git clone https://github.com/Alansws/KoeSub-Studio.git
-cd KoeSub-Studio
+git clone https://github.com/Alansws/KikuSub.git
+cd KikuSub
 chmod +x install.sh
 ./install.sh
 source .venv/bin/activate && python app.py
@@ -105,8 +111,8 @@ source .venv/bin/activate && python app.py
 Windows (the script creates the environment and launches the app):
 
 ```cmd
-git clone https://github.com/Alansws/KoeSub-Studio.git
-cd KoeSub-Studio
+git clone https://github.com/Alansws/KikuSub.git
+cd KikuSub
 install.bat
 ```
 
@@ -116,8 +122,8 @@ Both scripts check for `ffmpeg`, create `.venv` and install `requirements.txt`. 
 
 ```bash
 # 1. Environment
-conda create -n koesub python=3.10 -y
-conda activate koesub
+conda create -n kikusub python=3.10 -y
+conda activate kikusub
 
 # 2. PyTorch (pick one)
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121   # NVIDIA CUDA 12.1
@@ -270,7 +276,7 @@ Files go to `outputs/` by default, or next to the media when "保存至媒体同
 ## Project layout
 
 ```text
-KoeSub-Studio/
+KikuSub/
 ├── app.py                    # Gradio UI, job orchestration, review workspace, waveform front end
 ├── transcribe.py             # Data structures, format conversion, FFmpeg extraction, VAD, Anime Whisper
 ├── qwen_ctc.py               # Qwen3-ASR inference, CTC head, Japanese cue splitting, cue healing
@@ -283,7 +289,7 @@ KoeSub-Studio/
 ├── README.md / README_EN.md
 ├── CONTRIBUTING.md
 ├── LICENSE
-├── docs/                     # README screenshots
+├── docs/                     # README screenshots and logo
 ├── models/                   # Weights, not committed
 └── outputs/                  # Subtitles and proxies, not committed
 ```
