@@ -72,3 +72,6 @@ outputs/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Tool caches
+.ruff_cache/

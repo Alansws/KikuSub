@@ -225,6 +225,7 @@ Frame stepping always uses 24 fps as a fixed step size, regardless of the source
 - Trackpad two-finger horizontal: pan; vertical or pinch: continuous zoom
 - Zoom slider 1×–50×; "100% 全景" fits the whole file, "聚焦" centres and zooms on the playhead
 - Dragging a selection reveals a toolbar: preview, transcribe into the timeline, or copy the times to the form
+- While you drag the player progress bar only the time readout and playhead update; the actual seek (`fastSeek`) fires on release, so scrubbing long files stays smooth
 
 ## Parameters and presets
 
