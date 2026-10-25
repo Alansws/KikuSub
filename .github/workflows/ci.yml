@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Lint & validate (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 只装 ruff。torch / transformers 体积过大，而这里的检查不需要它们：
+      # presets.py 仅依赖标准库，compileall 只做语法编译。
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Compile sources
+        run: python -m compileall -q app.py transcribe.py qwen_ctc.py presets.py
+
+      - name: Validate presets.json
+        run: |
+          python - <<'PY'
+          from presets import PresetStore
+
+          store = PresetStore()
+          assert not store.load_error, store.load_error
+          assert store.names(), "presets.json has no usable presets"
+          for name, engine in store.list():
+              print(f"{name}  [{engine or 'generic'}]")
+          PY

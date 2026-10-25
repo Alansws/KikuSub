@@ -1,0 +1,12 @@
+# 日语影片字幕转录工作台 依赖清单
+torch>=2.1.0
+torchaudio>=2.1.0
+# Qwen3-ASR 原生支持（AutoModelForMultimodalLM / apply_transcription_request）需要 5.13+
+transformers>=5.13.0
+huggingface_hub>=0.23.0
+silero-vad>=5.1.0
+soundfile>=0.12.1
+numpy>=1.24.0
+gradio>=4.25.0
+accelerate>=0.28.0
+safetensors>=0.4.0

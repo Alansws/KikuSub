@@ -1,0 +1,14 @@
+# Ruff 配置
+#
+# 只启用语法错误、未定义名称、未使用导入这类"代码会真的出问题"的规则，
+# 不启用风格类规则（SIM / BLE / PLW 等），避免 ruff 默认规则集随版本变化
+# 让 CI 无缘无故变红。风格问题在本地按喜好处理即可。
+
+target-version = "py310"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+# E402：本项目需要在 import torch / gradio 之前设置 HF_ENDPOINT、MPS fallback、
+# 代理白名单等环境变量，模块级 import 不在文件顶部是刻意为之。
+ignore = ["E402"]

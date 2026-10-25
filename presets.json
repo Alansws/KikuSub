@@ -1,0 +1,105 @@
+{
+  "版本": 1,
+  "预设": {
+    "Qwen耳语转录识别": {
+      "引擎": "qwen",
+      "参数": {
+        "qwen.enable_loudnorm": false,
+        "qwen.vad_threshold": 0.18,
+        "qwen.vad_speech_pad_ms": 150,
+        "qwen.merge_gap_s": 0.3,
+        "qwen.max_cue_dur": 4.3,
+        "qwen.max_cue_chars": 22,
+        "qwen.min_pause_s": 0.15,
+        "qwen.max_segment_s": 15,
+        "qwen.cue_pad_s": 0.08,
+        "qwen.use_alignment": true
+      }
+    },
+    "Whisper-MLX 对标参数预设": {
+      "引擎": "whisper",
+      "参数": {
+        "whisper.no_repeat_ngram_size": 5,
+        "whisper.repetition_penalty": 1.1,
+        "whisper.vad_threshold": 0.3,
+        "whisper.vad_min_speech_ms": 120,
+        "whisper.vad_min_silence_ms": 250,
+        "whisper.vad_speech_pad_ms": 200,
+        "whisper.vad_merge_gap_s": 0.8,
+        "whisper.vad_max_segment_s": 20,
+        "whisper.vad_min_speech_s": 0.08,
+        "whisper.cue_pad_s": 0.05,
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": true
+      }
+    },
+    "常用推荐：高灵敏切分": {
+      "引擎": "whisper",
+      "参数": {
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": false,
+        "whisper.vad_threshold": 0.2,
+        "whisper.vad_min_speech_ms": 120,
+        "whisper.vad_min_silence_ms": 150,
+        "whisper.vad_speech_pad_ms": 200,
+        "whisper.vad_merge_gap_s": 0.3,
+        "whisper.vad_max_segment_s": 12.0,
+        "whisper.vad_min_speech_s": 0.08,
+        "whisper.cue_pad_s": 0.02,
+        "whisper.no_repeat_ngram_size": 5,
+        "whisper.repetition_penalty": 1.15
+      }
+    },
+    "电影推荐：Qwen3 逐字对齐": {
+      "引擎": "qwen",
+      "参数": {
+        "qwen.vad_threshold": 0.28,
+        "qwen.vad_min_speech_ms": 100,
+        "qwen.vad_min_silence_ms": 200,
+        "qwen.vad_speech_pad_ms": 150,
+        "qwen.merge_gap_s": 0.5,
+        "qwen.max_cue_dur": 4.3,
+        "qwen.max_cue_chars": 21,
+        "qwen.min_pause_s": 0.12,
+        "qwen.max_segment_s": 16,
+        "qwen.cue_pad_s": 0.12,
+        "qwen.use_alignment": true,
+        "qwen.enable_loudnorm": true
+      }
+    },
+    "电影推荐：高召回防漏音": {
+      "引擎": "whisper",
+      "参数": {
+        "whisper.no_repeat_ngram_size": 4,
+        "whisper.repetition_penalty": 1.15,
+        "whisper.vad_threshold": 0.28,
+        "whisper.vad_min_speech_ms": 100,
+        "whisper.vad_min_silence_ms": 200,
+        "whisper.vad_speech_pad_ms": 150,
+        "whisper.vad_merge_gap_s": 0.5,
+        "whisper.vad_max_segment_s": 15,
+        "whisper.vad_min_speech_s": 0.08,
+        "whisper.cue_pad_s": 0.05,
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": true
+      }
+    },
+    "耳语whisper识别【极高灵敏】": {
+      "引擎": "whisper",
+      "参数": {
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": false,
+        "whisper.vad_threshold": 0.18,
+        "whisper.vad_speech_pad_ms": 300,
+        "whisper.vad_min_silence_ms": 150,
+        "whisper.vad_min_speech_ms": 80,
+        "whisper.vad_merge_gap_s": 0.3,
+        "whisper.vad_max_segment_s": 12,
+        "whisper.cue_pad_s": 0.02,
+        "whisper.no_repeat_ngram_size": 5,
+        "whisper.repetition_penalty": 1.15,
+        "whisper.vad_min_speech_s": 0.08
+      }
+    }
+  }
+}
