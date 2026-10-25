@@ -641,7 +641,7 @@ def transcribe_media(
             if not cues:
                 if is_interrupted:
                     raise RuntimeError("转录已取消，尚未生成有效字幕。")
-                raise RuntimeError("未检测到有效语音。请尝试调低 VAD 阈值（如 0.20）或开启「电影响度归一化」后再试。")
+                raise RuntimeError("未检测到有效语音。请尝试调低 VAD 阈值（如 0.20）或开启「动态响度归一化」后再试。")
 
             text, ext = render_subtitles(cues, output_format)
             tag = output_suffix(engine_name)
@@ -3099,7 +3099,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                     )
                     enable_loudnorm = param(
                         "whisper.enable_loudnorm",
-                        "电影响度归一化",
+                        "动态响度归一化",
                         gr.Checkbox(value=False, label="启用动态响度归一化 (弱人声增强)"),
                         "whisper",
                         "bool",
@@ -3191,8 +3191,8 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                 with gr.Row():
                     qwen_loudnorm = param(
                         "qwen.enable_loudnorm",
-                        "电影响度归一化",
-                        gr.Checkbox(value=True, label="启用电影响度归一化 (弱人声强化)"),
+                        "动态响度归一化",
+                        gr.Checkbox(value=True, label="启用动态响度归一化 (弱人声强化)"),
                         "qwen",
                         "bool",
                         "enable_loudnorm",

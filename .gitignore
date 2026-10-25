@@ -72,6 +72,3 @@ outputs/
 *.swo
 .DS_Store
 Thumbs.db
-
-# 本地工作区数据（AI 助手笔记等），不入库
-.workbuddy-ai/
