@@ -270,7 +270,9 @@ Presets live in `presets.json` at the repository root (`版本: 1`, split into `
 | `{name}.autosave_draft.srt` | Written after every review edit |
 | `{name}.progress.json` | Last reviewed line, timestamps and text |
 | `{name}.reviewed.srt` | Exported from the review workspace |
+| `{name}.missed.json` | Suspected missed-speech spans (written only when there are any) |
 | `outputs/web_proxies/{name}_{size}_preview.mp4` | 480p preview proxy, generated on demand |
+| `outputs/.cache/audio/*.wav` | 16k decode cache shared by transcription and the waveform |
 
 Files go to `outputs/` by default, or next to the media when "保存至媒体同级目录" is checked.
 
@@ -281,6 +283,7 @@ KikuSub/
 ├── app.py                    # Gradio UI, job orchestration, review workspace, waveform front end
 ├── transcribe.py             # Data structures, format conversion, FFmpeg extraction, VAD, Anime Whisper
 ├── qwen_ctc.py               # Qwen3-ASR inference, CTC head, Japanese cue splitting, cue healing
+├── audio_cache.py            # 16k wav decode cache shared by transcription and the waveform
 ├── presets.py                # presets.json validation, backward-compatible loading, atomic writes
 ├── presets.json              # Built-in presets
 ├── requirements.txt
@@ -311,6 +314,10 @@ Raise the no-repeat n-gram size or the repetition penalty, and lower the maximum
 
 **Whole lines are missed, or quiet speech is skipped**
 Lower the VAD threshold below 0.20, increase speech padding, and enable loudness normalisation. Anything still missing can be transcribed directly from a waveform selection.
+Segments where VAD hears speech but the model returns nothing get one automatic gain-boosted retry; if that still fails the span is listed in `{name}.missed.json`, in the task report under 【疑似漏句区间】, and in the review workspace status line — just select that time range and patch it.
+
+**`outputs/.cache/audio/` takes up disk space**
+That is the 16k decode cache (~115 MB per hour of media), capped at 4 GB with LRU eviction. Set `KIKUSUB_AUDIO_CACHE=0` to disable it entirely — at the cost of re-decoding on every transcription and every review-workspace open.
 
 **Video is black or stutters**
 Browsers handle MKV containers and some HEVC encodes poorly. Use "压制 M4 硬件加速监看代理 (480p)": VideoToolbox on macOS, libx264 elsewhere.

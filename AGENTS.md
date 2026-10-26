@@ -26,6 +26,7 @@ python app.py
 | `app.py` | Gradio 页面、参数控件注册、预设交互、任务编排、文件写出和报告生成。 |
 | `transcribe.py` | 共用字幕数据结构/格式、时间解析、FFmpeg 音频抽取、Anime Whisper、Silero VAD 和启发式分句。 |
 | `qwen_ctc.py` | Qwen3-ASR 模型推理、CTC 对齐头、日语断句动态规划、字幕劈词修复。 |
+| `audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台波形共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。 |
 | `presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
 | `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
@@ -34,6 +35,7 @@ python app.py
 
 ## 3. 补漏核对工作台设计原则
 
+- **监看画面与转录源解耦**：`review_payload` 的 `src` 有四种来源——自动跟随导入的媒体、手动导入的任意本地片源（`📂 导入监看画面`）、`outputs/web_proxies` 里的历史 480p 代理（`📦` 下拉，零拷贝）、以及「已关闭」空态。手动片源路径记录在 `outputs/monitor_last.json`，供下次打开自动恢复；`prepare_review_workspace`（即 `media.change`）会清空该记忆，重新回到自动模式。`src` 为空时前端必须销毁 `window.__reviewerInstance` 与 keydown 监听，避免悬空引用。
 - 底部核对区由 `review_cues_state` 管理，和当前转写结果 `cues_state` 分离。导入 SRT 或“将本次转写设为基线”才会覆盖核对基线；“添加本次局部转写”追加去重后的条目。
 - 视频播放器拖动进度条、播放时，底部音频轨道必须有高亮时间播放线（时间游标）实时同步跟随。
 - 触控板缩放（捏合）与双指横移操作需精准平滑支持，允许将局部波形横向大幅放大（如放大至数秒区间），方便精细框选。

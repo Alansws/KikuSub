@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 import threading
 import unicodedata
 import warnings
@@ -49,11 +48,14 @@ from transcribe import (
     MODELS_DIR,
     SAMPLE_RATE,
     SubtitleCue,
+    _is_blank,
+    _retry_gain,
+    _retry_suspicious,
     detect_device,
-    extract_audio_16k,
-    load_wav_mono,
+    load_audio_for_transcription,
     merge_vad_segments,
     split_text_into_cues,
+    vad_neg_threshold,
 )
 
 REPO_ID = "jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf"
@@ -493,6 +495,8 @@ class QwenCtcEngine:
         self.device = detect_device()
         self.config = config or QwenCtcConfig()
         self.last_interrupted = False
+        self.last_missed_spans: list[dict] = []
+        self.last_segment_stats: dict = {}
         self._model = None
         self._processor = None
         self._head = None
@@ -730,6 +734,8 @@ class QwenCtcEngine:
     ) -> list[SubtitleCue]:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
+        self.last_missed_spans = []
+        self.last_segment_stats = {}
         cfg = config or self.config
         if progress_cb:
             progress_cb(0.06, "正在使用动态 VAD 切分语音段落…")
@@ -743,6 +749,7 @@ class QwenCtcEngine:
             min_speech_duration_ms=int(cfg.vad_min_speech_ms),
             min_silence_duration_ms=int(cfg.vad_min_silence_ms),
             speech_pad_ms=speech_pad_ms,
+            neg_threshold=vad_neg_threshold(cfg.vad_threshold),
         )
         segments = merge_vad_segments(
             stamps,
@@ -750,6 +757,8 @@ class QwenCtcEngine:
             merge_gap_s=cfg.merge_gap_s,
             min_speech_s=cfg.min_speech_s,
             speech_pad_s=speech_pad_ms / 1000.0,
+            audio=audio,
+            snap_stats=self.last_segment_stats,
         )
         if not segments:
             segments = [(0, len(audio))]
@@ -757,6 +766,7 @@ class QwenCtcEngine:
         cues: list[SubtitleCue] = []
         aligned = 0
         total = len(segments)
+        prev_text = ""
         stage = "转写并对齐" if use_alignment else "转写"
         for i, (start, end) in enumerate(segments, start=1):
             if cancel_event and cancel_event.is_set():
@@ -771,9 +781,32 @@ class QwenCtcEngine:
             if chunk.size == 0:
                 continue
             offset = (start / SAMPLE_RATE) + time_offset
+            seg_dur_s = (end - start) / SAMPLE_RATE
+
             text = self._transcribe(chunk, cfg)
-            if not text:
+            reason = ""
+            if _is_blank(text):
+                if cancel_event and cancel_event.is_set():
+                    self.last_interrupted = True
+                    if progress_cb:
+                        progress_cb(0.99, f"🛑 用户已中途取消，正在保存前 {len(cues)} 条字幕…")
+                    break
+                text = self._transcribe(_retry_gain(chunk), cfg)
+                if not _is_blank(text) and _retry_suspicious(text, seg_dur_s, prev_text):
+                    text, reason = "", "retry-suspicious"
+                elif _is_blank(text):
+                    reason = "empty-after-retry"
+
+            if _is_blank(text):
+                self.last_missed_spans.append({
+                    "start": round(offset, 3),
+                    "end": round(offset + seg_dur_s, 3),
+                    "dur": round(seg_dur_s, 2),
+                    "reason": reason or "empty-after-retry",
+                })
                 continue
+            prev_text = text
+
             if not use_alignment:
                 cues.extend(
                     split_text_into_cues(
@@ -812,19 +845,16 @@ class QwenCtcEngine:
     ) -> list[SubtitleCue]:
         cfg = config or self.config
         media_path = Path(media_path)
-        with tempfile.TemporaryDirectory(prefix="qwen3-asr-") as tmp:
-            wav_path = Path(tmp) / "audio_16k.wav"
-            if progress_cb:
-                slice_desc = f"（片段：{start_time_s or 0.0:.1f}s ~ {end_time_s:.1f}s）" if end_time_s else ""
-                progress_cb(0.02, f"正在提取 16kHz 音频并进行响度优化{slice_desc}…")
-            extract_audio_16k(
-                media_path,
-                wav_path,
-                enable_loudnorm=cfg.enable_loudnorm,
-                start_time_s=start_time_s,
-                end_time_s=end_time_s,
-            )
-            audio = load_wav_mono(wav_path)
+        if progress_cb:
+            slice_desc = f"（片段：{start_time_s or 0.0:.1f}s ~ {end_time_s:.1f}s）" if end_time_s else ""
+            progress_cb(0.02, f"正在提取 16kHz 音频并进行响度优化{slice_desc}…")
+        audio = load_audio_for_transcription(
+            media_path,
+            enable_loudnorm=cfg.enable_loudnorm,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+            tmp_prefix="qwen3-asr-",
+        )
         return self.transcribe_array(
             audio,
             progress_cb=progress_cb,

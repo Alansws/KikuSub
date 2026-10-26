@@ -44,6 +44,8 @@ import soundfile as sf
 import torch
 from silero_vad import get_speech_timestamps, load_silero_vad
 
+import audio_cache
+
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 SAMPLE_RATE = 16000
@@ -94,6 +96,31 @@ def download_anime_whisper(dest: Path, progress_cb=None) -> Path:
 MAX_SEGMENT_S = 20.0
 MERGE_GAP_S = 0.5
 MIN_SPEECH_S = 0.08
+
+# 强制切分点能量谷吸附：搜索窗宽度；0 = 关闭（恢复旧行为）
+CUT_SNAP_S = 0.40
+# 能量分析帧长（毫秒）
+CUT_SNAP_FRAME_MS = 20
+# 相邻切点最小间隔，防止切点倒退/交叉
+CUT_MIN_CHUNK_S = 0.50
+
+# 空结果段增益重试：目标峰值与增益上下限（≈ -14dB ~ +18dB）
+RETRY_TARGET_PEAK = 0.85
+RETRY_GAIN_RANGE = (0.2, 8.0)
+# 可信度安全阀：日语正常语速 5–7 字/秒，15 已是极限
+RETRY_MAX_CHARS_PER_S = 15.0
+# 与上一段完全相同且长度超过该值即视为复读
+RETRY_REPEAT_MIN_CHARS = 4
+
+# 空文本判定：模型遇到纯静音/配乐时很少返回空串，而是返回「…」「…。」「♪」这类占位符。
+# 若只认 ""，这些段会被当成"有内容"写进字幕，却又被清理环节当空条目删掉，
+# 结果是字幕出现空档、漏句清单却是空的。这里统一两边的口径。
+BLANK_TEXT_RE = re.compile(r"^[\s\u3000…‥⋯。、，．.,!！?？\-ー~〜♪♬「」『』（）()\[\]【】]*$")
+
+# Silero VAD 的退出阈值默认取 threshold - 0.15。阈值低于 0.15 时该值为负，
+# 而语音概率恒 >= 0，于是语音段一旦开始就永不结束——整片塌成一段。
+# 给退出阈值设下限，让低阈值真正表现为"更灵敏"而不是"退化成整片一段"。
+VAD_NEG_THRESHOLD_FLOOR = 0.02
 
 VAD_THRESHOLD = 0.28
 VAD_MIN_SPEECH_MS = 100
@@ -322,13 +349,14 @@ def cues_to_txt(cues: list[SubtitleCue]) -> str:
     return "\n".join(cue.text.strip() for cue in cues if cue.text.strip()) + "\n"
 
 
-def extract_audio_16k(
+def decode_wav_16k(
     input_path: str | Path,
     output_wav: str | Path,
     enable_loudnorm: bool = True,
     start_time_s: float | None = None,
     end_time_s: float | None = None,
 ) -> None:
+    """真正调用 ffmpeg 解码出 16k mono wav（缓存层与降级路径共用）。"""
     cmd = ["ffmpeg", "-y"]
 
     if start_time_s is not None and start_time_s > 0:
@@ -381,6 +409,64 @@ def extract_audio_16k(
             raise RuntimeError(f"ffmpeg 提取音频失败:\n{fallback_proc.stderr[-2000:]}")
 
 
+def extract_audio_16k(
+    input_path: str | Path,
+    output_wav: str | Path | None = None,
+    enable_loudnorm: bool = True,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
+) -> Path:
+    """取得 16k mono wav 路径：优先复用缓存，关闭缓存或缓存不可用时现场解码。"""
+    if audio_cache.enabled():
+        try:
+            return audio_cache.ensure_wav(
+                input_path,
+                loudnorm=enable_loudnorm,
+                start=start_time_s,
+                end=end_time_s,
+                extractor=decode_wav_16k,
+            )
+        except Exception as exc:
+            if output_wav is None:
+                raise
+            logging.warning("音频缓存不可用，回退为现场解码：%s", exc)
+
+    if output_wav is None:
+        raise ValueError("未启用音频缓存时必须提供 output_wav 路径")
+    decode_wav_16k(input_path, output_wav, enable_loudnorm, start_time_s, end_time_s)
+    return Path(output_wav)
+
+
+def load_audio_for_transcription(
+    media_path: str | Path,
+    *,
+    enable_loudnorm: bool = True,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
+    tmp_prefix: str = "kikusub-",
+) -> np.ndarray:
+    """取送模用的 16k 单声道数组：缓存开启时直接读缓存，关闭时走临时目录。"""
+    if audio_cache.enabled():
+        wav_path = extract_audio_16k(
+            media_path,
+            None,
+            enable_loudnorm=enable_loudnorm,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+        )
+        return load_wav_mono(wav_path)
+
+    with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmp:
+        wav_path = extract_audio_16k(
+            media_path,
+            Path(tmp) / "audio_16k.wav",
+            enable_loudnorm=enable_loudnorm,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+        )
+        return load_wav_mono(wav_path)
+
+
 def load_wav_mono(path: str | Path) -> np.ndarray:
     audio, sr = sf.read(str(path), always_2d=False)
     if audio.ndim > 1:
@@ -399,6 +485,58 @@ def load_wav_mono(path: str | Path) -> np.ndarray:
     return audio
 
 
+def _energy_valley_cut(audio: np.ndarray, lo: int, hi: int, frame: int) -> int:
+    """在 [lo, hi) 内寻找能量谷，返回吸附后的切点样本索引。
+
+    只向前找、不向后推：窗口过窄、或窗口内能量起伏不足 6dB（连续说话无显著谷）时
+    直接返回 hi，即完全退化为原来的机械切点。
+    """
+    orig_hi = hi
+    lo = max(0, int(lo))
+    hi = min(int(hi), int(audio.size))
+    if frame <= 0 or hi - lo < 3 * frame:
+        return orig_hi
+
+    n_frames = (hi - lo) // frame
+    if n_frames < 3:
+        return orig_hi
+
+    window = np.asarray(audio[lo : lo + n_frames * frame], dtype=np.float32)
+    if window.size < 3 * frame:
+        return orig_hi
+
+    rms = np.sqrt(np.mean(window.reshape(n_frames, frame) ** 2, axis=1))
+    peak = float(rms.max())
+    if peak <= 1e-9:
+        return orig_hi
+    if peak / max(float(rms.min()), 1e-6) < 2.0:
+        return orig_hi
+
+    valley = int(np.argmin(rms))
+    offset = valley * frame
+    local = np.abs(window[offset : offset + frame])
+    if local.size == 0:
+        return orig_hi
+    return lo + offset + int(np.argmin(local))
+
+
+def _cut_keeps_segment_count(end: int, planned: int, snapped: int, max_samples: int) -> bool:
+    """吸附把切点提前后，剩余音频所需的分段数是否保持不变。
+
+    吸附只会让切点更早，若剩余长度刚好卡在 max_samples 的整数倍边界上，
+    提前哪怕 10ms 都会凭空多切出一段（末尾剩一小截）。这里用整数上取整精确判定。
+    """
+    remain = end - planned
+    if remain <= 0:
+        return False
+    shift = planned - snapped
+    if shift <= 0:
+        return True
+    before = (remain + max_samples - 1) // max_samples
+    after = (remain + shift + max_samples - 1) // max_samples
+    return before == after
+
+
 def merge_vad_segments(
     stamps: list[dict],
     sample_rate: int = SAMPLE_RATE,
@@ -406,6 +544,9 @@ def merge_vad_segments(
     merge_gap_s: float = MERGE_GAP_S,
     min_speech_s: float = MIN_SPEECH_S,
     speech_pad_s: float = 0.0,
+    audio: np.ndarray | None = None,
+    cut_snap_s: float = CUT_SNAP_S,
+    snap_stats: dict | None = None,
 ) -> list[tuple[int, int]]:
     if not stamps:
         return []
@@ -431,21 +572,84 @@ def merge_vad_segments(
     split: list[tuple[int, int]] = []
     max_samples = int(max_segment_s * sample_rate)
     min_samples = int(min_speech_s * sample_rate)
+    snap_frame = max(1, int(sample_rate * CUT_SNAP_FRAME_MS / 1000))
+    snap_active = audio is not None and cut_snap_s > 0
+    min_chunk = int(CUT_MIN_CHUNK_S * sample_rate)
+    forced_cuts = 0
+    snapped_cuts = 0
+    snap_shift_samples = 0
+
     for start, end in merged:
         if end - start < min_samples:
             continue
         cursor = start
         while cursor < end:
             nxt = min(end, cursor + max_samples)
+            if nxt < end:
+                forced_cuts += 1
+            if snap_active and nxt < end:
+                lo = max(cursor + min_chunk, nxt - int(cut_snap_s * sample_rate))
+                if nxt - lo >= 3 * snap_frame:
+                    snapped = _energy_valley_cut(audio, lo, nxt, snap_frame)
+                    if _cut_keeps_segment_count(end, nxt, snapped, max_samples):
+                        if snapped != nxt:
+                            snapped_cuts += 1
+                            snap_shift_samples += nxt - snapped
+                        nxt = snapped
             if nxt - cursor >= min_samples:
                 split.append((cursor, nxt))
             cursor = nxt
+
+    if snap_stats is not None:
+        snap_stats.update({
+            "blocks": len(merged),
+            "forced_cuts": forced_cuts,
+            "snapped_cuts": snapped_cuts,
+            "shift_s": snap_shift_samples / sample_rate,
+            "max_block_s": max(((e - s) / sample_rate for s, e in merged), default=0.0),
+        })
     return split
 
 
 JP_SENTENCE_SPLIT_RE = re.compile(r"([^。！？!?…\n]+[。！？!?…\n]+)")
 JP_COMMA_SPLIT_RE = re.compile(r"([^、,]+[、,]+)")
 REPEATED_CHUNK_RE = re.compile(r"(.{1,4}?)\1{5,}")
+
+
+def _is_blank(text: str) -> bool:
+    """是否为"无内容"：空串，或仅由空白/标点/省略号/音符组成。
+
+    模型对纯静音与配乐段通常返回 "…" 而不是 ""，必须按同一口径判空，
+    否则这类段既不重试、也不进漏句清单，却会在清理字幕时被删掉。
+    """
+    return bool(BLANK_TEXT_RE.match(text or ""))
+
+
+def vad_neg_threshold(threshold: float) -> float:
+    """VAD 退出阈值：与 Silero 默认迟滞（threshold - 0.15）一致，但不低于下限。"""
+    return max(float(threshold) - 0.15, VAD_NEG_THRESHOLD_FLOOR)
+
+
+def _retry_gain(chunk: np.ndarray) -> np.ndarray:
+    """把空结果段拉到目标峰值再送模一次，返回新数组（不修改原音频）。"""
+    if chunk.size == 0:
+        return chunk
+    peak = float(np.max(np.abs(chunk)))
+    if peak < 1e-6:
+        return chunk
+    gain = min(max(RETRY_TARGET_PEAK / peak, RETRY_GAIN_RANGE[0]), RETRY_GAIN_RANGE[1])
+    return np.clip(chunk * gain, -1.0, 1.0)
+
+
+def _retry_suspicious(text: str, dur_s: float, prev_text: str) -> bool:
+    """重试结果的可信度安全阀：语速超限或与上一段完全复读即判为不可信。"""
+    compact = re.sub(r"\s+", "", text or "")
+    if not compact:
+        return False
+    if dur_s > 0 and len(compact) / dur_s > RETRY_MAX_CHARS_PER_S:
+        return True
+    prev_compact = re.sub(r"\s+", "", prev_text or "")
+    return len(compact) > RETRY_REPEAT_MIN_CHARS and compact == prev_compact
 
 
 def sanitize_pathological_repeats(text: str) -> str:
@@ -558,6 +762,8 @@ class AnimeWhisperEngine:
         self.config = config or WhisperVadConfig()
         self.last_stats = VadStats()
         self.last_interrupted = False
+        self.last_missed_spans: list[dict] = []
+        self.last_segment_stats: dict = {}
         self._pipe = None
         self._vad = None
 
@@ -620,28 +826,25 @@ class AnimeWhisperEngine:
         self.last_interrupted = False
         cfg = config or self.config
         media_path = Path(media_path)
-        with tempfile.TemporaryDirectory(prefix="anime-whisper-") as tmp:
-            wav_path = Path(tmp) / "audio_16k.wav"
-            if progress_cb:
-                slice_desc = f"（片段：{start_time_s or 0.0:.1f}s ~ {end_time_s:.1f}s）" if end_time_s else ""
-                progress_cb(0.02, f"正在提取 16kHz 音频并进行动态响度优化{slice_desc}…")
-            extract_audio_16k(
-                media_path,
-                wav_path,
-                enable_loudnorm=cfg.enable_loudnorm,
-                start_time_s=start_time_s,
-                end_time_s=end_time_s,
-            )
-            audio = load_wav_mono(wav_path)
-            return self._transcribe_array(
-                audio,
-                config=cfg,
-                no_repeat_ngram_size=no_repeat_ngram_size,
-                repetition_penalty=repetition_penalty,
-                progress_cb=progress_cb,
-                cancel_event=cancel_event,
-                time_offset=time_offset,
-            )
+        if progress_cb:
+            slice_desc = f"（片段：{start_time_s or 0.0:.1f}s ~ {end_time_s:.1f}s）" if end_time_s else ""
+            progress_cb(0.02, f"正在提取 16kHz 音频并进行动态响度优化{slice_desc}…")
+        audio = load_audio_for_transcription(
+            media_path,
+            enable_loudnorm=cfg.enable_loudnorm,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+            tmp_prefix="anime-whisper-",
+        )
+        return self._transcribe_array(
+            audio,
+            config=cfg,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            repetition_penalty=repetition_penalty,
+            progress_cb=progress_cb,
+            cancel_event=cancel_event,
+            time_offset=time_offset,
+        )
 
     def _transcribe_array(
         self,
@@ -658,6 +861,8 @@ class AnimeWhisperEngine:
             progress_cb(0.08, "正在使用 Silero VAD 精确切分语音段落…")
 
         cfg = config or self.config
+        self.last_missed_spans = []
+        self.last_segment_stats = {}
         wav_tensor = torch.from_numpy(audio)
         stamps = get_speech_timestamps(
             wav_tensor,
@@ -667,6 +872,7 @@ class AnimeWhisperEngine:
             min_speech_duration_ms=int(cfg.min_speech_ms),
             min_silence_duration_ms=int(cfg.min_silence_ms),
             speech_pad_ms=int(cfg.speech_pad_ms),
+            neg_threshold=vad_neg_threshold(cfg.threshold),
         )
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(
@@ -675,6 +881,8 @@ class AnimeWhisperEngine:
             merge_gap_s=float(cfg.merge_gap_s),
             min_speech_s=float(cfg.min_speech_s),
             speech_pad_s=int(cfg.speech_pad_ms) / 1000.0,
+            audio=audio,
+            snap_stats=self.last_segment_stats,
         )
         if not segments:
             segments = [(0, len(audio))]
@@ -703,6 +911,16 @@ class AnimeWhisperEngine:
 
         cues: list[SubtitleCue] = []
         total = len(segments)
+        prev_text = ""
+
+        def _decode(buf: np.ndarray) -> str:
+            res = self._pipe(
+                {"array": buf, "sampling_rate": SAMPLE_RATE},
+                generate_kwargs=generate_kwargs,
+                return_timestamps=False,
+            )
+            return (res.get("text") or "").strip()
+
         for i, (start, end) in enumerate(segments, start=1):
             if cancel_event and cancel_event.is_set():
                 self.last_interrupted = True
@@ -717,17 +935,34 @@ class AnimeWhisperEngine:
             chunk = audio[start:end]
             if chunk.size == 0:
                 continue
-            result = self._pipe(
-                {"array": chunk, "sampling_rate": SAMPLE_RATE},
-                generate_kwargs=generate_kwargs,
-                return_timestamps=False,
-            )
-            text = (result.get("text") or "").strip()
-            if not text:
-                continue
 
             seg_start_s = (start / SAMPLE_RATE) + time_offset
             seg_end_s = (end / SAMPLE_RATE) + time_offset
+            seg_dur_s = (end - start) / SAMPLE_RATE
+
+            text = _decode(chunk)
+            reason = ""
+            if _is_blank(text):
+                if cancel_event and cancel_event.is_set():
+                    self.last_interrupted = True
+                    if progress_cb:
+                        progress_cb(0.99, f"🛑 用户已中途取消，正在保存前 {len(cues)} 条字幕…")
+                    break
+                text = _decode(_retry_gain(chunk))
+                if not _is_blank(text) and _retry_suspicious(text, seg_dur_s, prev_text):
+                    text, reason = "", "retry-suspicious"
+                elif _is_blank(text):
+                    reason = "empty-after-retry"
+
+            if _is_blank(text):
+                self.last_missed_spans.append({
+                    "start": round(seg_start_s, 3),
+                    "end": round(seg_end_s, 3),
+                    "dur": round(seg_end_s - seg_start_s, 2),
+                    "reason": reason or "empty-after-retry",
+                })
+                continue
+            prev_text = text
 
             if cfg.enable_sentence_split:
                 sub_cues = split_text_into_cues(

@@ -70,6 +70,7 @@ from transformers import logging as hf_logging
 hf_logging.set_verbosity_error()
 
 from presets import PresetError, PresetStore
+import audio_cache
 from transcribe import (
     ENGINE,
     MODEL_DIR,
@@ -455,6 +456,94 @@ def cues_to_table(cues: list[SubtitleCue]) -> list[list]:
     return rows
 
 
+MISSED_REASON_LABELS = {
+    "empty-after-retry": "重试后仍为空",
+    "retry-suspicious": "重试结果不可信",
+}
+
+
+def _missed_reason_label(reason: str) -> str:
+    key = str(reason or "")
+    return MISSED_REASON_LABELS.get(key, key or MISSED_REASON_LABELS["empty-after-retry"])
+
+
+def _fmt_report_time(seconds) -> str:
+    return format_srt_timestamp(max(0.0, float(seconds or 0.0))).replace(",", ".")
+
+
+def _missed_spans_headline(spans: list[dict] | None) -> str:
+    if not spans:
+        return "未发现"
+    total = sum(float(span.get("dur", 0.0) or 0.0) for span in spans)
+    return f"共 {len(spans)} 处 / {total:.1f} 秒"
+
+
+def missed_json_path(media_path: Path, slice_tag: str = "") -> Path:
+    return OUTPUT_DIR / f"{Path(media_path).stem}{slice_tag}.missed.json"
+
+
+def _cut_snap_summary(stats: dict | None) -> str:
+    """报告里说明本次是否真的发生过强制切分与能量谷吸附。"""
+    if not stats:
+        return "无强制切分（未触发，属正常）"
+    forced = int(stats.get("forced_cuts", 0) or 0)
+    snapped = int(stats.get("snapped_cuts", 0) or 0)
+    shift = float(stats.get("shift_s", 0.0) or 0.0)
+    max_block = float(stats.get("max_block_s", 0.0) or 0.0)
+    if forced <= 0:
+        return f"无强制切分（最长连续语音块 {max_block:.1f}s，未超过单段上限）"
+    if snapped <= 0:
+        return f"{forced} 处强制切分，均未找到显著能量谷（连续说话），保持原切点"
+    return f"{forced} 处强制切分，其中 {snapped} 处吸附到能量谷（累计前移 {shift:.2f}s）"
+
+
+def write_missed_report(media_path, slice_tag: str, engine_key_name: str, spans: list[dict] | None) -> Path | None:
+    """落盘疑似漏句清单；无漏句时清掉同名旧文件，避免误导核对台提示。"""
+    path = missed_json_path(media_path, slice_tag)
+    if not spans:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+
+    payload = {
+        "media": Path(media_path).name,
+        "engine": engine_key_name,
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "spans": spans,
+    }
+    try:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
+def load_missed_spans(stem: str) -> list[dict]:
+    """读取与该媒体主干同名的漏句清单（含时间切片版本），供核对台状态行提示。"""
+    if not stem or not OUTPUT_DIR.exists():
+        return []
+    spans: list[dict] = []
+    for path in OUTPUT_DIR.iterdir():
+        name = path.name
+        if not name.endswith(".missed.json"):
+            continue
+        base = name[: -len(".missed.json")]
+        if base != stem and not base.startswith(f"{stem}_"):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for span in data.get("spans") or []:
+            if isinstance(span, dict):
+                spans.append(span)
+    spans.sort(key=lambda item: float(item.get("start", 0.0) or 0.0))
+    return spans
+
+
 def build_transcription_report(
     media_name: str,
     out_filename: str,
@@ -471,6 +560,8 @@ def build_transcription_report(
     ngram: int = 5,
     penalty: float = 1.15,
     use_alignment: bool = True,
+    missed_spans: list[dict] | None = None,
+    segment_stats: dict | None = None,
 ) -> str:
     finish_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     duration_str = format_duration(elapsed_time)
@@ -527,6 +618,16 @@ def build_transcription_report(
             f"• 重复惩罚因子 (repetition_penalty)：{penalty}",
         ])
 
+    lines.append("【疑似漏句区间】" + _missed_spans_headline(missed_spans))
+    if missed_spans:
+        for span in missed_spans:
+            lines.append(
+                f"• {_fmt_report_time(span.get('start', 0.0))} → {_fmt_report_time(span.get('end', 0.0))}"
+                f"  ({float(span.get('dur', 0.0)):.2f}s)  {_missed_reason_label(span.get('reason', ''))}"
+            )
+    else:
+        lines.append("• 未发现")
+    lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
     lines.append("============================================================")
     return "\n".join(lines)
 
@@ -637,6 +738,8 @@ def transcribe_media(
 
             elapsed_time = time.perf_counter() - start_timestamp
             is_interrupted = bool(engine.last_interrupted) or CANCEL_EVENT.is_set()
+            missed_spans = list(getattr(engine, "last_missed_spans", []) or [])
+            segment_stats = dict(getattr(engine, "last_segment_stats", {}) or {})
 
             if not cues:
                 if is_interrupted:
@@ -662,6 +765,7 @@ def transcribe_media(
                     pass
 
             char_count = sum(len(c.text) for c in cues)
+            write_missed_report(media_path, slice_tag, "qwen" if is_qwen else "whisper", missed_spans)
             report_text = build_transcription_report(
                 media_name=media_path.name,
                 out_filename=out_filename,
@@ -678,6 +782,8 @@ def transcribe_media(
                 ngram=ngram,
                 penalty=penalty,
                 use_alignment=use_alignment,
+                missed_spans=missed_spans,
+                segment_stats=segment_stats,
             )
 
             preview_lines = [f"[{c.start:7.2f} → {c.end:7.2f}] {c.text}" for c in cues[:100]]
@@ -814,6 +920,13 @@ def clean_ellipsis_subtitles(cues, output_format, media_file, engine_name, save_
 # ==============================================================================
 
 MEDIA_PEAKS_CACHE: dict[str, tuple[float, list[float]]] = {}
+MEDIA_PEAKS_CACHE_LIMIT = 8
+
+
+def _remember_peaks(key: str, value: tuple[float, list[float]]) -> None:
+    MEDIA_PEAKS_CACHE[key] = value
+    while len(MEDIA_PEAKS_CACHE) > MEDIA_PEAKS_CACHE_LIMIT:
+        MEDIA_PEAKS_CACHE.pop(next(iter(MEDIA_PEAKS_CACHE)))
 
 
 def _coerce_cues(raw_cues) -> list[SubtitleCue]:
@@ -1004,6 +1117,23 @@ def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tupl
     except ValueError:
         duration = 0.0
 
+    if bins is None or bins <= 0:
+        target_bins = int(duration * 4) if duration > 0 else 3200
+        bins = max(2400, min(8000, target_bins))
+
+    # 波形固定使用 loudnorm=False 的原始 16k wav：真实响度不被动态归一化压平
+    if audio_cache.enabled():
+        try:
+            wav_path = audio_cache.ensure_wav(media_path, loudnorm=False)
+            wav_duration, peaks = audio_cache.peaks(wav_path, bins)
+            if duration <= 0:
+                duration = wav_duration
+            res = (duration, peaks)
+            _remember_peaks(cache_key, res)
+            return res
+        except Exception as exc:
+            logging.warning("缓存波形不可用，回退为 ffmpeg 直读：%s", exc)
+
     audio = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(media_path), "-map", "0:a:0?", "-ac", "1", "-ar", "1000", "-f", "f32le", "pipe:1"],
         capture_output=True,
@@ -1011,18 +1141,14 @@ def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tupl
     )
     if audio.returncode != 0 or not audio.stdout:
         res = (duration, [])
-        MEDIA_PEAKS_CACHE[cache_key] = res
+        _remember_peaks(cache_key, res)
         return res
 
     samples = np.frombuffer(audio.stdout, dtype=np.float32)
     if not samples.size:
         res = (duration, [])
-        MEDIA_PEAKS_CACHE[cache_key] = res
+        _remember_peaks(cache_key, res)
         return res
-
-    if bins is None or bins <= 0:
-        target_bins = int(duration * 4) if duration > 0 else 3200
-        bins = max(2400, min(8000, target_bins))
 
     bins = min(bins, len(samples))
 
@@ -1031,7 +1157,7 @@ def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tupl
     maximum = max(peaks, default=0.0)
     norm_peaks = [round(min(1.0, peak / maximum), 2) if maximum else 0.0 for peak in peaks]
     res = (duration, norm_peaks)
-    MEDIA_PEAKS_CACHE[cache_key] = res
+    _remember_peaks(cache_key, res)
     return res
 
 
@@ -1072,13 +1198,306 @@ def build_review_payload(media_file, review_cues, include_peaks=True) -> str:
     }, ensure_ascii=False)
 
 
+# ---------------------------------------------------------------------------
+# 监看画面独立装载：手动导入 / 复用历史代理 / 关闭 / 恢复自动跟随
+# ---------------------------------------------------------------------------
+MONITOR_META_FILE = OUTPUT_DIR / "monitor_last.json"
+MONITOR_VIDEO_SUFFIXES = {
+    ".mp4", ".mkv", ".mov", ".webm", ".m4v", ".avi",
+    ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".ogv",
+}
+
+_MONITOR_IDLE_TIP = (
+    "🎞️ 媒体监看待机中。导入音视频后将自动载入画面；"
+    "也可点「📂 导入监看画面」手动指定任意本地片源。"
+)
+
+
+def _monitor_empty_html(icon: str, title: str, desc: str) -> str:
+    return (
+        '<div class="reviewer-empty">'
+        f'<div class="rw-empty-icon">{icon}</div>'
+        f'<div class="rw-empty-title">{title}</div>'
+        f'<div class="rw-empty-desc">{desc}</div>'
+        "</div>"
+    )
+
+
+def _coerce_upload_path(value) -> str:
+    """把 gr.File / gr.UploadButton 的各类返回值统一成字符串路径。"""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            resolved = _coerce_upload_path(item)
+            if resolved:
+                return resolved
+        return ""
+    if isinstance(value, dict):
+        for key in ("path", "name", "orig_name"):
+            if value.get(key):
+                return str(value[key])
+        return ""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, str):
+        return value.strip()
+    for attr in ("path", "name"):
+        candidate = getattr(value, attr, None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return ""
+
+
+def _format_file_size(num_bytes: int) -> str:
+    size = float(max(0, num_bytes))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit in {"B", "KB"} else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _save_monitor_meta(monitor_path: Path) -> None:
+    """记录最近一次手动指定的监看片源，便于下次打开工作台时自动恢复。"""
+    try:
+        MONITOR_META_FILE.write_text(
+            json.dumps(
+                {
+                    "path": str(monitor_path.resolve()),
+                    "name": monitor_path.name,
+                    "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _load_monitor_meta() -> tuple[Path | None, str]:
+    """返回 (仍然存在的片源路径, 记录中的文件名)。路径失效时第一项为 None。"""
+    try:
+        data = json.loads(MONITOR_META_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None, ""
+    remembered = str(data.get("name") or "")
+    candidate = Path(str(data.get("path") or ""))
+    if candidate.is_file():
+        return candidate, remembered or candidate.name
+    return None, remembered
+
+
+def _clear_monitor_meta() -> None:
+    try:
+        MONITOR_META_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _ensure_monitor_servable(monitor_path: Path) -> None:
+    """把片源所在目录动态加入 Gradio 白名单，避免手动指定的片源 403 黑屏。"""
+    try:
+        parent = str(monitor_path.resolve().parent)
+        blocks = globals().get("demo")
+        allowed = getattr(blocks, "allowed_paths", None)
+        if isinstance(allowed, list) and parent not in allowed:
+            allowed.append(parent)
+    except Exception:
+        pass
+
+
+def build_monitor_payload(monitor_path: Path, review_cues, origin: str = "manual") -> str:
+    """用任意本地片源构建监看负载：画面与波形取自该片源，字幕沿用当前核对基线。"""
+    cues_dicts = _cues_to_dicts(review_cues)
+    if not monitor_path.is_file():
+        return json.dumps(
+            {
+                "src": "",
+                "name": "",
+                "duration": 0.0,
+                "peaks": [],
+                "cues": cues_dicts,
+                "error": _monitor_empty_html(
+                    "⚠️",
+                    "监看片源不可用",
+                    f"找不到文件：<code>{monitor_path}</code><br>它可能已被移动或重命名，请重新指定。",
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    duration, peaks = 0.0, []
+    error = ""
+    try:
+        duration, peaks = _media_duration_and_peaks(monitor_path)
+    except Exception as exc:
+        error = f"读取监看片源波形异常：{exc}"
+
+    _ensure_monitor_servable(monitor_path)
+    return json.dumps(
+        {
+            "src": _media_url(monitor_path),
+            "name": monitor_path.name,
+            "duration": duration,
+            "peaks": peaks,
+            "cues": cues_dicts,
+            "error": error,
+            "is_patch_only": False,
+            "origin": origin,
+        },
+        ensure_ascii=False,
+    )
+
+
+def load_manual_monitor(upload_value, review_cues):
+    """📂 手动导入监看画面：只切换画面/波形片源，绝不改动转录源与字幕基线。"""
+    raw_path = _coerce_upload_path(upload_value)
+    if not raw_path:
+        return gr.update(), "⚠️ 尚未选择文件。点「📂 导入监看画面」从磁盘挑选一个视频文件。"
+
+    monitor_path = Path(raw_path)
+    if not monitor_path.is_file():
+        return gr.update(), f"⚠️ 文件不存在：`{monitor_path}`"
+
+    suffix = monitor_path.suffix.lower()
+    if suffix in {".srt", ".ass", ".ssa", ".vtt", ".txt", ".json"}:
+        return gr.update(), f"⚠️ `{suffix}` 不是视频文件，请选择 mp4 / mkv / mov 等片源。"
+
+    payload = build_monitor_payload(monitor_path, review_cues, origin="manual")
+    _save_monitor_meta(monitor_path)
+    note = "" if suffix in MONITOR_VIDEO_SUFFIXES else "（该文件不含画面，只会显示波形）"
+    return (
+        payload,
+        f"🎞️ 已手动载入监看片源「{monitor_path.name}」｜{_format_file_size(monitor_path.stat().st_size)}{note}。"
+        "此操作不影响上方转录源，字幕基线保持不变。",
+    )
+
+
+def close_monitor(review_cues):
+    """✕ 关闭监看画面：清空画面与波形，但完整保留字幕基线。"""
+    # 关闭即视为不再需要该片源，同步清除记忆，避免下次打开又被自动拉起
+    _clear_monitor_meta()
+    payload = json.dumps(
+        {
+            "src": "",
+            "name": "",
+            "duration": 0.0,
+            "peaks": [],
+            "cues": _cues_to_dicts(review_cues),
+            "error": _monitor_empty_html(
+                "🎬",
+                "监看画面已关闭",
+                "字幕与波形数据仍然保留。<br>点「📂 导入监看画面」选择新的片源，或点「↺ 恢复自动」跟随当前导入的媒体。",
+            ),
+            "closed": True,
+            "is_patch_only": False,
+        },
+        ensure_ascii=False,
+    )
+    return (
+        payload,
+        "🎬 监看画面已关闭（字幕与波形数据均保留）。"
+        "可点「📂 导入监看画面」换片源，或「↺ 恢复自动」跟随当前媒体。",
+    )
+
+
+def restore_auto_monitor(media_file, review_cues):
+    """↺ 恢复自动：重新跟随上方导入的媒体文件（原片或历史代理）。"""
+    if not media_file:
+        # 没有转录源时不要清掉当前画面，只做提示，避免误操作丢画面
+        return gr.update(), "⚠️ 尚未导入媒体文件，无法恢复自动监看。可点「📂 导入监看画面」直接指定片源。"
+
+    payload, status = prepare_review_workspace(media_file, review_cues)
+    return payload, "↺ " + status
+
+
+def list_proxy_choices() -> list[tuple[str, str]]:
+    """列出 outputs/web_proxies 里可零拷贝复用的历史 480p 代理。"""
+    try:
+        files = [
+            p for p in PROXIES_DIR.glob("*.mp4")
+            if p.is_file() and p.stat().st_size > 50 * 1024
+        ]
+    except Exception:
+        return []
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    choices: list[tuple[str, str]] = []
+    for item in files[:40]:
+        stat = item.stat()
+        stamp = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%m-%d %H:%M")
+        choices.append((f"{item.name}  ·  {stat.st_size / (1024 * 1024):.0f} MB  ·  {stamp}", str(item)))
+    return choices
+
+
+def refresh_monitor_proxy_choices():
+    choices = list_proxy_choices()
+    return gr.update(choices=choices, visible=bool(choices))
+
+
+def load_proxy_as_monitor(proxy_value, review_cues):
+    """选中历史代理后立即载入（零拷贝，直接复用磁盘上的成片）。"""
+    if not proxy_value:
+        return gr.update(), gr.update(), gr.update()
+
+    proxy_path = Path(str(proxy_value))
+    if not proxy_path.is_file():
+        return gr.update(), f"⚠️ 代理文件已不存在：`{proxy_path}`", gr.update(value=None)
+
+    payload = build_monitor_payload(proxy_path, review_cues, origin="proxy")
+    _save_monitor_meta(proxy_path)
+    return (
+        payload,
+        f"📦 已载入历史 480p 代理「{proxy_path.name}」（零拷贝直接复用，无需重新压制）。",
+        gr.update(value=None),
+    )
+
+
+def restore_monitor_on_load(review_cues):
+    """页面打开时自动恢复上次使用的监看片源，失效则给出明确提示。"""
+    last, remembered = _load_monitor_meta()
+    if last is None:
+        if remembered:
+            return (
+                gr.update(),
+                f"⚠️ 上次使用的监看片源「{remembered}」已不在原路径（可能被移动）。"
+                "请点「📂 导入监看画面」重新指定。",
+            )
+        return gr.update(), _MONITOR_IDLE_TIP
+
+    payload = build_monitor_payload(last, review_cues, origin="restore")
+    return (
+        payload,
+        f"↺ 已自动恢复上次使用的监看片源「{last.name}」。"
+        "如需更换请点「📂 导入监看画面」，点「✕ 关闭监看」可清空画面。",
+    )
+
+
 def prepare_review_workspace(media_file, review_cues):
+    # 导入新媒体即回到「自动跟随」模式，清掉上次手动指定的监看片源记忆
+    _clear_monitor_meta()
     payload = build_review_payload(media_file, review_cues, include_peaks=True)
     data = json.loads(payload)
     if data.get("error") and not data.get("src"):
         return payload, f"⚠️ {data['error']}"
     wave_state = "音频波形与时间轴已同步就绪，可在波形上拖拽框选漏句范围。" if data.get("peaks") else data.get("error", "媒体预览已就绪。")
-    return payload, f"🎞️ 已载入「{data['name']}」｜{wave_state}"
+    status = f"🎞️ 已载入「{data['name']}」｜{wave_state}"
+
+    missed: list[dict] = []
+    if media_file:
+        try:
+            missed = load_missed_spans(Path(media_file).stem)
+        except Exception:
+            missed = []
+    if missed:
+        total = sum(float(span.get("dur", 0.0) or 0.0) for span in missed)
+        status += (
+            f"\n\n⚠️ 有 {len(missed)} 处疑似漏句（共 {total:.1f} 秒），"
+            "可在波形上框选后「识别并直接入轨」"
+        )
+    return payload, status
 
 # ==============================================================================
 # 校对断点进度管理 (Auto-Save Progress)
@@ -1920,13 +2339,23 @@ REVIEWER_CLIENT_JS = r"""
     let data;
     try { data = JSON.parse(payloadText || '{}'); } catch (_) { return; }
 
-    if (data.is_patch_only && window.__reviewerInstance) {
-      window.__reviewerInstance.updateCues(data.cues || []);
+    if (data.is_patch_only) {
+      // 纯字幕补丁：只更新字幕轨，绝不重建画面（关闭监看后也不该被顶掉）
+      if (window.__reviewerInstance) {
+        window.__reviewerInstance.updateCues(data.cues || []);
+      }
       return;
     }
 
     if (!data.src) {
-      shell.innerHTML = `<div class="reviewer-empty">${data.error || '上传媒体后，这里会自动载入视频监看画面与精确时间轴波形轨。'}</div>`;
+      // 关闭监看 / 片源不可用：销毁旧播放器实例，避免残留快捷键与悬空引用
+      window.__reviewerInstance = null;
+      if (window.__reviewerKeyHandler) {
+        window.removeEventListener('keydown', window.__reviewerKeyHandler);
+        window.__reviewerKeyHandler = null;
+      }
+      window.onbeforeunload = null;
+      shell.innerHTML = data.error || '<div class="reviewer-empty">上传媒体后，这里会自动载入视频监看画面与精确时间轴波形轨。</div>';
       return;
     }
     const existingVideo = shell.querySelector('.reviewer-video');
@@ -3129,6 +3558,60 @@ fieldset label:has(input[type="radio"]:checked) * {
     display: flex !important;
     align-items: center !important;
 }
+
+/* 监看画面工具栏：说明 + 导入 / 压制 / 历史代理 / 关闭 / 恢复 */
+.monitor-toolbar {
+    align-items: stretch !important;
+    gap: 8px !important;
+    margin-bottom: 2px !important;
+}
+.monitor-toolbar > * { min-width: 0 !important; }
+.monitor-toolbar button {
+    height: 100% !important;
+    min-height: 40px !important;
+    white-space: nowrap !important;
+    font-size: 12px !important;
+}
+.monitor-toolbar .block,
+.monitor-toolbar .form { min-width: 0 !important; }
+#monitor-proxy-pick label span { font-size: 11px !important; }
+#btn-monitor-close,
+#btn-monitor-close button { color: #b91c1c !important; }
+#btn-monitor-close:hover,
+#btn-monitor-close button:hover { background: rgba(185, 28, 28, 0.08) !important; }
+
+/* 监看画面空态（已关闭 / 片源失效 / 尚未导入） */
+.reviewer-empty {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px !important;
+    min-height: 240px !important;
+    padding: 28px 20px !important;
+    border: 1px dashed rgba(99, 102, 241, 0.35) !important;
+    border-radius: 12px !important;
+    background: rgba(99, 102, 241, 0.04) !important;
+    text-align: center !important;
+}
+.reviewer-empty .rw-empty-icon { font-size: 30px; line-height: 1.1; }
+.reviewer-empty .rw-empty-title {
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    color: #1e1b4b !important;
+}
+.reviewer-empty .rw-empty-desc {
+    font-size: 12px !important;
+    line-height: 1.75 !important;
+    color: #64748b !important;
+}
+.reviewer-empty .rw-empty-desc code {
+    font-size: 11px !important;
+    background: rgba(15, 23, 42, 0.06) !important;
+    padding: 1px 5px !important;
+    border-radius: 4px !important;
+    word-break: break-all !important;
+}
 .proxy-status-box p,
 .proxy-status-box span {
     margin: 0 !important;
@@ -3729,11 +4212,51 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
 
     with gr.Row(elem_classes=["workbench-main-row"]):
         with gr.Column(scale=7, elem_classes=["workbench-panel"]):
-            with gr.Row():
-                gr.Markdown("💡 **监看画面**：默认直通原片。若您的浏览器播放 10-bit/8K 卡顿或黑屏，可点击右侧按钮 ➔", scale=5)
-                manual_proxy_btn = gr.Button("⚡ 压制 M4 硬件加速监看代理 (480p)", size="sm", variant="secondary", scale=3)
+            with gr.Row(elem_classes=["monitor-toolbar"]):
+                monitor_upload = gr.UploadButton(
+                    "📂 导入监看画面",
+                    file_types=["video"],
+                    size="sm",
+                    variant="secondary",
+                    min_width=120,
+                    elem_id="btn-monitor-import",
+                )
+                manual_proxy_btn = gr.Button(
+                    "⚡ 压制 480p 代理",
+                    size="sm",
+                    variant="secondary",
+                    min_width=115,
+                    elem_id="btn-monitor-proxy",
+                )
+                monitor_close_btn = gr.Button(
+                    "✕ 关闭监看",
+                    size="sm",
+                    variant="secondary",
+                    min_width=95,
+                    elem_id="btn-monitor-close",
+                )
+                monitor_auto_btn = gr.Button(
+                    "↺ 恢复自动",
+                    size="sm",
+                    variant="secondary",
+                    min_width=95,
+                    elem_id="btn-monitor-auto",
+                )
+            with gr.Row(elem_classes=["monitor-toolbar"]):
+                monitor_proxy_pick = gr.Dropdown(
+                    choices=list_proxy_choices(),
+                    value=None,
+                    label="📦 历史 480p 代理（点选即载入，零拷贝复用）",
+                    interactive=True,
+                    visible=bool(list_proxy_choices()),
+                    elem_id="monitor-proxy-pick",
+                )
             # 【核心新增】：左侧压制按钮下方的专属媒体状态与实时压制进度条
-            proxy_status = gr.Markdown("🎞️ 媒体监看待机中。导入音视频后将在此显示画面载入与压制进度。", elem_classes=["proxy-status-box"])
+            proxy_status = gr.Markdown(
+                "🎞️ 媒体监看待机中。导入音视频后会自动载入画面；"
+                "若浏览器播放 10-bit/8K 卡顿或黑屏，点「⚡ 压制 480p 代理」即可。",
+                elem_classes=["proxy-status-box"],
+            )
             reviewer = gr.HTML(REVIEWER_HTML)
             review_payload = gr.Textbox(value="", visible=False, elem_id="review-payload")
 
@@ -3937,6 +4460,52 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         manual_transcode_proxy_generator,
         inputs=[media, review_cues_state],
         outputs=[review_payload, proxy_status],
+        api_name=False,
+    ).then(
+        refresh_monitor_proxy_choices,
+        inputs=None,
+        outputs=[monitor_proxy_pick],
+        api_name=False,
+    )
+
+    # 📂 手动导入监看画面：只换画面片源，不动转录源与字幕基线
+    monitor_upload.upload(
+        load_manual_monitor,
+        inputs=[monitor_upload, review_cues_state],
+        outputs=[review_payload, proxy_status],
+        api_name=False,
+    )
+    # 📦 选中历史代理即载入（零拷贝复用 web_proxies 中的成片）
+    monitor_proxy_pick.change(
+        load_proxy_as_monitor,
+        inputs=[monitor_proxy_pick, review_cues_state],
+        outputs=[review_payload, proxy_status, monitor_proxy_pick],
+        api_name=False,
+    )
+    # ✕ 关闭监看画面（字幕与波形数据保留）
+    monitor_close_btn.click(
+        close_monitor,
+        inputs=[review_cues_state],
+        outputs=[review_payload, proxy_status],
+        api_name=False,
+    )
+    # ↺ 恢复自动跟随当前导入的媒体
+    monitor_auto_btn.click(
+        restore_auto_monitor,
+        inputs=[media, review_cues_state],
+        outputs=[review_payload, proxy_status],
+        api_name=False,
+    )
+    # 页面打开时自动恢复上次使用的监看片源（失效则提示重新指定）
+    demo.load(
+        restore_monitor_on_load,
+        inputs=[review_cues_state],
+        outputs=[review_payload, proxy_status],
+        api_name=False,
+    ).then(
+        refresh_monitor_proxy_choices,
+        inputs=None,
+        outputs=[monitor_proxy_pick],
         api_name=False,
     )
 
