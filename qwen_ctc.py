@@ -45,13 +45,20 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 from silero_vad import get_speech_timestamps, load_silero_vad
 
 from transcribe import (
+    HONORIFIC_PREFIXES,
+    JAPANESE_PARTICLES,
     MODELS_DIR,
+    PROLONGED_SOUNDS,
     SAMPLE_RATE,
+    SMALL_KANA,
     SubtitleCue,
     _is_blank,
+    _is_kana,
+    _is_kanji,
     _retry_gain,
     _retry_suspicious,
     detect_device,
+    forbidden_cut_positions,
     load_audio_for_transcription,
     merge_vad_segments,
     split_text_into_cues,
@@ -234,29 +241,43 @@ SEG_BASE_COST = 0.1
 OVERRUN_COST = 1.2
 MIN_CUE_DUR = 0.04
 
-SMALL_KANA = set("っッゃゅょャュョぁぃぅぇぉァィゥェォゎヮヵヶ")
-PROLONGED_SOUNDS = set("ー〜～")
-JAPANESE_PARTICLES = set("は が を に で へ と も から まで より ね よ わ か の".split())
-HONORIFIC_PREFIXES = set("おご御")
+# 可读性下限（A5）：只影响"在哪切"，不改变任何文本
+MIN_CUE_DUR_FLOOR = 0.80   # 单条字幕最短可读时长（秒）
+CPS_READABLE = 9.0         # "能读"的下限：字/秒，用于反推最短时长
+CPS_COMFORT = 6.5          # "读得舒服"的上限：字/秒
+DUR_DEFICIT_COST = 3.0     # 时长缺口：每秒罚分（与硬超时 3.5/s 同量级）
+CPS_EXCESS_COST = 0.9      # 语速超额：每字罚分
+CPS_EXCESS_CAP = 6.0       # 单条 cps 罚分上限，防止"靠合并掩盖密度"反转目标
 
-FORBIDDEN_WORDS = (
-    "これ", "それ", "あれ", "どれ",
-    "なんか", "なんて", "なんで", "ちょっと",
-    "やっぱり", "どうして", "だから", "だけど",
-    "ありま", "ございま", "お願い",
-    "あと", "けれども", "けれど", "なんです", "んです",
-    "として", "关于", "ですから", "なので",
-    "まして", "ました", "ません", "ったら", "ったり",
-    "てまして", "てました", "ていた", "ている", "ていく", "てみる",
-)
+# 劈词缝合的时间闸门（问题 6）：只有首尾相接才可能是同一个词被切开
+HEAL_MAX_GAP_S = 0.15
 
-
-def _is_kana(ch: str) -> bool:
-    return bool(ch) and ("\u3040" <= ch <= "\u30ff" or "\u31f0" <= ch <= "\u31ff")
+# 生成上限自适应（P4）：按送模时长反推 token 上限
+TOKENS_PER_SEC = 12        # 日语语速上限约 8 字/秒 × 1.5 余量（汉字/片假名常一字多 token）
+TOKENS_HEADROOM = 32       # 句首句尾与标点的固定余量
+# 撞上限后"是不是真截断"的判据：字/token。正常日语对白约 1.0–1.7；
+# 复读/空转时 token 被同一段反复吃掉，实测可低至 0.01–0.05。
+CHARS_PER_TOKEN_FLOOR = 0.5
 
 
-def _is_kanji(ch: str) -> bool:
-    return bool(ch) and ("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf")
+def classify_capped(n_chars: int, n_gen: int, cap: int) -> tuple[bool, bool]:
+    """判断"吃满生成上限"到底是真截断还是复读。
+
+    返回 ``(capped, truncated)``：
+
+    * ``capped``：token 数吃满上限，可能是截断，也可能是复读/空转；
+    * ``truncated``：吃满上限**且**字/token 密度正常 —— 说明 token 确实花在字上，
+      是上限不够导致末尾被砍，值得加长上限重跑。
+
+    复读时同一段 token 反复循环，解码后只剩几个字（实测 212 token → 3 字，
+    密度 0.014），加长上限只会多循环几遍，一个字也救不回来，所以不重跑。
+    正常日语对白密度约 1.0–1.7，取 0.5 作保守下限，宁可多跑一次也不漏真截断。
+    """
+    capped = n_gen >= cap
+    if not capped:
+        return False, False
+    truncated = n_chars >= CHARS_PER_TOKEN_FLOOR * max(n_gen, 1)
+    return True, truncated
 
 
 def _break_costs(folded: FoldedText, positions: list[int]) -> list[float]:
@@ -279,55 +300,21 @@ def _break_costs(folded: FoldedText, positions: list[int]) -> list[float]:
                 costs[rank[nxt]] = BREAK_COMMA
 
     text_str = folded.folded
+    # 禁切表一次算好：音节级 + 词级硬禁则全部标进 bytearray，
+    # 每个候选切点 O(1) 查表，避免"每个切点重扫 35 个词"的平方级开销。
+    blocked = forbidden_cut_positions(text_str)
     for i in range(1, n):
         prev_pos, next_pos = positions[i - 1], positions[i]
+        # 只在相邻（连续）字符之间判断禁则：positions 跳过零宽字符时，
+        # 这个边界不是真实切点，任何禁则判断都无从谈起。
         if next_pos > prev_pos + 1:
+            continue
+        if blocked[next_pos]:
+            costs[i] = BREAK_FORBIDDEN
             continue
 
         prev_ch = text_str[prev_pos]
         next_ch = text_str[next_pos]
-        cut_pos = prev_pos + 1
-
-        if next_ch in SMALL_KANA or prev_ch in SMALL_KANA:
-            costs[i] = BREAK_FORBIDDEN
-            continue
-        if next_ch in PROLONGED_SOUNDS or prev_ch in PROLONGED_SOUNDS:
-            costs[i] = BREAK_FORBIDDEN
-            continue
-        if (prev_ch.isascii() and prev_ch.isalnum()) and (next_ch.isascii() and next_ch.isalnum()):
-            costs[i] = BREAK_FORBIDDEN
-            continue
-        if "\u30a0" <= prev_ch <= "\u30ff" and "\u30a0" <= next_ch <= "\u30ff":
-            costs[i] = BREAK_FORBIDDEN
-            continue
-        if _is_kanji(prev_ch) and _is_kanji(next_ch):
-            costs[i] = BREAK_FORBIDDEN
-            continue
-        if prev_ch in HONORIFIC_PREFIXES and _is_kanji(next_ch):
-            costs[i] = BREAK_FORBIDDEN
-            continue
-        if prev_ch == "ま" and next_ch in ("す", "せ", "し"):
-            costs[i] = BREAK_FORBIDDEN
-            continue
-
-        word_cut_cross = False
-        for word in FORBIDDEN_WORDS:
-            start_search = max(0, cut_pos - len(word))
-            idx = text_str.find(word, start_search)
-            while idx != -1 and idx < cut_pos:
-                if idx < cut_pos < idx + len(word):
-                    costs[i] = BREAK_FORBIDDEN
-                    word_cut_cross = True
-                    break
-                idx = text_str.find(word, idx + 1)
-            if word_cut_cross:
-                break
-        if word_cut_cross:
-            continue
-
-        if prev_ch in "こそことのほもろよごぞどぼぽ" and next_ch == "う":
-            costs[i] = BREAK_FORBIDDEN
-            continue
 
         if prev_ch in JAPANESE_PARTICLES and not (next_ch in SMALL_KANA or next_ch in PROLONGED_SOUNDS):
             costs[i] = BREAK_PARTICLE
@@ -430,7 +417,19 @@ def partition_cues(
                 cost += (dur - max_dur) * 3.5
             n_chars = j - i
             if n_chars > max_chars:
-                cost += (n_chars - max_chars) * 1.2
+                cost += (n_chars - max_chars) * OVERRUN_COST
+            if dur > 0:
+                # 下限一：时长缺口——"太短"与"太长"对称罚，但量级压在同一档，
+                # 保证它只抵消便宜的切分（助词 1.2 / 逗号 0），永远敌不过
+                # 句中禁切 35，因此不会为了凑时长把词劈开。
+                need = max(MIN_CUE_DUR_FLOOR, n_chars / CPS_READABLE)
+                if dur < need:
+                    cost += (need - dur) * DUR_DEFICIT_COST
+                # 下限二：语速超额——按"多出来的字数"计并单条封顶。
+                # 若改成 (cps - 6.5) * k 直接累加，切两条要交两份罚、合成一条只交
+                # 一份，DP 会为了省罚分而倾向合并，方向正好相反。
+                excess = max(0.0, n_chars - CPS_COMFORT * dur)
+                cost += min(excess * CPS_EXCESS_COST, CPS_EXCESS_CAP)
             if cost < best[j]:
                 best[j] = cost
                 back[j] = i
@@ -464,6 +463,7 @@ class AlignmentResult:
     mean_logprob: float = 0.0
     ok: bool = True
     reason: str = ""
+    interpolated: int = 0   # 本段被插值（时间靠猜、零宽）的字数
 
 
 @dataclass
@@ -497,6 +497,9 @@ class QwenCtcEngine:
         self.last_interrupted = False
         self.last_missed_spans: list[dict] = []
         self.last_segment_stats: dict = {}
+        self.last_align_stats: dict = {}
+        self._last_truncated = False
+        self._last_capped = False
         self._model = None
         self._processor = None
         self._head = None
@@ -592,16 +595,32 @@ class QwenCtcEngine:
             block_start += MEL_PER_BLOCK * hop / SAMPLE_RATE
         return projected.float(), np.asarray(times, dtype=np.float64)
 
-    def _transcribe(self, audio: np.ndarray, config: QwenCtcConfig | None = None) -> str:
+    def _transcribe(
+        self,
+        audio: np.ndarray,
+        config: QwenCtcConfig | None = None,
+        cap_override: int | None = None,
+    ) -> str:
         cfg = config or self.config
+        self._last_truncated = False
+        self._last_capped = False
+        # 送模窗口最长 16s，日语上限约 8 字/秒；按 12 token/秒（含一字多 token 的余量）
+        # 反推上限。正常段由 EOS 提前终止，cap 不参与；只有复读段才吃满。
+        dur = audio.size / SAMPLE_RATE
+        if cap_override is not None:
+            cap = int(cap_override)
+        else:
+            cap = min(int(cfg.max_new_tokens), max(64, int(dur * TOKENS_PER_SEC) + TOKENS_HEADROOM))
         with torch.inference_mode():
             inputs = self._processor.apply_transcription_request(
                 audio=audio, sampling_rate=SAMPLE_RATE, language="Japanese"
             ).to(device=self.device, dtype=self._dtype)
-            output_ids = self._model.generate(**inputs, max_new_tokens=cfg.max_new_tokens)
+            output_ids = self._model.generate(**inputs, max_new_tokens=cap)
         generated = output_ids[:, inputs["input_ids"].shape[1] :]
         text = self._processor.decode(generated, return_format="transcription_only")[0]
-        return (text or "").strip()
+        text = (text or "").strip()
+        self._last_capped, self._last_truncated = classify_capped(len(text), int(generated.shape[1]), cap)
+        return text
 
     def align(self, audio: np.ndarray, text: str) -> AlignmentResult:
         folded = FoldedText(text)
@@ -671,8 +690,14 @@ class QwenCtcEngine:
 
         voiced = scores[0][labels > 0]
         mean_lp = float(voiced.mean().item()) if voiced.numel() else 0.0
+        aligned_count = len(chars)
         chars = _fill_unaligned(folded, chars, float(out_times[-1]))
-        return AlignmentResult(chars=chars, pauses=pauses, mean_logprob=mean_lp, ok=True)
+        # 插值字数 = 补出来的字数。不能用"零宽"判定：CTC 只占 1 帧的合法对齐
+        # 也是 start == end，那样会把正常对齐误报成插值。
+        interp = max(0, len(chars) - aligned_count)
+        return AlignmentResult(
+            chars=chars, pauses=pauses, mean_logprob=mean_lp, ok=True, interpolated=interp
+        )
 
     def _cues_from_alignment(
         self, result: AlignmentResult, offset: float, folded: FoldedText, cfg: QwenCtcConfig
@@ -736,6 +761,7 @@ class QwenCtcEngine:
         self.last_interrupted = False
         self.last_missed_spans = []
         self.last_segment_stats = {}
+        self.last_align_stats = {}
         cfg = config or self.config
         if progress_cb:
             progress_cb(0.06, "正在使用动态 VAD 切分语音段落…")
@@ -756,7 +782,6 @@ class QwenCtcEngine:
             max_segment_s=cfg.max_segment_s,
             merge_gap_s=cfg.merge_gap_s,
             min_speech_s=cfg.min_speech_s,
-            speech_pad_s=speech_pad_ms / 1000.0,
             audio=audio,
             snap_stats=self.last_segment_stats,
         )
@@ -765,6 +790,13 @@ class QwenCtcEngine:
 
         cues: list[SubtitleCue] = []
         aligned = 0
+        noop = 0
+        empty = 0
+        align_chars = 0
+        interp_chars = 0
+        truncated = 0
+        capped_repeat = 0
+        degraded: list[dict] = []
         total = len(segments)
         prev_text = ""
         stage = "转写并对齐" if use_alignment else "转写"
@@ -779,11 +811,23 @@ class QwenCtcEngine:
                 progress_cb(0.1 + 0.8 * (i - 1) / max(total, 1), f"正在{stage}第 {i}/{total} 段… (可随时点击取消)")
             chunk = audio[start:end]
             if chunk.size == 0:
+                empty += 1      # 退化段（时长为 0），无文本可对齐
                 continue
             offset = (start / SAMPLE_RATE) + time_offset
             seg_dur_s = (end - start) / SAMPLE_RATE
 
             text = self._transcribe(chunk, cfg)
+            if self._last_capped:
+                if self._last_truncated:
+                    # 密度正常却撞上限 = 真被砍：按完整上限重跑一次，宁可慢也不吃字。
+                    # 只保留更长的结果，重跑更差不至于把已有文本弄丢。
+                    retried = self._transcribe(chunk, cfg, cap_override=int(cfg.max_new_tokens))
+                    if len(retried) > len(text):
+                        text = retried
+                    if self._last_truncated:
+                        truncated += 1
+                else:
+                    capped_repeat += 1   # 复读/空转吃满上限：加长上限也救不回字，不重跑
             reason = ""
             if _is_blank(text):
                 if cancel_event and cancel_event.is_set():
@@ -804,6 +848,7 @@ class QwenCtcEngine:
                     "dur": round(seg_dur_s, 2),
                     "reason": reason or "empty-after-retry",
                 })
+                empty += 1      # 空结果段：没有文本，谈不上对齐，单独成桶
                 continue
             prev_text = text
 
@@ -821,9 +866,38 @@ class QwenCtcEngine:
             result = self.align(chunk, text)
             if result.ok and result.chars:
                 aligned += 1
+                align_chars += len(result.chars)
+                interp_chars += result.interpolated
                 cues.extend(self._cues_from_alignment(result, offset, FoldedText(text), cfg))
             else:
-                cues.extend(self._cues_fallback(text, offset, (end - start) / SAMPLE_RATE, cfg))
+                if result.reason == "no-acoustic-chars":
+                    noop += 1          # 纯符号文本，无需对齐，不计入降级率
+                else:
+                    degraded.append({
+                        "start": round(offset, 3),
+                        "end": round(offset + seg_dur_s, 3),
+                        "dur": round(seg_dur_s, 2),
+                        "reason": result.reason or "unknown",
+                        "chars": len(text),
+                    })
+                cues.extend(self._cues_fallback(text, offset, seg_dur_s, cfg))
+
+        # 四桶互斥且穷尽（仅 use_alignment 时成立）：aligned + noop + degraded + empty == total
+        # empty = 空结果段（已进 last_missed_spans），没有文本就谈不上对齐，必须单独成桶，
+        # 否则报告里的"共 N 段"会和三个分项对不上。
+        self.last_align_stats = {
+            "enabled": bool(use_alignment),
+            "segments": total,
+            "aligned": aligned,
+            "noop": noop,
+            "degraded": len(degraded),
+            "empty": empty,
+            "align_chars": align_chars,
+            "interp_chars": interp_chars,
+            "truncated": truncated,
+            "capped_repeat": capped_repeat,
+            "spans": degraded[:50],
+        }
 
         if progress_cb and not self.last_interrupted:
             note = f"（{aligned}/{total} 段完成逐字对齐）" if use_alignment else ""
@@ -866,6 +940,13 @@ class QwenCtcEngine:
 
 
 def _heal_broken_cues(cues: list[SubtitleCue], max_merge_dur: float = 5.2) -> list[SubtitleCue]:
+    """缝合被断句切开的两半。
+
+    关键约束：**只有首尾相接（间隙 ≈ 0）才可能是同一个词被劈开**。DP 在同一段音频
+    内部切分时，两条字幕的间隙为 0（甚至为负，靠 `_dedupe` 裁掉重叠）；一旦中间有
+    可见停顿，就说明这是两句独立台词——「今日は」+「東京に行く」被"汉字接汉字"这条
+    规则错并，正是缺了这道闸门。
+    """
     if len(cues) < 2:
         return cues
 
@@ -884,10 +965,11 @@ def _heal_broken_cues(cues: list[SubtitleCue], max_merge_dur: float = 5.2) -> li
                 i += 1
                 continue
 
+            gap = nxt.start - curr.end
             should_merge = False
             if nxt_text and (nxt_text[0] in SMALL_KANA or nxt_text[0] in PROLONGED_SOUNDS):
                 should_merge = True
-            elif any(nxt_text.startswith(broken) for broken in ["ったら", "てまして", "てta", "てない", "まして", "ました", "ども", "ティ"]):
+            elif any(nxt_text.startswith(broken) for broken in ["ったら", "てまして", "てた", "てない", "まして", "ました", "ども", "ティ"]):
                 should_merge = True
             elif curr_text and nxt_text and _is_kanji(curr_text[-1]) and _is_kanji(nxt_text[0]):
                 should_merge = True
@@ -908,7 +990,12 @@ def _heal_broken_cues(cues: list[SubtitleCue], max_merge_dur: float = 5.2) -> li
 
             combined_dur = nxt.end - curr.start
             combined_chars = len(curr_text + nxt_text)
-            if should_merge and combined_dur <= max_merge_dur and combined_chars <= 24:
+            if (
+                should_merge
+                and gap <= HEAL_MAX_GAP_S
+                and combined_dur <= max_merge_dur
+                and combined_chars <= 24
+            ):
                 curr = SubtitleCue(
                     start=curr.start,
                     end=nxt.end,

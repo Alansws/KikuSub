@@ -122,11 +122,139 @@ BLANK_TEXT_RE = re.compile(r"^[\s\u3000…‥⋯。、，．.,!！?？\-ー~〜�
 # 给退出阈值设下限，让低阈值真正表现为"更灵敏"而不是"退化成整片一段"。
 VAD_NEG_THRESHOLD_FLOOR = 0.02
 
-VAD_THRESHOLD = 0.28
+# 2026-10-26 第三轮 E1 实测（全片 46 分钟、单变量扫描）后固化：
+# 0.45 → 25.08% CER / 插入 69；0.35 → 23.35% / 68；**0.30 → 22.46% / 80 / 强制切分 0**；
+# 0.25 → 21.30% / 94（插入超硬约束 90）；0.20 → 20.51% / 103 / 强制切分 7。
+# 0.30 是「CER 改善 ≥1.5pt 且 插入 ≤85 且 强制切分 ≤3」全部满足的最低阈值档。
+VAD_THRESHOLD = 0.30
 VAD_MIN_SPEECH_MS = 100
 VAD_MIN_SILENCE_MS = 200
 VAD_SPEECH_PAD_MS = 150
 MAX_SEGMENT_S_LIMIT = 29.0
+
+# ==============================================================================
+# 日语断句语言学资产：两条引擎共用（Whisper 分句兜底 / Qwen 断句 DP）
+# ==============================================================================
+
+SMALL_KANA = set("っッゃゅょャュョぁぃぅぇぉァィゥェォゎヮヵヶ")
+PROLONGED_SOUNDS = set("ー〜～")
+JAPANESE_PARTICLES = set("は が を に で へ と も から まで より ね よ わ か の".split())
+HONORIFIC_PREFIXES = set("おご御")
+
+# 禁切词：在这些词内部下刀等于把词劈开
+FORBIDDEN_WORDS = (
+    "これ", "それ", "あれ", "どれ",
+    "なんか", "なんて", "なんで", "ちょっと",
+    "やっぱり", "どうして", "だから", "だけど",
+    "ありま", "ございま", "お願い",
+    "あと", "けれども", "けれど", "なんです", "んです",
+    "として", "ですから", "なので",
+    "まして", "ました", "ません", "ったら", "ったり",
+    "てまして", "てました", "ていた", "ている", "ていく", "てみる", "てた",
+)
+
+
+def _is_kana(ch: str) -> bool:
+    return bool(ch) and ("\u3040" <= ch <= "\u30ff" or "\u31f0" <= ch <= "\u31ff")
+
+
+def _is_kanji(ch: str) -> bool:
+    return bool(ch) and ("\u4e00" <= ch <= "\u9fff" or "\u3400" <= ch <= "\u4dbf")
+
+
+def forbidden_cut_positions(text: str) -> bytearray:
+    """禁切表：返回长度 len(text)+1 的布尔数组，1 表示"在下标处下刀"禁止。
+
+    覆盖两类硬禁则：**音节级**（小假名、长音符、片假名连写、汉字连写、ASCII 词内、
+    敬语前缀、ま+す/せ/し、こそ+う）与**词级**（FORBIDDEN_WORDS 内部）。
+    只判"能不能切"，不判"该不该切"——助词后/汉字转假名这类偏好仍由调用方决定。
+
+    实现要点：词级禁则一次扫描全文本标进数组（O(n·W)），而不是对每个候选切点
+    重扫一遍（O(n·W·n)）。`_break_costs` 与 Whisper 的超长兜底共用这一份结果。
+    """
+    n = len(text)
+    blocked = bytearray(n + 1)
+    if n < 2:
+        return blocked
+
+    for p in range(1, n):
+        prev_ch, next_ch = text[p - 1], text[p]
+        if (
+            next_ch in SMALL_KANA
+            or prev_ch in SMALL_KANA
+            or next_ch in PROLONGED_SOUNDS
+            or prev_ch in PROLONGED_SOUNDS
+            or (prev_ch.isascii() and prev_ch.isalnum() and next_ch.isascii() and next_ch.isalnum())
+            or ("\u30a0" <= prev_ch <= "\u30ff" and "\u30a0" <= next_ch <= "\u30ff")
+            or (_is_kanji(prev_ch) and _is_kanji(next_ch))
+            or (prev_ch in HONORIFIC_PREFIXES and _is_kanji(next_ch))
+            or (prev_ch == "ま" and next_ch in ("す", "せ", "し"))
+            or (prev_ch in "こそことのほもろよごぞどぼぽ" and next_ch == "う")
+        ):
+            blocked[p] = 1
+
+    for word in FORBIDDEN_WORDS:
+        start = 0
+        while (idx := text.find(word, start)) != -1:
+            # 词内部（首字之后、末字之前）的每个位置都禁止下刀
+            blocked[idx + 1 : idx + len(word)] = b"\x01" * (len(word) - 1)
+            start = idx + 1
+    return blocked
+
+
+_HARD_SPLIT_PUNCT = set("、。！？!?…‥，,・：:；;")
+_HARD_SPLIT_PARTICLES = set("はがをにでへともねよわかの")
+# 超长单句在「助词后」断句的候选助词（用户口径：は が を に で と て）。
+# 含 へ/も/の/や 是同一类「格助词/系助词后」的延伸，切出来同样是完整短语。
+_CUE_SPLIT_PARTICLES = set("はがをにでとてへものや")
+
+
+def _hard_split_text(text: str, max_chars: int, lookback_ratio: float = 0.34) -> list[str]:
+    """超长单行的兜底切分：从目标点向前找最近的**自然**切点。
+
+    优先级：标点后 > 助词后 > 窗口内任何未被禁则挡住的位置 > 按 max_chars 硬切。
+    标点/助词在更宽的窗口里找（宁可切短一点换一个自然边界），都没有才退回窄窗口
+    取最近合法点。宁可切得短一点，也不在词中间下刀，更不让一条字幕超出宽度上限。
+    """
+    max_chars = max(1, int(max_chars))
+    text = text or ""
+    n = len(text)
+    if n <= max_chars:
+        return [text] if text else []
+
+    blocked = forbidden_cut_positions(text)
+    narrow = max(2, int(max_chars * lookback_ratio))
+    wide = max(narrow + 1, int(max_chars * 0.5))
+    out: list[str] = []
+    start = 0
+    while start < n:
+        if n - start <= max_chars:
+            out.append(text[start:])
+            break
+        target = start + max_chars
+
+        cut = 0
+        particle_cut = 0
+        for p in range(target, max(start + 1, target - wide) - 1, -1):
+            if blocked[p]:
+                continue
+            if text[p - 1] in _HARD_SPLIT_PUNCT:
+                cut = p
+                break
+            if not particle_cut and text[p - 1] in _HARD_SPLIT_PARTICLES:
+                particle_cut = p
+        if not cut:
+            cut = particle_cut
+        if not cut:
+            for p in range(target, max(start + 1, target - narrow) - 1, -1):
+                if not blocked[p]:
+                    cut = p
+                    break
+        if cut <= start:
+            cut = target
+        out.append(text[start:cut])
+        start = cut
+    return out
 
 
 @dataclass
@@ -543,11 +671,16 @@ def merge_vad_segments(
     max_segment_s: float = MAX_SEGMENT_S,
     merge_gap_s: float = MERGE_GAP_S,
     min_speech_s: float = MIN_SPEECH_S,
-    speech_pad_s: float = 0.0,
     audio: np.ndarray | None = None,
     cut_snap_s: float = CUT_SNAP_S,
     snap_stats: dict | None = None,
 ) -> list[tuple[int, int]]:
+    """VAD 段合并 + 超长段强制切分。
+
+    注意：首尾留白不在这里处理。Silero 的 `speech_pad_ms` 已经在 VAD 阶段把留白
+    并进了每个 stamp 的边界，此处再收一个 `speech_pad_s` 只会让人误以为"留白参与
+    了合并判断"——该参数此前收而未用，已删除。
+    """
     if not stamps:
         return []
 
@@ -665,12 +798,137 @@ def sanitize_pathological_repeats(text: str) -> str:
     return curr
 
 
+def nearest_text_cut(text: str, target: int) -> int:
+    """在文本里挑一个最接近 `target` 的**自然**切点（返回切点下标，0 表示找不到）。
+
+    三档优先级，同档内取离 target 最近的那个：
+    1. 标点后（、。！？…）——最自然；
+    2. 助词后（は が を に で と て へ も の や）——用户指定的兜底口径；
+    3. 任何未被禁则挡住的位置。
+
+    禁则（`forbidden_cut_positions`）一律不破：小假名、长音符、汉字连写、词内等位置
+    永远不选，宁可不切也不把词劈开。
+    """
+    n = len(text)
+    if n < 4:
+        return 0
+    blocked = forbidden_cut_positions(text)
+    punct: list[int] = []
+    particle: list[int] = []
+    anypos: list[int] = []
+    for p in range(2, n - 1):  # 两侧都至少留 2 字，避免切出「は」「を」这种碎片
+        if blocked[p]:
+            continue
+        anypos.append(p)
+        prev_ch = text[p - 1]
+        if prev_ch in _HARD_SPLIT_PUNCT:
+            punct.append(p)
+        elif prev_ch in _CUE_SPLIT_PARTICLES:
+            particle.append(p)
+    for tier in (punct, particle, anypos):
+        if tier:
+            return min(tier, key=lambda p: (abs(p - target), p))
+    return 0
+
+
+def _split_overlong_single(
+    text: str,
+    t0: float,
+    t1: float,
+    max_cue_dur: float,
+    *,
+    audio: np.ndarray | None = None,
+    sample_rate: int = SAMPLE_RATE,
+    char_times: list[tuple[float, float]] | None = None,
+    depth: int = 0,
+) -> list[tuple[float, float, str]]:
+    """把「只有一句、但时长超过 max_cue_dur」的段拆成多条，返回 (start, end, text)。
+
+    关键约束（用户口径）：**不允许脱离文本按时间对半硬切**。切点先从文本里选
+    （标点后 > 助词后 > 合法位置，见 `nearest_text_cut`），时间再跟着文本走：
+
+    1. 有字级/词级时间戳（Qwen CTC 路径）→ 直接用该字的时间边界；
+    2. 没有时间戳但有音频（Whisper 路径）→ 按字符比例定位，再吸附到 ±0.35s 内的
+       发音能量谷（`_energy_valley_cut`）；
+    3. 两者都没有 → 纯按字符比例分配（仍然不是时间对半）。
+
+    任一侧剩余时长不足 0.45s、或文本里找不到合法切点，就**不切**——宁可留一条
+    超长字幕，也不制造半秒碎片或劈开词。
+    """
+    dur = t1 - t0
+    if dur <= max_cue_dur or len(text) < 4 or depth >= 4:
+        return [(t0, t1, text)]
+
+    n = len(text)
+    cut = nearest_text_cut(text, int(round(n / 2)))
+    if cut <= 0:
+        return [(t0, t1, text)]
+
+    head, tail = text[:cut], text[cut:]
+
+    if char_times is not None and len(char_times) >= n:
+        cut_t = t0 + float(char_times[cut - 1][1])
+    else:
+        cut_t = t0 + dur * (cut / n)
+        if audio is not None and audio.size:
+            frame = max(1, int(sample_rate * CUT_SNAP_FRAME_MS / 1000))
+            centre = int((cut_t - t0) * sample_rate)
+            # 搜索窗 ±0.60s：语速与标点停顿的偏差通常在这个量级内；
+            # 窗太窄（±0.35s）会漏掉真正的停顿，退化成按字符比例硬分。
+            lo = max(0, centre - int(0.60 * sample_rate))
+            hi = min(int(audio.size), centre + int(0.60 * sample_rate))
+            if hi - lo >= 3 * frame:
+                valley = _energy_valley_cut(audio, lo, hi, frame)
+                # 返回 hi 表示窗口内没有显著能量谷（连续说话），保留按字符比例的位置
+                if valley != hi:
+                    cut_t = t0 + valley / sample_rate
+
+    if cut_t - t0 < 0.45 or t1 - cut_t < 0.45:
+        return [(t0, t1, text)]
+
+    return _split_overlong_single(
+        head, t0, cut_t, max_cue_dur,
+        audio=audio, sample_rate=sample_rate, char_times=char_times, depth=depth + 1,
+    ) + _split_overlong_single(
+        tail, cut_t, t1, max_cue_dur,
+        audio=audio, sample_rate=sample_rate, char_times=char_times, depth=depth + 1,
+    )
+
+
+def _cap_cue_durations(
+    cues: list[SubtitleCue],
+    max_cue_dur: float,
+    *,
+    audio: np.ndarray | None = None,
+    sample_rate: int = SAMPLE_RATE,
+    char_times: list[tuple[float, float]] | None = None,
+) -> list[SubtitleCue]:
+    """把仍超过 `max_cue_dur` 的字幕条再拆一刀（文本切点驱动，不按时间对半）。"""
+    out: list[SubtitleCue] = []
+    for cue in cues:
+        if cue.end - cue.start > max_cue_dur:
+            pieces = _split_overlong_single(
+                cue.text, cue.start, cue.end, max_cue_dur,
+                audio=audio, sample_rate=sample_rate, char_times=char_times,
+            )
+            out.extend(
+                SubtitleCue(start=round(a, 3), end=round(b, 3), text=t) for a, b, t in pieces
+            )
+        else:
+            out.append(cue)
+    return out
+
+
 def split_text_into_cues(
     text: str,
     seg_start: float,
     seg_end: float,
     max_cue_dur: float = 4.2,
     max_cue_chars: int = 20,
+    *,
+    audio: np.ndarray | None = None,
+    sample_rate: int = SAMPLE_RATE,
+    char_times: list[tuple[float, float]] | None = None,
 ) -> list[SubtitleCue]:
     clean_text = sanitize_pathological_repeats(text.strip())
     seg_dur = max(0.05, seg_end - seg_start)
@@ -686,7 +944,15 @@ def split_text_into_cues(
     for p in parts:
         if len(p) > max_cue_chars:
             sub = [s.strip() for s in JP_COMMA_SPLIT_RE.split(p) if s.strip()]
-            refined_parts.extend(sub if sub else [p])
+            if not sub:
+                sub = [p]
+            for piece in sub:
+                # 逗号再切后仍超宽的片段（无标点长句 / 一口气说完的台词）走禁则兜底，
+                # 否则这一条会以超长单行的形式直接进成品。
+                if len(piece) > max_cue_chars:
+                    refined_parts.extend(_hard_split_text(piece, max_cue_chars))
+                else:
+                    refined_parts.append(piece)
         else:
             refined_parts.append(p)
 
@@ -695,7 +961,11 @@ def split_text_into_cues(
 
     num_parts = len(refined_parts)
     if num_parts == 1:
-        return [SubtitleCue(start=round(seg_start, 3), end=round(seg_end, 3), text=refined_parts[0])]
+        # 单句：先按整段返回，超长部分统一交给末尾的 _cap_cue_durations 处理
+        # （旧行为是直接返回、忽略 max_cue_dur，实测最长 6.10s、10 条 >4.3s）。
+        cues = [SubtitleCue(start=round(seg_start, 3), end=round(seg_end, 3), text=refined_parts[0])]
+        return _cap_cue_durations(cues, max_cue_dur, audio=audio, sample_rate=sample_rate,
+                                  char_times=char_times)
 
     weights: list[float] = []
     for p in refined_parts:
@@ -716,7 +986,7 @@ def split_text_into_cues(
     else:
         scaled_durs = [seg_dur / num_parts] * num_parts
 
-    cues: list[SubtitleCue] = []
+    cues = []
     curr_t = seg_start
     for i, p in enumerate(refined_parts):
         end_t = seg_end if i == num_parts - 1 else curr_t + scaled_durs[i]
@@ -729,7 +999,10 @@ def split_text_into_cues(
         )
         curr_t = end_t
 
-    return cues
+    # 权重分配只看字数，遇到「一句很长 + 一句很短」的段，长的那条仍可能超上限
+    # （实测主题歌区间出现过两条连续 5.00s）。这里统一再兜一刀。
+    return _cap_cue_durations(cues, max_cue_dur, audio=audio, sample_rate=sample_rate,
+                              char_times=None)
 
 
 def apply_cue_padding(
@@ -880,7 +1153,6 @@ class AnimeWhisperEngine:
             max_segment_s=min(float(cfg.max_segment_s), MAX_SEGMENT_S_LIMIT),
             merge_gap_s=float(cfg.merge_gap_s),
             min_speech_s=float(cfg.min_speech_s),
-            speech_pad_s=int(cfg.speech_pad_ms) / 1000.0,
             audio=audio,
             snap_stats=self.last_segment_stats,
         )
@@ -971,6 +1243,8 @@ class AnimeWhisperEngine:
                     seg_end_s,
                     max_cue_dur=cfg.max_cue_dur,
                     max_cue_chars=cfg.max_cue_chars,
+                    audio=chunk,
+                    sample_rate=SAMPLE_RATE,
                 )
                 cues.extend(sub_cues)
             else:

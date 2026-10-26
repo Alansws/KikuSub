@@ -94,6 +94,36 @@ ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def write_text_atomic(path: str | Path, text: str, encoding: str = "utf-8") -> Path:
+    """原子写文本：先写同目录临时文件并 fsync，再 os.replace 覆盖目标。
+
+    `Path.write_text` 在写入过程中崩溃/断电会留下半截文件，而 SRT 解析器对半截
+    文件不会报错，只会少最后几条——用户无从察觉。这里保证目标文件"要么是旧内容、
+    要么是完整新内容"，任何中间态都只存在于临时文件里。
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle, tmp_name = tempfile.mkstemp(
+        dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "w", encoding=encoding, newline="") as fh:
+            fh.write(text)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return target
+
 QWEN = QwenCtcEngine()
 ENGINES = {
     "Anime Whisper（litagin）": ENGINE,
@@ -320,7 +350,7 @@ def render_active_params_banner(engine_name: str, *values) -> str:
     if eng == "whisper":
         split_txt = "已启用" if param_dict.get("enable_sentence_split", True) else "已停用"
         loud_txt = "已启用" if param_dict.get("enable_loudnorm", False) else "已停用"
-        th = param_dict.get("vad_threshold", param_dict.get("threshold", 0.20))
+        th = param_dict.get("vad_threshold", param_dict.get("threshold", 0.30))
         min_sp = param_dict.get("vad_min_speech_ms", param_dict.get("min_speech_ms", 120))
         min_sil = param_dict.get("vad_min_silence_ms", param_dict.get("min_silence_ms", 150))
         pad = param_dict.get("vad_speech_pad_ms", param_dict.get("speech_pad_ms", 200))
@@ -540,6 +570,42 @@ def _cut_snap_summary(stats: dict | None) -> str:
     return f"{forced} 处强制切分，其中 {snapped} 处吸附到能量谷（累计前移 {shift:.2f}s）"
 
 
+def _align_stats_headline(stats: dict | None, is_qwen: bool) -> str:
+    """【逐字对齐】一行摘要：把"40ms 精度"从宣传语变成可核对的数字。"""
+    if not is_qwen:
+        return "该引擎无逐字对齐，句内时间按字数比例分配"
+    if not stats or not stats.get("segments"):
+        return "未记录（本次未产出对齐统计）"
+    if not stats.get("enabled", True):
+        return "逐字对齐已停用（本次按字数比例分配时间）"
+
+    total = int(stats.get("segments", 0) or 0)
+    aligned = int(stats.get("aligned", 0) or 0)
+    noop = int(stats.get("noop", 0) or 0)
+    degraded = int(stats.get("degraded", 0) or 0)
+    empty = int(stats.get("empty", 0) or 0)
+    align_chars = int(stats.get("align_chars", 0) or 0)
+    interp = int(stats.get("interp_chars", 0) or 0)
+    rate = (aligned / total * 100) if total else 0.0
+
+    parts = [
+        f"共 {total} 段：✅ {aligned} 段完成（{rate:.1f}%）",
+        f"○ 无需对齐 {noop} 段",
+        f"⚠️ 降级 {degraded} 段",
+    ]
+    if empty > 0:
+        parts.append(f"✕ 空结果 {empty} 段（已计入疑似漏句）")
+    if align_chars > 0:
+        parts.append(f"字级插值 {interp}/{align_chars} 字（{interp / align_chars * 100:.1f}%）")
+    truncated = int(stats.get("truncated", 0) or 0)
+    if truncated > 0:
+        parts.append(f"生成截断 {truncated} 段")
+    capped_repeat = int(stats.get("capped_repeat", 0) or 0)
+    if capped_repeat > 0:
+        parts.append(f"复读吃满上限 {capped_repeat} 段（非截断，已跳过重跑）")
+    return "｜".join(parts)
+
+
 def write_missed_report(media_path, slice_tag: str, engine_key_name: str, spans: list[dict] | None) -> Path | None:
     """落盘疑似漏句清单；无漏句时清掉同名旧文件，避免误导核对台提示。"""
     path = missed_json_path(media_path, slice_tag)
@@ -605,6 +671,7 @@ def build_transcription_report(
     use_alignment: bool = True,
     missed_spans: list[dict] | None = None,
     segment_stats: dict | None = None,
+    align_stats: dict | None = None,
 ) -> str:
     finish_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     duration_str = format_duration(elapsed_time)
@@ -671,6 +738,25 @@ def build_transcription_report(
     else:
         lines.append("• 未发现")
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
+
+    headline = _align_stats_headline(align_stats, is_qwen)
+    if is_interrupted and is_qwen and align_stats:
+        headline += "（统计截至中断处）"
+    lines.append("【逐字对齐】" + headline)
+
+    degraded_spans = list((align_stats or {}).get("spans") or [])
+    for span in degraded_spans:
+        lines.append(
+            f"• {_fmt_report_time(span.get('start', 0.0))} → {_fmt_report_time(span.get('end', 0.0))}"
+            f"  ({float(span.get('dur', 0.0)):.2f}s)  {span.get('reason', 'unknown')}"
+            f"  {int(span.get('chars', 0) or 0)} 字"
+        )
+    total_degraded = int((align_stats or {}).get("degraded", 0) or 0)
+    if total_degraded > len(degraded_spans):
+        lines.append(f"• … 另有 {total_degraded - len(degraded_spans)} 段降级未列出（仅展示前 50 段）")
+    elif is_qwen and align_stats and align_stats.get("enabled", True) and total_degraded == 0:
+        lines.append("• 无降级段")
+
     lines.append("============================================================")
     return "\n".join(lines)
 
@@ -783,6 +869,7 @@ def transcribe_media(
             is_interrupted = bool(engine.last_interrupted) or CANCEL_EVENT.is_set()
             missed_spans = list(getattr(engine, "last_missed_spans", []) or [])
             segment_stats = dict(getattr(engine, "last_segment_stats", {}) or {})
+            align_stats = dict(getattr(engine, "last_align_stats", {}) or {})
 
             if not cues:
                 if is_interrupted:
@@ -796,13 +883,13 @@ def transcribe_media(
 
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             out_path = OUTPUT_DIR / out_filename
-            out_path.write_text(text, encoding="utf-8")
+            write_text_atomic(out_path, text)
 
             if save_beside:
                 beside = media_path.with_name(out_filename)
                 try:
                     beside.parent.mkdir(parents=True, exist_ok=True)
-                    beside.write_text(text, encoding="utf-8")
+                    write_text_atomic(beside, text)
                     out_path = beside
                 except OSError:
                     pass
@@ -827,6 +914,7 @@ def transcribe_media(
                 use_alignment=use_alignment,
                 missed_spans=missed_spans,
                 segment_stats=segment_stats,
+                align_stats=align_stats,
             )
 
             preview_lines = [f"[{c.start:7.2f} → {c.end:7.2f}] {c.text}" for c in cues[:100]]
@@ -936,13 +1024,13 @@ def clean_ellipsis_subtitles(cues, output_format, media_file, engine_name, save_
     out_name = f"{media_path.stem}{tag}.clean{ext}"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / out_name
-    out_path.write_text(text, encoding="utf-8")
+    write_text_atomic(out_path, text)
 
     if save_beside:
         beside = media_path.with_name(out_name)
         try:
             beside.parent.mkdir(parents=True, exist_ok=True)
-            beside.write_text(text, encoding="utf-8")
+            write_text_atomic(beside, text)
             out_path = beside
         except OSError:
             pass
@@ -962,14 +1050,104 @@ def clean_ellipsis_subtitles(cues, output_format, media_file, engine_name, save_
 # 补漏核对工作台：音频波形缓存、选区双向同步与基线状态管理
 # ==============================================================================
 
+PEAKS_CACHE_DIR = OUTPUT_DIR / ".cache" / "peaks"
 MEDIA_PEAKS_CACHE: dict[str, tuple[float, list[float]]] = {}
 MEDIA_PEAKS_CACHE_LIMIT = 8
+PEAKS_DISK_LIMIT = 128
+
+
+def _peaks_cache_key(media_path: Path) -> str:
+    """与 audio_cache 同源的缓存键：绝对路径 + 体积 + mtime_ns + 响度档位。
+
+    波形固定读 `loudnorm=False` 的 16k wav，所以这里也固定 False，
+    两套缓存一一对应；重压制（mtime 变）或换文件都不会命中脏数据。
+    """
+    try:
+        return audio_cache.cache_key(media_path, loudnorm=False)
+    except Exception:
+        try:
+            size = media_path.stat().st_size if media_path.exists() else 0
+        except OSError:
+            size = 0
+        return f"{media_path.resolve()}_{size}"
 
 
 def _remember_peaks(key: str, value: tuple[float, list[float]]) -> None:
+    # dict 保序：先 pop 再插入 = 移到末尾。命中时也走这里，才是真正的 LRU
+    # （旧实现只按插入序淘汰，反复看同一部片时等同于随机淘汰）。
+    MEDIA_PEAKS_CACHE.pop(key, None)
     MEDIA_PEAKS_CACHE[key] = value
     while len(MEDIA_PEAKS_CACHE) > MEDIA_PEAKS_CACHE_LIMIT:
         MEDIA_PEAKS_CACHE.pop(next(iter(MEDIA_PEAKS_CACHE)))
+
+
+def _load_peaks_from_disk(key: str, bins: int) -> tuple[float, list[float]] | None:
+    """读落盘波形包络；任何异常都当作"未命中"并删掉坏文件，绝不向上抛。"""
+    path = PEAKS_CACHE_DIR / f"{key}.npz"
+    if not path.exists():
+        return None
+    try:
+        with np.load(path) as data:
+            if int(data["bins"]) != int(bins):
+                return None
+            duration = float(data["duration"])
+            # 存的是 float32，读回来会有 0.73000001 这种尾巴；包络本身只保留 2 位小数，
+            # 这里重新取整，保证"磁盘命中"与"现算"的结果逐元素相等。
+            peaks = [round(float(x), 2) for x in data["peaks"]]
+    except Exception:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+    if len(peaks) != int(bins):
+        return None
+    return duration, peaks
+
+
+def _save_peaks_to_disk(key: str, duration: float, peaks: list[float]) -> None:
+    """原子落盘 npz：崩溃只会留下临时文件，不会留下读不了的半截 npz。"""
+    if not peaks:
+        return
+    path = PEAKS_CACHE_DIR / f"{key}.npz"
+    tmp_name = ""
+    try:
+        PEAKS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        handle, tmp_name = tempfile.mkstemp(dir=str(PEAKS_CACHE_DIR), prefix=f".{key}.", suffix=".npz")
+        os.close(handle)
+        with open(tmp_name, "wb") as fh:
+            np.savez(
+                fh,
+                duration=np.float64(duration),
+                peaks=np.asarray(peaks, dtype=np.float32),
+                bins=np.int32(len(peaks)),
+            )
+        os.replace(tmp_name, path)
+        tmp_name = ""
+    except Exception as exc:
+        logging.warning("波形缓存落盘失败：%s", exc)
+    finally:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+    _prune_peaks_disk()
+
+
+def _prune_peaks_disk(limit: int = PEAKS_DISK_LIMIT) -> None:
+    """磁盘侧按 mtime 只留最近 limit 个（8000 bin ≈ 32KB/片，128 个约 4MB）。"""
+    try:
+        files = sorted(
+            PEAKS_CACHE_DIR.glob("*.npz"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+    except OSError:
+        return
+    for path in files[limit:]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def _coerce_cues(raw_cues) -> list[SubtitleCue]:
@@ -1153,9 +1331,11 @@ def _media_url(path: Path) -> str:
 
 
 def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tuple[float, list[float]]:
-    cache_key = f"{media_path.resolve()}_{media_path.stat().st_size if media_path.exists() else 0}"
-    if cache_key in MEDIA_PEAKS_CACHE:
-        return MEDIA_PEAKS_CACHE[cache_key]
+    cache_key = _peaks_cache_key(media_path)
+    cached = MEDIA_PEAKS_CACHE.get(cache_key)
+    if cached is not None:
+        _remember_peaks(cache_key, cached)
+        return cached
 
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(media_path)],
@@ -1172,6 +1352,12 @@ def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tupl
         target_bins = int(duration * 4) if duration > 0 else 3200
         bins = max(2400, min(8000, target_bins))
 
+    # 落盘缓存：进程重启后免去一次全片读盘 + 包络扫描
+    disk = _load_peaks_from_disk(cache_key, bins)
+    if disk is not None:
+        _remember_peaks(cache_key, disk)
+        return disk
+
     # 波形固定使用 loudnorm=False 的原始 16k wav：真实响度不被动态归一化压平
     if audio_cache.enabled():
         try:
@@ -1181,6 +1367,7 @@ def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tupl
                 duration = wav_duration
             res = (duration, peaks)
             _remember_peaks(cache_key, res)
+            _save_peaks_to_disk(cache_key, res[0], res[1])
             return res
         except Exception as exc:
             logging.warning("缓存波形不可用，回退为 ffmpeg 直读：%s", exc)
@@ -1209,6 +1396,7 @@ def _media_duration_and_peaks(media_path: Path, bins: int | None = None) -> tupl
     norm_peaks = [round(min(1.0, peak / maximum), 2) if maximum else 0.0 for peak in peaks]
     res = (duration, norm_peaks)
     _remember_peaks(cache_key, res)
+    _save_peaks_to_disk(cache_key, res[0], res[1])
     return res
 
 
@@ -1585,7 +1773,7 @@ def _save_draft_and_progress(
     # 1. 保存 .autosave_draft.srt 草稿
     try:
         draft_path = OUTPUT_DIR / f"{clean_stem}.autosave_draft.srt"
-        draft_path.write_text(cues_to_srt(cues), encoding="utf-8")
+        write_text_atomic(draft_path, cues_to_srt(cues))
     except Exception:
         pass
 
@@ -1601,7 +1789,7 @@ def _save_draft_and_progress(
             "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         try:
-            prog_file.write_text(json.dumps(prog_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            write_text_atomic(prog_file, json.dumps(prog_data, ensure_ascii=False, indent=2))
         except Exception:
             pass
 
@@ -1764,7 +1952,7 @@ def export_reviewed_srt(review_cues, media_file):
     stem = Path(media_file).stem if media_file else "subtitles"
     path = OUTPUT_DIR / f"{stem}.reviewed.srt"
     try:
-        path.write_text(cues_to_srt(cues), encoding="utf-8")
+        write_text_atomic(path, cues_to_srt(cues))
     except Exception as exc:
         gr.Warning(f"⚠️ 写出字幕文件失败：{exc}")
         return gr.update(visible=False), f"⚠️ 导出失败：{exc}"
@@ -2313,7 +2501,7 @@ def apply_table_edits(table_data, media_file, current_cues=None, undo_stack=None
         try:
             stem = Path(media_file).stem if media_file else "subtitles"
             draft_path = OUTPUT_DIR / f"{stem}.autosave_draft.srt"
-            draft_path.write_text(cues_to_srt(cues), encoding="utf-8")
+            write_text_atomic(draft_path, cues_to_srt(cues))
             saved_tip = f"（已自动写盘备份至 outputs/{draft_path.name}）"
         except Exception:
             saved_tip = ""
@@ -4745,7 +4933,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                     vad_threshold = param(
                         "whisper.vad_threshold",
                         "VAD 语音判定阈值",
-                        gr.Slider(0.05, 0.80, value=0.20, step=0.01, label="VAD 判定阈值", info="【调小】对微弱耳语更灵敏；【调大】抗噪更强，过滤背景音乐"),
+                        gr.Slider(0.05, 0.80, value=0.30, step=0.01, label="VAD 判定阈值", info="【调小】对微弱耳语更灵敏；【调大】抗噪更强，过滤背景音乐"),
                         "whisper",
                         "float",
                         "threshold",

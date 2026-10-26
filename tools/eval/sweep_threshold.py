@@ -11,6 +11,8 @@ max_segment / 分句参数，也不动任何代码路径——只在 `build_whis
 ----
     python tools/eval/sweep_threshold.py                    # 默认 0.45 / 0.35 / 0.30 / 0.25
     python tools/eval/sweep_threshold.py --thresholds 0.30  # 只跑一档
+    # 非阈值参数的单变量实验（如 D3 合并间隔）：用 --override 覆盖一项，其余锁定
+    python tools/eval/sweep_threshold.py --thresholds 0.30 --override merge_gap_s=0.15
 
 产物
 ----
@@ -61,18 +63,39 @@ def main() -> None:
     ap.add_argument("--thresholds", default="0.45,0.35,0.30,0.25")
     ap.add_argument("--out", default=f"{ROOT}/outputs/eval/sweep")
     ap.add_argument("--wav", default=WAV, help="16k 单声道 wav（默认全片）")
+    ap.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
+                    help="在锁定参数上覆盖一项（用于 D3 这类非阈值单变量实验），可重复")
     args = ap.parse_args()
 
     thresholds = [float(x) for x in args.thresholds.split(",") if x.strip()]
+    params = dict(BASE_PARAMS)
+    overrides: dict = {}
+    for item in args.override:
+        key, _, raw = item.partition("=")
+        key = key.strip()
+        if key not in params:
+            ap.error(f"未知参数 {key}；可选：{', '.join(sorted(params))}")
+        cur = params[key]
+        if isinstance(cur, bool):
+            val = raw.strip().lower() in ("1", "true", "yes", "on")
+        elif isinstance(cur, int):
+            val = int(raw)
+        else:
+            val = float(raw)
+        params[key] = val
+        overrides[key] = val
+    tag = "".join(f"_{k}{v}" for k, v in overrides.items())
+
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"读取 16k 音频 {args.wav} …", flush=True)
     audio, sr = sf.read(args.wav, dtype="float32")
     assert sr == SR, sr
-    print(f"音频 {len(audio)/SR:.1f}s，参考块 {len(SC.load_reference(REF))} 个", flush=True)
+    print(f"音频 {len(audio)/SR:.1f}s，参考块 {len(SC.load_reference(REF))} 个"
+          + (f"；覆盖参数 {overrides}" if overrides else ""), flush=True)
 
-    cfg0 = T.build_whisper_config(threshold=thresholds[0], **BASE_PARAMS)
+    cfg0 = T.build_whisper_config(threshold=thresholds[0], **params)
     print("加载 Anime Whisper …", flush=True)
     t_load = time.time()
     eng = T.AnimeWhisperEngine(cfg0)
@@ -82,23 +105,28 @@ def main() -> None:
     ref_blocks = SC.load_reference(REF)
     results: list[dict] = []
     for th in thresholds:
-        cfg = T.build_whisper_config(threshold=th, **BASE_PARAMS)
-        print(f"\n=== threshold={th:.2f} 开始 ===", flush=True)
+        cfg = T.build_whisper_config(threshold=th, **params)
+        print(f"\n=== threshold={th:.2f}{tag} 开始 ===", flush=True)
         t0 = time.time()
         cues = eng._transcribe_array(
             audio, config=cfg, no_repeat_ngram_size=5, repetition_penalty=1.15,
         )
         secs = time.time() - t0
 
-        srt_path = out_dir / f"th_{th:.2f}.srt"
+        srt_path = out_dir / f"th_{th:.2f}{tag}.srt"
         srt_path.write_text(T.cues_to_srt(cues), encoding="utf-8")
 
         stats = dict(eng.last_segment_stats or {})
-        spans, vad_stats = SC.vad_spans(audio, th)
+        spans, vad_stats = SC.vad_spans(
+            audio, th,
+            max_segment_s=params["max_segment_s"],
+            merge_gap_s=params["merge_gap_s"],
+            min_speech_s=params["min_speech_s"],
+        )
         row = SC.score(
             [{"start": c.start, "end": c.end, "text": c.text} for c in cues],
             ref_blocks,
-            label=f"th={th:.2f}",
+            label=f"th={th:.2f}{tag}",
             spans=spans,
             secs=secs,
             forced=stats.get("forced_cuts"),
@@ -126,10 +154,10 @@ def main() -> None:
     # ---- 汇总 ----
     base = next((r for r in results if abs(r["threshold"] - 0.45) < 1e-9), results[0])
     lines = [
-        "# E1 全局阈值扫描（单变量：只改 threshold）",
+        "# 单变量扫描（只改 threshold" + ("，外加 " + str(overrides) if overrides else "") + "）",
         "",
-        f"- 音频：`outputs/eval/full16k.wav`（{len(audio)/SR:.1f}s）",
-        "- 锁定参数：" + "，".join(f"{k}={v}" for k, v in BASE_PARAMS.items()),
+        f"- 音频：`{args.wav}`（{len(audio)/SR:.1f}s）",
+        "- 锁定参数：" + "，".join(f"{k}={v}" for k, v in params.items()),
         "- 基线参照：`tools/eval/baseline_474.srt`（CER 25.08%，插入 69）",
         "",
         "| 阈值 | 条数 | 全片 CER | 去歌 CER | 块均 | 漏块 | 插入字数 | VAD 不达标块/字 | 强制切分 | 最长条 | >4.3s | 耗时 |",
