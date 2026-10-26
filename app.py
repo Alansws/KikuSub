@@ -20,6 +20,7 @@ os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
 import datetime
+import html
 import json
 import logging
 import math
@@ -793,6 +794,148 @@ def build_transcription_report(
     return "\n".join(lines)
 
 
+_REPORT_SECTION_RE = re.compile(r"^【(?P<title>[^】]+)】(?P<note>.*)$")
+_REPORT_BANNER_CHARS = set("=-—_ ")
+
+
+def _report_chip(
+    label: str, value: str, accent: bool = False, dot: bool = False, pending: bool = False
+) -> str:
+    """顶部设备胶囊同款小胶囊：label 灰字 + value 等宽粗体。"""
+    if not value:
+        return ""
+    classes = "device-chip"
+    if accent:
+        classes += " is-accent"
+    if pending:
+        classes += " is-pending"
+    dot_html = '<span class="chip-dot"></span>' if dot else ""
+    return (
+        f'<span class="{classes}">{dot_html}'
+        f'<span class="chip-label">{html.escape(label)}</span>'
+        f'<span class="chip-value">{html.escape(value)}</span></span>'
+    )
+
+
+def _report_metrics_html(report_text: str) -> str:
+    """从详报正文抽取核心指标，渲染成胶囊行（耗时 / 条数 / 字符数 …）。"""
+
+    def pick(pattern: str) -> str:
+        match = re.search(pattern, report_text)
+        return match.group(1).strip() if match else ""
+
+    status = pick(r"• 执行状态：(.+)")
+    elapsed = pick(r"• 转录耗时：(.+)")
+    engine = pick(r"• 识别引擎：(.+)")
+    span_desc = pick(r"• 处理时间段：(.+)")
+
+    cue_count = char_count = ""
+    stats_match = re.search(r"• 字幕统计：共\s*(\d+)\s*条字幕\s*｜\s*总计\s*(\d+)\s*字符", report_text)
+    if stats_match:
+        cue_count, char_count = stats_match.group(1), stats_match.group(2)
+
+    done = status.startswith("✅")
+    chips = [
+        _report_chip("状态", status, accent=done, dot=True, pending=not done),
+        _report_chip("耗时", elapsed, accent=True),
+        _report_chip("条数", f"{cue_count} 条" if cue_count else ""),
+        _report_chip("字符数", f"{char_count} 字" if char_count else ""),
+        _report_chip("引擎", engine),
+        _report_chip("时间段", span_desc),
+    ]
+    body = "".join(chip for chip in chips if chip)
+    return f'<div class="report-metrics">{body}</div>' if body else ""
+
+
+def _report_rows_html(lines: list[str]) -> str:
+    rows = []
+    for raw in lines:
+        item = raw[2:].strip() if raw.startswith("• ") else raw.strip()
+        if not item:
+            continue
+        if "：" in item:
+            key, value = item.split("：", 1)
+            key, value = key.strip(), value.strip()
+            if key and value:
+                rows.append(
+                    f'<div class="rp-row"><span class="rp-key">{html.escape(key)}</span>'
+                    f'<span class="rp-val">{html.escape(value)}</span></div>'
+                )
+                continue
+        accent = " is-accent" if item.startswith(("✅", "⚠️", "❌")) else ""
+        rows.append(f'<div class="rp-row"><span class="rp-val{accent}">{html.escape(item)}</span></div>')
+    return "".join(rows)
+
+
+def render_report_panel(report_text: str) -> str:
+    """把纯文本详报渲染成结构化 HTML 面板。
+
+    自带 `overflow-y: auto` 滚动容器（不依赖 Gradio Textbox 的自动增高逻辑），
+    无论转写多少次都能稳定上下滑动；原始纯文本藏在 `.report-raw-src` 里供一键复制。
+    """
+    text = (report_text or "").strip()
+    head = (
+        '<div class="report-panel-head">'
+        '<span class="report-panel-title">📄 转录任务报告</span>'
+        '<span class="report-panel-hint">滚轮上下滑动查看全文 · 复制按钮输出纯文本原稿</span>'
+        "</div>"
+    )
+
+    if not text:
+        return (
+            '<div class="report-panel">'
+            f"{head}"
+            '<div class="report-empty">转写完成后将在此生成详细报告…</div>'
+            "</div>"
+        )
+
+    sections: list[dict] = []
+    loose: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or set(line) <= _REPORT_BANNER_CHARS:
+            continue
+        section_match = _REPORT_SECTION_RE.match(line)
+        if section_match:
+            sections.append({
+                "title": section_match.group("title").strip(),
+                "note": section_match.group("note").strip(),
+                "rows": [],
+            })
+            continue
+        if sections:
+            sections[-1]["rows"].append(line)
+        else:
+            loose.append(line)
+
+    blocks = []
+    for line in loose:
+        # 顶部 banner 标题（🎬 …）已在 Tab 名里，不再重复
+        if line.startswith("🎬"):
+            continue
+        blocks.append(f'<div class="rp-note">{html.escape(line)}</div>')
+
+    for section in sections:
+        title = html.escape(section["title"])
+        note = f'<span class="rp-sec-note">{html.escape(section["note"])}</span>' if section["note"] else ""
+        blocks.append(
+            '<section class="rp-sec">'
+            f'<div class="rp-sec-head"><span class="rp-sec-title">{title}</span>{note}</div>'
+            f'{_report_rows_html(section["rows"])}'
+            "</section>"
+        )
+
+    raw_source = f'<pre id="report-raw-text" class="report-raw-src">{html.escape(text)}</pre>'
+    return (
+        '<div class="report-panel">'
+        f"{head}"
+        f"{_report_metrics_html(text)}"
+        f'<div class="report-body">{"".join(blocks)}</div>'
+        f"{raw_source}"
+        "</div>"
+    )
+
+
 def render_subtitles(cues: list[SubtitleCue], output_format: str) -> tuple[str, str]:
     if output_format == "SRT":
         return cues_to_srt(cues), ".srt"
@@ -970,7 +1113,7 @@ def transcribe_media(
                 final_progress = f"✅ 转录完成！共生成 {len(cues)} 条字幕（耗时 {format_duration(elapsed_time)}）"
 
             state_cues = [{"start": c.start, "end": c.end, "text": c.text} for c in cues]
-            q.put(("done", (table_data, preview, str(out_path), str(out_path), state_cues, status_summary, report_text, final_progress)))
+            q.put(("done", (table_data, preview, str(out_path), str(out_path), state_cues, status_summary, render_report_panel(report_text), final_progress)))
         except Exception as exc:
             q.put(("error", exc))
 
@@ -4697,6 +4840,158 @@ button.btn-run {
     font-size: 12px !important;
     border-radius: 8px !important;
 }
+
+/* ============ 转录任务详报面板（与顶部设备胶囊同风格 · 自带滚动容器） ============ */
+.report-panel-wrap {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+}
+.report-panel-wrap .html-container,
+.report-panel-wrap .prose {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+}
+.report-panel {
+    border: 1px solid #e6ebf3;
+    border-left: 3px solid #a5b4fc;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 12px 14px 12px 14px;
+}
+.report-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-bottom: 9px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #e9eef6;
+}
+.report-panel-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: #334155;
+}
+.report-panel-hint {
+    font-size: 11px;
+    color: #94a3b8;
+}
+.report-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 12px;
+}
+.report-metrics .device-chip {
+    height: 28px;
+    padding: 0 11px;
+    background: #ffffff;
+}
+.report-body {
+    max-height: min(58vh, 520px);
+    overflow-y: auto;
+    overscroll-behavior: auto;
+    padding-right: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: #d3dced transparent;
+}
+.report-body::-webkit-scrollbar {
+    width: 8px;
+}
+.report-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+.report-body::-webkit-scrollbar-thumb {
+    background: #dbe3ee;
+    border-radius: 4px;
+}
+.report-body::-webkit-scrollbar-thumb:hover {
+    background: #c3cfe0;
+}
+.rp-sec {
+    margin-bottom: 12px;
+}
+.rp-sec:last-child {
+    margin-bottom: 2px;
+}
+.rp-sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid #e9eef6;
+}
+.rp-sec-head::before {
+    content: "";
+    width: 3px;
+    height: 11px;
+    border-radius: 2px;
+    background: #a5b4fc;
+    flex: none;
+    align-self: center;
+}
+.rp-sec-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #334155;
+}
+.rp-sec-note {
+    font-size: 11.5px;
+    color: #64748b;
+}
+.rp-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 3px 0;
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+.rp-row + .rp-row {
+    border-top: 1px dashed #e9eef6;
+}
+.rp-key {
+    flex: 0 0 auto;
+    min-width: 96px;
+    max-width: 40%;
+    color: #64748b;
+}
+.rp-val {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: #1e293b;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    word-break: break-word;
+}
+.rp-val.is-accent {
+    color: #4338ca;
+    font-weight: 600;
+}
+.rp-note {
+    padding: 2px 0 6px 0;
+    font-size: 12px;
+    color: #475569;
+}
+.report-empty {
+    padding: 16px 4px;
+    font-size: 12.5px;
+    color: #94a3b8;
+}
+.report-raw-src {
+    display: none !important;
+}
 """
 
 try:
@@ -5271,8 +5566,11 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             elem_classes=["cue-table", "cue-table-wrap"],
         )
 
-    with gr.Accordion("📊 全片转录原始结果、表格与任务详报", open=False, elem_classes=["clean-accordion"]):
-        status = gr.Markdown("状态：就绪。上传音视频文件并点击「🚀 开始转写」即可执行。")
+    with gr.Accordion("📊 全片转录原始结果、表格与任务详报", open=True, elem_classes=["clean-accordion"]):
+        status = gr.Markdown(
+            "状态：就绪。上传音视频文件并点击「🚀 开始转写」即可执行。",
+            elem_classes=["progress-status-box"],
+        )
         with gr.Tabs():
             with gr.TabItem("📋 原始条目列表"):
                 cue_table = gr.Dataframe(
@@ -5285,11 +5583,9 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             with gr.TabItem("📝 SRT 纯文本预览"):
                 preview = gr.Textbox(label="字幕内容文本", lines=10)
             with gr.TabItem("📊 转录任务详报与参数清单"):
-                report_box = gr.Textbox(
-                    label="转录任务报告",
-                    lines=10,
-                    interactive=False,
-                    placeholder="转写完成后将在此生成详细报告…",
+                report_box = gr.HTML(
+                    render_report_panel(""),
+                    elem_classes=["report-panel-wrap"],
                 )
                 with gr.Row():
                     copy_report_btn = gr.Button("📋 一键复制转录详报与参数清单", variant="secondary", size="sm")
@@ -5822,9 +6118,12 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         api_name=False,
     )
 
+    # 详报面板是 HTML，纯文本原稿藏在 #report-raw-text 里，复制时直接读 DOM
     copy_js = """
-    (text) => {
-        if (!text) {
+    () => {
+        const src = document.getElementById('report-raw-text');
+        const text = src ? (src.textContent || '') : '';
+        if (!text.trim()) {
             return '暂无转录详报内容可供复制。';
         }
         if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
@@ -5843,13 +6142,13 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             document.body.removeChild(ta);
             return '✅ 已成功将转录任务详报与全部参数复制到剪贴板！';
         } catch (e) {
-            return '复制失败，请手动选中文本框内容复制。';
+            return '复制失败，请手动选中面板内容复制。';
         }
     }
     """
     copy_report_btn.click(
         None,
-        inputs=report_box,
+        inputs=None,
         outputs=copy_status,
         js=copy_js,
         api_name=False,

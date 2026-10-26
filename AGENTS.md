@@ -47,3 +47,12 @@ python app.py
 - 重新导入 SRT 时，必须彻底更新 `review_cues_state` 以及前端表格和波形展示，杜绝旧基线残留。
 - **全链路撤回/重做体系 (Undo/Redo)**：由 `undo_stack_state` 与 `redo_stack_state` 管理，支持任意删除、单行更新、插入、清空、导入或追加操作后的无损撤回。前端通过 `Cmd+Z` (Mac) 或 `Ctrl+Z` (Windows/Linux) 及界面按钮触发撤回，`Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` 触发重做。
 - **高健壮性与防崩溃规范**：核对区所有操作函数在面对用户误操作（如空白时间、非法格式、越界行号）时，一律采用 `gr.Warning()` 友好提示并返回 `fallback` 保护当前已有字幕状态，严禁抛出未经处理的 `gr.Error()` 导致界面状态丢失；所有 Gradio 事件处理函数返回值的数量必须与 `outputs` 声明的组件列表严格一一对应。
+
+## 4. 转录任务详报面板（禁止退回 Textbox）
+
+- 「📊 全片转录原始结果、表格与任务详报」下的「转录任务报告」**必须**保持为 `gr.HTML` + `render_report_panel()`（`app.py` 中 `build_transcription_report` 之后），**不要改回 `gr.Textbox`**：Gradio 6 的 Textbox 会按内容自动增高并在 `overflow:hidden` / `overflow:scroll` 之间切换，长报告反复更新后会把文本框卡在裁切状态、无法上下滑动。
+- 滚动能力由面板自带的 `.report-body { max-height: min(58vh, 520px); overflow-y: auto }` 提供，任何改版都不得移除该容器或改成依赖组件自身高度的方案。
+- 详报的**纯文本原稿**藏在面板内 `<pre id="report-raw-text" class="report-raw-src">` 里，「📋 一键复制」按钮的 JS 直接读它的 `textContent`（事件 `inputs=None`），因此复制内容与旧版完全一致；改渲染逻辑时必须同步保留该 `<pre>`。
+- 指标胶囊复用顶部设备胶囊的 `.device-chip`（`chip-label` 灰字 + `chip-value` 等宽粗体），面板底色 `#f8fafc` + 3px `#a5b4fc` 左边框，与 `.progress-status-box` 同源；`status` Markdown 也挂 `progress-status-box`，保证「界面顶部 / 报告区」两处视觉一致。
+- 该折叠面板默认 `open=True`（用户要求首屏即可看到转写结果与详报）。
+
