@@ -38,6 +38,10 @@ python app.py
 - **监看画面与转录源解耦**：`review_payload` 的 `src` 有四种来源——自动跟随导入的媒体、手动导入的任意本地片源（`📂 导入监看画面`）、`outputs/web_proxies` 里的历史 480p 代理（`📦` 下拉，零拷贝）、以及「已关闭」空态。手动片源路径记录在 `outputs/monitor_last.json`，供下次打开自动恢复；`prepare_review_workspace`（即 `media.change`）会清空该记忆，重新回到自动模式。`src` 为空时前端必须销毁 `window.__reviewerInstance` 与 keydown 监听，避免悬空引用。
 - 底部核对区由 `review_cues_state` 管理，和当前转写结果 `cues_state` 分离。导入 SRT 或“将本次转写设为基线”才会覆盖核对基线；“添加本次局部转写”追加去重后的条目。
 - 视频播放器拖动进度条、播放时，底部音频轨道必须有高亮时间播放线（时间游标）实时同步跟随。
+- **字幕叠加层两条硬约束**（改 `REVIEWER_CLIENT_JS` 时必须保持）：
+  1. **多行聚合**：画面字幕由 `rebuildCaptionIndex()` 按 `(start, end)` 归并成「字幕块」，同区间的多条字幕（中日双语 SRT 的日/中两行）合并为多行渲染，行序沿用导入顺序。禁止退回 `cues.find(...)` 单条查找，否则双语只显示一行。`_unique_sorted_cues()` 的排序也因此保留原始下标做末位 tiebreak。
+  2. **与视窗解耦**：`updateCaption()` 必须在 `updatePlayhead()` 中位于「播放头是否在可视区」的 early-return **之前**，任何缩放比例、光标位置、进度条拖动状态下都要更新，否则放大波形后播放会出现「字幕卡住不跳句」。
+- 放大波形后播放时，视窗按「整页平移」跟随播放头（`ensurePlayheadVisible()`，落点约在窗口左侧 15%），工具栏 `#rw-follow-toggle` 可开关；播放中用户主动拖动/缩放波形会自动关闭跟随，避免框选区被拽走。
 - 触控板缩放（捏合）与双指横移操作需精准平滑支持，允许将局部波形横向大幅放大（如放大至数秒区间），方便精细框选。
 - 框选范围后，提供一键将该时间段同步到上方“时间片段截取”输入框（`slice-start`, `slice-end`），且能够联动更新上方的状态或者直接触发局部转录。
 - 重新导入 SRT 时，必须彻底更新 `review_cues_state` 以及前端表格和波形展示，杜绝旧基线残留。
