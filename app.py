@@ -957,9 +957,17 @@ def _coerce_cues(raw_cues) -> list[SubtitleCue]:
 
 
 def _unique_sorted_cues(raw_cues) -> list[SubtitleCue]:
+    """按时间排序去重。
+
+    时间区间完全相同的条目（典型场景：中日双语 SRT 的日语行 + 中文行）
+    保持「导入时的原始先后顺序」，不按文本重新排序，否则双语/多语字幕
+    的行序会随字符编码随机翻转，叠加显示时语序错乱。
+    """
     seen: set[tuple[int, int, str]] = set()
     result: list[SubtitleCue] = []
-    for cue in sorted(_coerce_cues(raw_cues), key=lambda item: (item.start, item.end, item.text)):
+    ordered = list(enumerate(_coerce_cues(raw_cues)))
+    ordered.sort(key=lambda pair: (float(pair[1].start), float(pair[1].end), pair[0]))
+    for _, cue in ordered:
         start = max(0.0, float(cue.start))
         end = max(start + 0.001, float(cue.end))
         text = cue.text.strip()
@@ -2428,6 +2436,7 @@ REVIEWER_CLIENT_JS = r"""
           <button type="button" class="rw-tool-btn" id="rw-zoom-in" title="放大轨道">🔍 +</button>
           <button type="button" class="rw-tool-btn" id="rw-zoom-fit" title="显示全片视图">100% 全景</button>
           <button type="button" class="rw-tool-btn" id="rw-center-playhead" title="聚焦到当前播放头并放大50倍">🎯 聚焦</button>
+          <button type="button" class="rw-tool-btn is-on" id="rw-follow-toggle" title="播放时自动跟随播放头（字幕始终同步）">🧲 跟随</button>
           <span class="reviewer-zoom-level" id="rw-zoom-level">1.0×</span>
         </div>
       </div>
@@ -2465,6 +2474,7 @@ REVIEWER_CLIENT_JS = r"""
     const zoomOutBtn = shell.querySelector('#rw-zoom-out');
     const zoomFitBtn = shell.querySelector('#rw-zoom-fit');
     const centerPlayheadBtn = shell.querySelector('#rw-center-playhead');
+    const followToggleBtn = shell.querySelector('#rw-follow-toggle');
     const zoomSlider = shell.querySelector('#rw-zoom-slider');
     const zoomLevelText = shell.querySelector('#rw-zoom-level');
 
@@ -2490,6 +2500,8 @@ REVIEWER_CLIENT_JS = r"""
     let isPlayingSelection = false;
     let lastSyncedCueIndex = -1;
     let isScrubbingSlider = false;
+    let followPlayhead = true;
+    let followUserLocked = false;
     let hideControlsTimer = null;
 
     window.__isTranscribing = false;
@@ -2509,7 +2521,72 @@ REVIEWER_CLIENT_JS = r"""
       if (scrubberSlider) scrubberSlider.max = String(duration);
     }
 
-    const activeCue = (time) => cues.find(c => time >= c.start && time <= c.end);
+    // ── 字幕叠加层索引 ───────────────────────────────────────────────
+    // 关键点 1：同一时间区间内的多条字幕（中日双语 SRT 通常把日语行和
+    // 中文行拆成两条、起止时间完全相同）必须聚合成一个「字幕块」多行显示，
+    // 不能用 find() 只取第一条，否则永远只显示一行。
+    // 关键点 2：字幕显示与下方波形的缩放视窗完全解耦，任何时间点都要更新。
+    let captionGroups = [];
+    let lastCaptionText = null;
+
+    const rebuildCaptionIndex = () => {
+      const buckets = new Map();
+      const groups = [];
+      for (const cue of cues) {
+        const start = Number(cue.start) || 0;
+        const end = Number(cue.end) || 0;
+        const key = `${Math.round(start * 1000)}|${Math.round(end * 1000)}`;
+        let group = buckets.get(key);
+        if (!group) {
+          group = { start, end, lines: [], seen: new Set() };
+          buckets.set(key, group);
+          groups.push(group);
+        }
+        const text = String(cue.text == null ? '' : cue.text).trim();
+        if (!text || group.seen.has(text)) continue;
+        group.seen.add(text);
+        group.lines.push(text);
+      }
+      groups.sort((a, b) => (a.start - b.start) || (a.end - b.end));
+      captionGroups = groups;
+      lastCaptionText = null;
+    };
+
+    const findCaptionGroup = (time) => {
+      const groups = captionGroups;
+      if (!groups.length) return null;
+      let lo = 0;
+      let hi = groups.length - 1;
+      let idx = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (groups[mid].start <= time + 0.0005) { idx = mid; lo = mid + 1; }
+        else { hi = mid - 1; }
+      }
+      if (idx === -1) return null;
+      for (let i = idx; i >= 0 && i > idx - 64; i--) {
+        if (groups[i].end + 0.0005 >= time) return groups[i];
+        if (groups[i].end < time - 60) break;
+      }
+      return null;
+    };
+
+    const updateCaption = (time) => {
+      if (!caption) return;
+      const group = findCaptionGroup(time);
+      const text = group ? group.lines.join('\n') : '';
+      if (text === lastCaptionText) return;
+      lastCaptionText = text;
+      if (!text) {
+        caption.textContent = '';
+        caption.style.display = 'none';
+      } else {
+        caption.textContent = text;
+        caption.style.display = 'block';
+      }
+    };
+
+    rebuildCaptionIndex();
 
     const clampView = () => {
       const minSpan = Math.min(duration || 1, 0.4);
@@ -2718,6 +2795,19 @@ REVIEWER_CLIENT_JS = r"""
       }
     };
 
+    // 播放头跑出可视范围时，把视窗整页平移到播放头附近（默认落在左侧 15% 处），
+    // 保证放大后长时间播放也不会「看不见播放头」。返回是否真的移动了视窗。
+    const ensurePlayheadVisible = (cur) => {
+      if (!followPlayhead || !duration) return false;
+      if (isDragging || isScrubbingSlider) return false;
+      if (cur >= viewStart && cur <= viewStart + viewSpan) return false;
+      const maxStart = Math.max(0, duration - viewSpan);
+      const next = Math.max(0, Math.min(maxStart, cur - viewSpan * 0.15));
+      if (Math.abs(next - viewStart) < 1e-6) return false;
+      viewStart = next;
+      return true;
+    };
+
     const updatePlayhead = (syncInputBoxes = false) => {
       const cur = video.currentTime;
       currentTimeText.textContent = format(cur);
@@ -2771,6 +2861,17 @@ REVIEWER_CLIENT_JS = r"""
         }
       }
 
+      // ① 字幕永远优先更新：与缩放视窗、光标位置、是否拖动进度条无关，
+      //    避免播放头一旦跑出可视范围就「卡住不动」。
+      updateCaption(cur);
+
+      // ② 播放时自动跟随播放头（整页平移，不做连续滚动，避免干扰框选）
+      if (duration && !video.paused && !video.ended && ensurePlayheadVisible(cur)) {
+        drawRuler();
+        drawWave();
+      }
+
+      // ③ 播放头时间游标
       if (!duration || cur < viewStart || cur > viewStart + viewSpan) {
         playheadLine.style.display = 'none';
         return;
@@ -2781,15 +2882,6 @@ REVIEWER_CLIENT_JS = r"""
 
       playheadLine.style.display = 'block';
       playheadLine.style.left = `${x}px`;
-
-      const cue = activeCue(cur);
-      if (cue) {
-        caption.textContent = cue.text;
-        caption.style.display = 'block';
-      } else {
-        caption.textContent = '';
-        caption.style.display = 'none';
-      }
     };
 
     const renderAll = () => {
@@ -2842,6 +2934,7 @@ REVIEWER_CLIENT_JS = r"""
 
     video.addEventListener('play', () => {
       onPlayStateChanged();
+      if (!followUserLocked) setFollow(true);
       cancelAnimationFrame(animId);
       animId = requestAnimationFrame(loop);
     });
@@ -2933,6 +3026,7 @@ REVIEWER_CLIENT_JS = r"""
         const targetSec = Number(e.target.value);
         currentTimeText.textContent = format(targetSec);
         if (ctrlCurrentTime) ctrlCurrentTime.textContent = format(targetSec);
+        updateCaption(targetSec);   // 拖动进度条时字幕实时预览
         if (scrubTip) {
           scrubTip.style.display = 'block';
           scrubTip.textContent = format(targetSec);
@@ -2953,6 +3047,16 @@ REVIEWER_CLIENT_JS = r"""
       scrubberSlider.addEventListener('change', commitScrub);
       scrubberSlider.addEventListener('pointerup', commitScrub);
       scrubberSlider.addEventListener('touchend', commitScrub);
+
+      // 兜底：无论指针在哪里松开，都复位拖动状态，
+      // 避免 isScrubbingSlider 卡在 true 导致进度条/时间读数不再跟随播放。
+      window.addEventListener('pointerup', () => {
+        if (!isScrubbingSlider) return;
+        isScrubbingSlider = false;
+        if (scrubTip) scrubTip.style.display = 'none';
+        safeSeekVideo(Number(scrubberSlider.value));
+        updatePlayhead(true);
+      });
     }
 
     const xToTime = (clientX) => {
@@ -2966,6 +3070,7 @@ REVIEWER_CLIENT_JS = r"""
 
     const onPointerDown = (e) => {
       if (!duration) return;
+      noteManualViewChange();
       downScreenX = e.clientX;
       downScreenY = e.clientY;
       dragAnchor = xToTime(e.clientX);
@@ -3034,6 +3139,7 @@ REVIEWER_CLIENT_JS = r"""
     const onWheelZoomPan = (e) => {
       if (!duration) return;
       e.preventDefault();
+      noteManualViewChange();
 
       const isMacPinch = e.ctrlKey || e.metaKey;
       const isHorizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY) && !isMacPinch;
@@ -3062,6 +3168,7 @@ REVIEWER_CLIENT_JS = r"""
     rulerCanvas.addEventListener('wheel', onWheelZoomPan, { passive: false });
 
     zoomInBtn.addEventListener('click', () => {
+      noteManualViewChange();
       const centerTime = viewStart + viewSpan / 2;
       viewSpan = Math.max(0.4, viewSpan * 0.65);
       viewStart = centerTime - viewSpan / 2;
@@ -3070,6 +3177,7 @@ REVIEWER_CLIENT_JS = r"""
     });
 
     zoomOutBtn.addEventListener('click', () => {
+      noteManualViewChange();
       const centerTime = viewStart + viewSpan / 2;
       viewSpan = Math.min(duration, viewSpan * 1.5);
       viewStart = centerTime - viewSpan / 2;
@@ -3092,7 +3200,37 @@ REVIEWER_CLIENT_JS = r"""
       renderAll();
     });
 
+    const syncFollowBtn = () => {
+      if (!followToggleBtn) return;
+      followToggleBtn.classList.toggle('is-on', followPlayhead);
+      followToggleBtn.textContent = followPlayhead ? '🧲 跟随' : '🧲 不跟随';
+      followToggleBtn.title = followPlayhead
+        ? '播放时自动跟随播放头（点击关闭）'
+        : '已关闭自动跟随（点击开启）';
+    };
+
+    const setFollow = (on) => {
+      followPlayhead = !!on;
+      syncFollowBtn();
+    };
+
+    if (followToggleBtn) {
+      followToggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = !followPlayhead;
+        followUserLocked = !next;
+        setFollow(next);
+      });
+      syncFollowBtn();
+    }
+
+    // 播放中用户主动拖动/缩放波形时，暂停自动跟随，避免画面被强行拽走
+    const noteManualViewChange = () => {
+      if (followPlayhead && !video.paused && !video.ended) setFollow(false);
+    };
+
     zoomSlider.addEventListener('input', () => {
+      noteManualViewChange();
       const zoomLevel = Number(zoomSlider.value);
       const nextSpan = duration / zoomLevel;
       const centerTime = viewStart + viewSpan / 2;
@@ -3251,6 +3389,7 @@ REVIEWER_CLIENT_JS = r"""
         cues.length = 0;
         cues.push(...newCues);
         lastSyncedCueIndex = -1;
+        rebuildCaptionIndex();
         renderAll();
       },
       seekAndCenter: (targetTime) => {
@@ -3629,7 +3768,7 @@ fieldset label:has(input[type="radio"]:checked) * {
     position: absolute;
     left: 5%;
     right: 5%;
-    bottom: 30px;
+    bottom: 90px;
     text-align: center;
     color: #ffffff;
     font-size: clamp(16px, 1.8vw, 24px);
@@ -3643,7 +3782,14 @@ fieldset label:has(input[type="radio"]:checked) * {
     backdrop-filter: blur(4px);
     display: none;
     z-index: 10;
+    /* 中日双语 / 多语字幕：同一时间区间聚合为多行显示 */
+    white-space: pre-line;
+    word-break: break-word;
+    max-height: 55%;
+    overflow: hidden;
+    transition: bottom 0.25s ease;
 }
+.reviewer-stage.is-playing.is-inactive .reviewer-caption { bottom: 34px; }
 
 .reviewer-wave-header {
     display: flex;
@@ -3685,6 +3831,12 @@ fieldset label:has(input[type="radio"]:checked) * {
 
 .reviewer-zoom-controls { display: flex; align-items: center; gap: 4px; }
 .rw-tool-btn { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+.rw-tool-btn.is-on {
+    background: rgba(99, 102, 241, 0.28);
+    border-color: rgba(129, 140, 248, 0.85);
+    color: #e0e7ff;
+    font-weight: 700;
+}
 .rw-zoom-slider { width: 75px; cursor: pointer; accent-color: #6366f1; }
 .reviewer-zoom-level { font-family: ui-monospace, monospace; font-size: 11px; color: #94a3b8; min-width: 34px; }
 
