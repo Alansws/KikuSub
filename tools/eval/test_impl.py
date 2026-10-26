@@ -1,4 +1,5 @@
-"""实现验证：报告渲染 / 峰值缓存落盘 / 原子写 / 劈词缝合闸门 / P4 截断标记。"""
+"""实现验证：报告渲染 / 峰值缓存落盘 / 原子写 / 劈词缝合闸门 / P4 截断标记 / E5 漏句降噪。"""
+import json
 import os
 import sys
 import tempfile
@@ -259,11 +260,59 @@ def test_p4_cap():
     print("  P4 上限自适应：9 项通过")
 
 
+def test_missed_filter():
+    """E5：近静音漏句记录不在报告里喊，但必须留在 JSON 里。"""
+    cfg = WhisperVadConfig()
+    loud = {"start": 100.0, "end": 102.0, "dur": 2.0, "reason": "empty-after-retry",
+            "peak": 0.42, "rms": 0.031}
+    quiet = {"start": 200.0, "end": 201.5, "dur": 1.5, "reason": "empty-after-retry",
+             "peak": 0.004, "rms": 0.0008}
+    legacy = {"start": 300.0, "end": 301.0, "dur": 1.0, "reason": "empty-after-retry"}
+
+    def report(spans):
+        return app.build_transcription_report(
+            media_name="a.mkv", out_filename="a.srt", out_path="/tmp/a.srt",
+            engine_name="Anime Whisper（litagin）", output_format="SRT",
+            elapsed_time=12.0, cue_count=10, char_count=100, is_qwen=False,
+            config=cfg, missed_spans=spans,
+        )
+
+    txt = report([loud, quiet])
+    check("共 1 处 / 2.0 秒" in txt, f"headline 未按峰值过滤：{[ln for ln in txt.splitlines() if '漏句' in ln]}")
+    check("00:01:40.000" in txt, "有声漏句应被展示")
+    check("00:03:20.000" not in txt, "近静音漏句不该展示")
+    check("另有 1 处峰值低于 0.02" in txt, "被隐藏的条数没有交代")
+    check("峰值 0.420" in txt, "展示项缺峰值")
+
+    # 老 JSON 没有 peak 字段：按「有声音」处理，不能把历史记录一并藏掉
+    txt_legacy = report([legacy])
+    check("共 1 处 / 1.0 秒" in txt_legacy, "无 peak 字段的旧记录被误隐藏")
+
+    # 全部是近静音：headline 显示「未发现」，但仍交代隐藏了几条
+    txt_all_quiet = report([quiet])
+    check("【疑似漏句区间】未发现" in txt_all_quiet, "全静音时应报未发现")
+    check("另有 1 处峰值低于 0.02" in txt_all_quiet, "全静音时缺隐藏说明")
+
+    # 落盘不过滤：信息只降噪、不丢失
+    media = Path(tempfile.gettempdir()) / "zz_kikusub_missed_filter.mkv"
+    path = app.write_missed_report(media, "", "whisper", [loud, quiet])
+    check(path is not None and path.exists(), "漏句 JSON 未落盘")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    check(len(data["spans"]) == 2, "JSON 不应过滤记录")
+    check(data["spans"][1]["peak"] == 0.004, "JSON 缺 peak 字段")
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    print("  E5 漏句降噪：11 项通过")
+
+
 if __name__ == "__main__":
     test_report()
     test_atomic_write()
     test_heal_gap()
     test_p4_cap()
+    test_missed_filter()
 
     media = Path("/tmp/kikusub_test_peak.wav")
     if not media.exists():

@@ -376,7 +376,7 @@ def render_active_params_banner(engine_name: str, *values) -> str:
     else:
         loud_txt = "已启用" if param_dict.get("enable_loudnorm", True) else "已停用"
         align_txt = "已启用" if param_dict.get("use_alignment", True) else "已停用"
-        th = param_dict.get("vad_threshold", 0.28)
+        th = param_dict.get("vad_threshold", 0.30)
         max_dur = param_dict.get("max_cue_dur", 4.3)
         max_chars = param_dict.get("max_cue_chars", 21)
         pad = param_dict.get("vad_speech_pad_ms", 150)
@@ -533,6 +533,28 @@ MISSED_REASON_LABELS = {
     "empty-after-retry": "重试后仍为空",
     "retry-suspicious": "重试结果不可信",
 }
+
+# E5：漏句告警的展示下限。模型对「VAD 判成语音、实际是底噪/静音」的段同样返回空，
+# 这类记录是纯噪声（实测两条的 RMS 处于全片 VAD 段的第 5/6 百分位，参考字幕此处无台词）。
+# 阈值以下只在 JSON 里留档，不进报告、不在状态行里喊。
+MISSED_MIN_PEAK = 0.02
+
+
+def _span_peak(span: dict) -> float:
+    """记录的峰值；老版本 JSON 没有 peak 字段时按「有声音」处理，保持向后兼容。"""
+    try:
+        return float(span.get("peak", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _visible_missed_spans(spans: list[dict] | None) -> list[dict]:
+    """报告/状态行里实际展示的漏句记录：滤掉近乎无声的误报。"""
+    return [s for s in (spans or []) if _span_peak(s) >= MISSED_MIN_PEAK]
+
+
+def _missed_hidden_count(spans: list[dict] | None) -> int:
+    return len(spans or []) - len(_visible_missed_spans(spans))
 
 
 def _missed_reason_label(reason: str) -> str:
@@ -698,7 +720,7 @@ def build_transcription_report(
     if is_qwen:
         lines.extend([
             "• 识别方案：Qwen3-ASR (JA Anime/Galgame) + CTC 对齐",
-            f"• VAD 语音检测阈值 (vad_threshold)：{getattr(config, 'vad_threshold', 0.28)}",
+            f"• VAD 语音检测阈值 (vad_threshold)：{getattr(config, 'vad_threshold', 0.30)}",
             f"• 最短语音长度 (vad_min_speech_ms)：{getattr(config, 'vad_min_speech_ms', 100)} ms",
             f"• 判定为停顿的静音 (vad_min_silence_ms)：{getattr(config, 'vad_min_silence_ms', 200)} ms",
             f"• 切片首尾留白缓冲 (vad_speech_pad_ms)：{getattr(config, 'vad_speech_pad_ms', 150)} ms",
@@ -716,7 +738,7 @@ def build_transcription_report(
             "• 识别方案：Anime Whisper (litagin/anime-whisper)",
             f"• 智能句级分切 (enable_sentence_split)：{'启用' if getattr(config, 'enable_sentence_split', True) else '停用'}",
             f"• 动态响度归一化 (enable_loudnorm)：{'启用' if getattr(config, 'enable_loudnorm', False) else '停用'}",
-            f"• VAD 语音判定阈值 (threshold)：{getattr(config, 'threshold', 0.20)}",
+            f"• VAD 语音判定阈值 (threshold)：{getattr(config, 'threshold', 0.30)}",
             f"• 最短语音片段 (min_speech_ms)：{getattr(config, 'min_speech_ms', 120)} ms",
             f"• 判定停顿静音 (min_silence_ms)：{getattr(config, 'min_silence_ms', 150)} ms",
             f"• 首尾留白缓冲 (speech_pad_ms)：{getattr(config, 'speech_pad_ms', 200)} ms",
@@ -728,15 +750,25 @@ def build_transcription_report(
             f"• 重复惩罚因子 (repetition_penalty)：{penalty}",
         ])
 
-    lines.append("【疑似漏句区间】" + _missed_spans_headline(missed_spans))
-    if missed_spans:
-        for span in missed_spans:
+    visible_missed = _visible_missed_spans(missed_spans)
+    hidden = _missed_hidden_count(missed_spans)
+    lines.append("【疑似漏句区间】" + _missed_spans_headline(visible_missed))
+    if visible_missed:
+        for span in visible_missed:
+            # 老记录没有 peak 字段：不显示假的 1.000，避免读成「这段很响」
+            peak_txt = f"  峰值 {_span_peak(span):.3f}" if "peak" in span else ""
             lines.append(
                 f"• {_fmt_report_time(span.get('start', 0.0))} → {_fmt_report_time(span.get('end', 0.0))}"
                 f"  ({float(span.get('dur', 0.0)):.2f}s)  {_missed_reason_label(span.get('reason', ''))}"
+                f"{peak_txt}"
             )
     else:
         lines.append("• 未发现")
+    if hidden:
+        lines.append(
+            f"• 另有 {hidden} 处峰值低于 {MISSED_MIN_PEAK} 的近静音段未展示"
+            f"（多为配乐/底噪误判，已留在 .missed.json 备查）"
+        )
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
 
     headline = _align_stats_headline(align_stats, is_qwen)
@@ -1731,11 +1763,16 @@ def prepare_review_workspace(media_file, review_cues):
         except Exception:
             missed = []
     if missed:
-        total = sum(float(span.get("dur", 0.0) or 0.0) for span in missed)
-        status += (
-            f"\n\n⚠️ 有 {len(missed)} 处疑似漏句（共 {total:.1f} 秒），"
-            "可在波形上框选后「识别并直接入轨」"
-        )
+        visible = _visible_missed_spans(missed)
+        hidden = len(missed) - len(visible)
+        if visible:
+            total = sum(float(span.get("dur", 0.0) or 0.0) for span in visible)
+            status += (
+                f"\n\n⚠️ 有 {len(visible)} 处疑似漏句（共 {total:.1f} 秒），"
+                "可在波形上框选后「识别并直接入轨」"
+            )
+        if hidden:
+            status += f"（另有 {hidden} 处近静音段已隐藏）"
     return payload, status
 
 # ==============================================================================
@@ -5032,7 +5069,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                     qwen_vad_threshold = param(
                         "qwen.vad_threshold",
                         "VAD 判定阈值",
-                        gr.Slider(0.05, 0.80, value=0.28, step=0.01, label="VAD 判定阈值", info="【调小】对低声耳语极灵敏；【调大】抗噪更强"),
+                        gr.Slider(0.05, 0.80, value=0.30, step=0.01, label="VAD 判定阈值", info="【调小】对低声耳语极灵敏；【调大】抗噪更强"),
                         "qwen",
                         "float",
                         "vad_threshold",

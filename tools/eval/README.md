@@ -29,6 +29,9 @@ $PY tools/eval/scorecard.py tools/eval/baseline_474.srt --vad 0.45
 
 # ③ E1 全局阈值扫描（单变量：只改 threshold，4 档 ≈ 15 分钟）
 $PY tools/eval/sweep_threshold.py --thresholds 0.45,0.35,0.30,0.25
+
+# ④ 全量断言（都不加载模型，全部秒级）
+for t in test_impl test_a5 test_p4 test_d6 test_qwen_d6; do $PY tools/eval/$t.py; done
 ```
 
 `scorecard.py` 的 stdout 末尾固定一行 TSV（表头见 `HEADER`），方便脚本汇总；
@@ -51,7 +54,7 @@ $PY tools/eval/sweep_threshold.py --thresholds 0.45,0.35,0.30,0.25
 | `exp_qwen.py` | Qwen 侧 A6 四桶 / P4 撞上限分类 | 是 |
 | `exp_bgm_cause.py` | 42:00–44:20 只有 1 条的成因（响度档位 / 可复现性） | 是 |
 | `perf.py` | P1 解码缓存 / P6 波形落盘 / P7 禁切点预计算的计时 | 否 |
-| `test_impl.py` / `test_a5.py` / `test_p4.py` | 回归断言（报告渲染 / 原子写 / 缝合闸门 / P4 / A5 禁切） | 否 |
+| `test_impl.py` / `test_a5.py` / `test_p4.py` / `test_d6.py` / `test_qwen_d6.py` | 回归断言（报告渲染 / 原子写 / 缝合闸门 / P4 / A5 禁切 / D6 切分 / Qwen 字级时间接线 / E5 漏句降噪） | 否 |
 
 所有脚本的 `ROOT` 由 `Path(__file__).resolve().parents[2]` 推导，仓库可整体搬走；
 数据一律写 `outputs/eval/`（已 gitignore），脚本与基线 SRT 留在 `tools/eval/`。

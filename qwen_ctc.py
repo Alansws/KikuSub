@@ -57,6 +57,8 @@ from transcribe import (
     _is_kanji,
     _retry_gain,
     _retry_suspicious,
+    _split_overlong_single,
+    chunk_level_stats,
     detect_device,
     forbidden_cut_positions,
     load_audio_for_transcription,
@@ -468,7 +470,9 @@ class AlignmentResult:
 
 @dataclass
 class QwenCtcConfig:
-    vad_threshold: float = 0.28
+    # 与 Whisper 侧保持一致（transcribe.VAD_THRESHOLD = 0.30）。两引擎共用同一套
+    # Silero VAD 与合并逻辑，默认值分裂只会让「换个引擎结果差一截」无法归因。
+    vad_threshold: float = 0.30
     vad_min_speech_ms: int = 100
     vad_min_silence_ms: int = 200
     vad_speech_pad_ms: int = 150
@@ -486,6 +490,34 @@ class QwenCtcConfig:
     cue_pad_start_s: float = 0.12
     cue_pad_end_s: float = 0.12
     max_new_tokens: int = 440
+
+
+def _char_times_in_span(
+    chars: list["AlignedChar"],
+    first_pos: int,
+    tail_pos: int,
+    offset: float,
+    cue_start: float,
+) -> list[tuple[float, float]]:
+    """把 CTC 逐字时间映射成「cue 文本下标 → (start, end)」，相对 `cue_start`。
+
+    D6 的第一优先级分支（`_split_overlong_single` 的 `char_times`）要求序列长度与
+    cue 文本等长：折叠文本里有些字不发声（长音符、标点、被折叠的符号），
+    这些位置沿用前一个字的结束时间，保证一一对应、切点永远落在真实发声边界上。
+    """
+    by_pos = {c.pos: c for c in chars}
+    out: list[tuple[float, float]] = []
+    last_end = 0.0
+    for pos in range(first_pos, tail_pos):
+        c = by_pos.get(pos)
+        if c is None:
+            out.append((last_end, last_end))
+            continue
+        start = max(0.0, offset + c.start - cue_start)
+        end = max(start, offset + c.end - cue_start)
+        out.append((start, end))
+        last_end = end
+    return out
 
 
 class QwenCtcEngine:
@@ -710,7 +742,7 @@ class QwenCtcEngine:
         )
 
         cues: list[SubtitleCue] = []
-        spans: list[tuple[float, float, str]] = []
+        spans: list[tuple[float, float, str, int, int]] = []
         for group in groups:
             if not group:
                 continue
@@ -723,28 +755,55 @@ class QwenCtcEngine:
                     offset + first.start - cfg.cue_pad_start_s,
                     offset + last.end + cfg.cue_pad_end_s,
                     folded.slice(first.pos, tail),
+                    first.pos,
+                    tail,
                 )
             )
 
         for i in range(len(spans) - 1):
-            start, end, text = spans[i]
-            spans[i] = (start, min(end, spans[i + 1][0]), text)
+            start, end, text, first_pos, tail = spans[i]
+            spans[i] = (start, min(end, spans[i + 1][0]), text, first_pos, tail)
 
-        for i, (start, end, text) in enumerate(spans):
+        for i, (start, end, text, first_pos, tail) in enumerate(spans):
             ceiling = spans[i + 1][0] if i + 1 < len(spans) else None
             if end - start < cfg.min_cue_dur:
                 wanted = start + cfg.min_cue_dur
                 end = wanted if ceiling is None else min(wanted, max(ceiling, start + MIN_CUE_DUR))
-            cues.append(SubtitleCue(start=round(max(0.0, start), 3), end=round(end, 3), text=text))
+            cue = SubtitleCue(start=round(max(0.0, start), 3), end=round(end, 3), text=text)
+            # DP 允许单条最长到 hard_max_cue_dur（5.2s），因此对齐路径也会产出
+            # 超过 max_cue_dur 的条。这里用 CTC 逐字时间（D6 第一优先级）再切一刀：
+            # 切点落在真实发声边界上，比按比例分配精确得多。
+            if cue.end - cue.start > cfg.max_cue_dur:
+                char_times = _char_times_in_span(result.chars, first_pos, tail, offset, cue.start)
+                pieces = _split_overlong_single(
+                    cue.text, cue.start, cue.end, cfg.max_cue_dur, char_times=char_times,
+                )
+                cues.extend(
+                    SubtitleCue(start=round(a, 3), end=round(b, 3), text=t) for a, b, t in pieces
+                )
+            else:
+                cues.append(cue)
         return cues
 
-    def _cues_fallback(self, text: str, offset: float, duration: float, cfg: QwenCtcConfig) -> list[SubtitleCue]:
+    def _cues_fallback(
+        self,
+        text: str,
+        offset: float,
+        duration: float,
+        cfg: QwenCtcConfig,
+        *,
+        audio: np.ndarray | None = None,
+    ) -> list[SubtitleCue]:
+        # 对齐失败（degraded）时没有 char_times 可用，但仍可走 D6 的第二优先级：
+        # 字符比例定位 + 该段音频的能量谷吸附，避免退回按时间对半。
         return split_text_into_cues(
             text,
             seg_start=offset,
             seg_end=offset + duration,
             max_cue_dur=cfg.max_cue_dur,
             max_cue_chars=cfg.max_cue_chars,
+            audio=audio,
+            sample_rate=SAMPLE_RATE,
         )
 
     def transcribe_array(
@@ -847,6 +906,7 @@ class QwenCtcEngine:
                     "end": round(offset + seg_dur_s, 3),
                     "dur": round(seg_dur_s, 2),
                     "reason": reason or "empty-after-retry",
+                    **chunk_level_stats(chunk),
                 })
                 empty += 1      # 空结果段：没有文本，谈不上对齐，单独成桶
                 continue
@@ -860,6 +920,8 @@ class QwenCtcEngine:
                         seg_end=(end / SAMPLE_RATE) + time_offset,
                         max_cue_dur=cfg.max_cue_dur,
                         max_cue_chars=cfg.max_cue_chars,
+                        audio=chunk,
+                        sample_rate=SAMPLE_RATE,
                     )
                 )
                 continue
@@ -880,7 +942,7 @@ class QwenCtcEngine:
                         "reason": result.reason or "unknown",
                         "chars": len(text),
                     })
-                cues.extend(self._cues_fallback(text, offset, seg_dur_s, cfg))
+                cues.extend(self._cues_fallback(text, offset, seg_dur_s, cfg, audio=chunk))
 
         # 四桶互斥且穷尽（仅 use_alignment 时成立）：aligned + noop + degraded + empty == total
         # empty = 空结果段（已进 last_missed_spans），没有文本就谈不上对齐，必须单独成桶，

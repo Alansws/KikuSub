@@ -758,6 +758,22 @@ def _is_blank(text: str) -> bool:
     return bool(BLANK_TEXT_RE.match(text or ""))
 
 
+def chunk_level_stats(chunk: np.ndarray | None) -> dict:
+    """该段音频的峰值与有效值，供漏句告警降噪使用（E5）。
+
+    模型对「VAD 判成语音、实际是静音/底噪」的段同样会返回空或占位符，这类段进
+    漏句清单是纯噪声（实测 2 条记录的 RMS 处于全片 VAD 段的第 5/6 百分位）。
+    把 peak / rms 记进记录，报告层就能只展示「真有声音却没出字」的那些。
+    """
+    if chunk is None or getattr(chunk, "size", 0) == 0:
+        return {"peak": 0.0, "rms": 0.0}
+    data = np.asarray(chunk, dtype=np.float64)
+    return {
+        "peak": round(float(np.max(np.abs(data))), 4),
+        "rms": round(float(np.sqrt(np.mean(data ** 2))), 5),
+    }
+
+
 def vad_neg_threshold(threshold: float) -> float:
     """VAD 退出阈值：与 Silero 默认迟滞（threshold - 0.15）一致，但不低于下限。"""
     return max(float(threshold) - 0.15, VAD_NEG_THRESHOLD_FLOOR)
@@ -1232,6 +1248,7 @@ class AnimeWhisperEngine:
                     "end": round(seg_end_s, 3),
                     "dur": round(seg_end_s - seg_start_s, 2),
                     "reason": reason or "empty-after-retry",
+                    **chunk_level_stats(chunk),
                 })
                 continue
             prev_text = text
