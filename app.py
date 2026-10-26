@@ -138,15 +138,33 @@ CANCEL_EVENT = threading.Event()
 
 
 def device_banner() -> str:
+    """渲染顶部运行环境胶囊条（纯 HTML，避免 Markdown 行内代码的白底色）。"""
     device = detect_device().upper()
     whisper_ready = MODEL_DIR.exists() and (MODEL_DIR / "model.safetensors").exists()
-    whisper_status = "已就绪" if whisper_ready else "未下载 (首次自动加载)"
-    qwen_status = "已就绪" if QWEN.model_available else "未下载 (首次自动加载)"
+    whisper_status = "已就绪" if whisper_ready else "未下载"
+    qwen_status = "已就绪" if QWEN.model_available else "未下载"
+
+    def chip(label: str, value: str, pending: bool = False, accent: bool = False) -> str:
+        classes = "device-chip"
+        if pending:
+            classes += " is-pending"
+        if accent:
+            classes += " is-accent"
+        tip = ' title="首次转写时会自动加载模型"' if pending else ""
+        return (
+            f'<span class="{classes}"{tip}>'
+            f'<span class="chip-dot"></span>'
+            f'<span class="chip-label">{label}</span>'
+            f'<span class="chip-value">{value}</span>'
+            f"</span>"
+        )
 
     return (
-        f"⚡ **计算设备：** `{device}` ｜ "
-        f"**Anime Whisper：** `{whisper_status}` ｜ "
-        f"**Qwen3-ASR + CTC：** `{qwen_status}`"
+        '<div class="device-chips">'
+        + chip("计算设备", device, accent=True)
+        + chip("Anime Whisper", whisper_status, pending=not whisper_ready)
+        + chip("Qwen3-ASR + CTC", qwen_status, pending=not QWEN.model_available)
+        + "</div>"
     )
 
 
@@ -312,13 +330,19 @@ def render_active_params_banner(engine_name: str, *values) -> str:
         ngram = param_dict.get("no_repeat_ngram_size", 5)
         penalty = param_dict.get("repetition_penalty", 1.15)
 
-        banner = (
-            f"**当前生效参数**（{now_str} 同步）｜ 引擎：`Anime Whisper` ｜ "
-            f"VAD 阈值: `{th}` ｜ 留白缓冲: `{pad}ms` ｜ 静音停顿: `{min_sil}ms` ｜ "
-            f"最短语音: `{min_sp}ms` ｜ 合并间隔: `{gap}s` ｜ 单段最长: `{max_seg}s` ｜ "
-            f"智能分句: `{split_txt}` ｜ 响度归一化: `{loud_txt}` ｜ "
-            f"抑制重复: `ngram={ngram}, penalty={penalty}` ｜ 留白外扩: `{cue_pad}s`"
-        )
+        engine_tag = "Anime Whisper"
+        chips = [
+            ("VAD 阈值", f"{th}"),
+            ("留白缓冲", f"{pad} ms"),
+            ("静音停顿", f"{min_sil} ms"),
+            ("最短语音", f"{min_sp} ms"),
+            ("合并间隔", f"{gap} s"),
+            ("单段最长", f"{max_seg} s"),
+            ("智能分句", split_txt, True),
+            ("响度归一化", loud_txt, True),
+            ("抑制重复", f"ngram {ngram} · penalty {penalty}"),
+            ("留白外扩", f"{cue_pad} s"),
+        ]
     else:
         loud_txt = "已启用" if param_dict.get("enable_loudnorm", True) else "已停用"
         align_txt = "已启用" if param_dict.get("use_alignment", True) else "已停用"
@@ -328,13 +352,32 @@ def render_active_params_banner(engine_name: str, *values) -> str:
         pad = param_dict.get("vad_speech_pad_ms", 150)
         gap = param_dict.get("merge_gap_s", 0.5)
 
-        banner = (
-            f"**当前生效参数**（{now_str} 同步）｜ 引擎：`Qwen3-ASR + CTC 逐字对齐` ｜ "
-            f"VAD 阈值: `{th}` ｜ 首尾缓冲: `{pad}ms` ｜ 合并间隔: `{gap}s` ｜ "
-            f"单句目标时长: `{max_dur}s` ｜ 单句字数上限: `{max_chars}` ｜ "
-            f"CTC 逐字对齐: `{align_txt}` ｜ 响度优化: `{loud_txt}`"
-        )
-    return banner
+        engine_tag = "Qwen3-ASR + CTC 逐字对齐"
+        chips = [
+            ("VAD 阈值", f"{th}"),
+            ("首尾缓冲", f"{pad} ms"),
+            ("合并间隔", f"{gap} s"),
+            ("单句目标时长", f"{max_dur} s"),
+            ("单句字数上限", f"{max_chars}"),
+            ("CTC 逐字对齐", align_txt, True),
+            ("响度优化", loud_txt, True),
+        ]
+
+    chip_html = "".join(
+        f'<span class="p-chip{" is-flag" if len(item) > 2 and item[2] else ""}">'
+        f"<i>{item[0]}</i><b>{item[1]}</b></span>"
+        for item in chips
+    )
+    return (
+        '<div class="params-strip">'
+        '<div class="params-strip-head">'
+        '<span class="dot"></span><b>当前生效参数</b>'
+        f'<span class="engine-tag">{engine_tag}</span>'
+        f'<span class="ts">{now_str} 同步</span>'
+        "</div>"
+        f'<div class="params-chips">{chip_html}</div>'
+        "</div>"
+    )
 
 
 def save_preset(name, engine_name, *values):
@@ -3418,6 +3461,9 @@ a[href*="/api"] {display: none !important;}
     margin: 0 !important;
     padding: 8px 16px !important;
     box-sizing: border-box !important;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+        "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+    -webkit-font-smoothing: antialiased !important;
 }
 
 .bridge-hidden,
@@ -3433,47 +3479,457 @@ a[href*="/api"] {display: none !important;}
     z-index: -9999 !important;
 }
 
-.device-header {
-    background: rgba(99, 102, 241, 0.08) !important;
-    border: 1px solid rgba(99, 102, 241, 0.22) !important;
-    border-radius: 8px !important;
-    padding: 6px 14px !important;
-    font-size: 13px !important;
-    margin-bottom: 4px !important;
-}
-
-.clean-accordion,
-.slice-accordion,
-.clean-accordion details,
-.slice-accordion details,
-.clean-accordion > .label-wrap,
-.slice-accordion > .label-wrap {
-    border: none !important;
-    box-shadow: none !important;
-    background: transparent !important;
-}
-.clean-accordion > div,
-.slice-accordion > div {
-    border: none !important;
-    box-shadow: none !important;
-}
-
-.active-params-banner {
-    background: rgba(99, 102, 241, 0.06) !important;
-    border: 1px solid rgba(99, 102, 241, 0.18) !important;
-    border-radius: 8px !important;
-    padding: 8px 12px !important;
-    font-size: 13px !important;
+/* ============ 顶部标题栏 + 运行环境胶囊 ============ */
+.app-header {
+    align-items: center !important;
+    gap: 10px !important;
     margin-bottom: 10px !important;
+    flex-wrap: wrap !important;
 }
-
-.active-params-banner code {
+.app-title-col {
+    padding: 0 !important;
+    min-width: 0 !important;
+}
+.app-title-col .prose,
+.app-title-col .markdown {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.app-title-col h3 {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 20px !important;
+    line-height: 1.3 !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.01em !important;
+    color: #0f172a !important;
+    white-space: nowrap !important;
+}
+.app-status-col {
+    padding: 0 !important;
+    min-width: 0 !important;
+    justify-content: center !important;
+}
+.device-header {
     background: transparent !important;
     border: none !important;
-    color: #4f46e5 !important;
-    font-weight: 700 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+}
+.device-header .html-container,
+.device-header .prose {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+.device-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    justify-content: flex-end;
+    align-items: center;
+}
+.device-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: #f8fafc;
+    border: 1px solid #e6ebf3;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.device-chip:hover {
+    background: #f4f7fd;
+    border-color: #d9e2f2;
+}
+.device-chip .chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+    flex: none;
+}
+.device-chip.is-pending .chip-dot {
+    background: #f59e0b;
+    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+}
+.device-chip .chip-label {
+    color: #64748b;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+}
+.device-chip .chip-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 700;
+    font-size: 11.5px;
+    color: #1e293b;
+    letter-spacing: 0.02em;
+}
+.device-chip.is-accent {
+    background: #eef2ff;
+    border-color: #dde4ff;
+}
+.device-chip.is-accent .chip-value {
+    color: #4338ca;
+}
+
+/* ============ 参数配置面板（导入 / 预设 / 执行） ============ */
+.setup-panel {
+    padding: 16px 18px 14px 18px !important;
+}
+.setup-row {
+    gap: 0 !important;
+    align-items: flex-start !important;
+}
+.setup-col {
+    padding: 0 18px !important;
+    min-width: 0 !important;
+}
+.setup-col:first-child {
+    padding-left: 0 !important;
+}
+.setup-col:last-child {
+    padding-right: 0 !important;
+}
+.setup-col + .setup-col {
+    border-left: 1px solid #eef2f8 !important;
+}
+.setup-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #334155;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #eef2f8;
+}
+.setup-head .step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #eef2ff;
+    color: #4f46e5;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: ui-monospace, monospace;
+}
+
+/* ============ 媒体上传区（空态紧凑化） ============ */
+.media-upload {
+    border: 1.5px dashed #c7d2fe !important;
+    border-radius: 12px !important;
+    background: #f9faff !important;
+    box-shadow: none !important;
+    flex: 0 0 auto !important;
+    align-self: flex-start !important;
+    height: auto !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    transition: border-color 0.18s ease, background 0.18s ease !important;
+}
+.media-upload:hover {
+    border-color: #818cf8 !important;
+    background: #f4f7ff !important;
+}
+.media-upload .block,
+.media-upload > div {
+    background: transparent !important;
+}
+.media-upload button[aria-dropeffect] {
+    height: 96px !important;
+    min-height: 96px !important;
+    max-height: 96px !important;
+    padding: 10px !important;
+    border: none !important;
+    background: transparent !important;
+}
+.media-upload .wrap {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0 !important;
+    font-size: 0 !important;
+    line-height: 1.45 !important;
+    color: #4338ca !important;
+}
+.media-upload .wrap .icon-wrap {
+    width: 26px !important;
+    height: 26px !important;
+    color: #6366f1 !important;
+    opacity: 0.85 !important;
+    margin-bottom: 6px !important;
+}
+.media-upload .wrap .or {
+    display: none !important;
+}
+.media-upload .wrap::after {
+    content: "点击选择 或 拖拽音视频到此处";
     font-size: 13px !important;
-    padding: 0 3px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em;
+}.upload-hint {
+    margin: 8px 2px 0 2px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #94a3b8;
+}
+.upload-hint b {
+    color: #64748b;
+    font-weight: 600;
+}
+/* 已导入文件后：上传区收缩为一条「更换文件」操作条 */
+.media-upload:has(.file-preview-holder) button[aria-dropeffect] {
+    height: 44px !important;
+    min-height: 44px !important;
+    max-height: 44px !important;
+    padding: 0 12px !important;
+}
+.media-upload:has(.file-preview-holder) .wrap {
+    flex-direction: row !important;
+    gap: 8px !important;
+}
+.media-upload:has(.file-preview-holder) .wrap .icon-wrap {
+    width: 15px !important;
+    height: 15px !important;
+    margin-bottom: 0 !important;
+}
+.media-upload:has(.file-preview-holder) .wrap::after {
+    content: "点击更换文件";
+    font-size: 12px !important;
+    color: #6366f1 !important;
+}
+.media-upload .file-preview-holder {
+    padding: 0 !important;
+}
+.media-upload .file-preview {
+    margin: 0 !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+.media-upload .file-preview td {
+    font-size: 12px !important;
+    padding: 6px 8px !important;
+    border-color: #eef2f8 !important;
+}
+.media-upload .file-preview .filename {
+    font-weight: 600 !important;
+    color: #1e293b !important;
+}
+
+/* ============ 预设区按钮 ============ */
+.setup-col .wrap-inner input,
+.setup-col .secondary-wrap input {
+    font-size: 12.5px !important;
+    text-overflow: ellipsis !important;
+}
+.preset-btn-row {
+    gap: 6px !important;
+}
+.preset-btn-row button {
+    min-width: 0 !important;
+    flex: 1 1 0 !important;
+    min-height: 32px !important;
+    height: 32px !important;
+    padding: 0 8px !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
+    border-radius: 8px !important;
+}
+
+/* ============ 折叠面板（时间片段 / VAD 参数） ============ */
+.clean-accordion.block {
+    margin-top: 10px !important;
+    border: 1px solid #e6ebf3 !important;
+    border-radius: 12px !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
+}
+.clean-accordion.block:hover {
+    border-color: #d5ddf7 !important;
+}
+.clean-accordion > button.label-wrap {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 10px !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 11px 14px !important;
+    background: #fbfcfe !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em !important;
+    color: #1e293b !important;
+    text-align: left !important;
+    cursor: pointer !important;
+    transition: background 0.16s ease, color 0.16s ease !important;
+}
+.clean-accordion > button.label-wrap:hover {
+    background: #f3f6ff !important;
+    color: #3730a3 !important;
+}
+.clean-accordion > button.label-wrap > span:first-child {
+    flex: 1 1 auto !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    line-height: 1.4 !important;
+    color: inherit !important;
+}
+.clean-accordion > button.label-wrap .icon {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 20px !important;
+    height: 20px !important;
+    flex: none !important;
+    border-radius: 50% !important;
+    background: #eef2ff !important;
+    color: #6366f1 !important;
+    font-size: 0 !important;
+    transform: none !important;
+    transition: background 0.16s ease !important;
+}
+.clean-accordion > button.label-wrap .icon::before {
+    content: "";
+    display: block;
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-right: 1.8px solid currentColor;
+    border-bottom: 1.8px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 0.2s ease, margin 0.2s ease;
+}
+.clean-accordion:has([data-testid="accordion-content"]:not([style*="display: none"])) > button.label-wrap .icon {
+    background: #e0e7ff !important;
+}
+.clean-accordion:has([data-testid="accordion-content"]:not([style*="display: none"])) > button.label-wrap .icon::before {
+    transform: rotate(-135deg);
+    margin-top: 2px;
+}
+.clean-accordion [data-testid="accordion-content"] {
+    padding: 12px 14px 14px 14px !important;
+    border-top: 1px solid #f1f5f9 !important;
+}
+.acc-hint {
+    display: block;
+    font-size: 11.5px;
+    line-height: 1.75;
+    color: #64748b;
+    background: #f8fafc;
+    border: 1px solid #eef2f8;
+    border-radius: 8px;
+    padding: 7px 10px;
+    margin-bottom: 10px;
+}
+.acc-hint b {
+    color: #4338ca;
+    font-weight: 600;
+}
+.clean-accordion .form,
+.clean-accordion fieldset {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+/* ============ 当前生效参数条 ============ */
+.active-params-banner {
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    min-height: 0 !important;
+}
+.params-strip {
+    border: 1px solid #e6ebf3;
+    border-radius: 10px;
+    background: #fbfcff;
+    padding: 10px 12px;
+}
+.params-strip-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: #475569;
+    margin-bottom: 8px;
+}
+.params-strip-head .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #6366f1;
+    flex: none;
+}
+.params-strip-head b {
+    color: #1e293b;
+    font-size: 12.5px;
+    font-weight: 700;
+}
+.params-strip-head .engine-tag {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4338ca;
+    background: #eef2ff;
+    border: 1px solid #dfe5ff;
+    border-radius: 999px;
+    padding: 2px 9px;
+}
+.params-strip-head .ts {
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: #94a3b8;
+}
+.params-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.params-chips .p-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 7px;
+    background: #ffffff;
+    border: 1px solid #eaeff8;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+.params-chips .p-chip i {
+    font-style: normal;
+    color: #64748b;
+}
+.params-chips .p-chip b {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 700;
+    color: #4338ca;
+}
+.params-chips .p-chip.is-flag b {
+    color: #0f766e;
 }
 
 .preset-action-col {
@@ -3939,13 +4395,82 @@ fieldset label:has(input[type="radio"]:checked) * {
 .cue-table td textarea, .cue-table td input { color: #0f172a !important; background: transparent !important; }
 .cue-table-wrap .label-wrap span { color: #4f46e5 !important; font-weight: 600 !important; }
 .progress-status-box {
-    margin-top: 8px !important;
-    padding: 8px 12px !important;
-    border-radius: 8px !important;
-    background: rgba(99, 102, 241, 0.08) !important;
-    border: 1px solid rgba(99, 102, 241, 0.25) !important;
-    font-size: 13px !important;
+    margin-top: 10px !important;
+    padding: 9px 12px !important;
+    border-radius: 9px !important;
+    background: #f8fafc !important;
+    border: 1px solid #e6ebf3 !important;
+    border-left: 3px solid #a5b4fc !important;
+    font-size: 12.5px !important;
+    color: #475569 !important;
+    min-height: 40px !important;
+}
+.progress-status-box p {
+    margin: 0 !important;
+    font-size: 12.5px !important;
+    line-height: 1.55 !important;
+    color: #475569 !important;
+}
+.progress-status-box strong {
+    color: #4338ca !important;
+}
+
+/* ============ 统一字段标签：去掉默认的胶囊底色 ============ */
+.gradio-container span[data-testid="block-info"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    color: #475569 !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em !important;
+}
+
+/* ============ 顶部面板内的 HTML 小标题 / 提示行 ============ */
+.setup-head-wrap,
+.upload-hint-wrap,
+.acc-hint-wrap {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+}
+.setup-head-wrap .html-container,
+.upload-hint-wrap .html-container,
+.acc-hint-wrap .html-container,
+.setup-head-wrap .prose,
+.upload-hint-wrap .prose,
+.acc-hint-wrap .prose {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+}
+
+/* ============ 执行按钮 ============ */
+button.btn-run {
+    width: 100% !important;
+    height: 42px !important;
     min-height: 42px !important;
+    font-size: 14px !important;
+    letter-spacing: 0.04em !important;
+    border-radius: 9px !important;
+    margin-top: 2px !important;
+}
+.run-secondary-row {
+    gap: 6px !important;
+    margin-top: 6px !important;
+}
+.run-secondary-row button {
+    min-width: 0 !important;
+    flex: 1 1 0 !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 6px !important;
+    font-size: 12px !important;
+    border-radius: 8px !important;
 }
 """
 
@@ -4093,10 +4618,11 @@ def manual_transcode_proxy_generator(media_file, review_cues, progress=gr.Progre
         yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
 
 with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEME, css=CSS_CUSTOM) as demo:
-    with gr.Row():
-        with gr.Column(scale=1):
+    with gr.Row(elem_classes=["app-header"]):
+        with gr.Column(scale=1, min_width=280, elem_classes=["app-title-col"]):
             gr.Markdown("### 🎬 日语影片字幕转录工作台")
-            gr.Markdown(device_banner(), elem_classes=["device-header"])
+        with gr.Column(scale=2, min_width=380, elem_classes=["app-status-col"]):
+            gr.HTML(device_banner(), elem_classes=["device-header"])
 
     with gr.Row(elem_classes=["bridge-hidden"], elem_id="bridge-hidden-row"):
         hidden_sync_start = gr.Textbox(elem_id="hidden-sync-start", value="")
@@ -4104,13 +4630,23 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         btn_hidden_bridge_sync = gr.Button(elem_id="btn-hidden-bridge-sync")
         btn_hidden_bridge_transcribe = gr.Button(elem_id="btn-hidden-bridge-transcribe")
 
-    with gr.Group(elem_classes=["workbench-panel"]):
-        with gr.Row():
-            with gr.Column(scale=4):
+    with gr.Group(elem_classes=["workbench-panel", "setup-panel"]):
+        with gr.Row(elem_classes=["setup-row"]):
+            with gr.Column(scale=5, min_width=320, elem_classes=["setup-col"]):
+                gr.HTML(
+                    '<div class="setup-head"><span class="step">1</span>导入待转写媒体</div>',
+                    elem_classes=["setup-head-wrap"],
+                )
                 media = gr.File(
                     label="📁 上传日语视频/音频文件",
                     file_types=sorted(SUPPORTED),
                     type="filepath",
+                    show_label=False,
+                    elem_classes=["media-upload"],
+                )
+                gr.HTML(
+                    '<div class="upload-hint">支持 <b>MP4/MKV/MOV/WAV/MP3/FLAC</b> · 单文件 ≤ 10 GB</div>',
+                    elem_classes=["upload-hint-wrap"],
                 )
                 engine_name = gr.Radio(
                     list(ENGINES),
@@ -4119,40 +4655,47 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                     info="Anime Whisper 擅长连贯日常对话；Qwen3-ASR 搭载 CTC 逐字发声对齐，断句更精准。",
                 )
 
-            with gr.Column(scale=4):
-                with gr.Group():
-                    with gr.Row():
-                        preset_pick = gr.Dropdown(
-                            choices=preset_choices_list(),
-                            value=preset_choices_list()[0][1] if STORE.names() else None,
-                            label="🎛️ 调优预设方案",
-                            scale=4,
-                        )
-                        with gr.Column(scale=1, min_width=72, elem_classes=["preset-action-col"]):
-                            load_btn = gr.Button("📥 载入", variant="secondary", elem_classes=["btn-subtle"])
-                            reset_btn = gr.Button("🔄 默认", variant="secondary", elem_classes=["btn-subtle"])
-                    with gr.Row():
-                        preset_name = gr.Textbox(
-                            label="另存为新预设",
-                            placeholder="输入方案名称…",
-                            scale=4,
-                        )
-                        with gr.Column(scale=1, min_width=72, elem_classes=["preset-action-col"]):
-                            save_btn = gr.Button("💾 保存", variant="secondary", elem_classes=["btn-subtle"])
-                            delete_btn = gr.Button("🗑️ 删除", variant="secondary", elem_classes=["btn-subtle"])
+            with gr.Column(scale=4, min_width=300, elem_classes=["setup-col"]):
+                gr.HTML(
+                    '<div class="setup-head"><span class="step">2</span>调优预设方案</div>',
+                    elem_classes=["setup-head-wrap"],
+                )
+                preset_pick = gr.Dropdown(
+                    choices=preset_choices_list(),
+                    value=preset_choices_list()[0][1] if STORE.names() else None,
+                    label="选择已保存的方案",
+                )
+                with gr.Row(elem_classes=["preset-btn-row"]):
+                    load_btn = gr.Button("📥 载入", variant="secondary", elem_classes=["btn-subtle"])
+                    reset_btn = gr.Button("🔄 恢复默认", variant="secondary", elem_classes=["btn-subtle"])
+                preset_name = gr.Textbox(
+                    label="另存为新预设",
+                    placeholder="输入方案名称…",
+                )
+                with gr.Row(elem_classes=["preset-btn-row"]):
+                    save_btn = gr.Button("💾 保存", variant="secondary", elem_classes=["btn-subtle"])
+                    delete_btn = gr.Button("🗑️ 删除", variant="secondary", elem_classes=["btn-subtle"])
 
-            with gr.Column(scale=4):
-                with gr.Row():
-                    output_format = gr.Radio(["SRT", "VTT", "TXT"], value="SRT", label="输出格式", scale=2)
-                    save_beside = gr.Checkbox(value=False, label="保存至媒体同级目录", scale=2)
-                with gr.Row():
-                    run_btn = gr.Button("🚀 开始转写", variant="primary", scale=3, elem_classes=["btn-primary-action"])
-                    stop_btn = gr.Button("⏹ 中途打断", variant="secondary", interactive=False, scale=2, elem_classes=["btn-subtle"])
-                    clean_btn = gr.Button("🧹 清理标点", variant="secondary", interactive=False, scale=2, elem_classes=["btn-subtle"])
+            with gr.Column(scale=4, min_width=300, elem_classes=["setup-col"]):
+                gr.HTML(
+                    '<div class="setup-head"><span class="step">3</span>输出与执行</div>',
+                    elem_classes=["setup-head-wrap"],
+                )
+                output_format = gr.Radio(["SRT", "VTT", "TXT"], value="SRT", label="输出格式")
+                save_beside = gr.Checkbox(value=False, label="保存至媒体同级目录")
+                run_btn = gr.Button("🚀 开始转写", variant="primary", elem_classes=["btn-primary-action", "btn-run"])
+                with gr.Row(elem_classes=["run-secondary-row"]):
+                    stop_btn = gr.Button("⏹ 中途打断", variant="secondary", interactive=False, elem_classes=["btn-subtle"])
+                    clean_btn = gr.Button("🧹 清理标点", variant="secondary", interactive=False, elem_classes=["btn-subtle"])
                 transcribe_progress = gr.Markdown("⚡ 状态：就绪，点击「开始转写」即可执行。", elem_classes=["progress-status-box"])
                 clean_status = gr.Markdown("")
 
-        with gr.Accordion("⏱️ 时间片段截取与补转区间 (在波形上拖拽框选后点击「⏱ 同步时间到顶部」即可填入)", open=False, elem_classes=["slice-accordion","clean-accordion"]) as slice_acc:
+        with gr.Accordion("⏱️ 时间片段截取与补转区间", open=False, elem_classes=["slice-accordion", "clean-accordion"]) as slice_acc:
+            gr.HTML(
+                '<div class="acc-hint">在下方波形上拖拽框选后点「⏱ 同步时间到顶部」即可自动填入；'
+                "起始留空表示从头开始，终止留空表示转至片尾；开启<b>全局对齐</b>后生成的时间戳直接对应视频总进度。</div>",
+                elem_classes=["acc-hint-wrap"],
+            )
             with gr.Row():
                 start_time_input = gr.Textbox(
                     label="起始时间点",
@@ -4168,12 +4711,17 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                 )
                 keep_timeline_chk = gr.Checkbox(
                     value=True,
-                    label="时间轴与原片全局对齐（开启后生成的时间戳直接对应视频全局进度）",
-                    scale=3,
+                    label="时间轴与原片全局对齐",
+                    scale=2,
                 )
 
-        with gr.Accordion("⚙️ 声学分段与 VAD 参数精细调优 (多列平铺 · 调大/调小效果指南)", open=False,elem_classes=["clean-accordion"]):
-            active_params_display = gr.Markdown(elem_classes=["active-params-banner"])
+        with gr.Accordion("⚙️ 声学分段与 VAD 参数精细调优", open=False, elem_classes=["clean-accordion"]):
+            active_params_display = gr.HTML(elem_classes=["active-params-banner"])
+            gr.HTML(
+                '<div class="acc-hint">多列平铺展示全部可调参数：<b>调小</b>更灵敏、更容易切碎；'
+                "<b>调大</b>更稳健、更容易吞掉短音。改动会即时同步到上方「当前生效参数」。</div>",
+                elem_classes=["acc-hint-wrap"],
+            )
 
             with gr.Group(visible=True) as whisper_params:
                 with gr.Row():
@@ -4482,7 +5030,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                     copy_cue_btn = gr.Button("📋 复制本句", size="sm", variant="secondary", scale=1, elem_id="btn-copy-cue")
                     apply_table_btn = gr.Button("📋 保存表格全量修改", size="sm", variant="secondary", scale=1)
 
-            with gr.Accordion("📥 外部 SRT 字幕文件导入", open=False):
+            with gr.Accordion("📥 外部 SRT 字幕文件导入", open=False, elem_classes=["clean-accordion"]):
                 with gr.Row():
                     review_srt_file = gr.File(label="选择要导入的 SRT 字幕文件", file_types=[".srt"], type="filepath", scale=3)
                     import_review_btn = gr.Button("📥 导入并设为基线", variant="secondary", scale=1)
@@ -4498,7 +5046,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             elem_classes=["cue-table", "cue-table-wrap"],
         )
 
-    with gr.Accordion("📊 全片转录原始结果、表格与任务详报 (点击查看)", open=False):
+    with gr.Accordion("📊 全片转录原始结果、表格与任务详报", open=False, elem_classes=["clean-accordion"]):
         status = gr.Markdown("状态：就绪。上传音视频文件并点击「🚀 开始转写」即可执行。")
         with gr.Tabs():
             with gr.TabItem("📋 原始条目列表"):
