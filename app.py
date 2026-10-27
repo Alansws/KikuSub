@@ -4518,8 +4518,84 @@ fieldset label:has(input[type="radio"]:checked) * {
     border: 1px solid rgba(99, 102, 241, 0.2) !important;
     font-size: 12px !important;
     min-height: 38px !important;
+    /* 纵向排列：Gradio 原生进度追踪器一旦被渲染进这个容器，只会在卡片上方另起一块，
+       绝不会把卡片横向挤压变形（历史上 display:flex + align-items:center 就干过这事）。 */
     display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+}
+
+/* 480p 代理压制进度卡片：全部使用 div/b/em，不碰 p/span，
+   以免被下方 .proxy-status-box span{color:...!important} 覆盖掉配色。 */
+.proxy-progress-card { display: block !important; width: 100% !important; }
+.ppc-head,
+.ppc-foot {
+    display: flex !important;
+    justify-content: space-between !important;
     align-items: center !important;
+    gap: 8px !important;
+}
+.ppc-head { margin-bottom: 5px !important; }
+.ppc-foot { margin-top: 5px !important; }
+.ppc-stage {
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    color: #1e1b4b !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+.ppc-right {
+    display: flex !important;
+    align-items: baseline !important;
+    gap: 4px !important;
+    white-space: nowrap !important;
+}
+.ppc-pct {
+    font-family: ui-monospace, SFMono-Regular, monospace !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    color: #4338ca !important;
+}
+.ppc-speed {
+    font-family: ui-monospace, SFMono-Regular, monospace !important;
+    font-size: 10px !important;
+    font-style: normal !important;
+    color: #64748b !important;
+}
+.ppc-track {
+    position: relative !important;
+    width: 100% !important;
+    height: 6px !important;
+    background: rgba(99, 102, 241, 0.15) !important;
+    border-radius: 3px !important;
+    overflow: hidden !important;
+}
+.ppc-fill {
+    height: 100% !important;
+    border-radius: 3px !important;
+    background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%) !important;
+    transition: width 0.25s ease !important;
+}
+.ppc-time,
+.ppc-note {
+    font-family: ui-monospace, SFMono-Regular, monospace !important;
+    font-size: 11px !important;
+    color: #64748b !important;
+}
+@keyframes ppc-indet-slide {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(340%); }
+}
+.ppc-indet {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 30% !important;
+    height: 100% !important;
+    border-radius: 3px !important;
+    background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%) !important;
+    animation: ppc-indet-slide 1.1s ease-in-out infinite !important;
 }
 
 /* 监看画面工具栏：说明 + 导入 / 压制 / 历史代理 / 关闭 / 恢复 */
@@ -5012,27 +5088,73 @@ def _format_time_simple(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
-def _render_proxy_progress_card(pct: int, current_s: float, total_s: float, speed_str: str = "1.0x", stage_desc: str = "正在压制 480p 流畅监看代理…") -> str:
-    pct_clamped = max(0, min(100, int(pct)))
+def _render_proxy_progress_card(
+    pct: int | None,
+    current_s: float,
+    total_s: float,
+    speed_str: str = "1.0x",
+    stage_desc: str = "正在压制 480p 流畅监看代理…",
+    note: str = "VideoToolbox 硬件加速中",
+) -> str:
+    """渲染左侧压制进度卡片。
+
+    ``pct=None`` 时渲染「不确定进度」的流动条纹条（启动阶段、回退压制、时长未知时），
+    这样无需凭空造一个百分比，也就不会出现 99% → 50% 这种倒退。
+    """
+    tot_str = _format_time_simple(total_s) if total_s and total_s > 0 else "--:--"
     cur_str = _format_time_simple(current_s)
-    tot_str = _format_time_simple(total_s)
-    return f"""<div style="background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.22); border-radius: 8px; padding: 8px 12px; margin: 4px 0 6px 0;">
-  <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; color: #1e1b4b; margin-bottom: 4px;">
-    <span>⚡ {stage_desc}</span>
-    <span style="font-family: ui-monospace, monospace; color: #4338ca;">{pct_clamped}% <span style="font-size: 10px; color: #64748b;">({speed_str})</span></span>
-  </div>
-  <div style="width: 100%; height: 6px; background: rgba(99, 102, 241, 0.15); border-radius: 3px; overflow: hidden; position: relative;">
-    <div style="width: {pct_clamped}%; height: 100%; background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%); border-radius: 3px; transition: width 0.25s ease;"></div>
-  </div>
-  <div style="display: flex; justify-content: space-between; font-size: 11px; color: #64748b; margin-top: 4px; font-family: ui-monospace, monospace;">
-    <span>时间: {cur_str} / {tot_str}</span>
-    <span>VideoToolbox 硬件加速中</span>
-  </div>
-</div>"""
+
+    if pct is None:
+        pct_html = '<b class="ppc-pct">处理中</b>'
+        bar_html = '<div class="ppc-track"><div class="ppc-indet"></div></div>'
+    else:
+        pct_clamped = max(0, min(100, int(pct)))
+        pct_html = f'<b class="ppc-pct">{pct_clamped}%</b>'
+        bar_html = (
+            '<div class="ppc-track">'
+            f'<div class="ppc-fill" style="width:{pct_clamped}%;"></div>'
+            "</div>"
+        )
+
+    return (
+        '<div class="proxy-progress-card">'
+        '<div class="ppc-head">'
+        f'<div class="ppc-stage">⚡ {html.escape(stage_desc)}</div>'
+        f'<div class="ppc-right">{pct_html}<em class="ppc-speed">({html.escape(speed_str)})</em></div>'
+        "</div>"
+        f"{bar_html}"
+        '<div class="ppc-foot">'
+        f'<div class="ppc-time">时间: {cur_str} / {tot_str}</div>'
+        f'<div class="ppc-note">{html.escape(note)}</div>'
+        "</div>"
+        "</div>"
+    )
 
 
-def manual_transcode_proxy_generator(media_file, review_cues, progress=gr.Progress()):
-    """带实时精准进度条的 480p 监看代理压制器（流式刷新左侧状态卡片）。"""
+_PROXY_JOB_LOCK = threading.Lock()
+_PROXY_JOB_ACTIVE = False
+
+
+def _drop_broken_proxy(path: Path) -> None:
+    """压制失败时删掉半成品，否则下一次点击会把它当成「历史代理」秒级复用。"""
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def manual_transcode_proxy_generator(media_file, review_cues):
+    """带实时精准进度条的 480p 监看代理压制器（流式刷新左侧状态卡片）。
+
+    重要：这里**不要**再用 ``progress=gr.Progress()`` 或调用 ``progress()``。
+    Gradio 原生进度追踪器会被渲染进 ``proxy_status`` 这个输出组件的容器里，而它的
+    文字刷新被三重限制卡着（见 gradio statustracker：只在「每 10% 一档」跨档时才换文案、
+    两次换文案至少间隔 5 秒、文案 1 秒后自动清空）。结果是同一个位置上有两个各自刷新的
+    进度源：卡片按 0.3s 走真实百分比，原生追踪器却周期性地把 1 秒前的旧百分比贴上来，
+    于是界面上就在两种形态之间反复横跳（19% ↔ 33%）。现在只保留卡片这一个进度源，
+    事件侧用 ``show_progress="hidden"`` 彻底关掉原生追踪器。
+    """
     if not media_file:
         gr.Warning("⚠️ 请先在上方上传音视频文件。")
         yield gr.update(), "⚠️ 请先在上方上传音视频文件。"
@@ -5054,88 +5176,132 @@ def manual_transcode_proxy_generator(media_file, review_cues, progress=gr.Progre
         yield payload, f"🎉 **已秒级复用历史代理（{standard_proxy.name}）！** 画面已对齐，拖拽现已流畅秒开。"
         return
 
-    total_duration = 0.0
+    # 同一时刻只允许一个压制任务，避免两个 ffmpeg 同时写同一个成片（会互相截断、进度互相打架）
+    global _PROXY_JOB_ACTIVE
+    with _PROXY_JOB_LOCK:
+        if _PROXY_JOB_ACTIVE:
+            gr.Warning("⚠️ 已有压制任务在运行，请等当前进度条走完再点。")
+            yield gr.update(), "⏳ **已有压制任务在运行**，请等当前进度条走完再点。"
+            return
+        _PROXY_JOB_ACTIVE = True
+
     try:
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(media_path)],
-            capture_output=True,
-            text=True,
-            timeout=20,
+        total_duration = 0.0
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(media_path)],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            total_duration = max(0.0, float(probe.stdout.strip()))
+        except Exception:
+            total_duration = 0.0  # 探不到时长就走「不确定进度」，不要瞎猜 180 秒
+
+        cmd_hw = [
+            "ffmpeg", "-y",
+            "-hwaccel", "videotoolbox",
+            "-i", str(media_path),
+            "-vf", "scale=-2:480,format=yuv420p",
+            "-c:v", "h264_videotoolbox",
+            "-b:v", "2200k",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-progress", "pipe:1",
+            str(standard_proxy)
+        ]
+
+        yield gr.update(), _render_proxy_progress_card(
+            None, 0, total_duration, "准备中…", "正在启动 VideoToolbox 硬件压制…", "初始化编码器"
         )
-        total_duration = max(0.1, float(probe.stdout.strip()))
-    except Exception:
-        total_duration = 180.0
 
-    cmd_hw = [
-        "ffmpeg", "-y",
-        "-hwaccel", "videotoolbox",
-        "-i", str(media_path),
-        "-vf", "scale=-2:480,format=yuv420p",
-        "-c:v", "h264_videotoolbox",
-        "-b:v", "2200k",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-progress", "pipe:1",
-        str(standard_proxy)
-    ]
-
-    yield gr.update(), _render_proxy_progress_card(0, 0, total_duration, "准备中…", "正在启动 VideoToolbox 硬件压制…")
-    progress(0.01, desc="启动硬件压制…")
-
-    proc = None
-    try:
-        proc = subprocess.Popen(cmd_hw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
-        last_update_time = time.time()
-        current_out_s = 0.0
+        proc = None
+        ok = False
+        max_out_s = 0.0
         current_speed = "1.0x"
+        try:
+            proc = subprocess.Popen(cmd_hw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            last_yield_time = time.time()
+            last_pct = -1
 
-        while True:
-            line = proc.stdout.readline() if proc.stdout else ""
-            if not line and proc.poll() is not None:
-                break
-            line_str = line.strip()
-            if "=" in line_str:
-                k, v = line_str.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if k == "out_time_us":
-                    try:
-                        current_out_s = float(v) / 1000000.0
-                    except ValueError:
-                        pass
-                elif k == "speed":
-                    current_speed = v
+            while True:
+                line = proc.stdout.readline() if proc.stdout else ""
+                if not line and proc.poll() is not None:
+                    break
+                line_str = line.strip()
+                if "=" in line_str:
+                    k, v = line_str.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if k == "out_time_us":
+                        try:
+                            # 只认单调值：ffmpeg 偶发回退/重置时进度条绝不倒走
+                            max_out_s = max(max_out_s, float(v) / 1000000.0)
+                        except ValueError:
+                            pass
+                    elif k == "speed" and v.endswith("x"):
+                        current_speed = v
 
-            now = time.time()
-            if now - last_update_time >= 0.3:
-                last_update_time = now
-                pct = int(min(99.0, max(0.0, (current_out_s / total_duration) * 100)))
-                progress_ratio = max(0.0, min(0.99, current_out_s / total_duration))
-                progress(progress_ratio, desc=f"压制中: {pct}% ({current_speed})")
-                yield gr.update(), _render_proxy_progress_card(pct, current_out_s, total_duration, current_speed)
+                now = time.time()
+                if now - last_yield_time < 0.3:
+                    continue
 
-        proc.wait(timeout=10)
-    except Exception as exc:
-        logging.warning(f"VideoToolbox 实时压制异常: {exc}")
-        if proc:
-            proc.kill()
+                if total_duration > 0:
+                    pct = int(min(99.0, max(0.0, (max_out_s / total_duration) * 100)))
+                else:
+                    pct = None
 
-    if standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
-        progress(1.0, desc="压制完成！")
-        payload = build_review_payload(media_file, review_cues, include_peaks=True)
-        gr.Info(f"🎉 480p 监看代理压制成功（{standard_proxy.name}）！")
-        yield payload, f"🎉 **480p 监看代理压制成功！** 已自动切换为轻量代理（`{standard_proxy.name}`），视频拖拽现已流畅秒开。"
-        return
+                # 百分比没变就不刷新（只偶尔补一次速度/时间），避免每 0.3s 无意义重绘造成闪烁
+                if pct == last_pct and now - last_yield_time < 1.5:
+                    continue
+                last_pct = pct
+                last_yield_time = now
+                yield gr.update(), _render_proxy_progress_card(
+                    pct, max_out_s, total_duration, current_speed
+                )
 
-    yield gr.update(), _render_proxy_progress_card(50, total_duration * 0.5, total_duration, "回退模式", "VideoToolbox 自动回退模式压制中…")
-    proxy_fallback = create_m4pro_hardware_proxy(media_path)
-    if proxy_fallback and proxy_fallback.exists():
-        payload = build_review_payload(media_file, review_cues, include_peaks=True)
-        gr.Info(f"🎉 回退方案压制成功（{proxy_fallback.name}）！")
-        yield payload, f"🎉 **480p 代理生成成功（回退方案）！** 已切换为轻量代理（`{proxy_fallback.name}`），拖拽现已流畅秒开。"
-    else:
-        gr.Warning("⚠️ 代理压制未能成功，继续保持原片监看。")
-        yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
+            proc.wait(timeout=10)
+            ok = proc.returncode == 0
+        except Exception as exc:
+            logging.warning(f"VideoToolbox 实时压制异常: {exc}")
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        if ok and standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
+            # 收尾阶段（算峰值、切画面）也占时间，先补一帧 100%，避免卡片停在 90% 看起来像卡死
+            yield gr.update(), _render_proxy_progress_card(
+                100 if total_duration > 0 else None,
+                total_duration or max_out_s,
+                total_duration,
+                current_speed,
+                "压制完成，正在载入监看画面…",
+                "收尾：生成波形峰值",
+            )
+            payload = build_review_payload(media_file, review_cues, include_peaks=True)
+            gr.Info(f"🎉 480p 监看代理压制成功（{standard_proxy.name}）！")
+            yield payload, f"🎉 **480p 监看代理压制成功！** 已自动切换为轻量代理（`{standard_proxy.name}`），视频拖拽现已流畅秒开。"
+            return
+
+        # 硬解失败：删掉半成品再走回退链，避免下次点击复用到一个截断文件
+        _drop_broken_proxy(standard_proxy)
+        yield gr.update(), _render_proxy_progress_card(
+            None, 0, total_duration, "回退模式", "VideoToolbox 直通失败，正在切换回退压制…", "软解 + 硬件编码（不确定进度）"
+        )
+        proxy_fallback = create_m4pro_hardware_proxy(media_path)
+        if proxy_fallback and proxy_fallback.exists():
+            payload = build_review_payload(media_file, review_cues, include_peaks=True)
+            gr.Info(f"🎉 回退方案压制成功（{proxy_fallback.name}）！")
+            yield payload, f"🎉 **480p 代理生成成功（回退方案）！** 已切换为轻量代理（`{proxy_fallback.name}`），拖拽现已流畅秒开。"
+        else:
+            gr.Warning("⚠️ 代理压制未能成功，继续保持原片监看。")
+            yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
+    finally:
+        with _PROXY_JOB_LOCK:
+            _PROXY_JOB_ACTIVE = False
+
 
 with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEME, css=CSS_CUSTOM) as demo:
     with gr.Row(elem_classes=["app-header"]):
@@ -5677,15 +5843,20 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         api_name=False,
     )
     # 核心改动：点击压制后的进度条与切换提示 -> 实时流式输出到左侧 proxy_status
+    # show_progress="hidden" 必须保留：否则 Gradio 原生进度追踪器会渲染进 proxy_status 容器，
+    # 与卡片自身的进度条形成两个刷新节奏不同的进度源，导致百分比来回横跳。
     manual_proxy_btn.click(
         manual_transcode_proxy_generator,
         inputs=[media, review_cues_state],
         outputs=[review_payload, proxy_status],
+        show_progress="hidden",
+        concurrency_limit=1,
         api_name=False,
     ).then(
         refresh_monitor_proxy_choices,
         inputs=None,
         outputs=[monitor_proxy_pick],
+        show_progress="hidden",
         api_name=False,
     )
 

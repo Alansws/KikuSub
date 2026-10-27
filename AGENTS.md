@@ -47,6 +47,7 @@ python app.py
 - 重新导入 SRT 时，必须彻底更新 `review_cues_state` 以及前端表格和波形展示，杜绝旧基线残留。
 - **全链路撤回/重做体系 (Undo/Redo)**：由 `undo_stack_state` 与 `redo_stack_state` 管理，支持任意删除、单行更新、插入、清空、导入或追加操作后的无损撤回。前端通过 `Cmd+Z` (Mac) 或 `Ctrl+Z` (Windows/Linux) 及界面按钮触发撤回，`Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` 触发重做。
 - **高健壮性与防崩溃规范**：核对区所有操作函数在面对用户误操作（如空白时间、非法格式、越界行号）时，一律采用 `gr.Warning()` 友好提示并返回 `fallback` 保护当前已有字幕状态，严禁抛出未经处理的 `gr.Error()` 导致界面状态丢失；所有 Gradio 事件处理函数返回值的数量必须与 `outputs` 声明的组件列表严格一一对应。
+- **压制进度只允许一个数据源**：`manual_transcode_proxy_generator` 是流式生成器，**禁止**再给它加 `progress=gr.Progress()` 或调用 `progress()`，`.click()` 也必须保持 `show_progress="hidden"`。Gradio 原生追踪器会被渲染进 `proxy_status` 容器，其文案还受「每 10% 一档（milestone）+ 两次换文案至少间隔 5 秒 + 文案 1 秒后自动清空」三重限制（见 `gradio/templates/frontend/assets/statustracker-*.js`），与卡片按 0.3s 刷新的真实百分比完全错拍，界面就会在「原生浮层」和「卡片」两种形态之间反复横跳（曾表现为 19% ↔ 33% 交替）。卡片样式统一走 `.ppc-*` 类并使用 `<div>/<b>/<em>`，不要用 `<span>` 内联样式——`.proxy-status-box span { ... !important }` 会把配色和字号全部覆盖掉。进度值还必须取单调最大值（`max_out_s`），并在时长探测失败时走 `pct=None` 的不确定进度态，绝不凭空造百分比。
 
 ## 4. 转录任务详报面板（禁止退回 Textbox）
 
