@@ -580,6 +580,16 @@ MISSED_REASON_LABELS = {
     "retry-suspicious": "重试结果不可信",
 }
 
+# 幻觉复核的判据标签（transcribe.hallucination_risk_reason 的返回值）
+HALLUCINATION_RULE_LABELS = {
+    "repeat": "重复复读",
+    "short": "短段复核",
+    "low-density": "低密度",
+}
+
+# 明细最多列这么多条，其余折叠成一行，避免长片把报告刷成流水账
+HALLUCINATION_SPAN_LIMIT = 50
+
 # E5：漏句告警的展示下限。模型对「VAD 判成语音、实际是底噪/静音」的段同样返回空，
 # 这类记录是纯噪声（实测两条的 RMS 处于全片 VAD 段的第 5/6 百分位，参考字幕此处无台词）。
 # 阈值以下只在 JSON 里留档，不进报告、不在状态行里喊。
@@ -621,6 +631,31 @@ def _missed_spans_headline(spans: list[dict] | None) -> str:
 
 def missed_json_path(media_path: Path, slice_tag: str = "") -> Path:
     return OUTPUT_DIR / f"{Path(media_path).stem}{slice_tag}.missed.json"
+
+
+def _hallucination_rule_label(rule: str) -> str:
+    key = str(rule or "")
+    return HALLUCINATION_RULE_LABELS.get(key, key or "可疑")
+
+
+def _hallucination_rows(spans: list[dict], verdict: str) -> list[str]:
+    """把同一结论（dropped / suspect）的复核记录渲染成报告明细行。"""
+    picked = [s for s in spans if str(s.get("verdict", "")) == verdict]
+    rows: list[str] = []
+    for span in picked[:HALLUCINATION_SPAN_LIMIT]:
+        peak_txt = f"  峰值 {_span_peak(span):.3f}" if "peak" in span else ""
+        text = " ".join(str(span.get("text", "")).split())
+        rows.append(
+            f"• {_fmt_report_time(span.get('start', 0.0))} → {_fmt_report_time(span.get('end', 0.0))}"
+            f"  ({float(span.get('dur', 0.0) or 0.0):.2f}s)  {_hallucination_rule_label(span.get('rule', ''))}"
+            f"{peak_txt}  「{text}」"
+        )
+    if len(picked) > HALLUCINATION_SPAN_LIMIT:
+        rows.append(
+            f"• … 另有 {len(picked) - HALLUCINATION_SPAN_LIMIT} 段未列出"
+            f"（仅展示前 {HALLUCINATION_SPAN_LIMIT} 段）"
+        )
+    return rows
 
 
 def _cut_snap_summary(stats: dict | None) -> str:
@@ -818,14 +853,31 @@ def build_transcription_report(
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
     hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
     suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
-    if hallucination_drops:
+    hallucination_spans = list((segment_stats or {}).get("hallucination_spans") or [])
+    dropped_rows = _hallucination_rows(hallucination_spans, "dropped")
+    suspect_rows = _hallucination_rows(hallucination_spans, "suspect")
+    if is_qwen:
+        # Qwen 路径没有时间戳复核这一步：不写“未发现”，避免读成“复核过且干净”
+        lines.append("【幻觉门控】该引擎不启用（仅 Anime Whisper 做时间戳复核）")
+    else:
         lines.append(
-            f"【幻觉门控】已丢弃 {hallucination_drops} 段经时间戳复核为空的疑似幻觉"
+            "【幻觉门控】"
+            + (
+                f"已丢弃 {hallucination_drops} 段经时间戳复核为空的疑似幻觉"
+                if hallucination_drops
+                else "未触发（没有段落复核为空被删）"
+            )
         )
-    if suspect_cues:
+        lines.extend(dropped_rows)
         lines.append(
-            f"【幻觉复核】{suspect_cues} 段短/低密度结果未被丢弃，建议人工核对"
+            "【幻觉复核】"
+            + (
+                f"{suspect_cues} 段短/低密度结果未被丢弃，建议人工核对"
+                if suspect_cues
+                else "未触发（无短段/低密度结果需要复核）"
+            )
         )
+        lines.extend(suspect_rows)
 
     headline = _align_stats_headline(align_stats, is_qwen)
     if is_interrupted and is_qwen and align_stats:
@@ -908,15 +960,15 @@ def _report_rows_html(lines: list[str]) -> str:
         item = raw[2:].strip() if raw.startswith("• ") else raw.strip()
         if not item:
             continue
-        if "：" in item:
-            key, value = item.split("：", 1)
-            key, value = key.strip(), value.strip()
-            if key and value:
-                rows.append(
-                    f'<div class="rp-row"><span class="rp-key">{html.escape(key)}</span>'
-                    f'<span class="rp-val">{html.escape(value)}</span></div>'
-                )
-                continue
+        # 只在“短标签：值”形状上拆分。明细行（时间戳区间 / 引用的识别原文）
+        # 前缀里带「→」或「」，其中的全角冒号属于文本本身，不能当分隔符。
+        prefix, sep, value = item.partition("：")
+        if sep and prefix and value and not set("→「」") & set(prefix):
+            rows.append(
+                f'<div class="rp-row"><span class="rp-key">{html.escape(prefix.strip())}</span>'
+                f'<span class="rp-val">{html.escape(value.strip())}</span></div>'
+            )
+            continue
         accent = " is-accent" if item.startswith(("✅", "⚠️", "❌")) else ""
         rows.append(f'<div class="rp-row"><span class="rp-val{accent}">{html.escape(item)}</span></div>')
     return "".join(rows)

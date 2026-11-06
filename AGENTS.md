@@ -65,4 +65,5 @@ python app.py
 - 详报的**纯文本原稿**藏在面板内 `<pre id="report-raw-text" class="report-raw-src">` 里，「📋 一键复制」按钮的 JS 直接读它的 `textContent`（事件 `inputs=None`），因此复制内容与旧版完全一致；改渲染逻辑时必须同步保留该 `<pre>`。
 - 指标胶囊复用顶部设备胶囊的 `.device-chip`（`chip-label` 灰字 + `chip-value` 等宽粗体），面板底色 `#f8fafc` + 3px `#a5b4fc` 左边框，与 `.progress-status-box` 同源；`status` Markdown 也挂 `progress-status-box`，保证「界面顶部 / 报告区」两处视觉一致。
 - 该折叠面板默认 `open=True`（用户要求首屏即可看到转写结果与详报）。
+- 【幻觉门控】/【幻觉复核】的逐段明细必须留在报告里（用户明确要求"不要在终端刷屏、要能复制"）：数据源是 `AnimeWhisperEngine.last_segment_stats["hallucination_spans"]`（字段 `start/end/dur/text/rule/verdict/peak`，`verdict` 取 `dropped|suspect`），由 `app._hallucination_rows()` 渲染，明细最多列 `HALLUCINATION_SPAN_LIMIT` 条。`transcribe.py` 里这两类段的日志只允许 `log.debug`，不要再升回 `log.info`。
 

@@ -20,6 +20,7 @@ from transcribe import (  # noqa: E402
     format_srt_timestamp,
     format_vtt_timestamp,
     hallucination_risk,
+    hallucination_risk_reason,
     merge_vad_segments,
     nearest_text_cut,
     parse_time_str,
@@ -134,6 +135,15 @@ def test_hallucination_risk_flags_repetition_and_short_cues():
     assert hallucination_risk("はい", 0.5, None)
     assert not hallucination_risk("こんにちは", 2.0, None)
     assert not hallucination_risk("", 1.0, None)
+
+
+def test_hallucination_risk_reason_names_the_triggered_rule():
+    # 复读优先于“短段”：同一段里两条判据都成立时报更具体的复读
+    assert hallucination_risk_reason("じゅるっ、じゅるっ、じゅるっ、じゅるっ、じゅるっ、じゅるっ", 1.0) == "repeat"
+    assert hallucination_risk_reason("はい", 0.5) == "short"
+    assert hallucination_risk_reason("…信じる", 8.0) == "low-density"
+    assert hallucination_risk_reason("こんにちは", 2.0) == ""
+    assert hallucination_risk_reason("", 1.0) == ""
 
 
 def test_blank_text_detection_matches_placeholder_outputs():

@@ -870,28 +870,44 @@ def _retry_suspicious(text: str, dur_s: float, prev_text: str) -> bool:
     return len(compact) > RETRY_REPEAT_MIN_CHARS and compact == prev_compact
 
 
-def hallucination_risk(text: str, dur_s: float, chunk: np.ndarray | None) -> bool:
-    """判断一段解码结果是否值得用“带时间戳”模式复核。
+# 幻觉复核的命中原由（报告里显示为中文标签，见 app.HALLUCINATION_RULE_LABELS）
+HALLUCINATION_REPEAT = "repeat"
+HALLUCINATION_SHORT = "short"
+HALLUCINATION_LOW_DENSITY = "low-density"
 
-    典型命中：`じゅるっ、じゅるっ…` 这样的病理性复读；或极短（<=2 字）且
-    时长 <0.9s 的 cue。后者可能是“はい”这类正常短句，所以只做复核、不直接丢：
-    时间戳模式通常会把纯噪声/音乐段解成「…」，据此丢弃。
+
+def hallucination_risk_reason(text: str, dur_s: float) -> str:
+    """判断一段解码结果是否值得用“带时间戳”模式复核，返回命中的判据。
+
+    返回空串表示不触发复核；否则返回下面三取一：
+
+    - ``repeat``：病理性复读（去标点后同一 1–4 字单元连续 >=6 次）；
+    - ``short``：时长 <1.2s 且至少 2 字——正常短句（「はい」）在时间戳模式下
+      会保留，噪声/音乐段通常被解成「…」；
+    - ``low-density``：时长 >=2s 却只有 <0.8 字/秒（8 秒只出 3 字），大概率非对白段。
+
+    这里只判“要不要复核”，不判“是不是幻觉”——是否丢弃由时间戳复核决定。
     """
     compact = re.sub(r"\s+", "", text or "")
     if not compact:
-        return False
+        return ""
     # 复读常带标点（「じゅるっ、じゅるっ、…」），先去掉标点再匹配连续单元。
     repeat_probe = re.sub(r"[\s、。．，,\.!?！？…‥・〜]+", "", text or "")
     if REPEATED_CHUNK_RE.search(repeat_probe):
-        return True
+        return HALLUCINATION_REPEAT
     # 短段（<1.2s）无论字数多少都复核：正常短句在时间戳模式下会保留，
     # 噪声/音乐段通常解成「…」。短段复核成本很低。
     if dur_s < 1.2 and len(compact) >= 2:
-        return True
+        return HALLUCINATION_SHORT
     # 长段却只吐出极少量字（「…信じる」3 字 / 8 秒）：大概率是非对白段。
     if dur_s >= 2.0 and len(compact) / dur_s < 0.8:
-        return True
-    return False
+        return HALLUCINATION_LOW_DENSITY
+    return ""
+
+
+def hallucination_risk(text: str, dur_s: float, chunk: np.ndarray | None = None) -> bool:
+    """兼容旧调用：只要命中任一复核判据就返回 True（``chunk`` 已不再参与判断）。"""
+    return bool(hallucination_risk_reason(text, dur_s))
 
 
 def sanitize_pathological_repeats(text: str) -> str:
@@ -1327,6 +1343,9 @@ class AnimeWhisperEngine:
 
         hallucination_drops = 0
         suspect_cues = 0
+        # 逐段留档：报告里的【幻觉门控】/【幻觉复核】直接列这些记录，
+        # 不再只把明细打到终端。字段与漏句记录保持同一形状，便于对照。
+        hallucination_spans: list[dict] = []
         for i, (start, end) in enumerate(segments, start=1):
             if cancel_event and cancel_event.is_set():
                 self.last_interrupted = True
@@ -1360,24 +1379,38 @@ class AnimeWhisperEngine:
                 elif _is_blank(text):
                     reason = "empty-after-retry"
 
-            if not _is_blank(text) and hallucination_risk(text, seg_dur_s, chunk):
+            rule = hallucination_risk_reason(text, seg_dur_s) if not _is_blank(text) else ""
+            if rule:
                 try:
                     verified = _decode(chunk, timestamps=True)
                 except Exception:
                     log.debug("时间戳复核失败，保留原结果", exc_info=True)
                     verified = text
+                record = {
+                    "start": round(seg_start_s, 3),
+                    "end": round(seg_end_s, 3),
+                    "dur": round(seg_dur_s, 2),
+                    "text": text.strip()[:80],
+                    "rule": rule,
+                    **chunk_level_stats(chunk),
+                }
                 if _is_blank(verified):
                     hallucination_drops += 1
-                    log.info(
-                        "丢弃疑似幻觉段 | %.2fs | %r",
+                    hallucination_spans.append({**record, "verdict": "dropped"})
+                    # 明细进报告（【幻觉门控】），终端只在 debug 留底
+                    log.debug(
+                        "丢弃疑似幻觉段 | %.2fs | rule=%s | %r",
                         seg_dur_s,
+                        rule,
                         text[:60],
                     )
                     continue
                 suspect_cues += 1
-                log.info(
-                    "疑似幻觉（保留待复核） | %.2fs | %r",
+                hallucination_spans.append({**record, "verdict": "suspect"})
+                log.debug(
+                    "疑似幻觉（保留待复核） | %.2fs | rule=%s | %r",
                     seg_dur_s,
+                    rule,
                     text[:60],
                 )
 
@@ -1433,6 +1466,7 @@ class AnimeWhisperEngine:
         )
         self.last_segment_stats["hallucination_drops"] = hallucination_drops
         self.last_segment_stats["suspect_cues"] = suspect_cues
+        self.last_segment_stats["hallucination_spans"] = hallucination_spans
 
         if progress_cb and not self.last_interrupted:
             progress_cb(0.98, "正在整理字幕…")
