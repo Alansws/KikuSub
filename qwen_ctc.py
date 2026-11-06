@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -42,7 +43,11 @@ from torch import nn
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+log = logging.getLogger(__name__)
+
 from silero_vad import get_speech_timestamps, load_silero_vad
+
+from procutil import CommandCancelled
 
 from transcribe import (
     HONORIFIC_PREFIXES,
@@ -69,6 +74,8 @@ from transcribe import (
 
 REPO_ID = "jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf"
 HEAD_FILE = "ctc_aligner_jav_vocalisation_v3.pt"
+# 与 Whisper 侧一致：模型加载/下载必须是进程级单飞，避免两份 4GB 权重。
+_LOAD_LOCK = threading.Lock()
 
 MEL_PER_BLOCK = 100
 SECONDS_PER_ENCODER_FRAME = 0.08
@@ -243,6 +250,38 @@ SEG_BASE_COST = 0.1
 OVERRUN_COST = 1.2
 MIN_CUE_DUR = 0.04
 
+# 词边界启发式（P1-1）：在没有分词器的前提下，先堵住最确定的劈词位置。
+# - 助词（は/が/を/に/で/へ/と/も/の/か/ね/よ/わ/や）前面绝不切：
+#   「空|は」「匂い|を」「好き|で」都属于这一类；
+# - 两个假名之间默认不切，除非左边正好是助词（「空は|もっと」是自然的）；
+# - 汉字/假名 + 活用尾（る/た/て/だ/な/ば/れ/ら/り/っ/ず/ぬ）前不切：
+#   「来|る」「食べ|る」「くれ|る」。
+# 这些位置标 BREAK_FORBIDDEN（1000），同时也能阻止 _apply_pauses 把成本清零。
+SINGLE_PARTICLES = {ch for ch in JAPANESE_PARTICLES if len(ch) == 1}
+MULTI_PARTICLES = tuple(sorted(p for p in JAPANESE_PARTICLES if len(p) > 1))
+AUXILIARY_STARTS = set("るたてだなばれらずぬりっ")
+# 左侧是这些假名时，允许在它后面切（助词 + て形）。
+BREAK_AFTER_KANA = SINGLE_PARTICLES | {"て"}
+
+# 「もっと」「こと」等以助词字开头、但本身是词；切在它们前面不是劈助词。
+# 只列高频、歧义低的词，避免把真正的「空|から」放过去。
+PARTICLE_WORD_EXCEPTIONS = (
+    "もっと", "もう", "もちろん", "もらう",
+    "こと", "これ", "それ", "あれ", "どれ", "どこ", "なぜ",
+    "のに", "のは", "のが", "のか", "のを", "には", "では", "とは",
+    "にも", "でも", "ても", "だけ", "しか", "ほど", "くらい", "など",
+    "みたい", "ように", "ために", "ところ", "とき", "けど", "けれど",
+    "かな", "かも", "でしょう", "そして", "それで", "だから",
+)
+
+
+def _starts_with_multi_particle(text: str, pos: int) -> bool:
+    return any(text.startswith(particle, pos) for particle in MULTI_PARTICLES)
+
+
+def _starts_lexical_word(text: str, pos: int) -> bool:
+    return any(text.startswith(word, pos) for word in PARTICLE_WORD_EXCEPTIONS)
+
 # 可读性下限（A5）：只影响"在哪切"，不改变任何文本
 MIN_CUE_DUR_FLOOR = 0.80   # 单条字幕最短可读时长（秒）
 CPS_READABLE = 9.0         # "能读"的下限：字/秒，用于反推最短时长
@@ -290,7 +329,16 @@ def _break_costs(folded: FoldedText, positions: list[int]) -> list[float]:
 
     rank = {p: i for i, p in enumerate(positions)}
     for p, ch in enumerate(folded.folded):
-        if p in rank or ch not in PAUSE_PUNCT:
+        if ch not in PAUSE_PUNCT:
+            continue
+        if p in rank:
+            # 标点本身也被 CTC 对齐时，奖励应落在「标点之后」的边界，
+            # 不能因为 p 在 rank 里就跳过（否则「、」后的切点拿不到 0 成本）。
+            boundary = rank[p] + 1
+            if boundary <= n:
+                costs[boundary] = (
+                    BREAK_SENTENCE_END if ch in "。！？!?\n" else BREAK_COMMA
+                )
             continue
         nxt = p + 1
         while nxt < len(folded) and nxt not in rank:
@@ -318,10 +366,35 @@ def _break_costs(folded: FoldedText, positions: list[int]) -> list[float]:
         prev_ch = text_str[prev_pos]
         next_ch = text_str[next_pos]
 
-        if prev_ch in JAPANESE_PARTICLES and not (next_ch in SMALL_KANA or next_ch in PROLONGED_SOUNDS):
+        # 标点后的边界已经在上面标成 0；不要再用词规则覆盖它。
+        if prev_ch in PAUSE_PUNCT:
+            continue
+
+        # 1) 助词前不切（「空|は」「匂い|を」「好き|で」）。
+        #    但「もっと」「こと」这类以助词字开头的词要放行。
+        if (
+            not _starts_lexical_word(text_str, next_pos)
+            and (next_ch in SINGLE_PARTICLES or _starts_with_multi_particle(text_str, next_pos))
+        ):
+            costs[i] = BREAK_FORBIDDEN
+            continue
+
+        # 2) 活用尾前不切（「来|る」「くれ|る」「食べ|る」）。
+        if next_ch in AUXILIARY_STARTS and (_is_kana(prev_ch) or _is_kanji(prev_ch)):
+            costs[i] = BREAK_FORBIDDEN
+            continue
+
+        # 3) 两个假名之间默认不切；只有左边是助词时才允许（「空は|もっと」）。
+        if _is_kana(prev_ch) and _is_kana(next_ch):
+            costs[i] = BREAK_PARTICLE if prev_ch in BREAK_AFTER_KANA else BREAK_FORBIDDEN
+            continue
+
+        # 4) 助词/て形后是自然的短语边界。
+        if prev_ch in BREAK_AFTER_KANA and not (next_ch in SMALL_KANA or next_ch in PROLONGED_SOUNDS):
             costs[i] = BREAK_PARTICLE
             continue
 
+        # 5) 汉字转假名是弱偏好（不是硬禁则）。
         if not _is_kana(prev_ch) and _is_kana(next_ch):
             costs[i] = BREAK_KANJI_KANA_PHRASE
 
@@ -540,17 +613,38 @@ class QwenCtcEngine:
         self._frame_classes: tuple[str, ...] = ()
         self._vad = None
         self._dtype = torch.float32
+        # 首次特征复用失败后关闭，避免每个分段都打印一次 traceback 并重复尝试。
+        self._audio_feature_reuse = True
 
     @property
     def ready(self) -> bool:
         return self._model is not None
 
+    @staticmethod
+    def _weights_present(directory: Path) -> bool:
+        """校验 config 之外的真实权重：分片索引里的每个 shard 都必须存在。"""
+        index = directory / "model.safetensors.index.json"
+        if index.exists():
+            try:
+                payload = json.loads(index.read_text(encoding="utf-8"))
+                shards = {str(v) for v in (payload.get("weight_map") or {}).values()}
+            except (OSError, ValueError):
+                return False
+            return bool(shards) and all((directory / shard).is_file() for shard in shards)
+        return (directory / "model.safetensors").is_file() or any(
+            directory.glob("*.safetensors")
+        )
+
     @property
     def model_available(self) -> bool:
-        return (self.model_dir / "config.json").exists()
+        return (
+            (self.model_dir / "config.json").is_file()
+            and (self.model_dir / HEAD_FILE).is_file()
+            and self._weights_present(self.model_dir)
+        )
 
     def ensure_model(self, progress_cb=None) -> None:
-        if self.model_available and (self.model_dir / HEAD_FILE).exists():
+        if self.model_available:
             return
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
         if progress_cb:
@@ -568,35 +662,45 @@ class QwenCtcEngine:
     def load(self, progress_cb=None) -> None:
         if self._model is not None:
             return
-        self.ensure_model(progress_cb)
-        if not self.model_available:
-            raise FileNotFoundError(
-                f"未找到 {REPO_ID} 权重（{self.model_dir}）。\n"
-                "运行 ./install.sh 下载，或用 QWEN3_ASR_MODEL 指向已有权重。"
-            )
+        with _LOAD_LOCK:
+            if self._model is not None:
+                return
 
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+            self.ensure_model(progress_cb)
+            if not self.model_available:
+                raise FileNotFoundError(
+                    f"未找到 {REPO_ID} 权重（{self.model_dir}）。\n"
+                    "运行 ./install.sh 下载，或用 QWEN3_ASR_MODEL 指向已有权重。"
+                )
 
-        if progress_cb:
-            progress_cb(0.01, "正在加载 Qwen3-ASR 权重…")
-        self._processor = AutoProcessor.from_pretrained(str(self.model_dir))
-        if hasattr(self._processor, "tokenizer") and self._processor.tokenizer is not None:
-            self._processor.tokenizer.clean_up_tokenization_spaces = False
+            from transformers import AutoModelForMultimodalLM, AutoProcessor
 
-        self._dtype = torch.bfloat16 if self.device in {"mps", "cuda"} else torch.float32
-        try:
-            model = AutoModelForMultimodalLM.from_pretrained(str(self.model_dir), dtype=self._dtype)
-        except TypeError:
-            model = AutoModelForMultimodalLM.from_pretrained(str(self.model_dir), torch_dtype=self._dtype)
-        self._model = model.to(self.device).eval()
+            if progress_cb:
+                progress_cb(0.01, "正在加载 Qwen3-ASR 权重…")
+            processor = AutoProcessor.from_pretrained(str(self.model_dir))
+            if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
+                processor.tokenizer.clean_up_tokenization_spaces = False
 
-        head, payload = load_alignment_head(self.model_dir)
-        self._head = head.to(self.device).float().eval()
-        vocab = payload["vocab"]
-        self._lookup = {ch: i + 2 for i, ch in enumerate(vocab["chars"])}
-        self._unk_index = int(vocab.get("unk_index", 1))
-        self._frame_classes = tuple(payload.get("frame_classes") or ())
-        self._vad = load_silero_vad()
+            dtype = torch.bfloat16 if self.device in {"mps", "cuda"} else torch.float32
+            try:
+                model = AutoModelForMultimodalLM.from_pretrained(str(self.model_dir), dtype=dtype)
+            except TypeError:
+                model = AutoModelForMultimodalLM.from_pretrained(str(self.model_dir), torch_dtype=dtype)
+            model = model.to(self.device).eval()
+
+            head, payload = load_alignment_head(self.model_dir)
+            vocab = payload["vocab"]
+            vad = load_silero_vad()
+
+            # 全部成功后再一次性发布，避免半初始化状态被其他线程看到。
+            self._processor = processor
+            self._dtype = dtype
+            self._model = model
+            self._head = head.to(self.device).float().eval()
+            self._lookup = {ch: i + 2 for i, ch in enumerate(vocab["chars"])}
+            self._unk_index = int(vocab.get("unk_index", 1))
+            self._frame_classes = tuple(payload.get("frame_classes") or ())
+            self._vad = vad
 
     def _encode_audio(self, audio: np.ndarray):
         inputs = self._processor.feature_extractor(
@@ -612,11 +716,8 @@ class QwenCtcEngine:
         mask = inputs["attention_mask"].to(self.device)
         return feats, mask
 
-    def _encoder_features(self, feats: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, np.ndarray]:
-        with torch.inference_mode():
-            hidden = self._model.model.audio_tower(input_features=feats, input_features_mask=mask).last_hidden_state
-            projected = self._model.model.multi_modal_projector(hidden)
-
+    def _encoder_times(self, mask: torch.Tensor) -> np.ndarray:
+        """由 processor 的 mel mask 推导每个 encoder 帧的时间戳。"""
         valid_mel = mask[0].to(torch.long).cpu()
         hop = self._processor.feature_extractor.hop_length
         times: list[float] = []
@@ -625,14 +726,30 @@ class QwenCtcEngine:
             count = _conv_length(int(valid_mel[i : i + MEL_PER_BLOCK].sum().item()))
             times.extend(block_start + p * SECONDS_PER_ENCODER_FRAME for p in range(count))
             block_start += MEL_PER_BLOCK * hop / SAMPLE_RATE
-        return projected.float(), np.asarray(times, dtype=np.float64)
+        return np.asarray(times, dtype=np.float64)
+
+    def _encoder_features(self, feats: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, np.ndarray]:
+        with torch.inference_mode():
+            output = self._model.model.get_audio_features(
+                feats, mask, return_dict=True
+            )
+            projected = output.pooler_output
+        return projected.float(), self._encoder_times(mask)
 
     def _transcribe(
         self,
         audio: np.ndarray,
         config: QwenCtcConfig | None = None,
         cap_override: int | None = None,
-    ) -> str:
+        capture_audio: bool = False,
+    ) -> tuple[str, tuple[torch.Tensor, np.ndarray] | None]:
+        """转写一段音频；``capture_audio`` 时同时返回可复用的 encoder 特征。
+
+        返回 ``(text, features)``，features 为 ``(projected, times)`` 或 None。
+        复用方式：先跑一次 ``get_audio_features``，再在 generate 期间把
+        ``model.model.get_audio_features`` 临时指向同一个输出。这样音频塔只前向
+        一次，后续 CTC 对齐直接用同一份特征，避免每段跑两遍 encoder。
+        """
         cfg = config or self.config
         self._last_truncated = False
         self._last_capped = False
@@ -643,25 +760,68 @@ class QwenCtcEngine:
             cap = int(cap_override)
         else:
             cap = min(int(cfg.max_new_tokens), max(64, int(dur * TOKENS_PER_SEC) + TOKENS_HEADROOM))
+        features: tuple[torch.Tensor, np.ndarray] | None = None
         with torch.inference_mode():
             inputs = self._processor.apply_transcription_request(
                 audio=audio, sampling_rate=SAMPLE_RATE, language="Japanese"
             ).to(device=self.device, dtype=self._dtype)
-            output_ids = self._model.generate(**inputs, max_new_tokens=cap)
+            if capture_audio and self._audio_feature_reuse:
+                try:
+                    cached = self._model.model.get_audio_features(
+                        inputs["input_features"],
+                        inputs["input_features_mask"],
+                        return_dict=True,
+                    )
+                    projected = cached.pooler_output
+                    features = (projected.float(), self._encoder_times(inputs["input_features_mask"]))
+
+                    def _cached_audio_features(*_args, **_kwargs):
+                        return cached
+
+                    model_core = self._model.model
+                    had_attr = "get_audio_features" in vars(model_core)
+                    previous_attr = vars(model_core).get("get_audio_features")
+                    model_core.get_audio_features = _cached_audio_features
+                    try:
+                        output_ids = self._model.generate(**inputs, max_new_tokens=cap)
+                    finally:
+                        if had_attr:
+                            model_core.get_audio_features = previous_attr
+                        else:
+                            del model_core.get_audio_features
+                except Exception:
+                    # 特征复用不能影响识别：失败就回到原来的二次编码路径。
+                    self._audio_feature_reuse = False
+                    log.warning(
+                        "Qwen 音频特征复用失败，本次及后续回退为二次编码", exc_info=True
+                    )
+                    features = None
+                    output_ids = self._model.generate(**inputs, max_new_tokens=cap)
+            else:
+                output_ids = self._model.generate(**inputs, max_new_tokens=cap)
         generated = output_ids[:, inputs["input_ids"].shape[1] :]
         text = self._processor.decode(generated, return_format="transcription_only")[0]
         text = (text or "").strip()
         self._last_capped, self._last_truncated = classify_capped(len(text), int(generated.shape[1]), cap)
-        return text
+        return text, features
 
     def align(self, audio: np.ndarray, text: str) -> AlignmentResult:
+        feats, mask = self._encode_audio(audio)
+        projected, enc_times = self._encoder_features(feats, mask)
+        return self._align_projected(projected, enc_times, text)
+
+    def _align_projected(
+        self,
+        projected: torch.Tensor,
+        enc_times: np.ndarray,
+        text: str,
+    ) -> AlignmentResult:
+        """用已算好的 encoder 特征做 CTC 对齐（不再跑音频塔）。"""
         folded = FoldedText(text)
         ids, char_index = encode_target(folded, self._lookup, self._unk_index)
         if not ids:
             return AlignmentResult(ok=True, reason="no-acoustic-chars")
 
-        feats, mask = self._encode_audio(audio)
-        projected, enc_times = self._encoder_features(feats, mask)
         if projected.shape[0] != enc_times.size:
             return AlignmentResult(ok=False, reason=f"frame-mismatch({projected.shape[0]}!={enc_times.size})")
 
@@ -724,8 +884,6 @@ class QwenCtcEngine:
         mean_lp = float(voiced.mean().item()) if voiced.numel() else 0.0
         aligned_count = len(chars)
         chars = _fill_unaligned(folded, chars, float(out_times[-1]))
-        # 插值字数 = 补出来的字数。不能用"零宽"判定：CTC 只占 1 帧的合法对齐
-        # 也是 start == end，那样会把正常对齐误报成插值。
         interp = max(0, len(chars) - aligned_count)
         return AlignmentResult(
             chars=chars, pauses=pauses, mean_logprob=mean_lp, ok=True, interpolated=interp
@@ -845,7 +1003,24 @@ class QwenCtcEngine:
             snap_stats=self.last_segment_stats,
         )
         if not segments:
-            segments = [(0, len(audio))]
+            # 与 Whisper 侧同一口径：VAD 未命中语音时不得把整段音频送模。
+            # 静音/纯音乐/环境声会被 ASR 幻觉成字幕，且会绕过 max_segment_s。
+            if progress_cb:
+                progress_cb(0.95, "未检测到有效语音（VAD 未命中任何语音段）…")
+            self.last_align_stats = {
+                "enabled": bool(use_alignment),
+                "segments": 0,
+                "aligned": 0,
+                "noop": 0,
+                "degraded": 0,
+                "empty": 0,
+                "align_chars": 0,
+                "interp_chars": 0,
+                "truncated": 0,
+                "capped_repeat": 0,
+                "spans": [],
+            }
+            return []
 
         cues: list[SubtitleCue] = []
         aligned = 0
@@ -875,14 +1050,21 @@ class QwenCtcEngine:
             offset = (start / SAMPLE_RATE) + time_offset
             seg_dur_s = (end - start) / SAMPLE_RATE
 
-            text = self._transcribe(chunk, cfg)
+            text, audio_features = self._transcribe(
+                chunk, cfg, capture_audio=use_alignment
+            )
             if self._last_capped:
                 if self._last_truncated:
                     # 密度正常却撞上限 = 真被砍：按完整上限重跑一次，宁可慢也不吃字。
                     # 只保留更长的结果，重跑更差不至于把已有文本弄丢。
-                    retried = self._transcribe(chunk, cfg, cap_override=int(cfg.max_new_tokens))
+                    retried, retried_features = self._transcribe(
+                        chunk,
+                        cfg,
+                        cap_override=int(cfg.max_new_tokens),
+                        capture_audio=use_alignment,
+                    )
                     if len(retried) > len(text):
-                        text = retried
+                        text, audio_features = retried, retried_features
                     if self._last_truncated:
                         truncated += 1
                 else:
@@ -894,7 +1076,9 @@ class QwenCtcEngine:
                     if progress_cb:
                         progress_cb(0.99, f"🛑 用户已中途取消，正在保存前 {len(cues)} 条字幕…")
                     break
-                text = self._transcribe(_retry_gain(chunk), cfg)
+                text, audio_features = self._transcribe(
+                    _retry_gain(chunk), cfg, capture_audio=use_alignment
+                )
                 if not _is_blank(text) and _retry_suspicious(text, seg_dur_s, prev_text):
                     text, reason = "", "retry-suspicious"
                 elif _is_blank(text):
@@ -925,7 +1109,12 @@ class QwenCtcEngine:
                     )
                 )
                 continue
-            result = self.align(chunk, text)
+            if audio_features is not None:
+                result = self._align_projected(
+                    audio_features[0], audio_features[1], text
+                )
+            else:
+                result = self.align(chunk, text)
             if result.ok and result.chars:
                 aligned += 1
                 align_chars += len(result.chars)
@@ -984,13 +1173,20 @@ class QwenCtcEngine:
         if progress_cb:
             slice_desc = f"（片段：{start_time_s or 0.0:.1f}s ~ {end_time_s:.1f}s）" if end_time_s else ""
             progress_cb(0.02, f"正在提取 16kHz 音频并进行响度优化{slice_desc}…")
-        audio = load_audio_for_transcription(
-            media_path,
-            enable_loudnorm=cfg.enable_loudnorm,
-            start_time_s=start_time_s,
-            end_time_s=end_time_s,
-            tmp_prefix="qwen3-asr-",
-        )
+        try:
+            audio = load_audio_for_transcription(
+                media_path,
+                enable_loudnorm=cfg.enable_loudnorm,
+                start_time_s=start_time_s,
+                end_time_s=end_time_s,
+                tmp_prefix="qwen3-asr-",
+                cancel_event=cancel_event,
+            )
+        except CommandCancelled:
+            self.last_interrupted = True
+            if progress_cb:
+                progress_cb(0.99, "🛑 已取消音频解码…")
+            return []
         return self.transcribe_array(
             audio,
             progress_cb=progress_cb,

@@ -8,22 +8,35 @@ from __future__ import annotations
 
 import os
 
-for proxy_key in [
-    "http_proxy", "https_proxy", "all_proxy",
-    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"
-]:
-    os.environ.pop(proxy_key, None)
+# 默认清掉代理，避免 Gradio/本地回环被错误代理；需要企业代理下载模型的用户
+# 可设置 KIKUSUB_KEEP_PROXY=1 保留系统代理（NO_PROXY 仍会覆盖 localhost）。
+if os.environ.get("KIKUSUB_KEEP_PROXY", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    for proxy_key in [
+        "http_proxy", "https_proxy", "all_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"
+    ]:
+        os.environ.pop(proxy_key, None)
 
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-# 确保本地回环与 Gradio 内部通信绝不走代理
-os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
-os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
+# 尊重用户已经配置的镜像/端点（企业内网、海外用户可能指向官方源），
+# 只在未设置时回落到国内镜像。
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 确保本地回环与 Gradio 内部通信绝不走代理；保留用户原有的 NO_PROXY 条目。
+_no_proxy_hosts = ["localhost", "127.0.0.1", "::1"]
+_no_proxy_current = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+_no_proxy_parts = [p.strip() for p in _no_proxy_current.split(",") if p.strip()]
+for _host in _no_proxy_hosts:
+    if _host not in _no_proxy_parts:
+        _no_proxy_parts.append(_host)
+os.environ["NO_PROXY"] = ",".join(_no_proxy_parts)
+os.environ["no_proxy"] = ",".join(_no_proxy_parts)
 
 import datetime
 import html
 import json
 import logging
 import math
+import platform
+import sys
 import subprocess
 import tempfile
 import threading
@@ -67,6 +80,8 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import gradio as gr
 import numpy as np
+import torch
+import transformers
 from transformers import logging as hf_logging
 hf_logging.set_verbosity_error()
 
@@ -90,10 +105,18 @@ from transcribe import (
     srt_to_cues,
 )
 from qwen_ctc import QwenCtcConfig, QwenCtcEngine
+from jobs import JobBusy, JobRegistry
+from logging_setup import setup_logging
+from procutil import CommandCancelled, CommandTimeout, run_command, tail, terminate_process
 
 ROOT = Path(__file__).resolve().parent
+STATIC_DIR = ROOT / "static"
 OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = OUTPUT_DIR / "logs"
+LOG_FILE = setup_logging(LOG_DIR)
+LOG_LABEL = str(LOG_FILE.relative_to(ROOT))
+log = logging.getLogger("kikusub")
 
 
 def write_text_atomic(path: str | Path, text: str, encoding: str = "utf-8") -> Path:
@@ -142,9 +165,25 @@ ENGINE_DISPLAY = {
     None: "通用配置",
 }
 
+log.info(
+    "KikuSub 启动 | python=%s | platform=%s | device=%s | torch=%s | transformers=%s | gradio=%s",
+    sys.version.split()[0],
+    platform.platform(),
+    detect_device(),
+    torch.__version__,
+    transformers.__version__,
+    gr.__version__,
+)
+log.info("路径 | root=%s | log=%s | whisper_model=%s | qwen_model=%s", ROOT, LOG_FILE, MODEL_DIR, QWEN.model_dir)
+
 
 def engine_key(engine_name: str) -> str:
     return ENGINE_A_TO_KEY.get(engine_name) or "whisper"
+
+
+def _session_hash(request) -> str:
+    """从 gr.Request 取会话标识；直接调用时为 anonymous。"""
+    return getattr(request, "session_hash", None) or "anonymous"
 
 
 SUPPORTED = {
@@ -165,7 +204,7 @@ SUPPORTED = {
 
 STORE = PresetStore()
 
-CANCEL_EVENT = threading.Event()
+JOB_REGISTRY = JobRegistry()
 
 
 def device_banner() -> str:
@@ -513,9 +552,15 @@ def pick_fills_name(name):
     return gr.update(value=name or "")
 
 
-def trigger_cancel():
-    CANCEL_EVENT.set()
-    gr.Warning("⚠️ 已发送中途打断指令！正在中止后续处理并妥善保存当前已转录的字幕…")
+def trigger_cancel(request: gr.Request | None = None):
+    """只取消“当前会话自己”的任务，绝不误伤另一个标签页。"""
+    ok, message = JOB_REGISTRY.cancel_for_session(_session_hash(request))
+    if ok:
+        log.warning("收到取消请求 | session=%s | %s", _session_hash(request), message)
+        gr.Warning("⚠️ 已发送中途打断指令！正在中止后续处理并妥善保存当前已转录的字幕…")
+    else:
+        log.info("忽略取消请求 | session=%s | %s", _session_hash(request), message)
+        gr.Warning(f"ℹ️ {message}")
 
 
 def cues_to_table(cues: list[SubtitleCue]) -> list[list]:
@@ -771,6 +816,16 @@ def build_transcription_report(
             f"（多为配乐/底噪误判，已留在 .missed.json 备查）"
         )
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
+    hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
+    suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
+    if hallucination_drops:
+        lines.append(
+            f"【幻觉门控】已丢弃 {hallucination_drops} 段经时间戳复核为空的疑似幻觉"
+        )
+    if suspect_cues:
+        lines.append(
+            f"【幻觉复核】{suspect_cues} 段短/低密度结果未被丢弃，建议人工核对"
+        )
 
     headline = _align_stats_headline(align_stats, is_qwen)
     if is_interrupted and is_qwen and align_stats:
@@ -952,8 +1007,9 @@ def transcribe_media(
     start_time_text,
     end_time_text,
     keep_absolute_timeline,
-    *values,
     progress=gr.Progress(),
+    request: gr.Request | None = None,
+    *values,
 ):
     if media_file is None:
         gr.Warning("请先上传视频或音频文件。")
@@ -965,8 +1021,6 @@ def transcribe_media(
         gr.Warning(f"不支持的文件格式: {media_path.suffix}")
         yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ 不支持的文件格式: {media_path.suffix}")
         return
-
-    CANCEL_EVENT.clear()
 
     start_s = parse_time_str(start_time_text)
     end_s = parse_time_str(end_time_text)
@@ -993,10 +1047,34 @@ def transcribe_media(
     engine = resolve_engine(engine_name)
     is_qwen = engine is QWEN
 
+    session = _session_hash(request)
+    try:
+        job = JOB_REGISTRY.start(session, label=f"{engine_name} · {media_path.name}")
+    except JobBusy as exc:
+        message = (
+            f"{exc}。同一时间只允许一个转写任务；请等它结束，"
+            "或由发起它的窗口点「中途打断」。"
+        )
+        log.warning("拒绝并发转写 | session=%s | %s", session, message)
+        gr.Warning(f"⚠️ {message}")
+        yield (gr.update(),) * 7 + (f"⚠️ {message}",)
+        return
+
+    log.info(
+        "转写开始 | job=%s | session=%s | media=%s | engine=%s | slice=%s..%s",
+        job.short_id(),
+        session,
+        media_path.name,
+        engine_name,
+        start_s,
+        end_s,
+    )
+
     q = queue.Queue()
 
     def cb(ratio, message):
-        progress(ratio, desc=message)
+        # 注意：这里在 worker 线程里执行，不能碰 gr.Progress（它绑定请求上下文）。
+        # 只把进度塞进队列，由 generator 线程统一更新原生进度条。
         q.put(("progress", ratio, message))
 
     def worker():
@@ -1016,7 +1094,7 @@ def transcribe_media(
                     progress_cb=cb,
                     use_alignment=use_alignment,
                     config=config,
-                    cancel_event=CANCEL_EVENT,
+                    cancel_event=job,
                     start_time_s=start_s,
                     end_time_s=end_s,
                     time_offset=time_offset,
@@ -1033,7 +1111,7 @@ def transcribe_media(
                     no_repeat_ngram_size=ngram,
                     repetition_penalty=penalty,
                     progress_cb=cb,
-                    cancel_event=CANCEL_EVENT,
+                    cancel_event=job,
                     start_time_s=start_s,
                     end_time_s=end_s,
                     time_offset=time_offset,
@@ -1041,7 +1119,7 @@ def transcribe_media(
                 stats_note = f"\n\n`{ENGINE.last_stats.describe()}`"
 
             elapsed_time = time.perf_counter() - start_timestamp
-            is_interrupted = bool(engine.last_interrupted) or CANCEL_EVENT.is_set()
+            is_interrupted = bool(engine.last_interrupted) or job.is_set()
             missed_spans = list(getattr(engine, "last_missed_spans", []) or [])
             segment_stats = dict(getattr(engine, "last_segment_stats", {}) or {})
             align_stats = dict(getattr(engine, "last_align_stats", {}) or {})
@@ -1112,14 +1190,40 @@ def transcribe_media(
                 )
                 final_progress = f"✅ 转录完成！共生成 {len(cues)} 条字幕（耗时 {format_duration(elapsed_time)}）"
 
+            log.info(
+                "转写完成 | job=%s | cues=%s | chars=%s | elapsed=%.2fs | interrupted=%s | out=%s",
+                job.short_id(),
+                len(cues),
+                char_count,
+                elapsed_time,
+                is_interrupted,
+                out_path.name,
+            )
             state_cues = [{"start": c.start, "end": c.end, "text": c.text} for c in cues]
             q.put(("done", (table_data, preview, str(out_path), str(out_path), state_cues, status_summary, render_report_panel(report_text), final_progress)))
         except Exception as exc:
+            log.exception(
+                "转写失败 | job=%s | session=%s | media=%s | engine=%s",
+                job.short_id(),
+                session,
+                media_path.name,
+                engine_name,
+            )
             q.put(("error", exc))
+        finally:
+            # 槽位必须由真正停止工作的 worker 释放：generator 可能先因客户端断开
+            # 退出，但模型调用可能还在收尾，提前释放会让新任务与旧 worker 并发。
+            JOB_REGISTRY.finish(job)
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
+    thread = threading.Thread(target=worker, daemon=True, name=f"kikusub-transcribe-{job.short_id()}")
+    try:
+        thread.start()
+    except Exception:
+        JOB_REGISTRY.finish(job)
+        raise
 
+    finished_normally = False
+    last_ratio = 0.0
     try:
         while True:
             try:
@@ -1132,7 +1236,14 @@ def transcribe_media(
             tag = item[0]
             if tag == "progress":
                 ratio, msg = item[1], item[2]
-                pct = int(max(0.0, min(1.0, ratio)) * 100)
+                # 引擎可能先报 2%（提取音频）再报 1%（加载模型）；保持单调，避免进度倒退。
+                ratio = max(last_ratio, max(0.0, min(1.0, ratio)))
+                last_ratio = ratio
+                pct = int(ratio * 100)
+                try:
+                    progress(min(1.0, max(0.0, ratio)), desc=msg)
+                except Exception:
+                    log.debug("原生进度更新失败（不影响状态卡片）", exc_info=True)
                 status_html = f"⏳ **处理进度 [{pct}%]**：{msg}"
                 yield (
                     gr.update(),
@@ -1146,6 +1257,11 @@ def transcribe_media(
                 )
             elif tag == "done":
                 table_data, preview, p1, p2, state_cues, status_summary, report_text, final_progress = item[1]
+                try:
+                    progress(1.0, desc="完成")
+                except Exception:
+                    pass
+                finished_normally = True
                 yield (
                     table_data,
                     preview,
@@ -1168,13 +1284,15 @@ def transcribe_media(
                     gr.update(),
                     gr.update(),
                     gr.update(),
-                    f"❌ 处理异常：{exc}",
+                    f"❌ 处理异常：{exc}\n\n详情已写入 `{LOG_LABEL}`。",
                 )
                 return
     finally:
-        # 核心防卡死保护：若前端刷新、断开连接（触发 GeneratorExit），立即向后台线程发送中止信号
-        if thread.is_alive():
-            CANCEL_EVENT.set()
+        # 客户端刷新/断开（GeneratorExit）时只发取消信号；槽位由 worker 的
+        # finally 在真正退出后释放，避免“界面已返回、模型还在跑”时被新任务覆盖。
+        if thread.is_alive() and not finished_normally:
+            log.warning("客户端断开，请求取消 | job=%s | session=%s", job.short_id(), session)
+            job.cancel()
 
 
 def clean_ellipsis_subtitles(cues, output_format, media_file, engine_name, save_beside):
@@ -1403,15 +1521,22 @@ def get_existing_proxy(media_path: Path) -> Path | None:
     if standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
         return standard_proxy
 
-    legacy_candidates = sorted(
-        PROXIES_DIR.glob(f"{clean_stem}_*_preview.mp4"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True
-    )
-    for cand in legacy_candidates:
-        if cand.stat().st_size > 50 * 1024:
-            return cand
-    return None
+    # 历史命名（旧版本没有体积字段）不能无条件复用：同名片源被替换后，
+    # 旧代理的画面和当前字幕会错位。只接受文件名中体积与当前片源一致的后缀。
+    legacy_candidates = []
+    for cand in PROXIES_DIR.glob("*_preview.mp4"):
+        if not cand.name.startswith(f"{clean_stem}_"):
+            continue
+        match = re.search(r"_(\d+)_preview\.mp4$", cand.name)
+        if match is None or int(match.group(1)) != file_size:
+            continue
+        try:
+            if cand.stat().st_size > 50 * 1024:
+                legacy_candidates.append(cand)
+        except OSError:
+            continue
+    legacy_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return legacy_candidates[0] if legacy_candidates else None
 
 
 def get_web_friendly_video(media_path: Path) -> Path:
@@ -1428,77 +1553,113 @@ def get_web_friendly_video(media_path: Path) -> Path:
     return media_path
 
 
-def create_m4pro_hardware_proxy(media_path: Path) -> Path | None:
-    """针对 Apple Silicon (M4 Pro) 硬件媒体引擎优化的 480p 代理极速压制器。"""
+def create_m4pro_hardware_proxy(
+    media_path: Path,
+    dest: Path | None = None,
+    cancel_event=None,
+) -> Path | None:
+    """480p 监看代理压制：macOS 优先 VideoToolbox，其他平台直接走 libx264。
+
+    失败路径会删除目标文件，绝不把半成品留给下一次「历史代理」复用。
+    """
+    media_path = Path(media_path)
     file_size = media_path.stat().st_size if media_path.exists() else 0
-    clean_stem = media_path.stem
-    standard_proxy = PROXIES_DIR / f"{clean_stem}_{file_size}_preview.mp4"
+    if dest is None:
+        dest = PROXIES_DIR / f"{media_path.stem}_{file_size}_preview.mp4"
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
-    # 方案 1：Apple Silicon 全硬件流水线（VideoToolbox 硬件解码 + 硬件编码 + 硬件色彩空间转换）
-    cmd_hw = [
-        "ffmpeg", "-y",
-        "-hwaccel", "videotoolbox",
-        "-i", str(media_path),
-        "-vf", "scale=-2:480,format=yuv420p",
-        "-c:v", "h264_videotoolbox",
-        "-b:v", "2200k",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        str(standard_proxy)
-    ]
+    base = ["ffmpeg", "-y", "-nostdin", "-threads", "0", "-i", str(media_path)]
+    video_filter = "scale=-2:480,format=yuv420p"
+    audio_args = ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
+    attempts: list[tuple[str, list[str], float]] = []
 
-    try:
-        logging.info("🚀 启动 Apple Silicon M4 硬件加速 (VideoToolbox) 压制监看代理…")
-        res = subprocess.run(cmd_hw, capture_output=True, text=True, timeout=1200)
-        if res.returncode == 0 and standard_proxy.exists() and standard_proxy.stat().st_size > 1024:
-            return standard_proxy
-    except Exception as exc:
-        logging.warning(f"VideoToolbox 全硬件加速异常，尝试回退模式: {exc}")
+    if sys.platform == "darwin":
+        attempts.append((
+            "VideoToolbox 全硬件",
+            ["ffmpeg", "-y", "-nostdin", "-hwaccel", "videotoolbox", "-i", str(media_path),
+             "-vf", video_filter, "-c:v", "h264_videotoolbox", "-b:v", "2200k",
+             *audio_args, str(dest)],
+            1200.0,
+        ))
+        attempts.append((
+            "软解 + VideoToolbox 编码",
+            [*base, "-vf", video_filter, "-c:v", "h264_videotoolbox", "-b:v", "2200k",
+             *audio_args, str(dest)],
+            1200.0,
+        ))
 
-    # 方案 2：若 8K 超规格导致硬解管线报错，使用多线程软解 + VideoToolbox 硬件编码
-    cmd_hw_fallback = [
-        "ffmpeg", "-y",
-        "-threads", "0",
-        "-i", str(media_path),
-        "-vf", "scale=-2:480,format=yuv420p",
-        "-c:v", "h264_videotoolbox",
-        "-b:v", "2200k",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        str(standard_proxy)
-    ]
-    try:
-        res = subprocess.run(cmd_hw_fallback, capture_output=True, text=True, timeout=1200)
-        if res.returncode == 0 and standard_proxy.exists() and standard_proxy.stat().st_size > 1024:
-            return standard_proxy
-    except Exception as exc:
-        logging.warning(f"硬件编码回退方案失败: {exc}")
+    attempts.append((
+        "libx264 CPU",
+        [*base, "-vf", "scale=-2:480", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-preset", "ultrafast", "-crf", "28", *audio_args, str(dest)],
+        1800.0,
+    ))
 
-    # 方案 3：通用多线程 CPU 兜底
-    cmd_cpu = [
-        "ffmpeg", "-y",
-        "-threads", "0",
-        "-i", str(media_path),
-        "-vf", "scale=-2:480",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-preset", "ultrafast",
-        "-crf", "28",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        str(standard_proxy)
-    ]
-    try:
-        res = subprocess.run(cmd_cpu, capture_output=True, text=True, timeout=1800)
-        if res.returncode == 0 and standard_proxy.exists():
-            return standard_proxy
-    except Exception:
-        pass
+    for label, cmd, timeout in attempts:
+        log.info("代理压制方案 | %s | dest=%s", label, dest.name)
+        try:
+            result = run_command(cmd, timeout=timeout, cancel_event=cancel_event)
+        except CommandCancelled:
+            _drop_broken_proxy(dest)
+            raise
+        except CommandTimeout as exc:
+            log.warning("代理压制超时 | %s | %s", label, tail(exc.stderr, 800))
+            _drop_broken_proxy(dest)
+            continue
+        except Exception as exc:
+            log.warning("代理压制启动失败 | %s | %s", label, exc)
+            _drop_broken_proxy(dest)
+            continue
+
+        if result.returncode == 0 and dest.exists() and dest.stat().st_size > 1024:
+            log.info("代理压制成功 | %s | %s", label, dest.name)
+            return dest
+        log.warning(
+            "代理压制失败 | %s | rc=%s | %s",
+            label,
+            result.returncode,
+            tail(result.stderr, 800),
+        )
+        _drop_broken_proxy(dest)
 
     return None
+
+_MEDIA_CODEC_CACHE: dict[str, str] = {}
+
+
+def _probe_video_codec(path: Path) -> str:
+    """读取首个视频流编码名（hevc/h264/av1…），供前端判断浏览器兼容性。"""
+    try:
+        stat = path.stat()
+        key = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
+    except OSError:
+        return ""
+    cached = _MEDIA_CODEC_CACHE.get(key)
+    if cached is not None:
+        return cached
+    codec = ""
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name", "-of", "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        payload = json.loads(probe.stdout or "{}")
+        streams = payload.get("streams") or []
+        if streams:
+            codec = str(streams[0].get("codec_name") or "").lower()
+    except Exception:
+        codec = ""
+    if len(_MEDIA_CODEC_CACHE) > 64:
+        _MEDIA_CODEC_CACHE.clear()
+    _MEDIA_CODEC_CACHE[key] = codec
+    return codec
 
 
 def _media_url(path: Path) -> str:
@@ -1607,6 +1768,7 @@ def build_review_payload(media_file, review_cues, include_peaks=True) -> str:
         "duration": duration,
         "peaks": peaks,
         "cues": cues_dicts,
+        "codec": _probe_video_codec(web_media_path),
         "error": error,
         "is_patch_only": not include_peaks,  # 告知前端只更新字幕
     }, ensure_ascii=False)
@@ -1758,6 +1920,7 @@ def build_monitor_payload(monitor_path: Path, review_cues, origin: str = "manual
             "duration": duration,
             "peaks": peaks,
             "cues": cues_dicts,
+            "codec": _probe_video_codec(monitor_path),
             "error": error,
             "is_patch_only": False,
             "origin": origin,
@@ -1962,6 +2125,7 @@ def _save_draft_and_progress(
         prog_file = OUTPUT_DIR / f"{clean_stem}.progress.json"
         prog_data = {
             "media_name": Path(media_file).name if media_file else "",
+            "media_path": str(Path(media_file).resolve()) if media_file else "",
             "last_reviewed_idx": int(reviewed_idx),
             "last_time_str": str(start_str or ""),
             "end_time_str": str(end_str or ""),
@@ -1979,9 +2143,24 @@ def _load_review_progress(media_file: str | None = None, srt_file: str | None = 
     prog_file = _get_progress_file(media_file, srt_file)
     if prog_file and prog_file.exists():
         try:
-            return json.loads(prog_file.read_text(encoding="utf-8"))
+            data = json.loads(prog_file.read_text(encoding="utf-8"))
         except Exception:
             return None
+        stored_path = str(data.get("media_path") or "")
+        if stored_path and media_file:
+            try:
+                current_path = str(Path(media_file).resolve())
+            except OSError:
+                current_path = str(media_file)
+            if stored_path != current_path:
+                # 同名不同文件（不同目录/替换后的片源）不能恢复对方的断点。
+                log.info(
+                    "忽略不匹配的校对断点 | stored=%s | current=%s",
+                    stored_path,
+                    current_path,
+                )
+                return None
+        return data
     return None
 
 def import_review_srt(srt_file, media_file, current_cues=None, undo_stack=None, redo_stack=None):
@@ -2156,138 +2335,253 @@ def transcribe_selection_to_editor(
     review_cues,
     undo_stack=None,
     redo_stack=None,
+    request: gr.Request | None = None,
     *values,
 ):
-    """就地识别选区语音，直接将新字幕插入核对时间轴，并自动聚焦选中该行供精修。"""
+    """就地识别选区语音，直接把新字幕插入核对时间轴。
+
+    这是一个流式 generator：引擎在 worker 线程里跑，进度通过队列回到 generator
+    线程再 yield，因此长选区不会把界面卡住，且取消令牌能直接打断解码/分段循环。
+    """
     existing = _unique_sorted_cues(review_cues)
     fallback_dicts = _cues_to_dicts(existing)
     fallback_table = review_cues_to_table(existing)
     u_stack = list(undo_stack or [])
     r_stack = list(redo_stack or [])
 
-    if not media_file:
-        gr.Warning("⚠️ 请先在上方上传音视频文件。")
-        return fallback_dicts, fallback_table, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ 请先上传音视频文件。", u_stack, r_stack
-
-    media_path = Path(media_file)
-    if not media_path.exists():
-        gr.Warning("⚠️ 媒体临时文件已失效，请重新上传。")
-        return fallback_dicts, fallback_table, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ 媒体文件失效。", u_stack, r_stack
-
-    s_val = parse_time_str(start_str)
-    e_val = parse_time_str(end_str)
-    if s_val is None or e_val is None or e_val <= s_val:
-        gr.Warning("⚠️ 选区起止时间无效，请在波形上重新拖拽框选。")
-        return fallback_dicts, fallback_table, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ 选区时间不合法。", u_stack, r_stack
-
-    engine = resolve_engine(engine_name)
-    is_qwen = (engine is QWEN)
-
-    try:
-        if is_qwen:
-            config = QwenCtcConfig(**config_kwargs("qwen", values))
-            use_alignment = bool(passthrough_kwargs("qwen", values).get("use_alignment", True))
-            cues = engine.transcribe_file(
-                media_path,
-                use_alignment=use_alignment,
-                config=config,
-                start_time_s=s_val,
-                end_time_s=e_val,
-                time_offset=s_val,
-            )
-        else:
-            config = build_whisper_config(**config_kwargs("whisper", values))
-            gen = passthrough_kwargs("whisper", values)
-            ngram = int(gen.get("no_repeat_ngram_size", 5))
-            penalty = float(gen.get("repetition_penalty", 1.15))
-            cues = ENGINE.transcribe_file(
-                media_path,
-                config=config,
-                no_repeat_ngram_size=ngram,
-                repetition_penalty=penalty,
-                start_time_s=s_val,
-                end_time_s=e_val,
-                time_offset=s_val,
-            )
-
-        s_out = format_srt_timestamp(s_val)
-        e_out = format_srt_timestamp(e_val)
-
-        if not cues:
-            gr.Warning("⚠️ 该选区内未检测到清晰语音。已为您填入起止时间，可手动输入文本后点击「➕ 插入为新句」。")
-            return (
-                fallback_dicts,
-                fallback_table,
-                gr.update(),
-                gr.update(),
-                s_out,
-                e_out,
-                "",
-                f"⚠️ [{s_out} → {e_out}] 未检出语音，已填入时间，可输入文本后点「➕ 插入为新句」。",
-                u_stack,
-                r_stack,
-            )
-
-        res_text = " ".join(c.text.strip() for c in cues if c.text.strip())
-        actual_start = min(c.start for c in cues)
-        actual_end = max(c.end for c in cues)
-        final_start = actual_start if abs(actual_start - s_val) < 2.0 else s_val
-        final_end = actual_end if abs(actual_end - e_val) < 2.0 else e_val
-        if final_end <= final_start:
-            final_start, final_end = s_val, e_val
-
-        # 核心：自动入轨并进入撤销栈
-        new_cue = SubtitleCue(round(final_start, 3), round(final_end, 3), res_text)
-        new_undo, new_redo = _push_history(u_stack, existing)
-        sorted_cues = _unique_sorted_cues([*existing, new_cue])
-
-        # 找到这句新字幕在时间轴排序后的准确行号
-        new_idx = 1
-        for i, c in enumerate(sorted_cues, start=1):
-            if c.start == round(final_start, 3) and c.end == round(final_end, 3) and c.text == res_text:
-                new_idx = i
-                break
-
-        cues_dicts = _cues_to_dicts(sorted_cues)
-        table_rows = review_cues_to_table(sorted_cues)
-        # 轻量入轨，不带巨型波形
-        payload = build_review_payload(media_file, sorted_cues, include_peaks=False)
-
-        final_s_out = format_srt_timestamp(final_start)
-        final_e_out = format_srt_timestamp(final_end)
-        
-        # 静默自动写入草稿与断点进度
-        _save_draft_and_progress(media_file, sorted_cues, new_idx, final_s_out, final_e_out, res_text)
-
-        msg = f"⚡ 选区已成功转录并直接入轨（已定位至第 {new_idx} 行）！可直接编辑文字后点「✏️ 更新此行」。"
-        gr.Info(f"⚡ 选区识别成功！已直接插入时间轴第 {new_idx} 行。(按 Cmd+Z 可撤销)")
-
-        return (
-            cues_dicts,
-            table_rows,
-            payload,
-            new_idx,
-            final_s_out,
-            final_e_out,
-            res_text,
-            msg,
-            new_undo,
-            new_redo,
-        )
-    except Exception as exc:
-        gr.Warning(f"⚠️ 局部转录异常：{exc}")
+    def fallback(status: str, *, start=None, end=None, text=None):
         return (
             fallback_dicts,
             fallback_table,
             gr.update(),
             gr.update(),
-            format_srt_timestamp(s_val) if s_val is not None else "",
-            format_srt_timestamp(e_val) if e_val is not None else "",
-            "",
-            f"⚠️ 局部转写失败：{exc}",
+            gr.update() if start is None else start,
+            gr.update() if end is None else end,
+            gr.update() if text is None else text,
+            status,
             u_stack,
             r_stack,
         )
+
+    if not media_file:
+        gr.Warning("⚠️ 请先在上方上传音视频文件。")
+        yield fallback("⚠️ 请先上传音视频文件。")
+        return
+
+    media_path = Path(media_file)
+    if not media_path.exists():
+        gr.Warning("⚠️ 媒体临时文件已失效，请重新上传。")
+        yield fallback("⚠️ 媒体文件失效。")
+        return
+
+    s_val = parse_time_str(start_str)
+    e_val = parse_time_str(end_str)
+    if s_val is None or e_val is None or e_val <= s_val:
+        gr.Warning("⚠️ 选区起止时间无效，请在波形上重新拖拽框选。")
+        yield fallback("⚠️ 选区时间不合法。")
+        return
+
+    engine = resolve_engine(engine_name)
+    is_qwen = engine is QWEN
+    session = _session_hash(request)
+    try:
+        job = JOB_REGISTRY.start(
+            session, label=f"{engine_name} · 选区 {s_val:.1f}-{e_val:.1f}s"
+        )
+    except JobBusy as exc:
+        message = f"{exc}。请等它结束，或由发起它的窗口点「中途打断」。"
+        log.warning("拒绝并发选区转写 | session=%s | %s", session, message)
+        gr.Warning(f"⚠️ {message}")
+        yield fallback(f"⚠️ {message}")
+        return
+
+    log.info(
+        "选区转写开始 | job=%s | session=%s | media=%s | %.2fs-%.2fs",
+        job.short_id(),
+        session,
+        media_path.name,
+        s_val,
+        e_val,
+    )
+
+    q: queue.Queue = queue.Queue()
+
+    def cb(ratio, message):
+        q.put(("progress", ratio, message))
+
+    def worker():
+        try:
+            if is_qwen:
+                config = QwenCtcConfig(**config_kwargs("qwen", values))
+                use_alignment = bool(passthrough_kwargs("qwen", values).get("use_alignment", True))
+                cues = engine.transcribe_file(
+                    media_path,
+                    use_alignment=use_alignment,
+                    config=config,
+                    progress_cb=cb,
+                    cancel_event=job,
+                    start_time_s=s_val,
+                    end_time_s=e_val,
+                    time_offset=s_val,
+                )
+            else:
+                config = build_whisper_config(**config_kwargs("whisper", values))
+                gen = passthrough_kwargs("whisper", values)
+                cues = ENGINE.transcribe_file(
+                    media_path,
+                    config=config,
+                    no_repeat_ngram_size=int(gen.get("no_repeat_ngram_size", 5)),
+                    repetition_penalty=float(gen.get("repetition_penalty", 1.15)),
+                    progress_cb=cb,
+                    cancel_event=job,
+                    start_time_s=s_val,
+                    end_time_s=e_val,
+                    time_offset=s_val,
+                )
+            q.put(("done", cues))
+        except Exception as exc:
+            log.exception(
+                "选区转写失败 | job=%s | session=%s | media=%s",
+                job.short_id(),
+                session,
+                media_path.name,
+            )
+            q.put(("error", exc))
+        finally:
+            JOB_REGISTRY.finish(job)
+
+    thread = threading.Thread(
+        target=worker, daemon=True, name=f"kikusub-selection-{job.short_id()}"
+    )
+    try:
+        thread.start()
+    except Exception:
+        JOB_REGISTRY.finish(job)
+        raise
+
+    finished_normally = False
+    last_ratio = 0.0
+    try:
+        while True:
+            try:
+                item = q.get(timeout=0.1)
+            except queue.Empty:
+                if not thread.is_alive():
+                    break
+                continue
+
+            tag = item[0]
+            if tag == "progress":
+                ratio, msg = item[1], item[2]
+                ratio = max(last_ratio, max(0.0, min(1.0, ratio)))
+                last_ratio = ratio
+                pct = int(ratio * 100)
+                yield (
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    f"⏳ **选区识别 [{pct}%]**：{msg}",
+                    gr.update(),
+                    gr.update(),
+                )
+            elif tag == "done":
+                finished_normally = True
+                cues = item[1]
+                if job.is_set():
+                    log.warning("选区转写已取消 | job=%s", job.short_id())
+                    gr.Warning("⚠️ 已取消本次选区转录，核对轴保持不变。")
+                    yield fallback("⚠️ 选区转录已取消，核对轴保持不变。")
+                    return
+
+                s_out = format_srt_timestamp(s_val)
+                e_out = format_srt_timestamp(e_val)
+                if not cues:
+                    gr.Warning("⚠️ 该选区内未检测到清晰语音。已为您填入起止时间，可手动输入文本后点击「➕ 插入为新句」。")
+                    yield fallback(
+                        f"⚠️ [{s_out} → {e_out}] 未检出语音，已填入时间，可输入文本后点「➕ 插入为新句」。",
+                        start=s_out,
+                        end=e_out,
+                        text="",
+                    )
+                    return
+
+                res_text = " ".join(c.text.strip() for c in cues if c.text.strip())
+                actual_start = min(c.start for c in cues)
+                actual_end = max(c.end for c in cues)
+                final_start = actual_start if abs(actual_start - s_val) < 2.0 else s_val
+                final_end = actual_end if abs(actual_end - e_val) < 2.0 else e_val
+                if final_end <= final_start:
+                    final_start, final_end = s_val, e_val
+
+                new_cue = SubtitleCue(round(final_start, 3), round(final_end, 3), res_text)
+                new_undo, new_redo = _push_history(u_stack, existing)
+                sorted_cues = _unique_sorted_cues([*existing, new_cue])
+
+                new_idx = 1
+                for i, c in enumerate(sorted_cues, start=1):
+                    if (
+                        c.start == round(final_start, 3)
+                        and c.end == round(final_end, 3)
+                        and c.text == res_text
+                    ):
+                        new_idx = i
+                        break
+
+                cues_dicts = _cues_to_dicts(sorted_cues)
+                table_rows = review_cues_to_table(sorted_cues)
+                payload = build_review_payload(media_file, sorted_cues, include_peaks=False)
+                final_s_out = format_srt_timestamp(final_start)
+                final_e_out = format_srt_timestamp(final_end)
+                _save_draft_and_progress(
+                    media_file,
+                    sorted_cues,
+                    new_idx,
+                    final_s_out,
+                    final_e_out,
+                    res_text,
+                )
+                log.info(
+                    "选区转写完成 | job=%s | cues=%s | row=%s",
+                    job.short_id(),
+                    len(cues),
+                    new_idx,
+                )
+                gr.Info(f"⚡ 选区识别成功！已直接插入时间轴第 {new_idx} 行。(按 Cmd+Z 可撤销)")
+                yield (
+                    cues_dicts,
+                    table_rows,
+                    payload,
+                    new_idx,
+                    final_s_out,
+                    final_e_out,
+                    res_text,
+                    f"⚡ 选区已成功转录并直接入轨（已定位至第 {new_idx} 行）！可直接编辑文字后点「✏️ 更新此行」。",
+                    new_undo,
+                    new_redo,
+                )
+                return
+            elif tag == "error":
+                exc = item[1]
+                gr.Warning(f"⚠️ 局部转录异常：{exc}")
+                yield fallback(
+                    f"⚠️ 局部转写失败：{exc}\n\n详情已写入 `{LOG_LABEL}`。",
+                    start=format_srt_timestamp(s_val),
+                    end=format_srt_timestamp(e_val),
+                    text="",
+                )
+                return
+    finally:
+        if thread.is_alive() and not finished_normally:
+            log.warning(
+                "选区转写客户端断开，请求取消 | job=%s | session=%s",
+                job.short_id(),
+                session,
+            )
+            job.cancel()
 
 
 def table_to_cues(table_data) -> list[SubtitleCue]:
@@ -2744,2331 +3038,11 @@ def clear_all_review_cues(media_file, current_cues=None, undo_stack=None, redo_s
         return fallback_dicts, fallback_table, gr.update(), f"⚠️ 清空异常：{exc}", u_stack, r_stack
 
 
-REVIEWER_HTML = """
-<section id="reviewer-shell" class="reviewer-shell">
-  <div class="reviewer-empty">上传媒体后，这里会自动载入视频监看画面与精确时间轴波形轨。</div>
-</section>
-"""
+REVIEWER_HTML = (STATIC_DIR / "reviewer.html").read_text(encoding="utf-8")
 
-REVIEWER_CLIENT_JS = r"""
-(payloadText) => {
-  try {
-    const shell = document.querySelector('#reviewer-shell');
-    if (!shell) return;
-    let data;
-    try { data = JSON.parse(payloadText || '{}'); } catch (_) { return; }
+REVIEWER_CLIENT_JS = (STATIC_DIR / "reviewer.js").read_text(encoding="utf-8")
 
-    if (data.is_patch_only) {
-      // 纯字幕补丁：只更新字幕轨，绝不重建画面（关闭监看后也不该被顶掉）
-      if (window.__reviewerInstance) {
-        window.__reviewerInstance.updateCues(data.cues || []);
-      }
-      return;
-    }
-
-    if (!data.src) {
-      // 关闭监看 / 片源不可用：销毁旧播放器实例，避免残留快捷键与悬空引用
-      window.__reviewerInstance = null;
-      if (window.__reviewerKeyHandler) {
-        window.removeEventListener('keydown', window.__reviewerKeyHandler);
-        window.__reviewerKeyHandler = null;
-      }
-      window.onbeforeunload = null;
-      shell.innerHTML = data.error || '<div class="reviewer-empty">上传媒体后，这里会自动载入视频监看画面与精确时间轴波形轨。</div>';
-      return;
-    }
-    const existingVideo = shell.querySelector('.reviewer-video');
-    if (existingVideo && existingVideo.getAttribute('src') === data.src && window.__reviewerInstance) {
-      window.__reviewerInstance.updateCues(data.cues || []);
-      return;
-    }
-    const esc = (text) => String(text || '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-    
-    let duration = Number(data.duration || 0);
-    const peaks = data.peaks || [];
-    const cues = data.cues || [];
-
-    shell.innerHTML = `
-      <div class="reviewer-stage" id="rw-stage">
-        <video class="reviewer-video" preload="metadata" src="${data.src}"></video>
-        <div class="reviewer-caption" id="reviewer-caption"></div>
-        
-        <div class="rw-center-play-indicator" id="rw-center-play" style="display:none;">
-          <div class="rw-center-play-icon">▶</div>
-        </div>
-
-        <div class="reviewer-custom-controls" id="rw-custom-controls">
-          <div class="rw-scrub-track-wrap">
-            <input type="range" class="rw-scrubber-slider" id="rw-scrubber-slider" min="0" max="${Number(data.duration || 0) || 100}" step="0.04" value="0">
-            <div class="rw-scrub-hover-tip" id="rw-scrub-tip" style="display:none;">00:00:00.000</div>
-          </div>
-
-          <div class="rw-controls-row">
-            <div class="rw-ctrl-left">
-              <button type="button" class="rw-ctrl-btn rw-btn-main-play" id="rw-btn-play-toggle" title="播放/暂停 (空格)">▶</button>
-              <button type="button" class="rw-ctrl-btn" id="rw-btn-step-prev" title="后退 1 帧 (←)">⏮ 1F</button>
-              <button type="button" class="rw-ctrl-btn" id="rw-btn-step-next" title="前进 1 帧 (→)">⏭ 1F</button>
-              
-              <div class="rw-ctrl-time-display">
-                <span class="rw-time-cur" id="rw-ctrl-current">00:00:00.000</span>
-                <span class="rw-time-sep">/</span>
-                <span class="rw-time-dur" id="rw-ctrl-total">00:00:00.000</span>
-              </div>
-            </div>
-
-            <div class="rw-ctrl-right">
-              <button type="button" class="rw-ctrl-btn" id="rw-btn-mute" title="静音切换">🔊</button>
-              <input type="range" class="rw-vol-slider" id="rw-vol-slider" min="0" max="1" step="0.05" value="1" title="调节音量">
-              <button type="button" class="rw-ctrl-btn" id="rw-btn-fullscreen" title="全屏画面">⛶</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="reviewer-wave-header">
-        <div class="reviewer-clock">
-          <span class="reviewer-playhead-time" id="rw-current-time">00:00:00.000</span>
-          <span class="reviewer-divider">/</span>
-          <span class="reviewer-total-time" id="rw-total-time">00:00:00.000</span>
-        </div>
-
-        <div class="reviewer-selection-bar" id="rw-selection-bar" style="display:none;">
-          <span class="rw-sel-icon">✂️</span>
-          <span class="rw-sel-info" id="rw-selection-info">已选: 00:00:00.000 → 00:00:00.000 (0.00s)</span>
-          <button type="button" class="rw-btn rw-btn-play-sel" id="rw-play-sel-btn" title="试听当前框选声音">▶ 试听</button>
-          <button type="button" class="rw-btn rw-btn-transcribe-sel" id="rw-transcribe-sel-btn" title="立即识别当前选区并直接插入时间轴">⚡ 识别并直接入轨</button>
-          <button type="button" class="rw-btn rw-btn-sync" id="rw-sync-btn" title="仅同步起止时间到顶部时间切片输入框">⏱ 同步时间到顶部</button>
-          <button type="button" class="rw-btn rw-btn-clear" id="rw-clear-sel-btn">✕</button>
-        </div>
-
-        <div class="reviewer-zoom-controls">
-          <button type="button" class="rw-tool-btn" id="rw-zoom-out" title="缩小轨道">🔍 -</button>
-          <input type="range" class="rw-zoom-slider" id="rw-zoom-slider" min="1" max="50" step="0.5" value="1" title="水平缩放轨道">
-          <button type="button" class="rw-tool-btn" id="rw-zoom-in" title="放大轨道">🔍 +</button>
-          <button type="button" class="rw-tool-btn" id="rw-zoom-fit" title="显示全片视图">100% 全景</button>
-          <button type="button" class="rw-tool-btn" id="rw-center-playhead" title="聚焦到当前播放头并放大50倍">🎯 聚焦</button>
-          <button type="button" class="rw-tool-btn is-on" id="rw-follow-toggle" title="播放时自动跟随播放头（字幕始终同步）">🧲 跟随</button>
-          <span class="reviewer-zoom-level" id="rw-zoom-level">1.0×</span>
-        </div>
-      </div>
-
-      <div class="reviewer-canvas-wrap" id="rw-canvas-wrap">
-        <canvas class="reviewer-ruler-canvas" id="rw-ruler-canvas" height="24"></canvas>
-        <canvas class="reviewer-wave-canvas" id="rw-wave-canvas" height="110" aria-label="音频波形时间轴"></canvas>
-        <div class="reviewer-playhead-line" id="rw-playhead-line" style="display:none;">
-          <div class="rw-playhead-flag">▼</div>
-        </div>
-      </div>
-
-      <div class="reviewer-wave-hint">
-        <div class="rw-hint-row">⌨️ <strong>快捷键：</strong><span>【<strong>空格</strong>】播放/暂停</span> ｜ <span>【<strong>← / →</strong>】1 帧微调（约 0.042s）</span> ｜ <span>【<strong>Shift + ← / →</strong>】5 帧快速定位</span> ｜ <span>【<strong>Cmd/Ctrl + Z</strong>】撤销</span> ｜ <span>【<strong>Cmd/Ctrl + Shift + Z</strong>】重做</span></div>
-        <div class="rw-hint-row">💡 <strong>手势：</strong><span>Mac 触控板在波形上<strong>双指横滑平移</strong>，<strong>双指垂直/捏合无级缩放</strong> ｜ 拖拽框选后点击<strong>「⚡ 识别此段送入精修」</strong>即可零位移秒出字幕！</span></div>
-      </div>
-    `;
-
-    const stage = shell.querySelector('#rw-stage');
-    const video = shell.querySelector('.reviewer-video');
-    const caption = shell.querySelector('#reviewer-caption');
-    const waveCanvas = shell.querySelector('#rw-wave-canvas');
-    const rulerCanvas = shell.querySelector('#rw-ruler-canvas');
-    const canvasWrap = shell.querySelector('#rw-canvas-wrap');
-    const playheadLine = shell.querySelector('#rw-playhead-line');
-    const currentTimeText = shell.querySelector('#rw-current-time');
-    const totalTimeText = shell.querySelector('#rw-total-time');
-    const selectionBar = shell.querySelector('#rw-selection-bar');
-    const selectionInfo = shell.querySelector('#rw-selection-info');
-    const syncBtn = shell.querySelector('#rw-sync-btn');
-    const transcribeSelBtn = shell.querySelector('#rw-transcribe-sel-btn');
-    const playSelBtn = shell.querySelector('#rw-play-sel-btn');
-    const clearSelBtn = shell.querySelector('#rw-clear-sel-btn');
-    const zoomInBtn = shell.querySelector('#rw-zoom-in');
-    const zoomOutBtn = shell.querySelector('#rw-zoom-out');
-    const zoomFitBtn = shell.querySelector('#rw-zoom-fit');
-    const centerPlayheadBtn = shell.querySelector('#rw-center-playhead');
-    const followToggleBtn = shell.querySelector('#rw-follow-toggle');
-    const zoomSlider = shell.querySelector('#rw-zoom-slider');
-    const zoomLevelText = shell.querySelector('#rw-zoom-level');
-
-    const scrubberSlider = shell.querySelector('#rw-scrubber-slider');
-    const scrubTip = shell.querySelector('#rw-scrub-tip');
-    const playToggleBtn = shell.querySelector('#rw-btn-play-toggle');
-    const stepPrevBtn = shell.querySelector('#rw-btn-step-prev');
-    const stepNextBtn = shell.querySelector('#rw-btn-step-next');
-    const ctrlCurrentTime = shell.querySelector('#rw-ctrl-current');
-    const ctrlTotalTime = shell.querySelector('#rw-ctrl-total');
-    const muteBtn = shell.querySelector('#rw-btn-mute');
-    const volSlider = shell.querySelector('#rw-vol-slider');
-    const fullscreenBtn = shell.querySelector('#rw-btn-fullscreen');
-
-    const waveCtx = waveCanvas.getContext('2d');
-    const rulerCtx = rulerCanvas.getContext('2d');
-
-    let viewStart = 0;
-    let viewSpan = duration || 1;
-    let selected = null;
-    let isDragging = false;
-    let dragAnchor = null;
-    let isPlayingSelection = false;
-    let lastSyncedCueIndex = -1;
-    let isScrubbingSlider = false;
-    let followPlayhead = true;
-    let followUserLocked = false;
-    let hideControlsTimer = null;
-
-    window.__isTranscribing = false;
-    let syncInputDebounceTimer = null;
-
-    const format = sec => {
-      sec = Math.max(0, Number(sec) || 0);
-      const h = Math.floor(sec / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      const s = sec % 60;
-      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${s.toFixed(3).padStart(6,'0')}`;
-    };
-
-    if (duration > 0) {
-      totalTimeText.textContent = format(duration);
-      if (ctrlTotalTime) ctrlTotalTime.textContent = format(duration);
-      if (scrubberSlider) scrubberSlider.max = String(duration);
-    }
-
-    // ── 字幕叠加层索引 ───────────────────────────────────────────────
-    // 关键点 1：同一时间区间内的多条字幕（中日双语 SRT 通常把日语行和
-    // 中文行拆成两条、起止时间完全相同）必须聚合成一个「字幕块」多行显示，
-    // 不能用 find() 只取第一条，否则永远只显示一行。
-    // 关键点 2：字幕显示与下方波形的缩放视窗完全解耦，任何时间点都要更新。
-    let captionGroups = [];
-    let lastCaptionText = null;
-
-    const rebuildCaptionIndex = () => {
-      const buckets = new Map();
-      const groups = [];
-      for (const cue of cues) {
-        const start = Number(cue.start) || 0;
-        const end = Number(cue.end) || 0;
-        const key = `${Math.round(start * 1000)}|${Math.round(end * 1000)}`;
-        let group = buckets.get(key);
-        if (!group) {
-          group = { start, end, lines: [], seen: new Set() };
-          buckets.set(key, group);
-          groups.push(group);
-        }
-        const text = String(cue.text == null ? '' : cue.text).trim();
-        if (!text || group.seen.has(text)) continue;
-        group.seen.add(text);
-        group.lines.push(text);
-      }
-      groups.sort((a, b) => (a.start - b.start) || (a.end - b.end));
-      captionGroups = groups;
-      lastCaptionText = null;
-    };
-
-    const findCaptionGroup = (time) => {
-      const groups = captionGroups;
-      if (!groups.length) return null;
-      let lo = 0;
-      let hi = groups.length - 1;
-      let idx = -1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (groups[mid].start <= time + 0.0005) { idx = mid; lo = mid + 1; }
-        else { hi = mid - 1; }
-      }
-      if (idx === -1) return null;
-      for (let i = idx; i >= 0 && i > idx - 64; i--) {
-        if (groups[i].end + 0.0005 >= time) return groups[i];
-        if (groups[i].end < time - 60) break;
-      }
-      return null;
-    };
-
-    const updateCaption = (time) => {
-      if (!caption) return;
-      const group = findCaptionGroup(time);
-      const text = group ? group.lines.join('\n') : '';
-      if (text === lastCaptionText) return;
-      lastCaptionText = text;
-      if (!text) {
-        caption.textContent = '';
-        caption.style.display = 'none';
-      } else {
-        caption.textContent = text;
-        caption.style.display = 'block';
-      }
-    };
-
-    rebuildCaptionIndex();
-
-    const clampView = () => {
-      const minSpan = Math.min(duration || 1, 0.4);
-      const maxSpan = duration || 1;
-      viewSpan = Math.max(minSpan, Math.min(maxSpan, viewSpan));
-      viewStart = Math.max(0, Math.min(Math.max(0, duration - viewSpan), viewStart));
-      const ratio = duration ? (duration / viewSpan) : 1;
-      zoomSlider.value = Math.min(50, Math.max(1, ratio));
-      zoomLevelText.textContent = `${ratio.toFixed(1)}×`;
-    };
-
-    const drawRuler = () => {
-      const rect = rulerCanvas.getBoundingClientRect();
-      const ratio = window.devicePixelRatio || 1;
-      rulerCanvas.width = Math.max(1, Math.floor(rect.width * ratio));
-      rulerCanvas.height = Math.max(1, Math.floor(rect.height * ratio));
-      rulerCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
-
-      const w = rect.width;
-      const h = rect.height;
-
-      rulerCtx.fillStyle = '#0f172a';
-      rulerCtx.fillRect(0, 0, w, h);
-
-      if (!duration) return;
-
-      const targetDivs = w / 90;
-      const rawStep = viewSpan / targetDivs;
-      const niceSteps = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
-      let step = niceSteps[niceSteps.length - 1];
-      for (const ns of niceSteps) {
-        if (ns >= rawStep) { step = ns; break; }
-      }
-
-      rulerCtx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
-      rulerCtx.fillStyle = '#94a3b8';
-      rulerCtx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-      rulerCtx.textBaseline = 'bottom';
-
-      const firstMark = Math.floor(viewStart / step) * step;
-      for (let t = firstMark; t <= viewStart + viewSpan; t += step) {
-        if (t < viewStart) continue;
-        const x = ((t - viewStart) / viewSpan) * w;
-        rulerCtx.beginPath();
-        rulerCtx.moveTo(x, h);
-        rulerCtx.lineTo(x, h - 8);
-        rulerCtx.stroke();
-
-        const subStep = step / 5;
-        for (let s = 1; s < 5; s++) {
-          const subT = t + s * subStep;
-          if (subT > viewStart && subT < viewStart + viewSpan) {
-            const subX = ((subT - viewStart) / viewSpan) * w;
-            rulerCtx.beginPath();
-            rulerCtx.moveTo(subX, h);
-            rulerCtx.lineTo(subX, h - 4);
-            rulerCtx.stroke();
-          }
-        }
-
-        const label = step < 1 ? t.toFixed(2) + 's' : (t >= 60 ? `${Math.floor(t/60)}m${(t%60).toFixed(0)}s` : t.toFixed(0) + 's');
-        rulerCtx.fillText(label, x + 3, h - 3);
-      }
-
-      rulerCtx.strokeStyle = 'rgba(99, 102, 241, 0.4)';
-      rulerCtx.beginPath();
-      rulerCtx.moveTo(0, h - 0.5);
-      rulerCtx.lineTo(w, h - 0.5);
-      rulerCtx.stroke();
-    };
-
-    const drawWave = () => {
-      const rect = waveCanvas.getBoundingClientRect();
-      const ratio = window.devicePixelRatio || 1;
-      waveCanvas.width = Math.max(1, Math.floor(rect.width * ratio));
-      waveCanvas.height = Math.max(1, Math.floor(rect.height * ratio));
-      waveCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
-
-      const w = rect.width;
-      const h = rect.height;
-      const mid = h / 2;
-
-      waveCtx.fillStyle = '#090d16';
-      waveCtx.fillRect(0, 0, w, h);
-
-      waveCtx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
-      waveCtx.lineWidth = 1;
-      waveCtx.beginPath();
-      waveCtx.moveTo(0, mid);
-      waveCtx.lineTo(w, mid);
-      waveCtx.stroke();
-
-      if (!duration) return;
-
-      if (cues && cues.length > 0) {
-        waveCtx.fillStyle = 'rgba(56, 189, 248, 0.12)';
-        for (const cue of cues) {
-          if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
-          const x1 = ((cue.start - viewStart) / viewSpan) * w;
-          const x2 = ((cue.end - viewStart) / viewSpan) * w;
-          waveCtx.fillRect(Math.max(0, x1), 0, Math.min(w, x2) - Math.max(0, x1), h);
-          
-          waveCtx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
-          waveCtx.beginPath();
-          waveCtx.moveTo(Math.max(0, x1), 2);
-          waveCtx.lineTo(Math.min(w, x2), 2);
-          waveCtx.stroke();
-        }
-      }
-
-      if (peaks.length > 0) {
-        const firstIdx = Math.max(0, Math.floor((viewStart / duration) * peaks.length));
-        const lastIdx = Math.min(peaks.length, Math.ceil(((viewStart + viewSpan) / duration) * peaks.length));
-
-        const pts = [];
-        for (let i = firstIdx; i < lastIdx; i++) {
-          const t = (i / Math.max(1, peaks.length - 1)) * duration;
-          const x = ((t - viewStart) / viewSpan) * w;
-          const amp = Math.max(1.5, peaks[i] * (h * 0.44));
-          pts.push({ x, amp });
-        }
-
-        if (pts.length > 0) {
-          waveCtx.fillStyle = 'rgba(129, 140, 248, 0.45)';
-          waveCtx.beginPath();
-          waveCtx.moveTo(pts[0].x, mid - pts[0].amp);
-          for (let j = 1; j < pts.length; j++) {
-            waveCtx.lineTo(pts[j].x, mid - pts[j].amp);
-          }
-          for (let j = pts.length - 1; j >= 0; j--) {
-            waveCtx.lineTo(pts[j].x, mid + pts[j].amp);
-          }
-          waveCtx.closePath();
-          waveCtx.fill();
-
-          waveCtx.strokeStyle = '#a5b4fc';
-          waveCtx.lineWidth = 1.2;
-          waveCtx.beginPath();
-          for (let j = 0; j < pts.length; j++) {
-            if (j === 0) waveCtx.moveTo(pts[j].x, mid - pts[j].amp);
-            else waveCtx.lineTo(pts[j].x, mid - pts[j].amp);
-          }
-          waveCtx.stroke();
-
-          waveCtx.beginPath();
-          for (let j = 0; j < pts.length; j++) {
-            if (j === 0) waveCtx.moveTo(pts[j].x, mid + pts[j].amp);
-            else waveCtx.lineTo(pts[j].x, mid + pts[j].amp);
-          }
-          waveCtx.stroke();
-        }
-      }
-
-      if (selected && duration) {
-        const s0 = Math.min(selected[0], selected[1]);
-        const s1 = Math.max(selected[0], selected[1]);
-        const x1 = ((s0 - viewStart) / viewSpan) * w;
-        const x2 = ((s1 - viewStart) / viewSpan) * w;
-
-        if (x2 >= 0 && x1 <= w) {
-          waveCtx.fillStyle = 'rgba(99, 102, 241, 0.38)';
-          waveCtx.fillRect(Math.max(0, x1), 0, Math.min(w, x2) - Math.max(0, x1), h);
-
-          waveCtx.strokeStyle = '#a5b4fc';
-          waveCtx.lineWidth = 2;
-          if (x1 >= 0 && x1 <= w) {
-            waveCtx.beginPath();
-            waveCtx.moveTo(x1, 0);
-            waveCtx.lineTo(x1, h);
-            waveCtx.stroke();
-          }
-          if (x2 >= 0 && x2 <= w) {
-            waveCtx.beginPath();
-            waveCtx.moveTo(x2, 0);
-            waveCtx.lineTo(x2, h);
-            waveCtx.stroke();
-          }
-        }
-      }
-    };
-
-    const setGradioValue = (elemId, value, triggerEvents = true) => {
-      const container = document.getElementById(elemId);
-      if (!container) return false;
-      const input = container.querySelector('input') || container.querySelector('textarea');
-      if (!input) return false;
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
-        'value'
-      ).set;
-      nativeSetter.call(input, value);
-
-      if (triggerEvents && !window.__isTranscribing) {
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      return true;
-    };
-
-    const safeSeekVideo = (targetSec) => {
-      targetSec = Math.max(0, Math.min(duration || Infinity, Number(targetSec) || 0));
-      if (typeof video.fastSeek === 'function') {
-        try { video.fastSeek(targetSec); } catch (_) { video.currentTime = targetSec; }
-      } else {
-        video.currentTime = targetSec;
-      }
-    };
-
-    // 播放头跑出可视范围时，把视窗整页平移到播放头附近（默认落在左侧 15% 处），
-    // 保证放大后长时间播放也不会「看不见播放头」。返回是否真的移动了视窗。
-    const ensurePlayheadVisible = (cur) => {
-      if (!followPlayhead || !duration) return false;
-      if (isDragging || isScrubbingSlider) return false;
-      if (cur >= viewStart && cur <= viewStart + viewSpan) return false;
-      const maxStart = Math.max(0, duration - viewSpan);
-      const next = Math.max(0, Math.min(maxStart, cur - viewSpan * 0.15));
-      if (Math.abs(next - viewStart) < 1e-6) return false;
-      viewStart = next;
-      return true;
-    };
-
-    const updatePlayhead = (syncInputBoxes = false) => {
-      const cur = video.currentTime;
-      currentTimeText.textContent = format(cur);
-      if (ctrlCurrentTime && !isScrubbingSlider) {
-        ctrlCurrentTime.textContent = format(cur);
-      }
-      if (scrubberSlider && !isScrubbingSlider && duration > 0) {
-        scrubberSlider.value = String(cur);
-      }
-
-      if (isPlayingSelection && selected) {
-        const endLimit = Math.max(selected[0], selected[1]);
-        if (cur >= endLimit) {
-          video.pause();
-          isPlayingSelection = false;
-          playSelBtn.textContent = '▶ 试听';
-        }
-      }
-
-      const canSyncToGradio = syncInputBoxes && !window.__isTranscribing && !isEditingText() && cues.length > 0;
-      if (canSyncToGradio) {
-        let matchedIdx = -1;
-        for (let i = cues.length - 1; i >= 0; i--) {
-          if (cur >= cues[i].start) {
-            matchedIdx = i;
-            break;
-          }
-        }
-        if (matchedIdx === -1 && cur < cues[0].start) {
-          matchedIdx = 0;
-        }
-        if (matchedIdx !== -1 && matchedIdx !== lastSyncedCueIndex) {
-          lastSyncedCueIndex = matchedIdx;
-          const target = cues[matchedIdx];
-          const srtFmt = (t) => {
-            const s = Math.max(0, Number(t) || 0);
-            const hh = String(Math.floor(s / 3600)).padStart(2, '0');
-            const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-            const ss = (s % 60).toFixed(3).padStart(6, '0').replace('.', ',');
-            return `${hh}:${mm}:${ss}`;
-          };
-          clearTimeout(syncInputDebounceTimer);
-          syncInputDebounceTimer = setTimeout(() => {
-            if (!window.__isTranscribing) {
-              setGradioValue('cue-edit-idx', matchedIdx + 1, true);
-              setGradioValue('cue-edit-start', srtFmt(target.start), true);
-              setGradioValue('cue-edit-end', srtFmt(target.end), true);
-              setGradioValue('cue-edit-text', target.text, true);
-            }
-          }, 250);
-        }
-      }
-
-      // ① 字幕永远优先更新：与缩放视窗、光标位置、是否拖动进度条无关，
-      //    避免播放头一旦跑出可视范围就「卡住不动」。
-      updateCaption(cur);
-
-      // ② 播放时自动跟随播放头（整页平移，不做连续滚动，避免干扰框选）
-      if (duration && !video.paused && !video.ended && ensurePlayheadVisible(cur)) {
-        drawRuler();
-        drawWave();
-      }
-
-      // ③ 播放头时间游标
-      if (!duration || cur < viewStart || cur > viewStart + viewSpan) {
-        playheadLine.style.display = 'none';
-        return;
-      }
-
-      const rect = waveCanvas.getBoundingClientRect();
-      const x = ((cur - viewStart) / viewSpan) * rect.width;
-
-      playheadLine.style.display = 'block';
-      playheadLine.style.left = `${x}px`;
-    };
-
-    const renderAll = () => {
-      drawRuler();
-      drawWave();
-      updatePlayhead(false);
-    };
-
-    let animId = null;
-    const loop = () => {
-      if (!video.paused && !video.ended) {
-        updatePlayhead(true);
-        animId = requestAnimationFrame(loop);
-      }
-    };
-
-    const togglePlay = () => {
-      if (video.paused || video.ended) {
-        video.play();
-      } else {
-        video.pause();
-      }
-    };
-
-    video.addEventListener('click', (e) => {
-      e.stopPropagation();
-      togglePlay();
-    });
-
-    if (playToggleBtn) {
-      playToggleBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        togglePlay();
-      });
-    }
-
-    const onPlayStateChanged = () => {
-      const isPaused = video.paused || video.ended;
-      if (playToggleBtn) {
-        playToggleBtn.textContent = isPaused ? '▶' : '⏸';
-      }
-      if (stage) {
-        if (isPaused) {
-          stage.classList.remove('is-playing', 'is-inactive');
-        } else {
-          stage.classList.add('is-playing');
-        }
-      }
-    };
-
-    video.addEventListener('play', () => {
-      onPlayStateChanged();
-      if (!followUserLocked) setFollow(true);
-      cancelAnimationFrame(animId);
-      animId = requestAnimationFrame(loop);
-    });
-    video.addEventListener('pause', () => {
-      onPlayStateChanged();
-      cancelAnimationFrame(animId);
-      updatePlayhead(true);
-    });
-    video.addEventListener('seeked', () => updatePlayhead(true));
-    video.addEventListener('timeupdate', () => updatePlayhead(!video.paused));
-    video.addEventListener('loadedmetadata', () => {
-      if (video.duration && !duration) {
-        duration = video.duration;
-        viewSpan = duration;
-        totalTimeText.textContent = format(duration);
-        if (ctrlTotalTime) ctrlTotalTime.textContent = format(duration);
-        if (scrubberSlider) scrubberSlider.max = String(duration);
-        renderAll();
-      }
-    });
-
-    const resetHideControlsTimer = () => {
-      if (!stage) return;
-      stage.classList.remove('is-inactive');
-      clearTimeout(hideControlsTimer);
-      if (!video.paused && !video.ended) {
-        hideControlsTimer = setTimeout(() => {
-          if (!isScrubbingSlider) {
-            stage.classList.add('is-inactive');
-          }
-        }, 2500);
-      }
-    };
-    if (stage) {
-      stage.addEventListener('mousemove', resetHideControlsTimer);
-      stage.addEventListener('mouseleave', () => {
-        if (!video.paused && !video.ended && !isScrubbingSlider) {
-          stage.classList.add('is-inactive');
-        }
-      });
-    }
-
-    if (stepPrevBtn) {
-      stepPrevBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        safeSeekVideo(video.currentTime - (1 / 24.0));
-        updatePlayhead(true);
-      });
-    }
-    if (stepNextBtn) {
-      stepNextBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        safeSeekVideo(video.currentTime + (1 / 24.0));
-        updatePlayhead(true);
-      });
-    }
-
-    if (volSlider && muteBtn) {
-      volSlider.addEventListener('input', (e) => {
-        e.stopPropagation();
-        video.volume = Number(e.target.value);
-        video.muted = (video.volume === 0);
-        muteBtn.textContent = video.muted ? '🔇' : (video.volume < 0.5 ? '🔉' : '🔊');
-      });
-
-      muteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        video.muted = !video.muted;
-        muteBtn.textContent = video.muted ? '🔇' : (video.volume < 0.5 ? '🔉' : '🔊');
-        volSlider.value = video.muted ? '0' : String(video.volume || 1);
-      });
-    }
-
-    if (fullscreenBtn) {
-      fullscreenBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!document.fullscreenElement) {
-          if (stage.requestFullscreen) stage.requestFullscreen();
-          else if (video.requestFullscreen) video.requestFullscreen();
-        } else {
-          if (document.exitFullscreen) document.exitFullscreen();
-        }
-      });
-    }
-
-    if (scrubberSlider) {
-      scrubberSlider.addEventListener('input', (e) => {
-        isScrubbingSlider = true;
-        const targetSec = Number(e.target.value);
-        currentTimeText.textContent = format(targetSec);
-        if (ctrlCurrentTime) ctrlCurrentTime.textContent = format(targetSec);
-        updateCaption(targetSec);   // 拖动进度条时字幕实时预览
-        if (scrubTip) {
-          scrubTip.style.display = 'block';
-          scrubTip.textContent = format(targetSec);
-          const pct = (targetSec / (duration || 1)) * 100;
-          scrubTip.style.left = `${pct}%`;
-        }
-      });
-
-      const commitScrub = (e) => {
-        if (!isScrubbingSlider) return;
-        isScrubbingSlider = false;
-        if (scrubTip) scrubTip.style.display = 'none';
-        const targetSec = Number(scrubberSlider.value);
-        safeSeekVideo(targetSec);
-        updatePlayhead(true);
-        resetHideControlsTimer();
-      };
-      scrubberSlider.addEventListener('change', commitScrub);
-      scrubberSlider.addEventListener('pointerup', commitScrub);
-      scrubberSlider.addEventListener('touchend', commitScrub);
-
-      // 兜底：无论指针在哪里松开，都复位拖动状态，
-      // 避免 isScrubbingSlider 卡在 true 导致进度条/时间读数不再跟随播放。
-      window.addEventListener('pointerup', () => {
-        if (!isScrubbingSlider) return;
-        isScrubbingSlider = false;
-        if (scrubTip) scrubTip.style.display = 'none';
-        safeSeekVideo(Number(scrubberSlider.value));
-        updatePlayhead(true);
-      });
-    }
-
-    const xToTime = (clientX) => {
-      const rect = waveCanvas.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
-      return Math.max(0, Math.min(duration, viewStart + ratio * viewSpan));
-    };
-
-    let downScreenX = 0;
-    let downScreenY = 0;
-
-    const onPointerDown = (e) => {
-      if (!duration) return;
-      noteManualViewChange();
-      downScreenX = e.clientX;
-      downScreenY = e.clientY;
-      dragAnchor = xToTime(e.clientX);
-      selected = [dragAnchor, dragAnchor];
-      isDragging = true;
-      waveCanvas.setPointerCapture(e.pointerId);
-      renderAll();
-    };
-
-    const onPointerMove = (e) => {
-      if (!isDragging || dragAnchor === null) return;
-      const curTime = xToTime(e.clientX);
-      selected = [Math.min(dragAnchor, curTime), Math.max(dragAnchor, curTime)];
-
-      const span = selected[1] - selected[0];
-      const moveDistance = Math.hypot(e.clientX - downScreenX, e.clientY - downScreenY);
-      if (moveDistance > 5 && span > 0.05) {
-        selectionBar.style.display = 'flex';
-        selectionInfo.textContent = `已选: ${format(selected[0])} → ${format(selected[1])} (${span.toFixed(2)}s)`;
-      }
-      renderAll();
-    };
-
-    const onPointerUp = (e) => {
-      if (!isDragging) return;
-      isDragging = false;
-      dragAnchor = null;
-      try { waveCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
-
-      const moveDistance = Math.hypot(e.clientX - downScreenX, e.clientY - downScreenY);
-      const span = selected ? (selected[1] - selected[0]) : 0;
-
-      if (moveDistance > 5 && span > 0.05) {
-        selectionBar.style.display = 'flex';
-        selectionInfo.textContent = `已选: ${format(selected[0])} → ${format(selected[1])} (${span.toFixed(2)}s)`;
-        safeSeekVideo(selected[0]);
-        updatePlayhead(true);
-      } else {
-        selected = null;
-        selectionBar.style.display = 'none';
-        const targetTime = xToTime(e.clientX);
-        safeSeekVideo(targetTime);
-        updatePlayhead(true);
-      }
-      renderAll();
-    };
-
-    waveCanvas.addEventListener('pointerdown', onPointerDown);
-    waveCanvas.addEventListener('pointermove', onPointerMove);
-    waveCanvas.addEventListener('pointerup', onPointerUp);
-
-    waveCanvas.addEventListener('dblclick', (e) => {
-      if (!duration) return;
-      const targetTime = xToTime(e.clientX);
-      safeSeekVideo(targetTime);
-      video.play();
-    });
-
-    rulerCanvas.addEventListener('click', (e) => {
-      if (!duration) return;
-      const targetTime = xToTime(e.clientX);
-      safeSeekVideo(targetTime);
-      updatePlayhead(true);
-    });
-
-    const onWheelZoomPan = (e) => {
-      if (!duration) return;
-      e.preventDefault();
-      noteManualViewChange();
-
-      const isMacPinch = e.ctrlKey || e.metaKey;
-      const isHorizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY) && !isMacPinch;
-
-      if (isHorizontal) {
-        const panDelta = (e.deltaX / Math.max(1, waveCanvas.clientWidth)) * viewSpan;
-        viewStart += panDelta;
-        clampView();
-        renderAll();
-        return;
-      }
-
-      const mouseTime = xToTime(e.clientX);
-      const zoomFactor = isMacPinch ? Math.exp(e.deltaY * 0.015) : Math.exp(e.deltaY * 0.003);
-      const nextSpan = Math.max(Math.min(duration, 0.4), Math.min(duration, viewSpan * zoomFactor));
-
-      const timeRatio = (mouseTime - viewStart) / Math.max(0.001, viewSpan);
-      viewStart = mouseTime - timeRatio * nextSpan;
-      viewSpan = nextSpan;
-
-      clampView();
-      renderAll();
-    };
-
-    waveCanvas.addEventListener('wheel', onWheelZoomPan, { passive: false });
-    rulerCanvas.addEventListener('wheel', onWheelZoomPan, { passive: false });
-
-    zoomInBtn.addEventListener('click', () => {
-      noteManualViewChange();
-      const centerTime = viewStart + viewSpan / 2;
-      viewSpan = Math.max(0.4, viewSpan * 0.65);
-      viewStart = centerTime - viewSpan / 2;
-      clampView();
-      renderAll();
-    });
-
-    zoomOutBtn.addEventListener('click', () => {
-      noteManualViewChange();
-      const centerTime = viewStart + viewSpan / 2;
-      viewSpan = Math.min(duration, viewSpan * 1.5);
-      viewStart = centerTime - viewSpan / 2;
-      clampView();
-      renderAll();
-    });
-
-    zoomFitBtn.addEventListener('click', () => {
-      viewStart = 0;
-      viewSpan = duration || 1;
-      clampView();
-      renderAll();
-    });
-
-    centerPlayheadBtn.addEventListener('click', () => {
-      const maxZoom = 50;
-      viewSpan = (duration || 1) / maxZoom;
-      viewStart = video.currentTime - viewSpan / 2;
-      clampView();
-      renderAll();
-    });
-
-    const syncFollowBtn = () => {
-      if (!followToggleBtn) return;
-      followToggleBtn.classList.toggle('is-on', followPlayhead);
-      followToggleBtn.textContent = followPlayhead ? '🧲 跟随' : '🧲 不跟随';
-      followToggleBtn.title = followPlayhead
-        ? '播放时自动跟随播放头（点击关闭）'
-        : '已关闭自动跟随（点击开启）';
-    };
-
-    const setFollow = (on) => {
-      followPlayhead = !!on;
-      syncFollowBtn();
-    };
-
-    if (followToggleBtn) {
-      followToggleBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const next = !followPlayhead;
-        followUserLocked = !next;
-        setFollow(next);
-      });
-      syncFollowBtn();
-    }
-
-    // 播放中用户主动拖动/缩放波形时，暂停自动跟随，避免画面被强行拽走
-    const noteManualViewChange = () => {
-      if (followPlayhead && !video.paused && !video.ended) setFollow(false);
-    };
-
-    zoomSlider.addEventListener('input', () => {
-      noteManualViewChange();
-      const zoomLevel = Number(zoomSlider.value);
-      const nextSpan = duration / zoomLevel;
-      const centerTime = viewStart + viewSpan / 2;
-      viewSpan = nextSpan;
-      viewStart = centerTime - viewSpan / 2;
-      clampView();
-      renderAll();
-    });
-
-    playSelBtn.addEventListener('click', () => {
-      if (!selected) return;
-      if (isPlayingSelection) {
-        video.pause();
-        isPlayingSelection = false;
-        playSelBtn.textContent = '▶ 试听';
-      } else {
-        safeSeekVideo(selected[0]);
-        video.play();
-        isPlayingSelection = true;
-        playSelBtn.textContent = '⏸ 停止';
-      }
-    });
-
-    clearSelBtn.addEventListener('click', () => {
-      selected = null;
-      selectionBar.style.display = 'none';
-      renderAll();
-    });
-
-    syncBtn.addEventListener('click', () => {
-      if (!selected) return;
-      const startStr = format(selected[0]);
-      const endStr = format(selected[1]);
-
-      setGradioValue('slice-start', startStr);
-      setGradioValue('slice-end', endStr);
-      setGradioValue('hidden-sync-start', startStr);
-      setGradioValue('hidden-sync-end', endStr);
-
-      const startElem = document.getElementById('slice-start');
-      if (startElem) {
-        const details = startElem.closest('details');
-        if (details) { details.open = true; }
-      }
-
-      const bridgeBtn = document.getElementById('btn-hidden-bridge-sync');
-      if (bridgeBtn) { bridgeBtn.click(); }
-
-      syncBtn.textContent = '✅ 已同步！';
-      setTimeout(() => {
-        syncBtn.textContent = '⏱ 同步时间到顶部';
-      }, 1500);
-    });
-
-    transcribeSelBtn.addEventListener('click', () => {
-      if (!selected) return;
-      const startStr = format(selected[0]);
-      const endStr = format(selected[1]);
-
-      setGradioValue('hidden-sync-start', startStr);
-      setGradioValue('hidden-sync-end', endStr);
-
-      transcribeSelBtn.textContent = '⏳ 正在转写…';
-      transcribeSelBtn.disabled = true;
-
-      const patchBtn = document.getElementById('btn-hidden-bridge-transcribe');
-      if (patchBtn) {
-        patchBtn.click();
-      }
-    });
-
-    const isEditingText = () => {
-      const active = document.activeElement;
-      if (!active) return false;
-      const tag = active.tagName.toLowerCase();
-      if (tag === 'input' || tag === 'textarea') return true;
-      if (active.isContentEditable) return true;
-      return false;
-    };
-
-    const handleKeyDown = (e) => {
-      if (isEditingText()) return;
-
-      if (e.code === 'Space' || e.key === ' ' || e.keyCode === 32) {
-        e.preventDefault();
-        togglePlay();
-        return;
-      }
-
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        e.preventDefault();
-        const frameRate = 24.0;
-        const frameCount = e.shiftKey ? 5 : 1;
-        const stepSeconds = frameCount / frameRate;
-
-        if (!video.paused) {
-          video.pause();
-        }
-
-        if (e.key === 'ArrowLeft') {
-          safeSeekVideo(Math.max(0, video.currentTime - stepSeconds));
-        } else {
-          const maxTime = duration || video.duration || Infinity;
-          safeSeekVideo(Math.min(maxTime, video.currentTime + stepSeconds));
-        }
-
-        updatePlayhead(true);
-
-        if (duration && (video.currentTime < viewStart || video.currentTime > viewStart + viewSpan)) {
-          viewStart = Math.max(0, Math.min(duration - viewSpan, video.currentTime - viewSpan / 2));
-          renderAll();
-        }
-        return;
-      }
-
-      const isZKey = e.key === 'z' || e.key === 'Z';
-      const isYKey = e.key === 'y' || e.key === 'Y';
-      const isMod = e.metaKey || e.ctrlKey;
-
-      if (isMod && (isZKey || isYKey)) {
-        e.preventDefault();
-        const isRedo = (isZKey && e.shiftKey) || (isYKey && !e.shiftKey);
-        if (isRedo) {
-          const redoBtn = document.querySelector('#btn-reviewer-redo button') || document.getElementById('btn-reviewer-redo');
-          if (redoBtn) {
-            redoBtn.click();
-          }
-        } else {
-          const undoBtn = document.querySelector('#btn-reviewer-undo button') || document.getElementById('btn-reviewer-undo');
-          if (undoBtn) {
-            undoBtn.click();
-          }
-        }
-        return;
-      }
-    };
-
-    if (window.__reviewerKeyHandler) {
-      window.removeEventListener('keydown', window.__reviewerKeyHandler);
-    }
-    window.__reviewerKeyHandler = handleKeyDown;
-    window.addEventListener('keydown', window.__reviewerKeyHandler);
-
-    window.onbeforeunload = (e) => {
-      if (cues && cues.length > 0) {
-        e.preventDefault();
-        e.returnValue = '';
-        return '';
-      }
-    };
-
-    new ResizeObserver(renderAll).observe(canvasWrap);
-    clampView();
-    window.__reviewerInstance = {
-      updateCues: (newCues) => {
-        cues.length = 0;
-        cues.push(...newCues);
-        lastSyncedCueIndex = -1;
-        rebuildCaptionIndex();
-        renderAll();
-      },
-      seekAndCenter: (targetTime) => {
-        safeSeekVideo(targetTime);
-        if (duration && (targetTime < viewStart || targetTime > viewStart + viewSpan)) {
-          viewStart = Math.max(0, Math.min(duration - viewSpan, targetTime - viewSpan / 2));
-        }
-        renderAll();
-      }
-    };
-    renderAll();
-  } catch (err) {
-    console.error('❌ [Reviewer] 渲染异常:', err);
-  }
-}
-"""
-
-CSS_CUSTOM = """
-footer {visibility: hidden !important; display: none !important;}
-.show-api {display: none !important;}
-a[href*="/api"] {display: none !important;}
-
-.gradio-container {
-    max-width: 100% !important;
-    width: 100% !important;
-    margin: 0 !important;
-    padding: 8px 16px !important;
-    box-sizing: border-box !important;
-    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-        "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
-    -webkit-font-smoothing: antialiased !important;
-}
-
-.bridge-hidden,
-#bridge-hidden-row {
-    position: fixed !important;
-    left: -9999px !important;
-    top: -9999px !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
-    z-index: -9999 !important;
-}
-
-/* ============ 顶部标题栏 + 运行环境胶囊 ============ */
-.app-header {
-    align-items: center !important;
-    gap: 10px !important;
-    margin-bottom: 10px !important;
-    flex-wrap: wrap !important;
-}
-.app-title-col {
-    padding: 0 !important;
-    min-width: 0 !important;
-}
-.app-title-col .prose,
-.app-title-col .markdown {
-    padding: 0 !important;
-    margin: 0 !important;
-}
-.app-title-col h3 {
-    margin: 0 !important;
-    padding: 0 !important;
-    font-size: 20px !important;
-    line-height: 1.3 !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.01em !important;
-    color: #0f172a !important;
-    white-space: nowrap !important;
-}
-.app-status-col {
-    padding: 0 !important;
-    min-width: 0 !important;
-    justify-content: center !important;
-}
-.device-header {
-    background: transparent !important;
-    border: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    box-shadow: none !important;
-    min-height: 0 !important;
-}
-.device-header .html-container,
-.device-header .prose {
-    padding: 0 !important;
-    margin: 0 !important;
-}
-.device-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    justify-content: flex-end;
-    align-items: center;
-}
-.device-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 999px;
-    background: #f8fafc;
-    border: 1px solid #e6ebf3;
-    font-size: 12px;
-    line-height: 1;
-    white-space: nowrap;
-    transition: border-color 0.15s ease, background 0.15s ease;
-}
-.device-chip:hover {
-    background: #f4f7fd;
-    border-color: #d9e2f2;
-}
-.device-chip .chip-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #22c55e;
-    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
-    flex: none;
-}
-.device-chip.is-pending .chip-dot {
-    background: #f59e0b;
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
-}
-.device-chip .chip-label {
-    color: #64748b;
-    font-weight: 500;
-    letter-spacing: 0.01em;
-}
-.device-chip .chip-value {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-weight: 700;
-    font-size: 11.5px;
-    color: #1e293b;
-    letter-spacing: 0.02em;
-}
-.device-chip.is-accent {
-    background: #eef2ff;
-    border-color: #dde4ff;
-}
-.device-chip.is-accent .chip-value {
-    color: #4338ca;
-}
-
-/* ============ 参数配置面板（导入 / 预设 / 执行） ============ */
-.setup-panel {
-    padding: 16px 18px 14px 18px !important;
-}
-.setup-row {
-    gap: 0 !important;
-    align-items: flex-start !important;
-}
-.setup-col {
-    padding: 0 18px !important;
-    min-width: 0 !important;
-}
-.setup-col:first-child {
-    padding-left: 0 !important;
-}
-.setup-col:last-child {
-    padding-right: 0 !important;
-}
-.setup-col + .setup-col {
-    border-left: 1px solid #eef2f8 !important;
-}
-.setup-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    color: #334155;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
-    border-bottom: 1px solid #eef2f8;
-}
-.setup-head .step {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #eef2ff;
-    color: #4f46e5;
-    font-size: 10px;
-    font-weight: 700;
-    font-family: ui-monospace, monospace;
-}
-
-/* ============ 媒体上传区（空态紧凑化） ============ */
-.media-upload {
-    border: 1.5px dashed #c7d2fe !important;
-    border-radius: 12px !important;
-    background: #f9faff !important;
-    box-shadow: none !important;
-    flex: 0 0 auto !important;
-    align-self: flex-start !important;
-    height: auto !important;
-    min-height: 0 !important;
-    width: 100% !important;
-    transition: border-color 0.18s ease, background 0.18s ease !important;
-}
-.media-upload:hover {
-    border-color: #818cf8 !important;
-    background: #f4f7ff !important;
-}
-.media-upload .block,
-.media-upload > div {
-    background: transparent !important;
-}
-.media-upload button[aria-dropeffect] {
-    height: 96px !important;
-    min-height: 96px !important;
-    max-height: 96px !important;
-    padding: 10px !important;
-    border: none !important;
-    background: transparent !important;
-}
-.media-upload .wrap {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
-    gap: 0 !important;
-    font-size: 0 !important;
-    line-height: 1.45 !important;
-    color: #4338ca !important;
-}
-.media-upload .wrap .icon-wrap {
-    width: 26px !important;
-    height: 26px !important;
-    color: #6366f1 !important;
-    opacity: 0.85 !important;
-    margin-bottom: 6px !important;
-}
-.media-upload .wrap .or {
-    display: none !important;
-}
-.media-upload .wrap::after {
-    content: "点击选择 或 拖拽音视频到此处";
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.01em;
-}.upload-hint {
-    margin: 8px 2px 0 2px;
-    font-size: 11px;
-    line-height: 1.6;
-    color: #94a3b8;
-}
-.upload-hint b {
-    color: #64748b;
-    font-weight: 600;
-}
-/* 已导入文件后：上传区收缩为一条「更换文件」操作条 */
-.media-upload:has(.file-preview-holder) button[aria-dropeffect] {
-    height: 44px !important;
-    min-height: 44px !important;
-    max-height: 44px !important;
-    padding: 0 12px !important;
-}
-.media-upload:has(.file-preview-holder) .wrap {
-    flex-direction: row !important;
-    gap: 8px !important;
-}
-.media-upload:has(.file-preview-holder) .wrap .icon-wrap {
-    width: 15px !important;
-    height: 15px !important;
-    margin-bottom: 0 !important;
-}
-.media-upload:has(.file-preview-holder) .wrap::after {
-    content: "点击更换文件";
-    font-size: 12px !important;
-    color: #6366f1 !important;
-}
-.media-upload .file-preview-holder {
-    padding: 0 !important;
-}
-.media-upload .file-preview {
-    margin: 0 !important;
-    border-radius: 8px !important;
-    overflow: hidden !important;
-}
-.media-upload .file-preview td {
-    font-size: 12px !important;
-    padding: 6px 8px !important;
-    border-color: #eef2f8 !important;
-}
-.media-upload .file-preview .filename {
-    font-weight: 600 !important;
-    color: #1e293b !important;
-}
-
-/* ============ 预设区按钮 ============ */
-.setup-col .wrap-inner input,
-.setup-col .secondary-wrap input {
-    font-size: 12.5px !important;
-    text-overflow: ellipsis !important;
-}
-.preset-btn-row {
-    gap: 6px !important;
-}
-.preset-btn-row button {
-    min-width: 0 !important;
-    flex: 1 1 0 !important;
-    min-height: 32px !important;
-    height: 32px !important;
-    padding: 0 8px !important;
-    font-size: 12px !important;
-    line-height: 1 !important;
-    border-radius: 8px !important;
-}
-
-/* ============ 折叠面板（时间片段 / VAD 参数） ============ */
-.clean-accordion.block {
-    margin-top: 10px !important;
-    border: 1px solid #e6ebf3 !important;
-    border-radius: 12px !important;
-    background: #ffffff !important;
-    box-shadow: none !important;
-    padding: 0 !important;
-    overflow: hidden !important;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
-}
-.clean-accordion.block:hover {
-    border-color: #d5ddf7 !important;
-}
-.clean-accordion > button.label-wrap {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: space-between !important;
-    gap: 10px !important;
-    width: 100% !important;
-    margin: 0 !important;
-    padding: 11px 14px !important;
-    background: #fbfcfe !important;
-    border: none !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.01em !important;
-    color: #1e293b !important;
-    text-align: left !important;
-    cursor: pointer !important;
-    transition: background 0.16s ease, color 0.16s ease !important;
-}
-.clean-accordion > button.label-wrap:hover {
-    background: #f3f6ff !important;
-    color: #3730a3 !important;
-}
-.clean-accordion > button.label-wrap > span:first-child {
-    flex: 1 1 auto !important;
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    line-height: 1.4 !important;
-    color: inherit !important;
-}
-.clean-accordion > button.label-wrap .icon {
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    width: 20px !important;
-    height: 20px !important;
-    flex: none !important;
-    border-radius: 50% !important;
-    background: #eef2ff !important;
-    color: #6366f1 !important;
-    font-size: 0 !important;
-    transform: none !important;
-    transition: background 0.16s ease !important;
-}
-.clean-accordion > button.label-wrap .icon::before {
-    content: "";
-    display: block;
-    width: 6px;
-    height: 6px;
-    margin-top: -3px;
-    border-right: 1.8px solid currentColor;
-    border-bottom: 1.8px solid currentColor;
-    transform: rotate(45deg);
-    transition: transform 0.2s ease, margin 0.2s ease;
-}
-.clean-accordion:has([data-testid="accordion-content"]:not([style*="display: none"])) > button.label-wrap .icon {
-    background: #e0e7ff !important;
-}
-.clean-accordion:has([data-testid="accordion-content"]:not([style*="display: none"])) > button.label-wrap .icon::before {
-    transform: rotate(-135deg);
-    margin-top: 2px;
-}
-.clean-accordion [data-testid="accordion-content"] {
-    padding: 12px 14px 14px 14px !important;
-    border-top: 1px solid #f1f5f9 !important;
-}
-.acc-hint {
-    display: block;
-    font-size: 11.5px;
-    line-height: 1.75;
-    color: #64748b;
-    background: #f8fafc;
-    border: 1px solid #eef2f8;
-    border-radius: 8px;
-    padding: 7px 10px;
-    margin-bottom: 10px;
-}
-.acc-hint b {
-    color: #4338ca;
-    font-weight: 600;
-}
-.clean-accordion .form,
-.clean-accordion fieldset {
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-}
-
-/* ============ 当前生效参数条 ============ */
-.active-params-banner {
-    padding: 0 !important;
-    margin: 0 !important;
-    background: transparent !important;
-    border: none !important;
-    min-height: 0 !important;
-}
-.params-strip {
-    border: 1px solid #e6ebf3;
-    border-radius: 10px;
-    background: #fbfcff;
-    padding: 10px 12px;
-}
-.params-strip-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    font-size: 12px;
-    color: #475569;
-    margin-bottom: 8px;
-}
-.params-strip-head .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #6366f1;
-    flex: none;
-}
-.params-strip-head b {
-    color: #1e293b;
-    font-size: 12.5px;
-    font-weight: 700;
-}
-.params-strip-head .engine-tag {
-    font-size: 11px;
-    font-weight: 600;
-    color: #4338ca;
-    background: #eef2ff;
-    border: 1px solid #dfe5ff;
-    border-radius: 999px;
-    padding: 2px 9px;
-}
-.params-strip-head .ts {
-    margin-left: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
-    color: #94a3b8;
-}
-.params-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-.params-chips .p-chip {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 5px;
-    padding: 3px 9px;
-    border-radius: 7px;
-    background: #ffffff;
-    border: 1px solid #eaeff8;
-    font-size: 11.5px;
-    line-height: 1.5;
-}
-.params-chips .p-chip i {
-    font-style: normal;
-    color: #64748b;
-}
-.params-chips .p-chip b {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-weight: 700;
-    color: #4338ca;
-}
-.params-chips .p-chip.is-flag b {
-    color: #0f766e;
-}
-
-.preset-action-col {
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: flex-end !important;
-    gap: 4px !important;
-    padding: 0 !important;
-    margin: 0 !important;
-}
-.preset-action-col button {
-    height: 34px !important;
-    min-height: 34px !important;
-    padding: 2px 6px !important;
-    font-size: 12px !important;
-    line-height: 1 !important;
-    margin: 0 !important;
-}
-
-button.btn-primary-action {
-    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%) !important;
-    border: none !important;
-    color: #ffffff !important;
-    font-weight: 600 !important;
-    box-shadow: 0 4px 14px rgba(79, 70, 229, 0.32) !important;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-}
-button.btn-primary-action:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 6px 18px rgba(79, 70, 229, 0.45) !important;
-}
-
-button:hover:is([id*="delete"], [id*="clear"]) {
-    border-color: #f87171 !important;
-    color: #fca5a5 !important;
-}
-
-div[data-testid="radio-group"] label,
-.gr-radio label,
-fieldset label:has(input[type="radio"]) {
-    transition: all 0.15s ease !important;
-    border-radius: 8px !important;
-    font-size: 13px !important;
-}
-
-div[data-testid="radio-group"] label:has(input:checked),
-div[data-testid="radio-group"] label.selected,
-.gr-radio label.selected,
-.gr-radio label:has(input[type="radio"]:checked),
-fieldset label:has(input[type="radio"]:checked) {
-    background: #e0e7ff !important;
-    border-color: #6366f1 !important;
-    box-shadow: 0 1px 4px rgba(99, 102, 241, 0.18) !important;
-}
-
-div[data-testid="radio-group"] label:has(input:checked) *,
-div[data-testid="radio-group"] label.selected *,
-.gr-radio label.selected *,
-.gr-radio label:has(input[type="radio"]:checked) *,
-fieldset label:has(input[type="radio"]:checked) * {
-    color: #1e1b4b !important;
-    font-weight: 600 !important;
-}
-
-.reviewer-stage {
-    position: relative;
-    background: #000;
-    border-radius: 10px;
-    overflow: hidden;
-    height: 480px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.85);
-    cursor: pointer;
-}
-.reviewer-stage:hover .reviewer-custom-controls {
-    opacity: 1;
-    transform: translateY(0);
-}
-.rw-center-play-indicator {
-    position: absolute;
-    width: 64px;
-    height: 64px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(4px);
-    border: 2px solid rgba(255, 255, 255, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    z-index: 15;
-    animation: rwPulse 0.3s ease-out;
-}
-.rw-center-play-icon {
-    color: #ffffff;
-    font-size: 24px;
-    margin-left: 3px;
-}
-@keyframes rwPulse {
-    from { transform: scale(0.8); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
-}
-
-.reviewer-custom-controls {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.4) 60%, transparent 100%);
-    padding: 24px 16px 10px 16px;
-    z-index: 20;
-    opacity: 1;
-    transform: translateY(0);
-    transition: opacity 0.25s ease, transform 0.25s ease;
-    cursor: default;
-}
-.reviewer-stage.is-playing.is-inactive .reviewer-custom-controls {
-    opacity: 0;
-    transform: translateY(8px);
-    pointer-events: none;
-}
-.rw-scrub-track-wrap {
-    position: relative;
-    width: 100%;
-    height: 12px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-}
-.rw-scrubber-slider {
-    width: 100%;
-    height: 4px;
-    border-radius: 2px;
-    background: rgba(255, 255, 255, 0.25);
-    accent-color: #6366f1;
-    cursor: pointer;
-    transition: height 0.15s ease;
-}
-.rw-scrub-track-wrap:hover .rw-scrubber-slider {
-    height: 6px;
-    background: rgba(255, 255, 255, 0.35);
-}
-.rw-scrub-hover-tip {
-    position: absolute;
-    top: -26px;
-    background: rgba(15, 23, 42, 0.95);
-    border: 1px solid #6366f1;
-    color: #e0e7ff;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    pointer-events: none;
-    transform: translateX(-50%);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    white-space: nowrap;
-}
-
-.rw-controls-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 6px;
-    gap: 12px;
-}
-.rw-ctrl-left, .rw-ctrl-right {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.rw-ctrl-btn {
-    background: transparent;
-    border: none;
-    color: #ffffff;
-    font-size: 13px;
-    font-weight: 600;
-    padding: 4px 8px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background 0.15s ease, transform 0.1s ease;
-}
-.rw-ctrl-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
-}
-.rw-btn-main-play {
-    font-size: 16px;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-}
-.rw-ctrl-time-display {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    font-weight: 600;
-    margin-left: 6px;
-}
-.rw-time-cur { color: #fbbf24; }
-.rw-time-sep { color: #64748b; margin: 0 4px; }
-.rw-time-dur { color: #94a3b8; }
-
-.rw-vol-slider {
-    width: 55px;
-    height: 4px;
-    accent-color: #6366f1;
-    cursor: pointer;
-}
-
-.proxy-status-box {
-    margin: 4px 0 6px 0 !important;
-    padding: 8px 12px !important;
-    border-radius: 8px !important;
-    background: rgba(99, 102, 241, 0.06) !important;
-    border: 1px solid rgba(99, 102, 241, 0.2) !important;
-    font-size: 12px !important;
-    min-height: 38px !important;
-    /* 纵向排列：Gradio 原生进度追踪器一旦被渲染进这个容器，只会在卡片上方另起一块，
-       绝不会把卡片横向挤压变形（历史上 display:flex + align-items:center 就干过这事）。 */
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: center !important;
-}
-
-/* 480p 代理压制进度卡片：全部使用 div/b/em，不碰 p/span，
-   以免被下方 .proxy-status-box span{color:...!important} 覆盖掉配色。 */
-.proxy-progress-card { display: block !important; width: 100% !important; }
-.ppc-head,
-.ppc-foot {
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: center !important;
-    gap: 8px !important;
-}
-.ppc-head { margin-bottom: 5px !important; }
-.ppc-foot { margin-top: 5px !important; }
-.ppc-stage {
-    font-size: 12px !important;
-    font-weight: 600 !important;
-    color: #1e1b4b !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    white-space: nowrap !important;
-}
-.ppc-right {
-    display: flex !important;
-    align-items: baseline !important;
-    gap: 4px !important;
-    white-space: nowrap !important;
-}
-.ppc-pct {
-    font-family: ui-monospace, SFMono-Regular, monospace !important;
-    font-size: 12px !important;
-    font-weight: 700 !important;
-    color: #4338ca !important;
-}
-.ppc-speed {
-    font-family: ui-monospace, SFMono-Regular, monospace !important;
-    font-size: 10px !important;
-    font-style: normal !important;
-    color: #64748b !important;
-}
-.ppc-track {
-    position: relative !important;
-    width: 100% !important;
-    height: 6px !important;
-    background: rgba(99, 102, 241, 0.15) !important;
-    border-radius: 3px !important;
-    overflow: hidden !important;
-}
-.ppc-fill {
-    height: 100% !important;
-    border-radius: 3px !important;
-    background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%) !important;
-    transition: width 0.25s ease !important;
-}
-.ppc-time,
-.ppc-note {
-    font-family: ui-monospace, SFMono-Regular, monospace !important;
-    font-size: 11px !important;
-    color: #64748b !important;
-}
-@keyframes ppc-indet-slide {
-    0% { transform: translateX(-110%); }
-    100% { transform: translateX(340%); }
-}
-.ppc-indet {
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 30% !important;
-    height: 100% !important;
-    border-radius: 3px !important;
-    background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%) !important;
-    animation: ppc-indet-slide 1.1s ease-in-out infinite !important;
-}
-
-/* 监看画面工具栏：说明 + 导入 / 压制 / 历史代理 / 关闭 / 恢复 */
-.monitor-toolbar {
-    align-items: stretch !important;
-    gap: 8px !important;
-    margin-bottom: 2px !important;
-}
-.monitor-toolbar > * { min-width: 0 !important; }
-.monitor-toolbar button {
-    height: 100% !important;
-    min-height: 40px !important;
-    white-space: nowrap !important;
-    font-size: 12px !important;
-}
-.monitor-toolbar .block,
-.monitor-toolbar .form { min-width: 0 !important; }
-#monitor-proxy-pick label span { font-size: 11px !important; }
-#btn-monitor-close,
-#btn-monitor-close button { color: #b91c1c !important; }
-#btn-monitor-close:hover,
-#btn-monitor-close button:hover { background: rgba(185, 28, 28, 0.08) !important; }
-
-/* 监看画面空态（已关闭 / 片源失效 / 尚未导入） */
-.reviewer-empty {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
-    gap: 6px !important;
-    min-height: 240px !important;
-    padding: 28px 20px !important;
-    border: 1px dashed rgba(99, 102, 241, 0.35) !important;
-    border-radius: 12px !important;
-    background: rgba(99, 102, 241, 0.04) !important;
-    text-align: center !important;
-}
-.reviewer-empty .rw-empty-icon { font-size: 30px; line-height: 1.1; }
-.reviewer-empty .rw-empty-title {
-    font-size: 15px !important;
-    font-weight: 700 !important;
-    color: #1e1b4b !important;
-}
-.reviewer-empty .rw-empty-desc {
-    font-size: 12px !important;
-    line-height: 1.75 !important;
-    color: #64748b !important;
-}
-.reviewer-empty .rw-empty-desc code {
-    font-size: 11px !important;
-    background: rgba(15, 23, 42, 0.06) !important;
-    padding: 1px 5px !important;
-    border-radius: 4px !important;
-    word-break: break-all !important;
-}
-.proxy-status-box p,
-.proxy-status-box span {
-    margin: 0 !important;
-    color: #334155 !important;
-    font-size: 12px !important;
-    line-height: 1.4 !important;
-}
-.proxy-status-box strong,
-.proxy-status-box code {
-    color: #4338ca !important;
-    font-weight: 700 !important;
-}
-.reviewer-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-.reviewer-caption {
-    position: absolute;
-    left: 5%;
-    right: 5%;
-    bottom: 90px;
-    text-align: center;
-    color: #ffffff;
-    font-size: clamp(16px, 1.8vw, 24px);
-    font-weight: 700;
-    line-height: 1.4;
-    text-shadow: 0 2px 4px #000, 0 0 10px rgba(0, 0, 0, 0.9);
-    pointer-events: none;
-    background: rgba(0, 0, 0, 0.65);
-    padding: 6px 14px;
-    border-radius: 8px;
-    backdrop-filter: blur(4px);
-    display: none;
-    z-index: 10;
-    /* 中日双语 / 多语字幕：同一时间区间聚合为多行显示 */
-    white-space: pre-line;
-    word-break: break-word;
-    max-height: 55%;
-    overflow: hidden;
-    transition: bottom 0.25s ease;
-}
-.reviewer-stage.is-playing.is-inactive .reviewer-caption { bottom: 34px; }
-
-.reviewer-wave-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 10px;
-    padding: 4px 2px;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-.reviewer-clock { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; }
-.reviewer-playhead-time { color: #fbbf24; }
-.reviewer-divider { color: #475569; margin: 0 4px; }
-.reviewer-total-time { color: #94a3b8; }
-
-.reviewer-selection-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: rgba(99, 102, 241, 0.18);
-    border: 1px solid rgba(99, 102, 241, 0.4);
-    padding: 3px 10px;
-    border-radius: 16px;
-}
-.rw-sel-info { font-family: ui-monospace, monospace; font-size: 12px; color: #c7d2fe; font-weight: 600; }
-.rw-btn { border: none; border-radius: 12px; padding: 2px 8px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s ease; }
-.rw-btn-play-sel { background: #0284c7; color: #fff; }
-.rw-btn-transcribe-sel { 
-    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%) !important; 
-    color: #fff !important; 
-    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.35) !important;
-}
-.rw-btn-transcribe-sel:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 3px 10px rgba(79, 70, 229, 0.5) !important;
-}
-.rw-btn-sync { background: #334155; color: #cbd5e1; }
-.rw-btn-clear { background: transparent; color: #94a3b8; }
-
-.reviewer-zoom-controls { display: flex; align-items: center; gap: 4px; }
-.rw-tool-btn { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
-.rw-tool-btn.is-on {
-    background: rgba(99, 102, 241, 0.28);
-    border-color: rgba(129, 140, 248, 0.85);
-    color: #e0e7ff;
-    font-weight: 700;
-}
-.rw-zoom-slider { width: 75px; cursor: pointer; accent-color: #6366f1; }
-.reviewer-zoom-level { font-family: ui-monospace, monospace; font-size: 11px; color: #94a3b8; min-width: 34px; }
-
-.reviewer-canvas-wrap {
-    position: relative !important;
-    border: 1px solid #1e293b !important;
-    border-radius: 8px !important;
-    overflow: hidden !important;
-    background: #090d16 !important;
-    margin-top: 6px !important;
-    width: 100% !important;
-}
-.reviewer-ruler-canvas { width: 100% !important; height: 24px !important; display: block !important; cursor: pointer !important; }
-.reviewer-wave-canvas { width: 100% !important; height: 110px !important; display: block !important; cursor: crosshair !important; touch-action: none !important; }
-
-.reviewer-playhead-line {
-    position: absolute !important;
-    top: 0 !important;
-    bottom: 0 !important;
-    width: 2px !important;
-    background: #fbbf24 !important;
-    box-shadow: 0 0 8px rgba(251, 191, 36, 0.85) !important;
-    pointer-events: none !important;
-    z-index: 10 !important;
-    transform: translateX(-50%) !important;
-}
-.rw-playhead-flag { position: absolute !important; top: 0 !important; left: 50% !important; transform: translateX(-50%) !important; color: #fbbf24 !important; font-size: 10px; line-height: 1 !important; }
-.reviewer-wave-hint { margin-top: 6px !important; font-size: 11px !important; color: #64748b !important; display: flex !important; flex-direction: column !important; gap: 2px !important; line-height: 1.4 !important; }
-
-.cue-table table {
-    width: 100% !important;
-    table-layout: auto !important;
-}
-.cue-table table tr > *:nth-child(1) { width: 60px !important; min-width: 60px !important; text-align: center; }
-.cue-table table tr > *:nth-child(2) { width: 120px !important; min-width: 120px !important; font-family: ui-monospace, monospace; }
-.cue-table table tr > *:nth-child(3) { width: 120px !important; min-width: 120px !important; font-family: ui-monospace, monospace; }
-.cue-table table tr > *:nth-child(4) { width: 80px !important; min-width: 80px !important; text-align: center; }
-.cue-table table tr > *:nth-child(5) { width: auto !important; min-width: 350px !important; word-break: break-word !important; }
-.reviewed-download-box { margin-top: 6px !important; border: 1px solid rgba(79, 70, 229, 0.4) !important; border-radius: 8px !important; background: rgba(79, 70, 229, 0.08) !important; }
-
-.workbench-panel {
-    background: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 12px !important;
-    padding: 14px !important;
-    box-shadow: 0 1px 4px 0 rgba(0, 0, 0, 0.04) !important;
-    transition: all 0.2s ease !important;
-}
-.editor-header-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #e2e8f0 !important;
-    margin-bottom: 8px;
-}
-.workbench-panel h4,
-.workbench-panel h3,
-.workbench-panel strong {
-    color: #0f172a !important;
-}
-.workbench-panel .markdown p,
-.workbench-panel span:not(.rw-sel-info) {
-    color: #334155 !important;
-    font-size: 13px !important;
-}
-.workbench-panel button:not(.btn-primary-action) {
-    background: #f1f5f9 !important;
-    border: 1px solid #cbd5e1 !important;
-    color: #1e293b !important;
-    font-weight: 600 !important;
-    border-radius: 8px !important;
-    transition: all 0.15s ease !important;
-}
-.workbench-panel button:not(.btn-primary-action):hover {
-    background: #e2e8f0 !important;
-    border-color: #94a3b8 !important;
-    color: #0f172a !important;
-}
-.cue-table {
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    background: #ffffff !important;
-    overflow: hidden !important;
-}
-.cue-table th, .cue-table .thead th {
-    background: #f8fafc !important;
-    color: #475569 !important;
-    font-weight: 600 !important;
-    font-size: 12px !important;
-    border-bottom: 1px solid #e2e8f0 !important;
-}
-.cue-table td, .cue-table tr td {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    font-size: 13px !important;
-    border-bottom: 1px solid #f1f5f9 !important;
-}
-.cue-table tbody tr:hover td { background: #f8fafc !important; }
-.cue-table td textarea, .cue-table td input { color: #0f172a !important; background: transparent !important; }
-.cue-table-wrap .label-wrap span { color: #4f46e5 !important; font-weight: 600 !important; }
-.progress-status-box {
-    margin-top: 10px !important;
-    padding: 9px 12px !important;
-    border-radius: 9px !important;
-    background: #f8fafc !important;
-    border: 1px solid #e6ebf3 !important;
-    border-left: 3px solid #a5b4fc !important;
-    font-size: 12.5px !important;
-    color: #475569 !important;
-    min-height: 40px !important;
-}
-.progress-status-box p {
-    margin: 0 !important;
-    font-size: 12.5px !important;
-    line-height: 1.55 !important;
-    color: #475569 !important;
-}
-.progress-status-box strong {
-    color: #4338ca !important;
-}
-
-/* ============ 统一字段标签：去掉默认的胶囊底色 ============ */
-.gradio-container span[data-testid="block-info"] {
-    background: transparent !important;
-    border: none !important;
-    padding: 0 !important;
-    color: #475569 !important;
-    font-size: 12px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.01em !important;
-}
-
-/* ============ 顶部面板内的 HTML 小标题 / 提示行 ============ */
-.setup-head-wrap,
-.upload-hint-wrap,
-.acc-hint-wrap {
-    padding: 0 !important;
-    margin: 0 !important;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    min-height: 0 !important;
-}
-.setup-head-wrap .html-container,
-.upload-hint-wrap .html-container,
-.acc-hint-wrap .html-container,
-.setup-head-wrap .prose,
-.upload-hint-wrap .prose,
-.acc-hint-wrap .prose {
-    padding: 0 !important;
-    margin: 0 !important;
-    border: none !important;
-    background: transparent !important;
-}
-
-/* ============ 执行按钮 ============ */
-button.btn-run {
-    width: 100% !important;
-    height: 42px !important;
-    min-height: 42px !important;
-    font-size: 14px !important;
-    letter-spacing: 0.04em !important;
-    border-radius: 9px !important;
-    margin-top: 2px !important;
-}
-.run-secondary-row {
-    gap: 6px !important;
-    margin-top: 6px !important;
-}
-.run-secondary-row button {
-    min-width: 0 !important;
-    flex: 1 1 0 !important;
-    height: 32px !important;
-    min-height: 32px !important;
-    padding: 0 6px !important;
-    font-size: 12px !important;
-    border-radius: 8px !important;
-}
-
-/* ============ 转录任务详报面板（与顶部设备胶囊同风格 · 自带滚动容器） ============ */
-.report-panel-wrap {
-    padding: 0 !important;
-    margin: 0 !important;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
-    min-height: 0 !important;
-}
-.report-panel-wrap .html-container,
-.report-panel-wrap .prose {
-    padding: 0 !important;
-    margin: 0 !important;
-    border: none !important;
-    background: transparent !important;
-}
-.report-panel {
-    border: 1px solid #e6ebf3;
-    border-left: 3px solid #a5b4fc;
-    border-radius: 10px;
-    background: #f8fafc;
-    padding: 12px 14px 12px 14px;
-}
-.report-panel-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding-bottom: 9px;
-    margin-bottom: 10px;
-    border-bottom: 1px solid #e9eef6;
-}
-.report-panel-title {
-    font-size: 12.5px;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-    color: #334155;
-}
-.report-panel-hint {
-    font-size: 11px;
-    color: #94a3b8;
-}
-.report-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    margin-bottom: 12px;
-}
-.report-metrics .device-chip {
-    height: 28px;
-    padding: 0 11px;
-    background: #ffffff;
-}
-.report-body {
-    max-height: min(58vh, 520px);
-    overflow-y: auto;
-    overscroll-behavior: auto;
-    padding-right: 8px;
-    scrollbar-width: thin;
-    scrollbar-color: #d3dced transparent;
-}
-.report-body::-webkit-scrollbar {
-    width: 8px;
-}
-.report-body::-webkit-scrollbar-track {
-    background: transparent;
-}
-.report-body::-webkit-scrollbar-thumb {
-    background: #dbe3ee;
-    border-radius: 4px;
-}
-.report-body::-webkit-scrollbar-thumb:hover {
-    background: #c3cfe0;
-}
-.rp-sec {
-    margin-bottom: 12px;
-}
-.rp-sec:last-child {
-    margin-bottom: 2px;
-}
-.rp-sec-head {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    flex-wrap: wrap;
-    padding-bottom: 6px;
-    margin-bottom: 6px;
-    border-bottom: 1px solid #e9eef6;
-}
-.rp-sec-head::before {
-    content: "";
-    width: 3px;
-    height: 11px;
-    border-radius: 2px;
-    background: #a5b4fc;
-    flex: none;
-    align-self: center;
-}
-.rp-sec-title {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    color: #334155;
-}
-.rp-sec-note {
-    font-size: 11.5px;
-    color: #64748b;
-}
-.rp-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 3px 0;
-    font-size: 12.5px;
-    line-height: 1.6;
-}
-.rp-row + .rp-row {
-    border-top: 1px dashed #e9eef6;
-}
-.rp-key {
-    flex: 0 0 auto;
-    min-width: 96px;
-    max-width: 40%;
-    color: #64748b;
-}
-.rp-val {
-    flex: 1 1 auto;
-    min-width: 0;
-    color: #1e293b;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    word-break: break-word;
-}
-.rp-val.is-accent {
-    color: #4338ca;
-    font-weight: 600;
-}
-.rp-note {
-    padding: 2px 0 6px 0;
-    font-size: 12px;
-    color: #475569;
-}
-.report-empty {
-    padding: 16px 4px;
-    font-size: 12.5px;
-    color: #94a3b8;
-}
-.report-raw-src {
-    display: none !important;
-}
-"""
+CSS_CUSTOM = (STATIC_DIR / "theme.css").read_text(encoding="utf-8")
 
 try:
     CUSTOM_THEME = gr.themes.Soft(
@@ -5144,7 +3118,89 @@ def _drop_broken_proxy(path: Path) -> None:
         pass
 
 
-def manual_transcode_proxy_generator(media_file, review_cues):
+def _human_bytes(num: int) -> str:
+    size = float(max(0, num))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit in {"B", "KB"} else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _tree_usage(path: Path) -> tuple[int, int]:
+    """返回 (文件数, 字节数)；目录不存在时返回 (0, 0)。"""
+    if not path.exists():
+        return 0, 0
+    files = 0
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                files += 1
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return files, total
+
+
+def _storage_stats() -> dict[str, tuple[int, int]]:
+    return {
+        "音频缓存": _tree_usage(audio_cache.CACHE_DIR),
+        "波形缓存": _tree_usage(PEAKS_CACHE_DIR),
+        "监看代理": _tree_usage(PROXIES_DIR),
+        "日志": _tree_usage(LOG_DIR),
+        "输出目录合计": _tree_usage(OUTPUT_DIR),
+    }
+
+
+def render_storage_report(note: str = "") -> str:
+    stats = _storage_stats()
+    rows = " ｜ ".join(
+        f"{name} `{_human_bytes(size)}`" for name, (_files, size) in stats.items()
+    )
+    state = "空闲" if JOB_REGISTRY.active() is None and not _PROXY_JOB_ACTIVE else "有任务在运行"
+    lines = [
+        f"**🧹 存储与缓存** ｜ 状态：`{state}`",
+        rows,
+    ]
+    if note:
+        lines.append(note)
+    lines.append(
+        "清理只会删除可再生的音频/波形缓存与 480p 代理；字幕、草稿、日志不会被动。"
+    )
+    return "\n\n".join(lines)
+
+
+def cleanup_storage(kind: str) -> str:
+    if JOB_REGISTRY.active() is not None or _PROXY_JOB_ACTIVE:
+        return render_storage_report("⚠️ 有转写/压制任务在运行，暂不清理。")
+    removed = 0
+    freed = 0
+    if kind == "caches":
+        targets = list(audio_cache.CACHE_DIR.glob("*.wav*")) + list(
+            PEAKS_CACHE_DIR.glob("*.npz")
+        )
+    elif kind == "proxies":
+        targets = list(PROXIES_DIR.glob("*.mp4")) + list(PROXIES_DIR.glob("*.part*"))
+    else:
+        return render_storage_report(f"⚠️ 未知的清理类型：{kind}")
+    for path in targets:
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            removed += 1
+            freed += size
+        except OSError:
+            continue
+    log.info("清理存储 | kind=%s | files=%s | freed=%s", kind, removed, _human_bytes(freed))
+    return render_storage_report(
+        f"✅ 已清理 {removed} 个文件，释放 `{_human_bytes(freed)}`。"
+    )
+
+
+def manual_transcode_proxy_generator(
+    media_file, review_cues, request: gr.Request | None = None
+):
     """带实时精准进度条的 480p 监看代理压制器（流式刷新左侧状态卡片）。
 
     重要：这里**不要**再用 ``progress=gr.Progress()`` 或调用 ``progress()``。
@@ -5154,7 +3210,11 @@ def manual_transcode_proxy_generator(media_file, review_cues):
     进度源：卡片按 0.3s 走真实百分比，原生追踪器却周期性地把 1 秒前的旧百分比贴上来，
     于是界面上就在两种形态之间反复横跳（19% ↔ 33%）。现在只保留卡片这一个进度源，
     事件侧用 ``show_progress="hidden"`` 彻底关掉原生追踪器。
+
+    子进程生命周期：ffmpeg 写到 ``*.part.mp4``，成功后才原子 rename 成正式代理；
+    客户端断开（GeneratorExit）会走 finally 终止 ffmpeg 并删除半成品。
     """
+    session = _session_hash(request)
     if not media_file:
         gr.Warning("⚠️ 请先在上方上传音视频文件。")
         yield gr.update(), "⚠️ 请先在上方上传音视频文件。"
@@ -5169,9 +3229,11 @@ def manual_transcode_proxy_generator(media_file, review_cues):
     file_size = media_path.stat().st_size if media_path.exists() else 0
     clean_stem = media_path.stem
     standard_proxy = PROXIES_DIR / f"{clean_stem}_{file_size}_preview.mp4"
+    partial_proxy = PROXIES_DIR / f"{clean_stem}_{file_size}_preview.part.mp4"
 
     if standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
         payload = build_review_payload(media_file, review_cues, include_peaks=True)
+        log.info("代理复用 | session=%s | %s", session, standard_proxy.name)
         gr.Info("⚡ 检测到已有历史压制代理，已秒级直接切换！")
         yield payload, f"🎉 **已秒级复用历史代理（{standard_proxy.name}）！** 画面已对齐，拖拽现已流畅秒开。"
         return
@@ -5186,42 +3248,75 @@ def manual_transcode_proxy_generator(media_file, review_cues):
         _PROXY_JOB_ACTIVE = True
 
     try:
+        log.info(
+            "代理压制开始 | session=%s | media=%s | size=%s",
+            session,
+            media_path.name,
+            file_size,
+        )
+        _drop_broken_proxy(partial_proxy)
+
         total_duration = 0.0
         try:
-            probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(media_path)],
-                capture_output=True,
-                text=True,
+            probe = run_command(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=nw=1:nk=1", str(media_path)],
                 timeout=20,
             )
             total_duration = max(0.0, float(probe.stdout.strip()))
         except Exception:
             total_duration = 0.0  # 探不到时长就走「不确定进度」，不要瞎猜 180 秒
 
-        cmd_hw = [
-            "ffmpeg", "-y",
-            "-hwaccel", "videotoolbox",
-            "-i", str(media_path),
-            "-vf", "scale=-2:480,format=yuv420p",
-            "-c:v", "h264_videotoolbox",
-            "-b:v", "2200k",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-movflags", "+faststart",
-            "-progress", "pipe:1",
-            str(standard_proxy)
-        ]
+        use_videotoolbox = sys.platform == "darwin"
+        if use_videotoolbox:
+            cmd_hw = [
+                "ffmpeg", "-y", "-nostdin",
+                "-hwaccel", "videotoolbox",
+                "-i", str(media_path),
+                "-vf", "scale=-2:480,format=yuv420p",
+                "-c:v", "h264_videotoolbox",
+                "-b:v", "2200k",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1",
+                str(partial_proxy),
+            ]
+            stage_text = "正在启动 VideoToolbox 硬件压制…"
+        else:
+            cmd_hw = [
+                "ffmpeg", "-y", "-nostdin", "-threads", "0",
+                "-i", str(media_path),
+                "-vf", "scale=-2:480,format=yuv420p",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "28",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1",
+                str(partial_proxy),
+            ]
+            stage_text = "正在启动 libx264 CPU 压制…"
 
         yield gr.update(), _render_proxy_progress_card(
-            None, 0, total_duration, "准备中…", "正在启动 VideoToolbox 硬件压制…", "初始化编码器"
+            None, 0, total_duration, "准备中…", stage_text, "初始化编码器"
         )
 
         proc = None
         ok = False
         max_out_s = 0.0
         current_speed = "1.0x"
+        err_tail = ""
+        err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         try:
-            proc = subprocess.Popen(cmd_hw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            proc = subprocess.Popen(
+                cmd_hw,
+                stdout=subprocess.PIPE,
+                stderr=err_file,
+                text=True,
+                bufsize=1,
+            )
             last_yield_time = time.time()
             last_pct = -1
 
@@ -5262,15 +3357,36 @@ def manual_transcode_proxy_generator(media_file, review_cues):
 
             proc.wait(timeout=10)
             ok = proc.returncode == 0
-        except Exception as exc:
-            logging.warning(f"VideoToolbox 实时压制异常: {exc}")
-            if proc:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        except GeneratorExit:
+            log.warning("客户端断开，终止代理压制 | session=%s", session)
+            raise
+        except Exception:
+            log.exception("代理实时压制异常 | session=%s", session)
+        finally:
+            if proc is not None and proc.poll() is None:
+                log.warning("终止代理 ffmpeg | session=%s | pid=%s", session, proc.pid)
+                terminate_process(proc)
+            try:
+                err_file.seek(0)
+                err_tail = tail(err_file.read(), 1500)
+            except Exception:
+                err_tail = ""
+            try:
+                err_file.close()
+            except Exception:
+                pass
 
-        if ok and standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
+        if ok:
+            try:
+                if partial_proxy.exists() and partial_proxy.stat().st_size > 50 * 1024:
+                    os.replace(partial_proxy, standard_proxy)
+                else:
+                    ok = False
+            except OSError:
+                log.exception("代理成片 rename 失败 | %s", partial_proxy.name)
+                ok = False
+
+        if ok:
             # 收尾阶段（算峰值、切画面）也占时间，先补一帧 100%，避免卡片停在 90% 看起来像卡死
             yield gr.update(), _render_proxy_progress_card(
                 100 if total_duration > 0 else None,
@@ -5281,27 +3397,50 @@ def manual_transcode_proxy_generator(media_file, review_cues):
                 "收尾：生成波形峰值",
             )
             payload = build_review_payload(media_file, review_cues, include_peaks=True)
+            log.info("代理压制完成 | session=%s | %s", session, standard_proxy.name)
             gr.Info(f"🎉 480p 监看代理压制成功（{standard_proxy.name}）！")
             yield payload, f"🎉 **480p 监看代理压制成功！** 已自动切换为轻量代理（`{standard_proxy.name}`），视频拖拽现已流畅秒开。"
             return
 
-        # 硬解失败：删掉半成品再走回退链，避免下次点击复用到一个截断文件
-        _drop_broken_proxy(standard_proxy)
+        _drop_broken_proxy(partial_proxy)
+        log.warning("标准代理压制失败 | session=%s | stderr=%s", session, err_tail)
         yield gr.update(), _render_proxy_progress_card(
-            None, 0, total_duration, "回退模式", "VideoToolbox 直通失败，正在切换回退压制…", "软解 + 硬件编码（不确定进度）"
+            None, 0, total_duration, "回退模式", "标准压制失败，正在切换回退压制…", "软解编码（不确定进度）"
         )
-        proxy_fallback = create_m4pro_hardware_proxy(media_path)
-        if proxy_fallback and proxy_fallback.exists():
+        try:
+            proxy_fallback = create_m4pro_hardware_proxy(
+                media_path, dest=partial_proxy
+            )
+        except CommandCancelled:
+            log.warning("代理回退压制已取消 | session=%s", session)
+            yield gr.update(), "⚠️ 代理压制已取消。"
+            return
+        if (
+            proxy_fallback
+            and proxy_fallback.exists()
+            and proxy_fallback.stat().st_size > 50 * 1024
+        ):
+            try:
+                os.replace(partial_proxy, standard_proxy)
+            except OSError:
+                log.exception("回退代理 rename 失败 | %s", partial_proxy.name)
+                _drop_broken_proxy(partial_proxy)
+                gr.Warning("⚠️ 代理压制未能成功，继续保持原片监看。")
+                yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
+                return
             payload = build_review_payload(media_file, review_cues, include_peaks=True)
-            gr.Info(f"🎉 回退方案压制成功（{proxy_fallback.name}）！")
-            yield payload, f"🎉 **480p 代理生成成功（回退方案）！** 已切换为轻量代理（`{proxy_fallback.name}`），拖拽现已流畅秒开。"
+            log.info("代理回退压制完成 | session=%s | %s", session, standard_proxy.name)
+            gr.Info(f"🎉 回退方案压制成功（{standard_proxy.name}）！")
+            yield payload, f"🎉 **480p 代理生成成功（回退方案）！** 已切换为轻量代理（`{standard_proxy.name}`），拖拽现已流畅秒开。"
         else:
+            log.warning("代理压制最终失败 | session=%s", session)
             gr.Warning("⚠️ 代理压制未能成功，继续保持原片监看。")
             yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
     finally:
+        # 成功时 partial 已被 rename；失败/断连时清掉半成品，避免下次被当成历史代理。
+        _drop_broken_proxy(partial_proxy)
         with _PROXY_JOB_LOCK:
             _PROXY_JOB_ACTIVE = False
-
 
 with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEME, css=CSS_CUSTOM) as demo:
     with gr.Row(elem_classes=["app-header"]):
@@ -5348,8 +3487,11 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
                 )
                 preset_pick = gr.Dropdown(
                     choices=preset_choices_list(),
-                    value=preset_choices_list()[0][1] if STORE.names() else None,
-                    label="选择已保存的方案",
+                    # 不要预选第一个预设：它既不会被自动载入，又会让人误以为
+                    # 当前参数就是该预设（默认引擎是 Whisper，而第一个预设常常是 Qwen）。
+                    value=None,
+                    label="选择已保存的方案（点「载入」后才会应用）",
+                    info="当前参数以「当前生效参数」条为准；选择预设后需点「📥 载入」。",
                 )
                 with gr.Row(elem_classes=["preset-btn-row"]):
                     load_btn = gr.Button("📥 载入", variant="secondary", elem_classes=["btn-subtle"])
@@ -5760,6 +3902,43 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             download = gr.File(label="本次转写直接下载", scale=1)
             saved_path = gr.Textbox(label="本地生成完整路径", interactive=False, scale=2)
 
+    with gr.Accordion("🧹 存储与缓存管理", open=False, elem_classes=["clean-accordion"]):
+        storage_box = gr.Markdown(
+            render_storage_report(), elem_classes=["progress-status-box"]
+        )
+        with gr.Row():
+            storage_refresh_btn = gr.Button(
+                "🔄 刷新占用", size="sm", variant="secondary"
+            )
+            storage_clean_cache_btn = gr.Button(
+                "🧹 清理音频/波形缓存", size="sm", variant="secondary"
+            )
+            storage_clean_proxy_btn = gr.Button(
+                "🧹 清理 480p 代理", size="sm", variant="secondary"
+            )
+
+    storage_refresh_btn.click(
+        render_storage_report,
+        inputs=None,
+        outputs=storage_box,
+        queue=False,
+        api_name=False,
+    )
+    storage_clean_cache_btn.click(
+        lambda: cleanup_storage("caches"),
+        inputs=None,
+        outputs=storage_box,
+        queue=False,
+        api_name=False,
+    )
+    storage_clean_proxy_btn.click(
+        lambda: cleanup_storage("proxies"),
+        inputs=None,
+        outputs=storage_box,
+        queue=False,
+        api_name=False,
+    )
+
     validate_params()
     PARAM_COMPONENTS = [spec.component for spec in PARAMS]
 
@@ -5819,6 +3998,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             undo_stack_state,
             redo_stack_state,
         ],
+        show_progress="hidden",
         api_name=False,
     ).then(
         None,

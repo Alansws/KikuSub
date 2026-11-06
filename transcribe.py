@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 import tempfile
 import threading
 import warnings
@@ -45,10 +44,19 @@ import torch
 from silero_vad import get_speech_timestamps, load_silero_vad
 
 import audio_cache
+from procutil import CommandCancelled, CommandTimeout, run_command, tail
+
+log = logging.getLogger(__name__)
+
+# 模型加载/下载是进程级单例操作；并发首次调用不能各自 from_pretrained 一份权重。
+_MODEL_LOAD_LOCK = threading.Lock()
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 SAMPLE_RATE = 16000
+# 单条 ffmpeg 解码命令的硬超时。音频解码通常远快于实时，30 分钟足够覆盖
+# 数小时素材；超时说明输入/解码器异常，不应无限占用工作线程。
+FFMPEG_DECODE_TIMEOUT_S = 1800.0
 
 ROOT = Path(__file__).resolve().parent
 MODELS_DIR = ROOT / "models"
@@ -79,8 +87,7 @@ def download_anime_whisper(dest: Path, progress_cb=None) -> Path:
     if progress_cb:
         progress_cb(0.005, f"首次运行：正在从国内镜像高速下载 {ANIME_WHISPER_REPO}（支持断点续传）…")
     
-    print(f"\n[模型加速下载] 正在通过国内镜像 (hf-mirror.com) 下载 {ANIME_WHISPER_REPO} 到 {dest} ...")
-    print("[模型加速下载] 提示：如果之前已下载部分数据，将自动触发断点续传，无需从头下载。")
+    log.info("模型下载开始 repo=%s dest=%s endpoint=%s", ANIME_WHISPER_REPO, dest, os.environ.get("HF_ENDPOINT", ""))
     dest.mkdir(parents=True, exist_ok=True)
     
     snapshot_download(
@@ -89,7 +96,7 @@ def download_anime_whisper(dest: Path, progress_cb=None) -> Path:
         ignore_patterns=["figs/*", "*.png", ".gitattributes"],
         max_workers=2,
     )
-    print(f"[模型加速下载] {ANIME_WHISPER_REPO} 权重下载完成！")
+    log.info("模型下载完成 repo=%s dest=%s", ANIME_WHISPER_REPO, dest)
     return dest
 
 
@@ -294,6 +301,8 @@ class VadStats:
     chars: int = 0
     cut_s: float = 0.0
     cut_driver: str = ""
+    hallucinations: int = 0
+    suspect_cues: int = 0
 
     @property
     def speech_ratio(self) -> float:
@@ -305,12 +314,16 @@ class VadStats:
 
     def describe(self) -> str:
         cut = f"｜实际切分边界 {self.cut_s * 1000:.0f}ms（由{self.cut_driver}决定）" if self.cut_s else ""
+        hallucination = f"｜丢弃疑似幻觉 {self.hallucinations} 段" if self.hallucinations else ""
+        suspect = f"｜疑似幻觉待复核 {self.suspect_cues} 段" if self.suspect_cues else ""
         return (
             f"VAD 语音占比 {self.speech_ratio * 100:.1f}%"
             f"（送模音频占比 {self.covered_ratio * 100:.1f}%）"
             f"｜{self.segments} 个切片 → 产出 {self.cues} 条字幕 / {self.chars} 字"
             f"｜音频总长 {self.audio_s:.1f}s"
             f"{cut}"
+            f"{hallucination}"
+            f"{suspect}"
         )
 
 
@@ -439,14 +452,15 @@ def detect_dtype(device: str) -> torch.dtype:
 
 
 def format_srt_timestamp(seconds: float) -> str:
-    seconds = max(0.0, seconds)
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int(round((seconds - int(seconds)) * 1000))
-    if millis == 1000:
-        secs += 1
-        millis = 0
+    """秒 → SRT 时间戳。
+
+    先把整段换算成毫秒再分解，避免 `59.9996` 这类值被四舍五入成
+    `00:00:60,000`（旧实现只给秒 +1，没有处理分/时进位）。
+    """
+    total_ms = int(round(max(0.0, float(seconds)) * 1000))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, millis = divmod(rem, 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
@@ -483,9 +497,14 @@ def decode_wav_16k(
     enable_loudnorm: bool = True,
     start_time_s: float | None = None,
     end_time_s: float | None = None,
+    cancel_event=None,
 ) -> None:
-    """真正调用 ffmpeg 解码出 16k mono wav（缓存层与降级路径共用）。"""
-    cmd = ["ffmpeg", "-y"]
+    """真正调用 ffmpeg 解码出 16k mono wav（缓存层与降级路径共用）。
+
+    ``cancel_event`` 可以是 ``threading.Event`` 或 ``jobs.CancelToken``；
+    ``run_command`` 会轮询它并在取消/超时时终止 ffmpeg 子进程。
+    """
+    cmd = ["ffmpeg", "-y", "-nostdin"]
 
     if start_time_s is not None and start_time_s > 0:
         cmd.extend(["-ss", f"{start_time_s:.3f}"])
@@ -513,28 +532,63 @@ def decode_wav_16k(
         str(output_wav),
     ])
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        fallback_cmd = ["ffmpeg", "-y"]
-        if start_time_s is not None and start_time_s > 0:
-            fallback_cmd.extend(["-ss", f"{start_time_s:.3f}"])
-        fallback_cmd.extend(["-i", str(input_path)])
-        if end_time_s is not None:
-            start_val = start_time_s or 0.0
-            fallback_cmd.extend(["-t", f"{max(0.1, end_time_s - start_val):.3f}"])
-        fallback_cmd.extend([
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            str(SAMPLE_RATE),
-            "-c:a",
-            "pcm_s16le",
-            str(output_wav),
-        ])
-        fallback_proc = subprocess.run(fallback_cmd, capture_output=True, text=True)
-        if fallback_proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg 提取音频失败:\n{fallback_proc.stderr[-2000:]}")
+    try:
+        proc = run_command(
+            cmd,
+            timeout=FFMPEG_DECODE_TIMEOUT_S,
+            cancel_event=cancel_event,
+        )
+    except CommandCancelled:
+        raise
+    except CommandTimeout as exc:
+        raise RuntimeError(
+            f"ffmpeg 解码超时（>{FFMPEG_DECODE_TIMEOUT_S:.0f}s）：{tail(exc.stderr)}"
+        ) from exc
+    except Exception as exc:
+        log.warning("主解码命令启动失败，尝试回退：%s", exc)
+        proc = None
+
+    if proc is not None and proc.returncode == 0:
+        return
+
+    if proc is not None:
+        log.warning(
+            "主解码命令返回 %s，尝试回退：%s",
+            proc.returncode,
+            tail(proc.stderr, 800),
+        )
+
+    fallback_cmd = ["ffmpeg", "-y", "-nostdin"]
+    if start_time_s is not None and start_time_s > 0:
+        fallback_cmd.extend(["-ss", f"{start_time_s:.3f}"])
+    fallback_cmd.extend(["-i", str(input_path)])
+    if end_time_s is not None:
+        start_val = start_time_s or 0.0
+        fallback_cmd.extend(["-t", f"{max(0.1, end_time_s - start_val):.3f}"])
+    fallback_cmd.extend([
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(SAMPLE_RATE),
+        "-c:a",
+        "pcm_s16le",
+        str(output_wav),
+    ])
+    try:
+        fallback_proc = run_command(
+            fallback_cmd,
+            timeout=FFMPEG_DECODE_TIMEOUT_S,
+            cancel_event=cancel_event,
+        )
+    except CommandCancelled:
+        raise
+    except CommandTimeout as exc:
+        raise RuntimeError(
+            f"ffmpeg 解码超时（>{FFMPEG_DECODE_TIMEOUT_S:.0f}s）：{tail(exc.stderr)}"
+        ) from exc
+    if fallback_proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg 提取音频失败:\n{tail(fallback_proc.stderr)}")
 
 
 def extract_audio_16k(
@@ -543,6 +597,7 @@ def extract_audio_16k(
     enable_loudnorm: bool = True,
     start_time_s: float | None = None,
     end_time_s: float | None = None,
+    cancel_event=None,
 ) -> Path:
     """取得 16k mono wav 路径：优先复用缓存，关闭缓存或缓存不可用时现场解码。"""
     if audio_cache.enabled():
@@ -553,7 +608,11 @@ def extract_audio_16k(
                 start=start_time_s,
                 end=end_time_s,
                 extractor=decode_wav_16k,
+                cancel_event=cancel_event,
             )
+        except CommandCancelled:
+            # 取消不应触发“回退为现场解码”——那等于无视用户的取消。
+            raise
         except Exception as exc:
             if output_wav is None:
                 raise
@@ -561,7 +620,14 @@ def extract_audio_16k(
 
     if output_wav is None:
         raise ValueError("未启用音频缓存时必须提供 output_wav 路径")
-    decode_wav_16k(input_path, output_wav, enable_loudnorm, start_time_s, end_time_s)
+    decode_wav_16k(
+        input_path,
+        output_wav,
+        enable_loudnorm,
+        start_time_s,
+        end_time_s,
+        cancel_event=cancel_event,
+    )
     return Path(output_wav)
 
 
@@ -572,6 +638,7 @@ def load_audio_for_transcription(
     start_time_s: float | None = None,
     end_time_s: float | None = None,
     tmp_prefix: str = "kikusub-",
+    cancel_event=None,
 ) -> np.ndarray:
     """取送模用的 16k 单声道数组：缓存开启时直接读缓存，关闭时走临时目录。"""
     if audio_cache.enabled():
@@ -581,6 +648,7 @@ def load_audio_for_transcription(
             enable_loudnorm=enable_loudnorm,
             start_time_s=start_time_s,
             end_time_s=end_time_s,
+            cancel_event=cancel_event,
         )
         return load_wav_mono(wav_path)
 
@@ -591,6 +659,7 @@ def load_audio_for_transcription(
             enable_loudnorm=enable_loudnorm,
             start_time_s=start_time_s,
             end_time_s=end_time_s,
+            cancel_event=cancel_event,
         )
         return load_wav_mono(wav_path)
 
@@ -799,6 +868,30 @@ def _retry_suspicious(text: str, dur_s: float, prev_text: str) -> bool:
         return True
     prev_compact = re.sub(r"\s+", "", prev_text or "")
     return len(compact) > RETRY_REPEAT_MIN_CHARS and compact == prev_compact
+
+
+def hallucination_risk(text: str, dur_s: float, chunk: np.ndarray | None) -> bool:
+    """判断一段解码结果是否值得用“带时间戳”模式复核。
+
+    典型命中：`じゅるっ、じゅるっ…` 这样的病理性复读；或极短（<=2 字）且
+    时长 <0.9s 的 cue。后者可能是“はい”这类正常短句，所以只做复核、不直接丢：
+    时间戳模式通常会把纯噪声/音乐段解成「…」，据此丢弃。
+    """
+    compact = re.sub(r"\s+", "", text or "")
+    if not compact:
+        return False
+    # 复读常带标点（「じゅるっ、じゅるっ、…」），先去掉标点再匹配连续单元。
+    repeat_probe = re.sub(r"[\s、。．，,\.!?！？…‥・〜]+", "", text or "")
+    if REPEATED_CHUNK_RE.search(repeat_probe):
+        return True
+    # 短段（<1.2s）无论字数多少都复核：正常短句在时间戳模式下会保留，
+    # 噪声/音乐段通常解成「…」。短段复核成本很低。
+    if dur_s < 1.2 and len(compact) >= 2:
+        return True
+    # 长段却只吐出极少量字（「…信じる」3 字 / 8 秒）：大概率是非对白段。
+    if dur_s >= 2.0 and len(compact) / dur_s < 0.8:
+        return True
+    return False
 
 
 def sanitize_pathological_repeats(text: str) -> str:
@@ -1067,36 +1160,43 @@ class AnimeWhisperEngine:
     def load(self, progress_cb=None) -> None:
         if self._pipe is not None:
             return
-        
-        self.ensure_model(progress_cb=progress_cb)
-        
-        if not model_ready(MODEL_DIR):
-            raise FileNotFoundError(
-                f"未能成功获取 litagin/anime-whisper 权重（{MODEL_DIR}）。\n"
-                "请检查网络连接或代理，也可手动指定 ANIME_WHISPER_MODEL。"
+
+        with _MODEL_LOAD_LOCK:
+            # 双检：等锁期间另一个线程可能已经加载完成。
+            if self._pipe is not None:
+                return
+
+            self.ensure_model(progress_cb=progress_cb)
+
+            if not model_ready(MODEL_DIR):
+                raise FileNotFoundError(
+                    f"未能成功获取 litagin/anime-whisper 权重（{MODEL_DIR}）。\n"
+                    "请检查网络连接或代理，也可手动指定 ANIME_WHISPER_MODEL。"
+                )
+
+            if progress_cb:
+                progress_cb(0.015, "模型权重就绪，正在加载至加速设备…")
+
+            from transformers import pipeline
+
+            self._vad = load_silero_vad()
+            pipe_kwargs = dict(
+                model=str(MODEL_DIR),
+                device=self.device,
+                chunk_length_s=None,
             )
+            try:
+                pipe = pipeline("automatic-speech-recognition", dtype=self.dtype, **pipe_kwargs)
+            except TypeError:
+                pipe = pipeline("automatic-speech-recognition", torch_dtype=self.dtype, **pipe_kwargs)
 
-        if progress_cb:
-            progress_cb(0.015, "模型权重就绪，正在加载至加速设备…")
+            if hasattr(pipe, "tokenizer") and pipe.tokenizer is not None:
+                pipe.tokenizer.clean_up_tokenization_spaces = False
 
-        from transformers import pipeline
-
-        self._vad = load_silero_vad()
-        pipe_kwargs = dict(
-            model=str(MODEL_DIR),
-            device=self.device,
-            chunk_length_s=None,
-        )
-        try:
-            self._pipe = pipeline("automatic-speech-recognition", dtype=self.dtype, **pipe_kwargs)
-        except TypeError:
-            self._pipe = pipeline("automatic-speech-recognition", torch_dtype=self.dtype, **pipe_kwargs)
-
-        if hasattr(self._pipe, "tokenizer") and self._pipe.tokenizer is not None:
-            self._pipe.tokenizer.clean_up_tokenization_spaces = False
-
-        if hasattr(self._pipe.model, "generation_config") and self._pipe.model.generation_config is not None:
-            self._pipe.model.generation_config.forced_decoder_ids = None
+            if hasattr(pipe.model, "generation_config") and pipe.model.generation_config is not None:
+                pipe.model.generation_config.forced_decoder_ids = None
+            # 最后再赋值：加载中途失败时 _pipe 保持 None，下一次还能重试。
+            self._pipe = pipe
 
     def transcribe_file(
         self,
@@ -1118,13 +1218,21 @@ class AnimeWhisperEngine:
         if progress_cb:
             slice_desc = f"（片段：{start_time_s or 0.0:.1f}s ~ {end_time_s:.1f}s）" if end_time_s else ""
             progress_cb(0.02, f"正在提取 16kHz 音频并进行动态响度优化{slice_desc}…")
-        audio = load_audio_for_transcription(
-            media_path,
-            enable_loudnorm=cfg.enable_loudnorm,
-            start_time_s=start_time_s,
-            end_time_s=end_time_s,
-            tmp_prefix="anime-whisper-",
-        )
+        audio = None
+        try:
+            audio = load_audio_for_transcription(
+                media_path,
+                enable_loudnorm=cfg.enable_loudnorm,
+                start_time_s=start_time_s,
+                end_time_s=end_time_s,
+                tmp_prefix="anime-whisper-",
+                cancel_event=cancel_event,
+            )
+        except CommandCancelled:
+            self.last_interrupted = True
+            if progress_cb:
+                progress_cb(0.99, "🛑 已取消音频解码…")
+            return []
         return self._transcribe_array(
             audio,
             config=cfg,
@@ -1173,7 +1281,15 @@ class AnimeWhisperEngine:
             snap_stats=self.last_segment_stats,
         )
         if not segments:
-            segments = [(0, len(audio))]
+            # VAD 没命中任何语音时**不要**把整段音频兜底送模。
+            # 旧行为 segments = [(0, len(audio))] 会把静音/雨声/纯音乐整段交给
+            # Whisper，模型在这类非语音输入上会稳定地产出「すぅう…」这类幻觉字幕，
+            # 而且能突破 max_segment_s（实测 30s 静音段直接送模）。
+            # 这里返回空结果，由上层统一提示「未检测到有效语音」。
+            if progress_cb:
+                progress_cb(0.95, "未检测到有效语音（VAD 未命中任何语音段）…")
+            self.last_stats = VadStats(audio_s=len(audio) / SAMPLE_RATE)
+            return []
 
         ngram_val = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
         penalty_val = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
@@ -1201,14 +1317,16 @@ class AnimeWhisperEngine:
         total = len(segments)
         prev_text = ""
 
-        def _decode(buf: np.ndarray) -> str:
+        def _decode(buf: np.ndarray, *, timestamps: bool = False) -> str:
             res = self._pipe(
                 {"array": buf, "sampling_rate": SAMPLE_RATE},
                 generate_kwargs=generate_kwargs,
-                return_timestamps=False,
+                return_timestamps=bool(timestamps),
             )
             return (res.get("text") or "").strip()
 
+        hallucination_drops = 0
+        suspect_cues = 0
         for i, (start, end) in enumerate(segments, start=1):
             if cancel_event and cancel_event.is_set():
                 self.last_interrupted = True
@@ -1241,6 +1359,27 @@ class AnimeWhisperEngine:
                     text, reason = "", "retry-suspicious"
                 elif _is_blank(text):
                     reason = "empty-after-retry"
+
+            if not _is_blank(text) and hallucination_risk(text, seg_dur_s, chunk):
+                try:
+                    verified = _decode(chunk, timestamps=True)
+                except Exception:
+                    log.debug("时间戳复核失败，保留原结果", exc_info=True)
+                    verified = text
+                if _is_blank(verified):
+                    hallucination_drops += 1
+                    log.info(
+                        "丢弃疑似幻觉段 | %.2fs | %r",
+                        seg_dur_s,
+                        text[:60],
+                    )
+                    continue
+                suspect_cues += 1
+                log.info(
+                    "疑似幻觉（保留待复核） | %.2fs | %r",
+                    seg_dur_s,
+                    text[:60],
+                )
 
             if _is_blank(text):
                 self.last_missed_spans.append({
@@ -1289,7 +1428,11 @@ class AnimeWhisperEngine:
             chars=sum(len(c.text) for c in cues),
             cut_s=cut_s,
             cut_driver=cut_driver,
+            hallucinations=hallucination_drops,
+            suspect_cues=suspect_cues,
         )
+        self.last_segment_stats["hallucination_drops"] = hallucination_drops
+        self.last_segment_stats["suspect_cues"] = suspect_cues
 
         if progress_cb and not self.last_interrupted:
             progress_cb(0.98, "正在整理字幕…")

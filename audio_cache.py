@@ -13,6 +13,7 @@ import hashlib
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -79,6 +80,7 @@ def ensure_wav(
     start: float | None = None,
     end: float | None = None,
     extractor: Extractor | None = None,
+    cancel_event=None,
 ) -> Path:
     """返回可用的 16k mono wav 路径；未命中时解码并原子落盘。"""
     target = wav_path(media, loudnorm=loudnorm, start=start, end=end)
@@ -91,7 +93,11 @@ def ensure_wav(
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     # 必须保留 .wav 扩展名，否则 ffmpeg 无法推断输出容器格式
-    partial = target.with_name(f"{target.stem}.{os.getpid()}.part.wav")
+    # PID 不足以区分同进程内的并发请求（两个标签页/核对台与转写同时命中同一键），
+    # 追加随机后缀，避免两个 ffmpeg 同时写同一个 partial。
+    partial = target.with_name(
+        f"{target.stem}.{os.getpid()}.{uuid.uuid4().hex[:8]}.part.wav"
+    )
     decode = extractor or _default_extractor()
     try:
         decode(
@@ -100,6 +106,7 @@ def ensure_wav(
             enable_loudnorm=loudnorm,
             start_time_s=start,
             end_time_s=end,
+            cancel_event=cancel_event,
         )
         if not partial.exists() or partial.stat().st_size <= 44:
             raise RuntimeError(f"解码产出为空: {partial.name}")
