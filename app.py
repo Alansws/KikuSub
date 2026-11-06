@@ -1240,11 +1240,8 @@ def transcribe_media(
                 ratio = max(last_ratio, max(0.0, min(1.0, ratio)))
                 last_ratio = ratio
                 pct = int(ratio * 100)
-                try:
-                    progress(min(1.0, max(0.0, ratio)), desc=msg)
-                except Exception:
-                    log.debug("原生进度更新失败（不影响状态卡片）", exc_info=True)
-                status_html = f"⏳ **处理进度 [{pct}%]**：{msg}"
+                # 只保留「3 输出与执行」里这一处进度卡片（下方报告区禁止再出现进度条）。
+                status_html = _render_transcribe_progress_card(pct, msg)
                 yield (
                     gr.update(),
                     gr.update(),
@@ -1257,10 +1254,6 @@ def transcribe_media(
                 )
             elif tag == "done":
                 table_data, preview, p1, p2, state_cues, status_summary, report_text, final_progress = item[1]
-                try:
-                    progress(1.0, desc="完成")
-                except Exception:
-                    pass
                 finished_normally = True
                 yield (
                     table_data,
@@ -3062,6 +3055,28 @@ def _format_time_simple(seconds: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _render_transcribe_progress_card(pct: int, message: str) -> str:
+    """渲染「3 输出与执行」里的唯一进度卡片。
+
+    进度只允许这一个数据源：Gradio 原生追踪器（``progress()`` + ``show_progress="full"``）
+    会同时渲染进所有 output 组件，于是「全片转录原始结果」报告区及以下会多出好几条
+    刷新节奏不同的进度条，与这张卡片反复横跳。事件侧已改为 ``show_progress="hidden"``，
+    所以这里用纯 div 自绘进度条，并保持百分比单调（由调用方取 max）。
+    """
+    pct_clamped = max(0, min(100, int(pct)))
+    return (
+        '<div class="transcribe-progress-card">'
+        '<div class="tpc-head">'
+        f'<div class="tpc-stage">⏳ {html.escape(message)}</div>'
+        f'<b class="tpc-pct">{pct_clamped}%</b>'
+        "</div>"
+        '<div class="tpc-track">'
+        f'<div class="tpc-fill" style="width:{pct_clamped}%;"></div>'
+        "</div>"
+        "</div>"
+    )
+
+
 def _render_proxy_progress_card(
     pct: int | None,
     current_s: float,
@@ -4434,6 +4449,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         inputs=None,
         outputs=[run_btn, stop_btn, transcribe_progress],
         js=set_transcribing_start_js,
+        show_progress="hidden",
         api_name=False,
     ).then(
         transcribe_media,
@@ -4448,7 +4464,10 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             *PARAM_COMPONENTS,
         ],
         outputs=[cue_table, preview, download, saved_path, cues_state, status, report_box, transcribe_progress],
-        show_progress="full",
+        # 必须保持 hidden：原生追踪器会给每个 output 组件各画一条进度条，
+        # 报告区与下方表格就会出现与顶部卡片错拍的重复进度条。
+        # 进度只走 transcribe_progress 里的 _render_transcribe_progress_card。
+        show_progress="hidden",
         api_name=False,
     ).then(
         lambda: (
@@ -4459,6 +4478,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         inputs=None,
         outputs=[run_btn, stop_btn, clean_btn],
         js=set_transcribing_end_js,
+        show_progress="hidden",
         api_name=False,
     )
 
