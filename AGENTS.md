@@ -71,7 +71,10 @@ python app.py
 
 报告里的三类清单只是归档；用户实际逐条核对用的是 `static/qa_panel.html` + `static/qa_panel.js` 的浮动队列。改这块时必须保持以下契约：
 
-- **单一数据源**：队列 JSON 只走隐藏 Textbox `#qa-payload`（字段 `items/statuses/counts/latest_cue_count/hidden_missed/revision/last_action`）。前端所有动作写入 `#qa-cmd` 后点击 `#btn-hidden-qa`，由 `qa_apply_action()` 统一处理；不要为每个按钮注册 Gradio 事件。
+- **单一数据源**：队列 JSON 只走隐藏 Textbox `#qa-payload`（字段 `items/statuses/counts/latest_cue_count/hidden_missed/revision/last_action`，以及运行态元数据 `phase/engine/coverage/scanned/transcribed_at`）。前端所有动作写入 `#qa-cmd` 后点击 `#btn-hidden-qa`，由 `qa_apply_action()` 统一处理；不要为每个按钮注册 Gradio 事件。元数据在处理动作里必须原样带回（`qa_apply_action()` 已透传），否则入口会退回 idle。
+- **入口与内容解耦（2026-11 修订）**：`data-mode="hidden"` 只允许出现在「没有媒体且 `phase=idle`」时。`phase` 取 `idle|running|done`：媒体载入后 `idle` 就要显示「质检 · 待转写」浮标；`done` 即使 `items` 为空也必须保留「✅ 质检完成 · 0 处待核」，禁止再用 `items.length ? ... : 'hidden'` 把功能整体隐藏。0 条是「检查完成」的正结果，不是「功能不存在」。
+- **空态必须自解释**：`items` 为 0 时面板不能空白。`renderEmpty()` 要同时给出「本次检查了多少切片/字幕」（`scanned`）、三类检查各自的「已检查 / 本引擎不启用」状态（`coverage`）和入口常驻说明；`#qa-fab-text` 在 `phase=done` 且 0 条时固定为「质检完成 · 0 处待核」。空态面板只在**用户第一次遇到**（`localStorage` 的 `kikusub.qa.emptyHintShown.v1`）且 `transcribed_at` 晚于本次页面加载时自动展开一次；刷新页面恢复旧 payload、之后的干净运行都只更新绿色浮标，不得反复弹窗。
+- **引擎能力必须如实声明**：`coverage.dropped/suspect` 只在 Anime Whisper 下为 true；Qwen 只覆盖 `missed`。禁止为了“看起来功能齐全”给 Qwen 伪造 dropped/suspect 条目，也禁止把「不启用」写成「未发现」——`_audit_coverage()` 是唯一真源，报告与空态都读它。
 - **事件闭包必须是动态的**：`qa_payload.change` 可能在页面加载时先发一次空 payload。所有点击回调只能从 `window.__qaRuntime.items/data` 取最新数据，禁止在首次绑定时把 `items` 闭包进回调（否则真实队列到达后，按钮仍认为“没有待核项”，面板会被空事件隐藏）。
 - **三类语义不可混淆**：`missed`（有声音但识别为空）只能“补录/不是台词”；`dropped`（识别出过文字但复核为空被删）只能“恢复原句/重新识别/确认删除”；`suspect`（保留但短/低密度）只能“定位编辑/保留/删除”。新增动作要同时更新 `qa_apply_action()` 的 `last_action.message` 与前端 `resolutions` 文案。
 - **进度只在同一次运行内恢复**：`write_audit_payload()` 在每次动作后原子写 `outputs/{stem}.qa.json`；`AUDIT_SESSION_ID` 在进程启动时生成并写入 payload，`load_audit_payload()` 遇到旧进程的 session 一律返回空队列。因此刷新页面/重开媒体可继续，**重启应用后默认清空**；新一轮转写重置状态也是预期行为。

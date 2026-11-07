@@ -45,7 +45,7 @@ You upload a file, the app segments speech with Silero VAD, transcribes each seg
 - Undo / redo for the last 50 review operations, covering delete, update, insert, clear, import and append
 - Autosave and resume: `*.autosave_draft.srt` plus `*.progress.json`; re-importing jumps back to the line you last edited
 - Import an external SRT as a baseline, then merge results either by replacing the baseline or by appending only new cues
-- **QA queue**: after a run, a floating dock merges "possible missed line / deleted by hallucination check / short line to confirm" into one time-ordered list. Each item can be listened to, auto-selected on the waveform, patched in, restored, or deleted; progress is saved to `*.qa.json` and survives a reload within the same app run; restarting the app starts with an empty queue
+- **QA queue**: after a run, a floating dock merges "possible missed line / deleted by hallucination check / short line to confirm" into one time-ordered list. Each item can be listened to, auto-selected on the waveform, patched in, restored, or deleted; progress is saved to `*.qa.json` and survives a reload within the same app run; restarting the app starts with an empty queue. The entry point is independent of the item count: once media is loaded it shows "QA · waiting for transcription", and a finished run with **0 items** stays visible as "✅ QA complete" instead of disappearing. The Qwen engine covers only "possible missed line"; the other two checks are explicitly marked as unavailable for that engine
 
 **Other**
 

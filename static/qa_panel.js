@@ -33,6 +33,10 @@
       S.signature = '';
       S.pendingId = null;
       S.note = '';
+      // 用于区分「页面加载时恢复的旧队列」和「本次页面加载后才跑完的新转写」：
+      // 只有后者在 0 处待核时才考虑自动展开，刷新页面不会反复弹。
+      S.pageLoadAt = Date.now() / 1000;
+      S.emptyHintShown = false;
       try {
         const pref = JSON.parse(localStorage.getItem('kikusub.qa.prefs.v1') || '{}');
         if (typeof pref.filter === 'string') S.filter = pref.filter;
@@ -47,6 +51,17 @@
           filter: S.filter, autoNext: S.autoNext, pinned: S.pinned,
         }));
       } catch (_) {}
+    };
+
+    // 「0 处待核」的面板只在第一次遇到时自动展开，之后收成绿色浮标。
+    // 否则每跑一段短视频都弹一次，会变成打扰。
+    const emptyHintSeen = () => {
+      if (S.emptyHintShown) return true;
+      try { return localStorage.getItem('kikusub.qa.emptyHintShown.v1') === '1'; } catch (_) { return false; }
+    };
+    const rememberEmptyHint = () => {
+      S.emptyHintShown = true;
+      try { localStorage.setItem('kikusub.qa.emptyHintShown.v1', '1'); } catch (_) {}
     };
 
     const esc = (text) => String(text == null ? '' : text).replace(/[&<>"']/g, c => ({
@@ -74,6 +89,22 @@
     const isPending = (it) => statusOf(it) === 'pending';
     const kindOf = (it) => kinds[it.kind] || { icon: '•', name: '待核', cls: 'kind-other' };
     const resolutionLabel = (it) => resolutions[it.resolution] || (statusOf(it) === 'skipped' ? '已跳过' : '已处理');
+
+    // ── 运行态与能力声明（入口是否常驻由 phase 决定，不再由 items 是否有内容决定）──
+    const phaseOf = () => {
+      const phase = String(RT.data.phase || '');
+      if (phase === 'idle' || phase === 'running' || phase === 'done') return phase;
+      return RT.items.length ? 'done' : 'idle';
+    };
+    const hasMedia = () => Boolean(String(RT.data.media || '').trim());
+    const coverageOf = () => (RT.data.coverage && typeof RT.data.coverage === 'object') ? RT.data.coverage : {};
+    const scannedOf = () => (RT.data.scanned && typeof RT.data.scanned === 'object') ? RT.data.scanned : {};
+    const engineLabel = () => {
+      const engine = String(RT.data.engine || '');
+      if (engine === 'qwen') return 'Qwen3-ASR + CTC';
+      if (engine === 'whisper') return 'Anime Whisper';
+      return '';
+    };
 
     // ── DOM ─────────────────────────────────────────────────────────
     const fab = root.querySelector('#qa-fab');
@@ -444,13 +475,77 @@
 
     const renderFoot = () => {
       const data = RT.data;
+      const phase = phaseOf();
       const parts = [];
       if (S.note) parts.push(`<div class="qa-note-text">${esc(S.note)}</div>`);
-      if (Number(data.hidden_missed || 0) > 0) {
+      if (phase === 'done' && Number(data.hidden_missed || 0) > 0) {
         parts.push(`<div class="qa-note-muted">另有 ${data.hidden_missed} 处峰值极低的近静音段未列入（多为配乐/底噪误判，已留在 .missed.json 备查）。</div>`);
       }
-      parts.push('<div class="qa-note-muted">同一次运行内刷新页面/重开媒体会恢复进度；重启应用后默认清空。</div>');
+      if (phase === 'done') {
+        parts.push('<div class="qa-note-muted">同一次运行内刷新页面/重开媒体会恢复进度；重启应用后默认清空。</div>');
+      } else if (phase === 'idle') {
+        parts.push('<div class="qa-note-muted">转写完成后自动生成待核清单；即使 0 处待核，这个入口也会保留。</div>');
+      }
       footEl.innerHTML = parts.join('');
+    };
+
+    // 空队列不是「功能不存在」，而是「本次检查完成且没有问题」。
+    // 这里必须把三类检查、引擎覆盖范围和 0 条的原因讲清楚，避免用户误读。
+    const renderEmpty = () => {
+      const phase = phaseOf();
+      const coverage = coverageOf();
+      const scanned = scannedOf();
+      const idle = phase !== 'done';
+      const engine = engineLabel();
+      const enabled = (key) => coverage[key] !== false;
+      const rows = [
+        ['missed', '🔍', '可能漏句', '有声音、但两次识别都为空'],
+        ['dropped', '✂️', '误删待核', '识别出过文字，复核为空被删'],
+        ['suspect', '👂', '短句待确认', '太短 / 信息量低，已保留'],
+      ].map(([key, icon, name, desc]) => {
+        const on = enabled(key);
+        const state = !on ? '本引擎不启用' : (idle ? '转写后检查' : '已检查');
+        return `<div class="qa-empty-row${on ? '' : ' is-off'}">
+          <span class="qa-empty-row-icon">${icon}</span>
+          <span class="qa-empty-row-name">${esc(name)}</span>
+          <span class="qa-empty-row-desc">${esc(desc)}</span>
+          <span class="qa-empty-row-state">${esc(state)}</span>
+        </div>`;
+      }).join('');
+
+      const stats = [];
+      const segs = Number(scanned.segments || 0);
+      const cues = Number(scanned.cues || 0);
+      if (!idle && segs > 0) stats.push(`检查 ${segs} 个语音切片`);
+      if (!idle && cues > 0) stats.push(`产出 ${cues} 条字幕`);
+      const statLine = stats.length
+        ? `<div class="qa-empty-stat">本次检查：${esc(stats.join(' · '))}</div>`
+        : '';
+
+      const offKinds = ['dropped', 'suspect'].filter(key => !enabled(key));
+      const qwenNote = offKinds.length
+        ? `<div class="qa-empty-note">⚠️ ${esc(engine || '当前引擎')} 没有「带时间戳重解码」这一步，所以「✂️ 误删待核 / 👂 短句待确认」不会被执行——这表示<b>未检查</b>，不表示「检查过且干净」。这两类请改用 Anime Whisper 引擎，或直接在核对台按时间听。</div>`
+        : '';
+
+      const title = phase === 'running'
+        ? '正在转写…'
+        : (idle ? '还没有可质检的转写结果' : '本次没有待核项');
+      const desc = phase === 'running'
+        ? '转写完成后会自动生成本次待核清单。'
+        : (idle
+          ? '完成一次全片转写后，这里会自动列出需要试听的片段；即使 0 处，这个入口也会保留。'
+          : '本次检查没有发现需要人工试听的片段。你可以随时打开这个面板，查看检查范围与三类问题的说明。');
+
+      emptyEl.innerHTML = `<div class="qa-empty-card">
+        <div class="qa-empty-icon">${idle ? '🔎' : '✅'}</div>
+        <div class="qa-empty-title">${esc(title)}</div>
+        <div class="qa-empty-desc">${esc(desc)}</div>
+        ${statLine}
+        <div class="qa-empty-rows">${rows}</div>
+        ${qwenNote}
+        <div class="qa-empty-foot">入口常驻右下角，不会因为「0 处待核」而消失。${engine ? `本次引擎：${esc(engine)}。` : ''}</div>
+      </div>`;
+      emptyEl.hidden = false;
     };
 
     const renderCurrent = () => {
@@ -487,8 +582,17 @@
     const render = () => {
       const items = RT.items;
       const data = RT.data;
-      // 新一批待核项：先自动展开钉住面板，再按最新 open/pinned 计算显示模式。
-      const signature = items.map(it => it.id).join('|');
+      const phase = phaseOf();
+      // 入口是否存在由「运行态」决定，而不是「队列是否有内容」：
+      //   idle + 已载入媒体 → 「质检 · 待转写」
+      //   done（即使 0 条）  → 「质检完成 · 0 处待核」
+      // 只有完全没有媒体、也没有结果时才隐藏。
+      const visible = items.length > 0 || phase === 'done' || phase === 'running'
+        || (phase === 'idle' && hasMedia());
+
+      // 新一批结果：用 transcribed_at 区分「刷新恢复」与「刚跑完的新转写」。
+      // 只凭 items 的 id 列表无法区分两次都为空队列的运行。
+      const signature = `${Number(data.transcribed_at || 0)}|${items.map(it => it.id).join('|')}`;
       let isNewSignature = false;
       if (signature !== S.signature) {
         isNewSignature = true;
@@ -499,14 +603,29 @@
         if (items.length && items.some(isPending)) {
           S.open = true;
           S.pinned = true;
+        } else if (phase === 'done' && !items.length) {
+          // 刚跑完且 0 处待核：本次页面加载后的新结果、且用户还没见过空态时，
+          // 自动展开一次，让用户看到「已检查、没有问题」，而不是以为功能消失了。
+          const at = Number(data.transcribed_at || 0);
+          if (at && at >= S.pageLoadAt - 1 && !emptyHintSeen()) {
+            rememberEmptyHint();
+            S.open = true;
+            S.pinned = true;
+          }
         }
       }
 
       const pending = items.filter(isPending).length;
       const done = items.length - pending;
-      const mode = items.length ? (S.open ? (S.pinned ? 'open-pinned' : 'open-inline') : 'mini') : 'hidden';
+      const mode = visible ? (S.open ? (S.pinned ? 'open-pinned' : 'open-inline') : 'mini') : 'hidden';
       root.dataset.mode = mode;
       root.dataset.pinned = S.pinned ? '1' : '0';
+      fab.classList.toggle('is-idle', visible && phase !== 'done' && pending === 0);
+      fab.title = items.length
+        ? '打开质检待核队列（试听 / 补录 / 确认）'
+        : (phase === 'done'
+          ? '本次质检完成，0 处待核；点开查看检查范围'
+          : '质检待转写：完成一次转写后生成待核清单');
 
       if (items.length) {
         fab.classList.toggle('is-complete', pending === 0);
@@ -530,9 +649,27 @@
         filtersEl.innerHTML = '';
         currentEl.hidden = true;
         emptyEl.hidden = true;
-        footEl.innerHTML = '';
+        progressEl.textContent = '0 / 0';
+        fab.classList.toggle('is-complete', phase === 'done');
+        if (fabText) {
+          fabText.textContent = phase === 'running'
+            ? '质检 · 转写中'
+            : (phase === 'done' ? '质检完成 · 0 处待核' : '质检 · 待转写');
+        }
+        startBtn.textContent = phase === 'done' ? '✅ 本次无需处理' : '▶ 开始逐条核对';
+        startBtn.disabled = true;
+        nextBtn.disabled = true;
+        pinBtn.textContent = S.pinned ? '📌 已钉住' : '📍 钉住';
+        pinBtn.classList.toggle('is-on', S.pinned);
+        autoNextEl.checked = Boolean(S.autoNext);
         S.note = '';
         S.currentId = null;
+        if (visible) {
+          renderEmpty();
+          renderFoot();
+        } else {
+          footEl.innerHTML = '';
+        }
       }
 
       // 处理完一条后自动跳下一条（后端用 revision 标记“这是一次真实操作”）。

@@ -889,11 +889,33 @@ def _audit_counts(items: list[dict]) -> dict:
     return counts
 
 
-def empty_audit_payload() -> str:
+def _audit_coverage(engine: str) -> dict:
+    """本次实际执行的质检类别。
+
+    · ``missed``  —— VAD 判成语音但识别为空，两个引擎都会产出；
+    · ``dropped`` / ``suspect`` —— 依赖 Anime Whisper 的「带时间戳重解码」复核，
+      Qwen 路径没有这一步。这里必须如实标成 False，否则空队列会被误读成
+      「检查过且干净」。
+    """
+    is_qwen = str(engine or "") == "qwen"
+    return {
+        "missed": True,
+        "dropped": not is_qwen,
+        "suspect": not is_qwen,
+    }
+
+
+def empty_audit_payload(media_name: str = "") -> str:
     return json.dumps({
         "version": 1,
         "session": AUDIT_SESSION_ID,
-        "media": "",
+        "media": str(media_name or ""),
+        # idle = 还没有可质检的结果。前端据此显示常驻入口，而不是整个功能消失。
+        "phase": "idle",
+        "engine": "",
+        "coverage": _audit_coverage(""),
+        "scanned": {},
+        "transcribed_at": 0.0,
         "items": [],
         "statuses": {},
         "counts": _audit_counts([]),
@@ -912,6 +934,11 @@ def make_audit_payload(
     hidden_missed: int = 0,
     revision: int = 0,
     last_action: dict | None = None,
+    *,
+    engine: str = "",
+    phase: str = "done",
+    scanned: dict | None = None,
+    transcribed_at: float | None = None,
 ) -> str:
     """把 item 与状态合并成前端可直接渲染的 JSON。
 
@@ -942,6 +969,13 @@ def make_audit_payload(
         "version": 1,
         "session": AUDIT_SESSION_ID,
         "media": str(media_name or ""),
+        # phase 描述「这次运行走到了哪一步」，与 items 是否为空解耦：
+        # idle 还没结果、done 已完成（0 条也是完成）。前端靠它决定入口是否常驻。
+        "phase": str(phase or ("done" if merged else "idle")),
+        "engine": str(engine or ""),
+        "coverage": _audit_coverage(engine),
+        "scanned": dict(scanned or {}),
+        "transcribed_at": float(transcribed_at or 0.0),
         "items": merged,
         "statuses": statuses,
         "counts": _audit_counts(merged),
@@ -994,6 +1028,11 @@ def load_audit_payload(media_file) -> str:
     data.setdefault("latest_cue_count", 0)
     data.setdefault("hidden_missed", 0)
     data.setdefault("media", Path(media_file).name if media_file else "")
+    data.setdefault("engine", "")
+    data.setdefault("scanned", {})
+    data.setdefault("transcribed_at", 0.0)
+    # 老版本 .qa.json 没有 phase：只要有条目就视为已完成的队列，避免入口被误判成 idle。
+    data.setdefault("phase", "done" if data.get("items") else "idle")
     # 重新合并一次，保证老文件里的 status 形状也能被前端识别
     return make_audit_payload(
         data.get("media") or (Path(media_file).name if media_file else ""),
@@ -1003,6 +1042,10 @@ def load_audit_payload(media_file) -> str:
         data.get("hidden_missed") or 0,
         data.get("revision") or 0,
         data.get("last_action"),
+        engine=data.get("engine") or "",
+        phase=data.get("phase") or "done",
+        scanned=data.get("scanned") or {},
+        transcribed_at=data.get("transcribed_at") or 0.0,
     )
 
 
@@ -1200,6 +1243,12 @@ def qa_apply_action(
             "auto_advance": auto_advance,
             "message": message,
         },
+        # 这些是「这次运行是什么」的元数据，处理动作必须原样带过去，
+        # 否则前端会把空闲/引擎能力误判成未知。
+        engine=payload.get("engine") or "",
+        phase=payload.get("phase") or "done",
+        scanned=payload.get("scanned") or {},
+        transcribed_at=payload.get("transcribed_at") or 0.0,
     )
     write_audit_payload(media_file, new_payload)
 
@@ -1426,7 +1475,19 @@ def build_transcription_report(
             "本报告保留为归档与一键复制用。"
         )
     else:
-        lines.append("• 本次没有需要人工试听复核的片段。")
+        lines.append(
+            "• 本次没有需要人工试听复核的片段；「🔎 质检待核队列」仍会保留入口，"
+            "可随时打开查看三类检查的说明。"
+        )
+    if is_qwen:
+        # Qwen 路径没有时间戳复核这一步：明确写「不启用」，避免 0 条被读成「复查过且干净」。
+        lines.append(
+            "• 引擎差异：Qwen3-ASR 只执行「🔍 可能漏句」检查；"
+            "「✂️ 误删待核 / 👂 短句待确认」依赖 Anime Whisper 的时间戳复核，本引擎不启用。"
+        )
+    lines.append(
+        "• 队列入口常驻右下角「🔎 质检」：0 处待核时显示为「✅ 质检完成」，不会因为队列为空而消失。"
+    )
 
     lines.append(
         "【疑似漏句区间】" + _missed_spans_headline(visible_missed)
@@ -1842,17 +1903,37 @@ def transcribe_media(
             # 质检待核队列：把报告里的三类静态清单变成可逐条试听/补录的队列。
             # 新一轮转写重置状态（旧状态只对旧结果有意义），落盘后刷新页面也能恢复。
             audit_items = build_audit_items(missed_spans, segment_stats, cues)
+            # 队列为空也是「检查完成」的正结果：phase=done + scanned 让前端能说
+            # 「已检查 N 段，0 处待核」，而不是把整个入口藏起来。
+            segment_total = int((align_stats or {}).get("segments") or 0)
+            if not segment_total:
+                segment_total = int(getattr(getattr(engine, "last_stats", None), "segments", 0) or 0)
+            scanned = {
+                "segments": segment_total,
+                "cues": len(cues),
+                "missed": len(_visible_missed_spans(missed_spans)),
+                "hidden_missed": _missed_hidden_count(missed_spans),
+            }
+            if not is_qwen:
+                scanned["dropped"] = int(segment_stats.get("hallucination_drops", 0) or 0)
+                scanned["suspect"] = int(segment_stats.get("suspect_cues", 0) or 0)
             audit_payload = make_audit_payload(
                 media_path.name,
                 audit_items,
                 {},
                 len(cues),
                 _missed_hidden_count(missed_spans),
+                engine="qwen" if is_qwen else "whisper",
+                phase="done",
+                scanned=scanned,
+                transcribed_at=time.time(),
             )
             write_audit_payload(media_path, audit_payload)
             pending_qa = sum(1 for item in audit_items if item.get("status") == "pending")
             if pending_qa and not is_interrupted:
                 final_progress += f" ｜ 🔎 质检：{pending_qa} 处待你试听确认（右下角浮标）"
+            elif not is_interrupted:
+                final_progress += " ｜ ✅ 质检：本次 0 处待核（入口仍在右下角）"
             if is_interrupted:
                 final_progress += " ｜ ⚠️ 本次为打断结果，队列只覆盖已保存的字幕"
 
@@ -2728,6 +2809,13 @@ def prepare_review_workspace(media_file, review_cues):
     payload = build_review_payload(media_file, review_cues, include_peaks=True)
     qa_payload = load_audit_payload(media_file)
     qa_data = _parse_audit_payload(qa_payload)
+    if media_file and str(qa_data.get("phase") or "idle") == "idle":
+        # 媒体已就绪但还没转写：给空队列补上媒体名，前端就能显示
+        # 「🔎 质检 · 待转写」常驻入口，而不是把整个功能藏到转写之后。
+        qa_payload = make_audit_payload(
+            Path(media_file).name, [], {}, 0, 0, phase="idle",
+        )
+        qa_data = _parse_audit_payload(qa_payload)
     qa_pending = int((qa_data.get("counts") or {}).get("pending", 0) or 0)
     data = json.loads(payload)
     if data.get("error") and not data.get("src"):
@@ -4585,9 +4673,9 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
     with gr.Accordion("📊 全片转录原始结果、表格与任务详报", open=True, elem_classes=["clean-accordion"]):
         status = gr.Markdown(
             "状态：就绪。上传音视频文件并点击「🚀 开始转写」即可执行。",
-            elem_classes=["progress-status-box"],
+            elem_classes=["progress-status-box", "result-status"],
         )
-        with gr.Tabs():
+        with gr.Tabs(elem_classes=["result-tabs"]):
             with gr.TabItem("📋 原始条目列表"):
                 cue_table = gr.Dataframe(
                     headers=["序号", "起始时间", "结束时间", "字幕内容"],

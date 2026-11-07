@@ -104,6 +104,15 @@ def test_report_raw_text_matches_panel_copy_source():
     assert f'<pre id="report-raw-text" class="report-raw-src">{html_lib.escape(text)}</pre>' in app.render_report_panel(text)
 
 
+def test_report_explains_qwen_coverage_instead_of_faking_clean():
+    """Qwen 没有幻觉悟复核：0 条必须写成「不启用」，不能读成「复查过且干净」。"""
+    text = _report(is_qwen=True, segment_stats={}, align_stats={})
+    assert "引擎差异：Qwen3-ASR 只执行「🔍 可能漏句」检查" in text
+    assert "「✂️ 误删待核 / 👂 短句待确认」依赖 Anime Whisper 的时间戳复核，本引擎不启用" in text
+    # 队列入口常驻的说明也必须在报告里，避免用户以为 0 条就代表功能不存在
+    assert "队列入口常驻右下角「🔎 质检」" in text
+
+
 def test_report_offers_plain_language_summary_and_queue_pointer():
     text = _report(
         missed_spans=[{"start": 2.0, "end": 3.0, "dur": 1.0, "peak": 0.2}],

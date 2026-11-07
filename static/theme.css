@@ -1360,6 +1360,15 @@ button.btn-run {
     background: linear-gradient(135deg, #059669 0%, #047857 100%);
     box-shadow: 0 10px 28px rgba(5, 150, 105, 0.32);
 }
+/* 还没有转写结果时的常驻入口：保持可见，但不抢眼。 */
+.qa-fab.is-idle {
+    background: #e2e8f0;
+    color: #475569;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+}
+.qa-fab.is-idle:hover {
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.2);
+}
 .qa-fab-icon { font-size: 15px; }
 .qa-fab-arrow { font-size: 18px; opacity: 0.85; margin-left: 2px; }
 
@@ -1515,6 +1524,9 @@ button.btn-run {
     font-size: 11.5px;
     color: #3730a3;
 }
+/* 作者态 display:flex 会压过浏览器默认的 [hidden]{display:none}，
+   0 条待核时这里必须显式隐藏，否则会留下一条空的蓝色横条。 */
+.qa-current[hidden] { display: none !important; }
 .qa-current.kind-dropped { background: #fffbeb; border-color: #fde68a; color: #92400e; }
 .qa-current.kind-suspect { background: #f0f9ff; border-color: #bae6fd; color: #075985; }
 .qa-current-kind { font-weight: 700; }
@@ -1667,6 +1679,87 @@ button.btn-run {
     font-size: 12px;
     color: #94a3b8;
 }
+/* 0 条待核不是空白：把「检查了什么、为什么是 0」讲清楚。 */
+.qa-empty-card {
+    text-align: left;
+    padding: 10px 9px;
+    border: 1px solid #eef2f8;
+    border-radius: 10px;
+    background: #fbfcfe;
+}
+.qa-empty-icon {
+    font-size: 22px;
+    line-height: 1.1;
+    margin-bottom: 4px;
+}
+.qa-empty-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e293b;
+}
+.qa-empty-desc {
+    margin-top: 4px;
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: #64748b;
+}
+.qa-empty-stat {
+    margin-top: 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    color: #4338ca;
+}
+.qa-empty-rows {
+    margin-top: 9px;
+    border: 1px solid #eef2f8;
+    border-radius: 9px;
+    overflow: hidden;
+    background: #ffffff;
+}
+.qa-empty-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 9px;
+    border-top: 1px solid #f1f5f9;
+    font-size: 11.5px;
+    line-height: 1.45;
+}
+.qa-empty-row:first-child { border-top: none; }
+.qa-empty-row.is-off { background: #f8fafc; opacity: 0.72; }
+.qa-empty-row-icon { flex: none; }
+.qa-empty-row-name { flex: none; font-weight: 700; color: #334155; }
+.qa-empty-row-desc { flex: 1; min-width: 0; color: #94a3b8; }
+.qa-empty-row-state {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: 10.5px;
+    white-space: nowrap;
+}
+.qa-empty-row.is-off .qa-empty-row-state {
+    background: #fef3c7;
+    color: #92400e;
+}
+.qa-empty-note {
+    margin-top: 8px;
+    padding: 7px 9px;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 11px;
+    line-height: 1.6;
+}
+.qa-empty-note b { color: #78350f; }
+.qa-empty-foot {
+    margin-top: 8px;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: #94a3b8;
+}
 .qa-foot {
     margin-top: 7px;
     padding-top: 7px;
@@ -1704,4 +1797,316 @@ button.btn-run {
     font-weight: 400;
     color: #94a3b8;
     font-style: normal;
+}
+
+/* ============================================================
+   2026-11 界面精修：步骤标题 / 上传区 / 状态条 / 核对表格 / 结果页签
+   原则：只做字体、间距、配色与层次优化，不改变现有区块顺序与宽度。
+   ============================================================ */
+
+:root {
+    --ks-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+        "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    --ks-font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
+        SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.gradio-container {
+    font-family: var(--ks-font-sans) !important;
+    color: #1e293b;
+}
+
+/* ---------- 1/2/3 步骤标题 ---------- */
+.setup-head {
+    gap: 9px !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.02em !important;
+    color: #1e293b !important;
+    padding-bottom: 9px !important;
+    margin-bottom: 11px !important;
+    border-bottom: 1px solid #eef2f8 !important;
+}
+.workbench-panel .setup-head .step {
+    width: 21px !important;
+    height: 21px !important;
+    flex: 0 0 21px !important;
+    border-radius: 7px !important;
+    background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%) !important;
+    color: #ffffff !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    font-family: var(--ks-font-mono) !important;
+    line-height: 1 !important;
+    box-shadow: 0 2px 6px rgba(67, 56, 202, 0.26) !important;
+    letter-spacing: 0 !important;
+}
+
+/* 清掉 Gradio 群组内部 styler 的冷灰色底，避免标题/表头后面出现灰带 */
+.workbench-panel .styler,
+.workbench-panel .gr-group:not(.workbench-panel) {
+    background: transparent !important;
+}
+
+/* ---------- 上传区：更柔和的外观 + 首次导入时不再逐字换行 ---------- */
+.media-upload {
+    border-radius: 14px !important;
+    background: linear-gradient(180deg, #fbfcff 0%, #f7f9ff 100%) !important;
+    border-color: #cbd5fe !important;
+}
+.media-upload:hover {
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.06) !important;
+}
+.media-upload .wrap {
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    transition: none !important;
+}
+/* 关键修复：首次导入视频时组件会短暂卸载上传按钮，伪元素文字会在极窄盒子里
+   逐字换行；禁止换行，并在按钮不存在时直接隐藏，杜绝“左侧竖排后回收”。 */
+.media-upload .wrap::after {
+    display: block !important;
+    max-width: 100% !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    text-align: center !important;
+    line-height: 1.5 !important;
+    color: #4338ca !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.015em !important;
+}
+.media-upload:not(:has(button[aria-dropeffect])) .wrap::after {
+    content: none !important;
+}
+.media-upload .wrap .icon-wrap {
+    width: 40px !important;
+    height: 40px !important;
+    padding: 9px !important;
+    margin-bottom: 8px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-sizing: border-box !important;
+    border-radius: 12px !important;
+    background: #eef2ff !important;
+    border: 1px solid #e0e7ff !important;
+    color: #4f46e5 !important;
+    opacity: 1 !important;
+}
+.media-upload .wrap .icon-wrap svg {
+    width: 22px !important;
+    height: 22px !important;
+    color: #4f46e5 !important;
+}
+
+/* ---------- 状态条：外层只负责留白，内层才是真正的卡片 ---------- */
+.progress-status-box.block {
+    padding: 0 !important;
+    margin: 10px 0 0 0 !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+}
+.progress-status-box .prose.progress-status-box,
+.prose.progress-status-box {
+    margin: 0 !important;
+    padding: 10px 14px !important;
+    border-radius: 10px !important;
+    background: linear-gradient(180deg, #fbfcff 0%, #f7f9ff 100%) !important;
+    border: 1px solid #e6ebf7 !important;
+    border-left: 3px solid #6366f1 !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03) !important;
+    min-height: 0 !important;
+}
+.progress-status-box p {
+    margin: 0 !important;
+    font-size: 13px !important;
+    font-weight: 450 !important;
+    line-height: 1.6 !important;
+    color: #334155 !important;
+    letter-spacing: 0.005em !important;
+}
+.progress-status-box p strong {
+    color: #3730a3 !important;
+    font-weight: 700 !important;
+}
+
+/* ---------- 核对时间轴全景视图：表头标题与工具按钮 ---------- */
+.cue-table-wrap .table-container > .header-row {
+    min-height: 40px !important;
+    padding: 9px 12px 9px 14px !important;
+    background: linear-gradient(180deg, #fbfcff 0%, #f8fafc 100%) !important;
+    border-bottom: 1px solid #e9eef6 !important;
+    align-items: center !important;
+}
+.cue-table-wrap .table-container > .header-row > .label {
+    display: flex !important;
+    align-items: center !important;
+    min-width: 0 !important;
+}
+.cue-table-wrap .table-container > .header-row > .label p {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    margin: 0 !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    line-height: 1.5 !important;
+    letter-spacing: 0.01em !important;
+    color: #334155 !important;
+}
+.cue-table-wrap .table-container > .header-row > .label p::before {
+    content: "" !important;
+    display: inline-block !important;
+    width: 3px !important;
+    height: 14px !important;
+    flex: 0 0 3px !important;
+    border-radius: 2px !important;
+    background: linear-gradient(180deg, #818cf8 0%, #4f46e5 100%) !important;
+}
+.cue-table .toolbar .icon-button {
+    width: 26px !important;
+    height: 26px !important;
+    border: 1px solid #e6ebf3 !important;
+    border-radius: 7px !important;
+    background: #ffffff !important;
+    color: #64748b !important;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease !important;
+}
+.cue-table .toolbar .icon-button:hover {
+    background: #eef2ff !important;
+    border-color: #c7d2fe !important;
+    color: #4338ca !important;
+}
+
+/* ---------- 核对表格 / 原始条目列表：表头、斑马纹、列字体 ---------- */
+.cue-table .header-table th,
+.cue-table th {
+    background: #f8fafc !important;
+    border-bottom: 1px solid #e6ebf3 !important;
+}
+.cue-table .header-table th .header {
+    font-family: var(--ks-font-sans) !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.06em !important;
+    color: #64748b !important;
+}
+.cue-table .virtual-row {
+    border-bottom: 1px solid #f1f5f9 !important;
+    transition: background 0.12s ease !important;
+}
+.cue-table .virtual-row:not(.row-odd) {
+    background: #fafbfe !important;
+}
+.cue-table .virtual-row.row-odd {
+    background: #ffffff !important;
+}
+.cue-table .virtual-row:hover {
+    background: #f3f6ff !important;
+}
+.cue-table .body-cell .cell-wrap {
+    padding: 8px 12px !important;
+}
+.cue-table .body-cell .wrap {
+    line-height: 1.5 !important;
+}
+.cue-table .body-cell.first-column .wrap {
+    font-family: var(--ks-font-mono) !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    color: #94a3b8 !important;
+}
+.cue-table .body-cell[data-col="1"] .wrap,
+.cue-table .body-cell[data-col="2"] .wrap {
+    font-family: var(--ks-font-mono) !important;
+    font-size: 12px !important;
+    font-weight: 450 !important;
+    color: #334155 !important;
+    font-variant-numeric: tabular-nums;
+}
+.cue-table-wrap .body-cell[data-col="3"] .wrap {
+    font-size: 12px !important;
+    color: #64748b !important;
+}
+.cue-table-wrap .body-cell[data-col="4"] .wrap,
+.cue-table:not(.cue-table-wrap) .body-cell[data-col="3"] .wrap {
+    font-family: var(--ks-font-sans) !important;
+    font-size: 13px !important;
+    font-weight: 450 !important;
+    color: #1e293b !important;
+    letter-spacing: 0.005em !important;
+}
+.cue-table .add-row-button {
+    background: #fbfcff !important;
+    border-top: 1px solid #eef2f8 !important;
+    color: #818cf8 !important;
+    font-size: 16px !important;
+    font-weight: 600 !important;
+    transition: background 0.15s ease, color 0.15s ease !important;
+}
+.cue-table .add-row-button:hover {
+    background: #eef2ff !important;
+    color: #4338ca !important;
+}
+
+/* ---------- 结果区页签：浅色分段胶囊 ---------- */
+.result-tabs .tab-wrapper {
+    padding-bottom: 9px !important;
+    margin-bottom: 6px !important;
+    border-bottom: 1px solid #eef2f8 !important;
+}
+/* 不要在 tablist 上改 display / width / padding：Gradio 依靠它测量可用宽度，
+   一改就会把所有页签折叠进「⋯」菜单。这里只调整按钮本身的胶囊外观。 */
+.result-tabs .tab-container[role="tablist"] {
+    gap: 6px !important;
+    align-items: center !important;
+}
+.result-tabs .tab-container[role="tablist"] > button[role="tab"] {
+    display: inline-flex !important;
+    align-items: center !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 13px !important;
+    border: 1px solid #e8edf6 !important;
+    border-radius: 8px !important;
+    background: #f4f6fb !important;
+    color: #64748b !important;
+    font-family: var(--ks-font-sans) !important;
+    font-size: 12.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.01em !important;
+    box-shadow: none !important;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+        box-shadow 0.15s ease !important;
+}
+.result-tabs .tab-container[role="tablist"] > button[role="tab"]::after {
+    display: none !important;
+}
+.result-tabs .tab-container[role="tablist"] > button[role="tab"]:hover {
+    background: #e9edff !important;
+    border-color: #d7ddfb !important;
+    color: #4338ca !important;
+}
+.result-tabs .tab-container[role="tablist"] > button[role="tab"].selected {
+    background: #ffffff !important;
+    border-color: #dfe5ff !important;
+    color: #4338ca !important;
+    box-shadow:
+        0 1px 2px rgba(15, 23, 42, 0.08),
+        inset 0 0 0 1px #e5e9ff !important;
+}
+
+/* 结果区里的数据表、文本框等基础组件字体统一到新字阶 */
+.result-tabs .block table,
+.result-tabs .block .wrap {
+    font-family: var(--ks-font-sans);
 }

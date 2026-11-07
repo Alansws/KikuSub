@@ -75,6 +75,76 @@ def test_empty_payload_is_renderable():
     payload = json.loads(app.empty_audit_payload())
     assert payload["items"] == []
     assert payload["counts"]["total"] == 0
+    # 空队列是 idle，不是「功能不存在」：前端必须据此保留入口。
+    assert payload["phase"] == "idle"
+    assert payload["engine"] == ""
+    assert payload["transcribed_at"] == 0.0
+
+
+def test_engine_coverage_marks_qwen_unsupported_checks():
+    assert app._audit_coverage("whisper") == {
+        "missed": True, "dropped": True, "suspect": True,
+    }
+    assert app._audit_coverage("qwen") == {
+        "missed": True, "dropped": False, "suspect": False,
+    }
+
+
+def test_payload_marks_engine_phase_and_scan_range():
+    items, cues = _fixture()
+    payload = json.loads(app.make_audit_payload(
+        "demo.mp4",
+        items,
+        {},
+        len(cues),
+        engine="qwen",
+        phase="done",
+        scanned={"segments": 12, "cues": 3},
+        transcribed_at=1234.5,
+    ))
+    assert payload["phase"] == "done"
+    assert payload["engine"] == "qwen"
+    assert payload["coverage"]["dropped"] is False
+    assert payload["scanned"] == {"segments": 12, "cues": 3}
+    assert payload["transcribed_at"] == 1234.5
+
+
+def test_engine_metadata_survives_payload_round_trip(tmp_path, monkeypatch):
+    """落盘后再读回，phase/engine/coverage 不能丢，否则入口又会变回 idle。"""
+    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    media = tmp_path / "demo.mp4"
+    media.write_bytes(b"x")
+    payload = app.make_audit_payload(
+        "demo.mp4", [], {}, 0, engine="whisper", phase="done",
+        scanned={"segments": 20, "cues": 0}, transcribed_at=99.0,
+    )
+    app.write_audit_payload(str(media), payload)
+
+    loaded = json.loads(app.load_audit_payload(str(media)))
+    assert loaded["phase"] == "done"
+    assert loaded["engine"] == "whisper"
+    assert loaded["coverage"]["dropped"] is True
+    assert loaded["scanned"]["segments"] == 20
+    assert loaded["transcribed_at"] == 99.0
+    assert loaded["items"] == []
+
+
+def test_prepare_review_workspace_keeps_entry_for_loaded_media(tmp_path, monkeypatch):
+    """媒体已载入、还没转写时，qa_payload 必须是 idle+media，前端才能显示常驻入口。"""
+    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    media = tmp_path / "demo.mkv"
+    media.write_bytes(b"x")
+    monkeypatch.setattr(
+        app, "build_review_payload",
+        lambda *args, **kwargs: json.dumps({"name": "demo.mkv", "peaks": [], "src": ""}),
+    )
+    monkeypatch.setattr(app, "load_missed_spans", lambda stem: [])
+
+    _, _, qa_payload = app.prepare_review_workspace(str(media), [])
+    data = json.loads(qa_payload)
+    assert data["phase"] == "idle"
+    assert data["media"] == "demo.mkv"
+    assert data["items"] == []
 
 
 def test_qa_actions_mark_restore_delete_and_focus(tmp_path, monkeypatch):
@@ -82,7 +152,10 @@ def test_qa_actions_mark_restore_delete_and_focus(tmp_path, monkeypatch):
     items, cues = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload("demo.mp4", items, {}, len(cues))
+    payload = app.make_audit_payload(
+        "demo.mp4", items, {}, len(cues),
+        engine="whisper", phase="done", scanned={"segments": 4}, transcribed_at=42.0,
+    )
 
     # 1) 标记保留：只改状态，不动字幕
     mark = json.dumps({"action": "mark", "id": items[0]["id"], "status": "done", "resolution": "kept"})
@@ -92,6 +165,11 @@ def test_qa_actions_mark_restore_delete_and_focus(tmp_path, monkeypatch):
     assert new_payload["items"][0]["resolution"] == "kept"
     assert len(out[0]) == len(cues)
     assert new_payload["last_action"]["message"].startswith("✅")
+    # 处理动作不能把「这次运行是什么」的元数据冲掉
+    assert new_payload["engine"] == "whisper"
+    assert new_payload["phase"] == "done"
+    assert new_payload["scanned"] == {"segments": 4}
+    assert new_payload["transcribed_at"] == 42.0
 
     # 1b) 重新放回待核：statuses 清空后必须回到 pending，不能留着 item 里的 done
     reopen = json.dumps({"action": "mark", "id": items[0]["id"], "status": "pending"})
