@@ -135,20 +135,23 @@ class FoldedText:
 def encode_target(
     text: FoldedText, lookup: dict[str, int], unk_index: int
 ) -> tuple[list[int], list[int | None]]:
+    """把折叠文本编码成 CTC 目标序列，并返回「每个 id 对应的 folded 下标」。
+
+    第二个返回值**与 ids 等长**（不是与 folded 等长）：标点/符号属于零宽字符，
+    不发声也不进 ids。如果用「按 folded 文本逐字编号」的列表去索引 CTC span，
+    每遇到一个标点，后面所有字的字级时间都会错后一拍——句读越多、整段漂得越晚
+    （曾导致「お前は相変わらず白いな」比实际晚约 1 秒）。未知字仍返回 None，
+    由 `_fill_unaligned` 插值兜底。
+    """
     ids: list[int] = []
-    char_index: list[int | None] = []
+    positions: list[int | None] = []
     for pos, ch in enumerate(text.folded):
-        idx = lookup.get(ch)
         if _is_zero_width(ch):
-            char_index.append(None)
             continue
-        if idx is None:
-            char_index.append(None)
-            ids.append(unk_index)
-        else:
-            char_index.append(pos)
-            ids.append(idx)
-    return ids, char_index
+        idx = lookup.get(ch)
+        positions.append(pos if idx is not None else None)
+        ids.append(unk_index if idx is None else idx)
+    return ids, positions
 
 
 class ResidualConvBlock(nn.Module):
@@ -818,7 +821,7 @@ class QwenCtcEngine:
     ) -> AlignmentResult:
         """用已算好的 encoder 特征做 CTC 对齐（不再跑音频塔）。"""
         folded = FoldedText(text)
-        ids, char_index = encode_target(folded, self._lookup, self._unk_index)
+        ids, id_positions = encode_target(folded, self._lookup, self._unk_index)
         if not ids:
             return AlignmentResult(ok=True, reason="no-acoustic-chars")
 
@@ -854,7 +857,7 @@ class QwenCtcEngine:
         for k, span in enumerate(spans):
             if span is None:
                 continue
-            pos = char_index[k]
+            pos = id_positions[k]
             if pos is None:
                 continue
             chars.append(
