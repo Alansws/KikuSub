@@ -32,7 +32,7 @@ python app.py
 | `logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）与后台线程 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
-| `static/` | 主题 CSS、核对台 JS、空态 HTML；`app.py` 启动时读取。JS 改动必须过 `node --check static/reviewer.js`。 |
+| `static/` | 主题 CSS、核对台 JS、质检队列 JS/HTML、空态 HTML；`app.py` 启动时读取。JS 改动必须过 `node --check static/reviewer.js` 与 `node --check static/qa_panel.js`。 |
 | `presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
 | `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
@@ -66,4 +66,16 @@ python app.py
 - 指标胶囊复用顶部设备胶囊的 `.device-chip`（`chip-label` 灰字 + `chip-value` 等宽粗体），面板底色 `#f8fafc` + 3px `#a5b4fc` 左边框，与 `.progress-status-box` 同源；`status` Markdown 也挂 `progress-status-box`，保证「界面顶部 / 报告区」两处视觉一致。
 - 该折叠面板默认 `open=True`（用户要求首屏即可看到转写结果与详报）。
 - 【幻觉门控】/【幻觉复核】的逐段明细必须留在报告里（用户明确要求"不要在终端刷屏、要能复制"）：数据源是 `AnimeWhisperEngine.last_segment_stats["hallucination_spans"]`（字段 `start/end/dur/text/rule/verdict/peak`，`verdict` 取 `dropped|suspect`），由 `app._hallucination_rows()` 渲染，明细最多列 `HALLUCINATION_SPAN_LIMIT` 条。`transcribe.py` 里这两类段的日志只允许 `log.debug`，不要再升回 `log.info`。
+
+## 5. 质检待核队列（2026-11）
+
+报告里的三类清单只是归档；用户实际逐条核对用的是 `static/qa_panel.html` + `static/qa_panel.js` 的浮动队列。改这块时必须保持以下契约：
+
+- **单一数据源**：队列 JSON 只走隐藏 Textbox `#qa-payload`（字段 `items/statuses/counts/latest_cue_count/hidden_missed/revision/last_action`）。前端所有动作写入 `#qa-cmd` 后点击 `#btn-hidden-qa`，由 `qa_apply_action()` 统一处理；不要为每个按钮注册 Gradio 事件。
+- **事件闭包必须是动态的**：`qa_payload.change` 可能在页面加载时先发一次空 payload。所有点击回调只能从 `window.__qaRuntime.items/data` 取最新数据，禁止在首次绑定时把 `items` 闭包进回调（否则真实队列到达后，按钮仍认为“没有待核项”，面板会被空事件隐藏）。
+- **三类语义不可混淆**：`missed`（有声音但识别为空）只能“补录/不是台词”；`dropped`（识别出过文字但复核为空被删）只能“恢复原句/重新识别/确认删除”；`suspect`（保留但短/低密度）只能“定位编辑/保留/删除”。新增动作要同时更新 `qa_apply_action()` 的 `last_action.message` 与前端 `resolutions` 文案。
+- **进度只在同一次运行内恢复**：`write_audit_payload()` 在每次动作后原子写 `outputs/{stem}.qa.json`；`AUDIT_SESSION_ID` 在进程启动时生成并写入 payload，`load_audit_payload()` 遇到旧进程的 session 一律返回空队列。因此刷新页面/重开媒体可继续，**重启应用后默认清空**；新一轮转写重置状态也是预期行为。
+- **不遮住关键操作**：面板默认“钉住”在右下角（`position: fixed`），但必须提供「收起为浮标」「取消钉住（内嵌）」；固定面板的 z-index 要低于 Gradio 弹窗。`focusRange()` 负责跳转+框选+播到段尾自动停，队列 JS 不直接改 reviewer 内部状态。
+- **补录链路**：前端把区间写进 `#hidden-sync-start/end`，点 `#btn-hidden-bridge-transcribe`；成功后在转写事件的 `.then(js=...)` 调用 `window.__qaPanel.afterTranscribe(status)`，由它把该条标成 `done/filled`。失败或空结果不得标记完成。
+- **「保留」不是纯状态**：`qa_apply_action()` 对 `suspect + kept` 必须调用 `_audit_ensure_item_cues()` 幂等补齐核对台缺失的 cue（按重叠/同文本去重，避免用户改过文字后重复插），并且**显式返回 `review_cues_table` 与 `review_payload`**（不能用 `gr.update()`），否则会出现“导出 SRT 里有这句、核对台表格里没有”的显示不同步。前端在 `keep` 前也必须 `requireBaseline()`，防止只往空核对台里补一条。
 

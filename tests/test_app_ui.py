@@ -94,7 +94,8 @@ def test_transcribe_media_streams_card_without_native_progress(tmp_path, monkeyp
             _FakeRequest(),
             *[spec.default for spec in app.PARAMS],
         )
-        statuses = [outputs[-1] for outputs in generator]
+        # 末尾新增 qa_payload；进度卡片仍在倒数第二个输出（transcribe_progress）。
+        statuses = [outputs[-2] for outputs in generator]
     finally:
         app.JOB_REGISTRY.reset()
 

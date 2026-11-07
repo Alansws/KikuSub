@@ -658,6 +658,582 @@ def _hallucination_rows(spans: list[dict], verdict: str) -> list[str]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# 质检待核队列：把「疑似漏句 / 幻觉门控 / 幻觉复核」三类静态清单
+# 变成用户能逐条试听、定位、补录、确认的可操作队列。
+#
+# 设计要点：
+# - 后端只负责生成稳定的 item（带 id / 类型 / 时间 / 原文 / 匹配到的字幕），
+#   状态（待核 / 已处理 / 已跳过）单独放在 statuses 里，便于落盘恢复；
+# - 同一媒体重复处理时按 id 合并状态，绝不因为重新渲染丢掉“已经听过”的进度；
+# - 队列数据走一个隐藏 Textbox（#qa-payload），前端 JS 与 reviewer 共用同一次渲染，
+#   不额外引入 Gradio 组件刷新，避免面板闪烁。
+# ---------------------------------------------------------------------------
+# 每次进程启动生成一个会话标识：质检队列只在同一进程内恢复。
+# 重启后旧 .qa.json 视为上一次运行的记录，不自动带入，保证面板默认清空。
+AUDIT_SESSION_ID = f"{os.getpid()}:{time.time_ns()}"
+
+AUDIT_KIND_ORDER = {"missed": 0, "dropped": 1, "suspect": 2}
+
+AUDIT_KIND_META = {
+    "missed": {
+        "icon": "🔍",
+        "name": "可能漏句",
+        "plain": "这里有声音，但两次识别都没有出字幕",
+        "hint": "听一下：若确实有台词，点「⚡ 补录并插入」；若只是配乐/底噪，点「✓ 不是台词」。",
+    },
+    "dropped": {
+        "icon": "✂️",
+        "name": "误删待核",
+        "plain": "识别出过文字，但复核为空，已自动删除",
+        "hint": "若你听到确实有声音，点「↩ 恢复原句」或「⚡ 重新识别」；若确认是脑补，点「✓ 确认删除」。",
+    },
+    "suspect": {
+        "icon": "👂",
+        "name": "短句待确认",
+        "plain": "字幕已保留，但太短或信息量低，容易是模型脑补",
+        "hint": "听一遍：没问题点「✓ 保留」（核对台缺这句会自动补回），不对劲点「🗑 删除此句」或「✏️ 定位编辑」。",
+    },
+}
+
+
+def _audit_media_stem(media_file) -> str:
+    """与校对断点使用同一套主干规则，保证同名媒体的队列能恢复。"""
+    if not media_file:
+        return ""
+    stem = Path(media_file).stem
+    return re.sub(r"(\.autosave_draft|\.reviewed|\.clean|\.part_cancelled)$", "", stem)
+
+
+def audit_state_path(media_file) -> Path | None:
+    stem = _audit_media_stem(media_file)
+    return OUTPUT_DIR / f"{stem}.qa.json" if stem else None
+
+
+def _audit_item_id(kind: str, start: float, end: float) -> str:
+    return f"{kind}:{int(round(float(start) * 1000))}:{int(round(float(end) * 1000))}"
+
+
+def _audit_match_cues(cues, start: float, end: float) -> list[dict]:
+    """找出被该时间段覆盖的字幕，供「定位编辑 / 删除此句」精确操作。
+
+    短句被断句器拆成多条时，这里会把同一段里的所有子句都带出来；
+    只要求“重叠超过自身一半”或“字幕中点落在区间内”，避免误伤相邻句。
+    """
+    matched: list[dict] = []
+    for cue in cues or []:
+        c_start = float(cue.start)
+        c_end = float(cue.end)
+        overlap = min(c_end, end) - max(c_start, start)
+        if overlap <= 0:
+            continue
+        cue_dur = max(0.001, c_end - c_start)
+        midpoint = (c_start + c_end) / 2.0
+        if overlap / cue_dur >= 0.5 or (start <= midpoint <= end):
+            matched.append({
+                "start": round(c_start, 3),
+                "end": round(c_end, 3),
+                "text": str(cue.text or ""),
+            })
+    return matched
+
+
+def build_audit_items(
+    missed_spans: list[dict] | None,
+    segment_stats: dict | None,
+    cues,
+) -> list[dict]:
+    """把三类问题合并成一条按时间排序的待核队列。
+
+    · missed   —— VAD 认为是语音，但模型重试后仍为空（报告里的“疑似漏句”）
+    · dropped  —— 识别出文字、时间戳复核为空，被自动删掉（“幻觉门控”）
+    · suspect  —— 短/低密度但被保留、建议人工核对（“幻觉复核”）
+    """
+    cue_list = _coerce_cues(cues or [])
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add(
+        kind: str,
+        start: float,
+        end: float,
+        *,
+        peak=None,
+        rule: str = "",
+        text: str = "",
+        reason: str = "",
+    ) -> None:
+        start = round(max(0.0, float(start or 0.0)), 3)
+        end = round(max(start + 0.001, float(end or 0.0)), 3)
+        item_id = _audit_item_id(kind, start, end)
+        if item_id in seen:
+            return
+        seen.add(item_id)
+        meta = AUDIT_KIND_META[kind]
+        matched = _audit_match_cues(cue_list, start, end)
+        rule_label = (
+            _missed_reason_label(reason) if kind == "missed"
+            else _hallucination_rule_label(rule)
+        )
+        items.append({
+            "id": item_id,
+            "kind": kind,
+            "start": start,
+            "end": end,
+            "dur": round(end - start, 2),
+            "peak": (round(float(peak), 3) if isinstance(peak, (int, float)) else None),
+            "rule": rule or reason,
+            "rule_label": rule_label,
+            "text": " ".join(str(text or "").split())[:160],
+            "cues": matched,
+            "label": meta["name"],
+            "plain": meta["plain"],
+            "hint": meta["hint"],
+            "status": "pending",
+            "resolution": "",
+        })
+
+    for span in _visible_missed_spans(missed_spans):
+        add(
+            "missed",
+            span.get("start", 0.0),
+            span.get("end", 0.0),
+            peak=span.get("peak") if "peak" in span else None,
+            reason=str(span.get("reason") or ""),
+        )
+
+    for span in list((segment_stats or {}).get("hallucination_spans") or []):
+        verdict = str(span.get("verdict") or "")
+        kind = "dropped" if verdict == "dropped" else ("suspect" if verdict == "suspect" else "")
+        if not kind:
+            continue
+        add(
+            kind,
+            span.get("start", 0.0),
+            span.get("end", 0.0),
+            peak=span.get("peak") if "peak" in span else None,
+            rule=str(span.get("rule") or ""),
+            text=str(span.get("text") or ""),
+        )
+
+    items.sort(key=lambda item: (float(item.get("start", 0.0)), AUDIT_KIND_ORDER.get(item["kind"], 9)))
+    return items
+
+
+def _audit_cue_overlaps(cues, start: float, end: float) -> bool:
+    """核对台里是否已有与 [start, end] 重叠的字幕。
+
+    用重叠关系而不是“起止完全相等”判断，原因有两个：
+    - 转写结果会做 cue padding，队列里的区间和表格里的起止可能差几十毫秒；
+    - 用户可能已经手动改过这句的文字/时间，不能再把旧文本重复插一遍。
+    """
+    for cue in cues or []:
+        c_start = float(cue.start)
+        c_end = float(cue.end)
+        overlap = min(c_end, end) - max(c_start, start)
+        if overlap <= 0:
+            continue
+        cue_dur = max(0.001, c_end - c_start)
+        midpoint = (c_start + c_end) / 2.0
+        if overlap / cue_dur >= 0.5 or (start <= midpoint <= end):
+            return True
+    return False
+
+
+def _audit_ensure_item_cues(existing, item: dict) -> tuple[list[SubtitleCue], int]:
+    """确保「短句待确认」这条记录对应的字幕确实存在核对台里。
+
+    正常流程里核对台由“本次设为基线”写入，应该天然包含这些 cue；但用户可能
+    先设了基线、之后又重转/删改，或表格显示与状态不同步。点“保留”时做一次
+    幂等补齐：已经重叠的 cue 不重复插，缺的才按转写时的精确文本补回。
+    """
+    start = float(item.get("start", 0.0) or 0.0)
+    end = float(item.get("end", 0.0) or 0.0)
+    targets = [dict(c) for c in (item.get("cues") or []) if isinstance(c, dict)]
+    if not targets:
+        targets = _audit_match_cues(existing, start, end)
+    if not targets and str(item.get("text") or "").strip():
+        targets = [{"start": start, "end": end, "text": str(item.get("text") or "")}]
+
+    added: list[SubtitleCue] = []
+    for target in targets:
+        text = " ".join(str(target.get("text") or "").split())
+        if not text:
+            continue
+        t_start = round(max(0.0, float(target.get("start", start) or 0.0)), 3)
+        t_end = round(max(t_start + 0.001, float(target.get("end", end) or 0.0)), 3)
+        normalized = " ".join(text.split())
+        same_text = any(" ".join(cue.text.split()) == normalized for cue in existing)
+        same_text = same_text or any(" ".join(cue.text.split()) == normalized for cue in added)
+        if same_text or _audit_cue_overlaps(existing, t_start, t_end) or _audit_cue_overlaps(added, t_start, t_end):
+            continue
+        added.append(SubtitleCue(t_start, t_end, text))
+
+    if not added:
+        return existing, 0
+    return _unique_sorted_cues([*existing, *added]), len(added)
+
+
+def _audit_counts(items: list[dict]) -> dict:
+    counts = {"total": len(items), "pending": 0, "done": 0, "skipped": 0}
+    by_kind = {kind: 0 for kind in AUDIT_KIND_ORDER}
+    for item in items:
+        status = str(item.get("status") or "pending")
+        if status not in counts:
+            status = "pending"
+        counts[status] += 1
+        kind = str(item.get("kind") or "")
+        if kind in by_kind:
+            by_kind[kind] += 1
+    counts["by_kind"] = by_kind
+    return counts
+
+
+def empty_audit_payload() -> str:
+    return json.dumps({
+        "version": 1,
+        "session": AUDIT_SESSION_ID,
+        "media": "",
+        "items": [],
+        "statuses": {},
+        "counts": _audit_counts([]),
+        "latest_cue_count": 0,
+        "hidden_missed": 0,
+        "revision": 0,
+        "last_action": None,
+    }, ensure_ascii=False)
+
+
+def make_audit_payload(
+    media_name: str,
+    items: list[dict],
+    statuses: dict | None = None,
+    latest_cue_count: int = 0,
+    hidden_missed: int = 0,
+    revision: int = 0,
+    last_action: dict | None = None,
+) -> str:
+    """把 item 与状态合并成前端可直接渲染的 JSON。
+
+    status 记录既接受「done」字符串，也接受 {"status":..., "resolution":...}
+    的旧/新两种形状，避免升级后把用户已有的核对进度读丢。
+    """
+    statuses = dict(statuses or {})
+    merged: list[dict] = []
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        record = statuses.get(str(item.get("id") or ""))
+        if isinstance(record, dict):
+            item["status"] = str(record.get("status") or "pending")
+            item["resolution"] = str(record.get("resolution") or "")
+        elif isinstance(record, str) and record:
+            item["status"] = record
+            item["resolution"] = ""
+        else:
+            # statuses 是唯一真源：没有记录 = 待核。
+            # 不能用 setdefault —— 重新放回待核时 item 里还留着上一次的 done。
+            item["status"] = "pending"
+            item["resolution"] = ""
+        merged.append(item)
+
+    payload = {
+        "version": 1,
+        "session": AUDIT_SESSION_ID,
+        "media": str(media_name or ""),
+        "items": merged,
+        "statuses": statuses,
+        "counts": _audit_counts(merged),
+        "latest_cue_count": int(latest_cue_count or 0),
+        "hidden_missed": int(hidden_missed or 0),
+        "revision": int(revision or 0),
+        "last_action": last_action,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_audit_payload(text) -> dict:
+    try:
+        data = json.loads(text or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_audit_payload(media_file, payload_text: str) -> Path | None:
+    """把队列与处理进度落到媒体同名 .qa.json；失败不阻断主流程。"""
+    path = audit_state_path(media_file)
+    if path is None:
+        return None
+    try:
+        write_text_atomic(path, payload_text)
+    except OSError:
+        log.debug("质检队列落盘失败 | %s", path, exc_info=True)
+        return None
+    return path
+
+
+def load_audit_payload(media_file) -> str:
+    """读取同名媒体的历史质检队列；没有/损坏时返回空队列。"""
+    path = audit_state_path(media_file)
+    if path is None or not path.exists():
+        return empty_audit_payload()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return empty_audit_payload()
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return empty_audit_payload()
+    # 跨进程不恢复：重启应用后默认就是空队列，不把上一次的核对进度带进来。
+    if str(data.get("session") or "") != AUDIT_SESSION_ID:
+        log.info("忽略上次进程的质检队列 | %s", path.name)
+        return empty_audit_payload()
+    data.setdefault("statuses", {})
+    data.setdefault("revision", 0)
+    data.setdefault("latest_cue_count", 0)
+    data.setdefault("hidden_missed", 0)
+    data.setdefault("media", Path(media_file).name if media_file else "")
+    # 重新合并一次，保证老文件里的 status 形状也能被前端识别
+    return make_audit_payload(
+        data.get("media") or (Path(media_file).name if media_file else ""),
+        data.get("items") or [],
+        data.get("statuses") or {},
+        data.get("latest_cue_count") or 0,
+        data.get("hidden_missed") or 0,
+        data.get("revision") or 0,
+        data.get("last_action"),
+    )
+
+
+def qa_apply_action(
+    cmd_json,
+    review_cues,
+    media_file,
+    qa_payload,
+    undo_stack=None,
+    redo_stack=None,
+):
+    """处理质检队列里的一次点击：标记 / 删除 / 恢复原句 / 定位编辑。
+
+    所有会改动字幕的动作都走既有的撤回栈，且只在“真的找到对应字幕”时才改，
+    避免用户在核对台尚未设为基线时误删或误插。
+    """
+    existing = _unique_sorted_cues(review_cues)
+    fallback_dicts = _cues_to_dicts(existing)
+    fallback_table = review_cues_to_table(existing)
+    u_stack = list(undo_stack or [])
+    r_stack = list(redo_stack or [])
+    payload = _parse_audit_payload(qa_payload)
+    items = [dict(item) for item in (payload.get("items") or []) if isinstance(item, dict)]
+
+    def fallback(message: str, *, edit=None):
+        return (
+            fallback_dicts,
+            fallback_table,
+            gr.update(),
+            message,
+            u_stack,
+            r_stack,
+            qa_payload or empty_audit_payload(),
+            *(edit or (gr.update(), gr.update(), gr.update(), gr.update())),
+        )
+
+    if not items:
+        gr.Warning("⚠️ 质检队列为空或已失效，请先重新转写生成。")
+        return fallback("⚠️ 质检队列为空，请先转写。")
+
+    try:
+        cmd = json.loads(cmd_json or "{}")
+    except (TypeError, ValueError):
+        cmd = {}
+    if not isinstance(cmd, dict):
+        cmd = {}
+
+    action = str(cmd.get("action") or "")
+    item_id = str(cmd.get("id") or "")
+    item = next((entry for entry in items if str(entry.get("id")) == item_id), None)
+    if item is None:
+        gr.Warning("⚠️ 没有找到这条待核记录，可能已重新转写，请刷新队列。")
+        return fallback("⚠️ 待核记录已失效。")
+
+    statuses = dict(payload.get("statuses") or {})
+    media_name = str(payload.get("media") or (Path(media_file).name if media_file else ""))
+    start = float(item.get("start", 0.0) or 0.0)
+    end = float(item.get("end", 0.0) or 0.0)
+    cues_changed = False
+    force_table_sync = False
+    edit_fields = (gr.update(), gr.update(), gr.update(), gr.update())
+    message = ""
+
+    def mark(status: str, resolution: str = "") -> None:
+        if status == "pending":
+            statuses.pop(item_id, None)
+        else:
+            statuses[item_id] = {"status": status, "resolution": resolution}
+
+    if action == "mark":
+        status = str(cmd.get("status") or "done")
+        if status not in {"pending", "done", "skipped"}:
+            status = "done"
+        resolution = str(cmd.get("resolution") or "")
+        mark(status, resolution)
+        if status == "pending":
+            message = "↺ 已重新放回待核队列。"
+        else:
+            message = {
+                "filled": "⚡ 已补录并插入核对台。",
+                "restored": "↩ 已恢复原句。",
+                "deleted": "🗑 已删除此句。",
+                "kept": "✅ 已保留。",
+                "confirmed": "✓ 已确认删除。",
+                "not-speech": "✓ 已标记为不是台词。",
+                "skipped": "⏭ 已跳过。",
+            }.get(resolution, "✅ 已标记为本条处理完成。")
+            # 短句待确认点“保留”时，核对台可能因为“先设基线、后重转/删改”
+            # 而缺少这句。这里幂等补齐，并强制刷新表格，避免状态与表格不同步。
+            if resolution == "kept" and str(item.get("kind") or "") == "suspect":
+                before_ensure = existing
+                existing, added = _audit_ensure_item_cues(existing, item)
+                if added:
+                    u_stack, r_stack = _push_history(u_stack, before_ensure)
+                    cues_changed = True
+                    message = (
+                        f"✅ 已保留；核对台原先缺少这句，已自动补回 {added} 条字幕"
+                        "（可按 Cmd+Z 撤回）。"
+                    )
+                else:
+                    message = "✅ 已保留；核对台已包含这句，表格已刷新对齐。"
+                force_table_sync = True
+    elif action == "skip":
+        mark("skipped", "skipped")
+        message = "⏭ 已跳过这一条，可随时点「↺ 重新待核」找回。"
+    elif action == "delete_cue":
+        targets = [c for c in (item.get("cues") or []) if isinstance(c, dict)]
+        remove_keys = {
+            (
+                int(round(float(c.get("start", 0.0)) * 1000)),
+                int(round(float(c.get("end", 0.0)) * 1000)),
+                str(c.get("text") or ""),
+            )
+            for c in targets
+        }
+        if not remove_keys:
+            # 兜底：构建队列时没匹配到（例如用户刚改过字幕），按时间包含关系找
+            remove_keys = {
+                (int(round(cue.start * 1000)), int(round(cue.end * 1000)), cue.text)
+                for cue in existing
+                if cue.start >= start - 0.08 and cue.end <= end + 0.08
+            }
+        remaining = [
+            cue for cue in existing
+            if (int(round(cue.start * 1000)), int(round(cue.end * 1000)), cue.text) not in remove_keys
+        ]
+        if len(remaining) == len(existing):
+            gr.Warning("⚠️ 核对台里没有找到这句字幕。请先点「📌 本次设为基线」再试。")
+            return fallback("⚠️ 核对台未找到对应字幕，未做删除。")
+        removed_count = len(existing) - len(remaining)
+        u_stack, r_stack = _push_history(u_stack, existing)
+        existing = remaining
+        cues_changed = True
+        mark("done", "deleted")
+        message = f"🗑 已从核对台删除该段对应的 {removed_count} 条字幕（可按 Cmd+Z 撤回）。"
+    elif action == "restore":
+        text = " ".join(str(item.get("text") or "").split())
+        if not text:
+            gr.Warning("⚠️ 这条记录没有可恢复的原文，请改用「⚡ 重新识别」。")
+            return fallback("⚠️ 没有可恢复的原文。")
+        new_cue = SubtitleCue(round(start, 3), round(max(end, start + 0.1), 3), text)
+        combined = _unique_sorted_cues([*existing, new_cue])
+        if len(combined) == len(existing):
+            mark("done", "restored")
+            message = "ℹ️ 这句已经在核对台里了，未重复插入。"
+        else:
+            u_stack, r_stack = _push_history(u_stack, existing)
+            existing = combined
+            cues_changed = True
+            mark("done", "restored")
+            message = "↩ 已按原文恢复这句字幕（可按 Cmd+Z 撤回）。"
+    elif action == "focus":
+        targets = [c for c in (item.get("cues") or []) if isinstance(c, dict)]
+        target = targets[0] if targets else None
+        if target is None:
+            # 用区间内第一条字幕兜底
+            overlapping = _audit_match_cues(existing, start, end)
+            target = overlapping[0] if overlapping else None
+        idx = 0
+        if target is not None:
+            for i, cue in enumerate(existing, start=1):
+                if (
+                    int(round(cue.start * 1000)) == int(round(float(target.get("start", 0.0)) * 1000))
+                    and int(round(cue.end * 1000)) == int(round(float(target.get("end", 0.0)) * 1000))
+                ):
+                    idx = i
+                    break
+        text = str(target.get("text") if target else item.get("text") or "")
+        edit_fields = (
+            idx or gr.update(),
+            format_srt_timestamp(start),
+            format_srt_timestamp(end),
+            text,
+        )
+        message = "✏️ 已定位并填入上方单行精修框，改完点「✏️ 更新此行」。"
+    else:
+        gr.Warning("⚠️ 未知的质检操作。")
+        return fallback("⚠️ 未知操作。")
+
+    revision = int(payload.get("revision") or 0) + 1
+    auto_advance = action in {"mark", "skip", "delete_cue", "restore"} and not (
+        action == "mark" and str(cmd.get("status") or "") == "pending"
+    )
+    new_payload = make_audit_payload(
+        media_name,
+        items,
+        statuses,
+        payload.get("latest_cue_count") or len(existing),
+        payload.get("hidden_missed") or 0,
+        revision,
+        {
+            "id": item_id,
+            "action": action,
+            "seq": revision,
+            "auto_advance": auto_advance,
+            "message": message,
+        },
+    )
+    write_audit_payload(media_file, new_payload)
+
+    if cues_changed or force_table_sync:
+        log.info(
+            "质检动作 | action=%s | id=%s | cues=%s | media=%s | table_sync=%s",
+            action,
+            item_id,
+            len(existing),
+            media_name,
+            force_table_sync,
+        )
+        return (
+            _cues_to_dicts(existing),
+            review_cues_to_table(existing),
+            build_review_payload(media_file, existing, include_peaks=False),
+            message,
+            u_stack,
+            r_stack,
+            new_payload,
+            *edit_fields,
+        )
+    return (
+        fallback_dicts,
+        gr.update(),
+        gr.update(),
+        message,
+        u_stack,
+        r_stack,
+        new_payload,
+        *edit_fields,
+    )
+
+
 def _cut_snap_summary(stats: dict | None) -> str:
     """报告里说明本次是否真的发生过强制切分与能量谷吸附。"""
     if not stats:
@@ -833,7 +1409,29 @@ def build_transcription_report(
 
     visible_missed = _visible_missed_spans(missed_spans)
     hidden = _missed_hidden_count(missed_spans)
-    lines.append("【疑似漏句区间】" + _missed_spans_headline(visible_missed))
+    hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
+    suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
+    hallucination_spans = list((segment_stats or {}).get("hallucination_spans") or [])
+
+    # 先用一句「人话」把三类问题放到同一张速览里，再接原来的明细。
+    # 用户不需要先理解 VAD / 幻觉 / 复核这些术语，也能知道下一步做什么。
+    quality_parts = [f"🔍 可能漏句 {len(visible_missed)} 处"]
+    if not is_qwen:
+        quality_parts.append(f"✂️ 误删待核 {hallucination_drops} 段")
+        quality_parts.append(f"👂 短句待确认 {suspect_cues} 段")
+    lines.append("【质检速览】" + " ｜ ".join(quality_parts))
+    if len(visible_missed) or hallucination_drops or suspect_cues:
+        lines.append(
+            "• 已生成可交互队列：页面上方 / 右下角「🔎 质检待核队列」可逐条试听、定位、补录、确认；"
+            "本报告保留为归档与一键复制用。"
+        )
+    else:
+        lines.append("• 本次没有需要人工试听复核的片段。")
+
+    lines.append(
+        "【疑似漏句区间】" + _missed_spans_headline(visible_missed)
+        + ("（有声音、但两次识别都为空 → 建议试听补录）" if visible_missed else "")
+    )
     if visible_missed:
         for span in visible_missed:
             # 老记录没有 peak 字段：不显示假的 1.000，避免读成「这段很响」
@@ -851,9 +1449,6 @@ def build_transcription_report(
             f"（多为配乐/底噪误判，已留在 .missed.json 备查）"
         )
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
-    hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
-    suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
-    hallucination_spans = list((segment_stats or {}).get("hallucination_spans") or [])
     dropped_rows = _hallucination_rows(hallucination_spans, "dropped")
     suspect_rows = _hallucination_rows(hallucination_spans, "suspect")
     if is_qwen:
@@ -864,6 +1459,7 @@ def build_transcription_report(
             "【幻觉门控】"
             + (
                 f"已丢弃 {hallucination_drops} 段经时间戳复核为空的疑似幻觉"
+                "（识别出过文字但复核为空，多为脑补；若你听到台词请点「恢复原句」补回）"
                 if hallucination_drops
                 else "未触发（没有段落复核为空被删）"
             )
@@ -873,6 +1469,7 @@ def build_transcription_report(
             "【幻觉复核】"
             + (
                 f"{suspect_cues} 段短/低密度结果未被丢弃，建议人工核对"
+                "（字幕已保留，听一遍确认保留或删除即可）"
                 if suspect_cues
                 else "未触发（无短段/低密度结果需要复核）"
             )
@@ -984,7 +1581,7 @@ def render_report_panel(report_text: str) -> str:
     head = (
         '<div class="report-panel-head">'
         '<span class="report-panel-title">📄 转录任务报告</span>'
-        '<span class="report-panel-hint">滚轮上下滑动查看全文 · 复制按钮输出纯文本原稿</span>'
+        '<span class="report-panel-hint">滚轮上下滑动查看全文 · 复制按钮输出纯文本原稿 · 待核项请用右下角「🔎 质检待核队列」</span>'
         "</div>"
     )
 
@@ -1065,13 +1662,13 @@ def transcribe_media(
 ):
     if media_file is None:
         gr.Warning("请先上传视频或音频文件。")
-        yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ 请先上传视频或音频文件。")
+        yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ 请先上传视频或音频文件。")
         return
 
     media_path = Path(media_file)
     if media_path.suffix.lower() not in SUPPORTED:
         gr.Warning(f"不支持的文件格式: {media_path.suffix}")
-        yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ 不支持的文件格式: {media_path.suffix}")
+        yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), f"❌ 不支持的文件格式: {media_path.suffix}")
         return
 
     start_s = parse_time_str(start_time_text)
@@ -1080,7 +1677,7 @@ def transcribe_media(
         start_s = 0.0
     if end_s is not None and start_s is not None and end_s <= start_s:
         gr.Warning(f"终止时间点 ({end_time_text}) 必须大于起始时间点 ({start_time_text})。")
-        yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "❌ 终止时间点必须大于起始时间点。")
+        yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "❌ 终止时间点必须大于起始时间点。")
         return
 
     slice_tag = ""
@@ -1109,7 +1706,7 @@ def transcribe_media(
         )
         log.warning("拒绝并发转写 | session=%s | %s", session, message)
         gr.Warning(f"⚠️ {message}")
-        yield (gr.update(),) * 7 + (f"⚠️ {message}",)
+        yield (gr.update(),) * 8 + (f"⚠️ {message}",)
         return
 
     log.info(
@@ -1242,17 +1839,39 @@ def transcribe_media(
                 )
                 final_progress = f"✅ 转录完成！共生成 {len(cues)} 条字幕（耗时 {format_duration(elapsed_time)}）"
 
+            # 质检待核队列：把报告里的三类静态清单变成可逐条试听/补录的队列。
+            # 新一轮转写重置状态（旧状态只对旧结果有意义），落盘后刷新页面也能恢复。
+            audit_items = build_audit_items(missed_spans, segment_stats, cues)
+            audit_payload = make_audit_payload(
+                media_path.name,
+                audit_items,
+                {},
+                len(cues),
+                _missed_hidden_count(missed_spans),
+            )
+            write_audit_payload(media_path, audit_payload)
+            pending_qa = sum(1 for item in audit_items if item.get("status") == "pending")
+            if pending_qa and not is_interrupted:
+                final_progress += f" ｜ 🔎 质检：{pending_qa} 处待你试听确认（右下角浮标）"
+            if is_interrupted:
+                final_progress += " ｜ ⚠️ 本次为打断结果，队列只覆盖已保存的字幕"
+
             log.info(
-                "转写完成 | job=%s | cues=%s | chars=%s | elapsed=%.2fs | interrupted=%s | out=%s",
+                "转写完成 | job=%s | cues=%s | chars=%s | elapsed=%.2fs | interrupted=%s | out=%s | qa=%s",
                 job.short_id(),
                 len(cues),
                 char_count,
                 elapsed_time,
                 is_interrupted,
                 out_path.name,
+                pending_qa,
             )
             state_cues = [{"start": c.start, "end": c.end, "text": c.text} for c in cues]
-            q.put(("done", (table_data, preview, str(out_path), str(out_path), state_cues, status_summary, render_report_panel(report_text), final_progress)))
+            q.put(("done", (
+                table_data, preview, str(out_path), str(out_path), state_cues,
+                status_summary, render_report_panel(report_text), final_progress,
+                audit_payload,
+            )))
         except Exception as exc:
             log.exception(
                 "转写失败 | job=%s | session=%s | media=%s | engine=%s",
@@ -1303,9 +1922,13 @@ def transcribe_media(
                     gr.update(),
                     gr.update(),
                     status_html,
+                    gr.update(),
                 )
             elif tag == "done":
-                table_data, preview, p1, p2, state_cues, status_summary, report_text, final_progress = item[1]
+                (
+                    table_data, preview, p1, p2, state_cues, status_summary,
+                    report_text, final_progress, audit_payload,
+                ) = item[1]
                 finished_normally = True
                 yield (
                     table_data,
@@ -1316,6 +1939,7 @@ def transcribe_media(
                     status_summary,
                     report_text,
                     final_progress,
+                    audit_payload,
                 )
                 break
             elif tag == "error":
@@ -1330,6 +1954,7 @@ def transcribe_media(
                     gr.update(),
                     gr.update(),
                     f"❌ 处理异常：{exc}\n\n详情已写入 `{LOG_LABEL}`。",
+                    gr.update(),
                 )
                 return
     finally:
@@ -2032,7 +2657,7 @@ def restore_auto_monitor(media_file, review_cues):
         # 没有转录源时不要清掉当前画面，只做提示，避免误操作丢画面
         return gr.update(), "⚠️ 尚未导入媒体文件，无法恢复自动监看。可点「📂 导入监看画面」直接指定片源。"
 
-    payload, status = prepare_review_workspace(media_file, review_cues)
+    payload, status, _qa = prepare_review_workspace(media_file, review_cues)
     return payload, "↺ " + status
 
 
@@ -2101,9 +2726,12 @@ def prepare_review_workspace(media_file, review_cues):
     # 导入新媒体即回到「自动跟随」模式，清掉上次手动指定的监看片源记忆
     _clear_monitor_meta()
     payload = build_review_payload(media_file, review_cues, include_peaks=True)
+    qa_payload = load_audit_payload(media_file)
+    qa_data = _parse_audit_payload(qa_payload)
+    qa_pending = int((qa_data.get("counts") or {}).get("pending", 0) or 0)
     data = json.loads(payload)
     if data.get("error") and not data.get("src"):
-        return payload, f"⚠️ {data['error']}"
+        return payload, f"⚠️ {data['error']}", qa_payload
     wave_state = "音频波形与时间轴已同步就绪，可在波形上拖拽框选漏句范围。" if data.get("peaks") else data.get("error", "媒体预览已就绪。")
     status = f"🎞️ 已载入「{data['name']}」｜{wave_state}"
 
@@ -2119,12 +2747,13 @@ def prepare_review_workspace(media_file, review_cues):
         if visible:
             total = sum(float(span.get("dur", 0.0) or 0.0) for span in visible)
             status += (
-                f"\n\n⚠️ 有 {len(visible)} 处疑似漏句（共 {total:.1f} 秒），"
-                "可在波形上框选后「识别并直接入轨」"
+                f"\n\n🔎 检测到 {len(visible)} 处「可能有声音但没出字幕」（共 {total:.1f} 秒）"
             )
         if hidden:
-            status += f"（另有 {hidden} 处近静音段已隐藏）"
-    return payload, status
+            status += f"（另有 {hidden} 处近静音段已折叠备查）"
+    if qa_pending:
+        status += f"\n\n👉 右侧「🔎 质检待核队列」还有 **{qa_pending}** 处待你试听确认，逐条处理即可，无需按时间码来回翻找。"
+    return payload, status, qa_payload
 
 # ==============================================================================
 # 校对断点进度管理 (Auto-Save Progress)
@@ -3087,6 +3716,10 @@ REVIEWER_HTML = (STATIC_DIR / "reviewer.html").read_text(encoding="utf-8")
 
 REVIEWER_CLIENT_JS = (STATIC_DIR / "reviewer.js").read_text(encoding="utf-8")
 
+QA_PANEL_HTML = (STATIC_DIR / "qa_panel.html").read_text(encoding="utf-8")
+
+QA_CLIENT_JS = (STATIC_DIR / "qa_panel.js").read_text(encoding="utf-8")
+
 CSS_CUSTOM = (STATIC_DIR / "theme.css").read_text(encoding="utf-8")
 
 try:
@@ -3521,6 +4154,11 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         hidden_sync_end = gr.Textbox(elem_id="hidden-sync-end", value="")
         btn_hidden_bridge_sync = gr.Button(elem_id="btn-hidden-bridge-sync")
         btn_hidden_bridge_transcribe = gr.Button(elem_id="btn-hidden-bridge-transcribe")
+        # 质检队列的单一数据源与动作桥：前端只改这两个隐藏框 + 点隐藏按钮，
+        # 不额外注册组件事件，避免面板随每次状态变化重绘导致滚动位置丢失。
+        qa_payload = gr.Textbox(elem_id="qa-payload", value="")
+        qa_cmd = gr.Textbox(elem_id="qa-cmd", value="")
+        btn_hidden_qa = gr.Button(elem_id="btn-hidden-qa")
 
     with gr.Group(elem_classes=["workbench-panel", "setup-panel"]):
         with gr.Row(elem_classes=["setup-row"]):
@@ -3805,6 +4443,9 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
 
 
 
+    # 质检待核队列：转写完成后自动浮到右下角，也可以钉回页面顶部内嵌显示。
+    qa_dock = gr.HTML(QA_PANEL_HTML, elem_classes=["qa-dock-wrap"])
+
     with gr.Row(elem_classes=["workbench-main-row"]):
         with gr.Column(scale=7, elem_classes=["workbench-panel"]):
             with gr.Row(elem_classes=["monitor-toolbar"]):
@@ -3874,7 +4515,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             review_status = gr.Markdown("📋 **字幕精修状态**：就绪。点击下方表格行或波形框选识别，字幕将在此同步供精修。")
 
             with gr.Row():
-                latest_as_base_btn = gr.Button("📌 本次设为基线", variant="secondary", size="sm")
+                latest_as_base_btn = gr.Button("📌 本次设为基线", variant="secondary", size="sm", elem_id="btn-latest-as-base")
                 append_patch_btn = gr.Button("➕ 添加本次局部转写", variant="primary", size="sm", elem_classes=["btn-primary-action"])
                 export_review_btn = gr.Button("💾 导出最终已核对 SRT", variant="secondary", size="sm")
 
@@ -4073,6 +4714,12 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         outputs=None,
         js=reset_transcribe_btn_js,
         api_name=False,
+    ).then(
+        None,
+        inputs=[review_status],
+        outputs=None,
+        js="(status) => { if (window.__qaPanel && window.__qaPanel.afterTranscribe) window.__qaPanel.afterTranscribe(status); }",
+        api_name=False,
     )
 
     review_payload.change(
@@ -4082,11 +4729,42 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         js=REVIEWER_CLIENT_JS,
         api_name=False,
     )
+
+    # 质检队列的唯一数据源：转写完成 / 媒体切换 / 每次处理动作后刷新前端面板。
+    qa_payload.change(
+        None,
+        inputs=qa_payload,
+        outputs=None,
+        js=QA_CLIENT_JS,
+        api_name=False,
+    )
+
+    # 质检面板的隐藏动作桥：前端写入 JSON 命令后点这个隐藏按钮。
+    btn_hidden_qa.click(
+        qa_apply_action,
+        inputs=[qa_cmd, review_cues_state, media, qa_payload, undo_stack_state, redo_stack_state],
+        outputs=[
+            review_cues_state,
+            review_table,
+            review_payload,
+            review_status,
+            undo_stack_state,
+            redo_stack_state,
+            qa_payload,
+            cue_edit_idx,
+            cue_edit_start,
+            cue_edit_end,
+            cue_edit_text,
+        ],
+        show_progress="hidden",
+        api_name=False,
+    )
+
     # 核心改动：导入媒体时的正常载入提示 -> 输出到左侧 proxy_status
     media.change(
         prepare_review_workspace,
         inputs=[media, review_cues_state],
-        outputs=[review_payload, proxy_status],
+        outputs=[review_payload, proxy_status, qa_payload],
         api_name=False,
     )
     # 核心改动：点击压制后的进度条与切换提示 -> 实时流式输出到左侧 proxy_status
@@ -4203,6 +4881,12 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
         use_latest_as_review_base,
         inputs=[cues_state, media, review_cues_state, undo_stack_state, redo_stack_state],
         outputs=[review_cues_state, review_table, review_payload, review_status, undo_stack_state, redo_stack_state],
+        api_name=False,
+    ).then(
+        None,
+        inputs=None,
+        outputs=None,
+        js="() => { if (window.__qaPanel && window.__qaPanel.refresh) setTimeout(() => window.__qaPanel.refresh(), 200); }",
         api_name=False,
     )
     append_patch_btn.click(
@@ -4515,7 +5199,7 @@ with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEM
             keep_timeline_chk,
             *PARAM_COMPONENTS,
         ],
-        outputs=[cue_table, preview, download, saved_path, cues_state, status, report_box, transcribe_progress],
+        outputs=[cue_table, preview, download, saved_path, cues_state, status, report_box, transcribe_progress, qa_payload],
         # 必须保持 hidden：原生追踪器会给每个 output 组件各画一条进度条，
         # 报告区与下方表格就会出现与顶部卡片错拍的重复进度条。
         # 进度只走 transcribe_progress 里的 _render_transcribe_progress_card。

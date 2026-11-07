@@ -1309,3 +1309,399 @@ button.btn-run {
 .report-raw-src {
     display: none !important;
 }
+
+/* ============ 质检待核队列（原报告三类清单的可操作形态） ============ */
+.qa-dock-wrap {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    min-height: 0 !important;
+}
+.qa-dock-wrap .html-container,
+.qa-dock-wrap .prose {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+}
+
+.qa-dock[data-mode="hidden"] { display: none !important; }
+.qa-dock[data-mode="mini"] .qa-panel { display: none !important; }
+.qa-dock[data-mode="open-pinned"] .qa-fab { display: none !important; }
+
+.qa-fab {
+    position: fixed !important;
+    right: 22px;
+    bottom: 22px;
+    z-index: 952;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    box-shadow: 0 10px 28px rgba(67, 56, 202, 0.38);
+    cursor: pointer;
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.qa-fab:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 34px rgba(67, 56, 202, 0.48);
+}
+.qa-fab.is-complete {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    box-shadow: 0 10px 28px rgba(5, 150, 105, 0.32);
+}
+.qa-fab-icon { font-size: 15px; }
+.qa-fab-arrow { font-size: 18px; opacity: 0.85; margin-left: 2px; }
+
+.qa-panel {
+    border: 1px solid #e2e8f0;
+    border-left: 3px solid #6366f1;
+    border-radius: 14px;
+    background: #ffffff;
+    padding: 12px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.qa-dock[data-mode="open-pinned"] .qa-panel {
+    position: fixed !important;
+    right: 22px;
+    bottom: 22px;
+    z-index: 952;
+    width: min(500px, calc(100vw - 32px));
+    max-height: min(78vh, 760px);
+}
+.qa-dock[data-mode="open-inline"] .qa-panel {
+    margin: 0 0 12px 0;
+}
+
+.qa-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eef2f8;
+}
+.qa-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: #1e293b;
+}
+.qa-title-icon { font-size: 15px; }
+.qa-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #4338ca;
+    background: #eef2ff;
+    border: 1px solid #dfe5ff;
+    border-radius: 999px;
+    padding: 2px 9px;
+}
+.qa-head-btns { display: inline-flex; align-items: center; gap: 4px; }
+.qa-icon-btn {
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.14s ease;
+}
+.qa-icon-btn:hover { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; }
+.qa-icon-btn.is-on { background: #eef2ff; border-color: #a5b4fc; color: #4338ca; }
+
+.qa-help {
+    margin-top: 8px;
+    padding: 9px 10px;
+    border-radius: 9px;
+    background: #f8fafc;
+    border: 1px solid #eef2f8;
+}
+.qa-help-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 4px 0;
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: #475569;
+}
+.qa-help-row b { flex: none; color: #1e293b; font-size: 11.5px; }
+.qa-help-row.kind-dropped b { color: #b45309; }
+.qa-help-row.kind-suspect b { color: #0369a1; }
+.qa-help-foot {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px dashed #e2e8f0;
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.55;
+}
+
+.qa-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 9px;
+}
+.qa-primary {
+    height: 32px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    color: #ffffff;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(79, 70, 229, 0.3);
+}
+.qa-primary:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
+.qa-ghost {
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.qa-ghost:disabled { opacity: 0.5; cursor: default; }
+.qa-auto {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    font-size: 11.5px;
+    color: #64748b;
+    cursor: pointer;
+    user-select: none;
+}
+.qa-auto input { accent-color: #6366f1; }
+
+.qa-current {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #eef2ff;
+    border: 1px solid #e0e7ff;
+    font-size: 11.5px;
+    color: #3730a3;
+}
+.qa-current.kind-dropped { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.qa-current.kind-suspect { background: #f0f9ff; border-color: #bae6fd; color: #075985; }
+.qa-current-kind { font-weight: 700; }
+.qa-current-time { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+.qa-current-state { margin-left: auto; opacity: 0.85; }
+
+.qa-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin: 9px 0 6px 0;
+}
+.qa-chip {
+    height: 24px;
+    padding: 0 9px;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.14s ease;
+}
+.qa-chip:hover { border-color: #c7d2fe; color: #4338ca; }
+.qa-chip.is-on {
+    background: #eef2ff;
+    border-color: #a5b4fc;
+    color: #3730a3;
+}
+
+.qa-list {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+    padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: #d3dced transparent;
+}
+.qa-dock[data-mode="open-pinned"] .qa-list { max-height: min(46vh, 430px); }
+.qa-dock[data-mode="open-inline"] .qa-list { max-height: min(52vh, 520px); }
+.qa-list::-webkit-scrollbar { width: 7px; }
+.qa-list::-webkit-scrollbar-thumb { background: #dbe3ee; border-radius: 4px; }
+
+.qa-item {
+    border: 1px solid #eef2f8;
+    border-left: 3px solid #c7d2fe;
+    border-radius: 9px;
+    background: #fbfcff;
+    padding: 8px 10px;
+    margin-bottom: 7px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.qa-item.kind-missed { border-left-color: #818cf8; }
+.qa-item.kind-dropped { border-left-color: #f59e0b; }
+.qa-item.kind-suspect { border-left-color: #38bdf8; }
+.qa-item.is-current {
+    background: #eef2ff;
+    border-color: #a5b4fc;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.14);
+}
+.qa-item.is-done { opacity: 0.72; background: #f8fafc; }
+.qa-item.is-busy { border-color: #a5b4fc; animation: qa-pulse 1.1s ease-in-out infinite; }
+@keyframes qa-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.28); }
+    50% { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.08); }
+}
+.qa-item-top {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    font-size: 11px;
+}
+.qa-kind { font-weight: 700; color: #3730a3; }
+.qa-item.kind-dropped .qa-kind { color: #b45309; }
+.qa-item.kind-suspect .qa-kind { color: #0369a1; }
+.qa-time { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; color: #1e293b; }
+.qa-dur, .qa-peak, .qa-rule { color: #94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.qa-status {
+    margin-left: auto;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+}
+.qa-status.is-pending { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+.qa-status.is-done { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+.qa-status.is-skipped { background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+.qa-item-text {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: #334155;
+    word-break: break-word;
+}
+.qa-item.kind-dropped .qa-item-text { color: #92400e; font-weight: 600; }
+.qa-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+}
+.qa-btn {
+    height: 26px;
+    padding: 0 9px;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #334155;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.14s ease;
+}
+.qa-btn:hover { border-color: #a5b4fc; color: #4338ca; background: #f5f7ff; }
+.qa-btn-listen { color: #0369a1; border-color: #bae6fd; background: #f0f9ff; }
+.qa-btn-primary {
+    border: none;
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.28);
+}
+.qa-btn-primary:hover { color: #ffffff; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4); }
+.qa-btn-danger { color: #b91c1c; border-color: #fecaca; background: #fff5f5; }
+.qa-btn-danger:hover { color: #991b1b; border-color: #fca5a5; background: #fee2e2; }
+.qa-btn-ghost { color: #64748b; }
+.qa-btn-sm { height: 24px; font-size: 11px; padding: 0 8px; }
+
+.qa-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 7px 9px;
+    margin-bottom: 7px;
+    border-radius: 8px;
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: #475569;
+}
+.qa-banner-warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.qa-banner b { color: inherit; }
+
+.qa-empty {
+    padding: 14px 6px;
+    text-align: center;
+    font-size: 12px;
+    color: #94a3b8;
+}
+.qa-foot {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px solid #eef2f8;
+}
+.qa-note-text {
+    font-size: 11.5px;
+    color: #4338ca;
+    font-weight: 600;
+    line-height: 1.5;
+    margin-bottom: 3px;
+}
+.qa-note-muted {
+    font-size: 10.5px;
+    color: #94a3b8;
+    line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+    .qa-dock[data-mode="open-pinned"] .qa-panel {
+        right: 8px;
+        left: 8px;
+        bottom: 8px;
+        width: auto;
+        max-height: 82vh;
+    }
+    .qa-fab { right: 12px; bottom: 12px; }
+}
+
+/* 质检队列里“断句前原文 vs 表格中的字幕”的差异提示 */
+.qa-item-text .qa-orig {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 10.5px;
+    font-weight: 400;
+    color: #94a3b8;
+    font-style: normal;
+}

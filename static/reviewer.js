@@ -1057,6 +1057,46 @@
 
     new ResizeObserver(renderAll).observe(canvasWrap);
     clampView();
+
+    // 质检队列联动：聚焦一个时间段并框选，可选自动播放（播到段尾自动停）。
+    // 面板只调用这个方法，不直接操作内部 viewStart/selected，避免两套状态打架。
+    const focusRange = (targetStart, targetEnd, opts = {}) => {
+      if (!duration) return false;
+      const s = Math.max(0, Number(targetStart) || 0);
+      const e = Math.min(duration, Math.max(s + 0.03, Number(targetEnd) || 0));
+      const span = Math.max(0.05, e - s);
+      const pad = Math.max(0.9, span * 1.4);
+      let nextSpan = Math.max(2.4, span + pad * 1.6);
+      if (nextSpan > duration) nextSpan = duration;
+      let nextStart = Math.max(0, s - pad * 0.4);
+      if (nextStart + nextSpan > duration) nextStart = Math.max(0, duration - nextSpan);
+
+      selected = [s, e];
+      viewStart = nextStart;
+      viewSpan = nextSpan;
+      clampView();
+      selectionBar.style.display = 'flex';
+      selectionInfo.textContent = `已选: ${format(s)} → ${format(e)} (${span.toFixed(2)}s)`;
+      isPlayingSelection = false;
+      safeSeekVideo(s);
+      if (opts.play) {
+        isPlayingSelection = true;
+        playSelBtn.textContent = '⏸ 停止';
+        const p = video.play();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } else {
+        playSelBtn.textContent = '▶ 试听';
+      }
+      renderAll();
+      return true;
+    };
+
+    const stopPlayback = () => {
+      isPlayingSelection = false;
+      try { video.pause(); } catch (_) {}
+      if (playSelBtn) playSelBtn.textContent = '▶ 试听';
+    };
+
     window.__reviewerInstance = {
       updateCues: (newCues) => {
         cues.length = 0;
@@ -1071,7 +1111,12 @@
           viewStart = Math.max(0, Math.min(duration - viewSpan, targetTime - viewSpan / 2));
         }
         renderAll();
-      }
+      },
+      focusRange: (start, end, opts) => focusRange(start, end, opts),
+      playRange: (start, end) => focusRange(start, end, { play: true }),
+      stopPlayback: () => stopPlayback(),
+      getCueCount: () => cues.length,
+      getCues: () => cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.text }))
     };
     renderAll();
   } catch (err) {

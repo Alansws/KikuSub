@@ -102,3 +102,20 @@ def test_report_raw_text_matches_panel_copy_source():
         align_stats={},
     )
     assert f'<pre id="report-raw-text" class="report-raw-src">{html_lib.escape(text)}</pre>' in app.render_report_panel(text)
+
+
+def test_report_offers_plain_language_summary_and_queue_pointer():
+    text = _report(
+        missed_spans=[{"start": 2.0, "end": 3.0, "dur": 1.0, "peak": 0.2}],
+        segment_stats={
+            "hallucination_drops": 1,
+            "suspect_cues": 1,
+            "hallucination_spans": _SPANS,
+        },
+        align_stats={},
+    )
+    # 术语之外先给一句人话总览，并明确告诉用户去可交互队列处理
+    assert "【质检速览】🔍 可能漏句 1 处 ｜ ✂️ 误删待核 1 段 ｜ 👂 短句待确认 1 段" in text
+    assert "「🔎 质检待核队列」" in text
+    assert "有声音、但两次识别都为空" in text
+    assert "若你听到台词请点「恢复原句」补回" in text

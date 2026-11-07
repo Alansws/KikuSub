@@ -45,6 +45,7 @@ You upload a file, the app segments speech with Silero VAD, transcribes each seg
 - Undo / redo for the last 50 review operations, covering delete, update, insert, clear, import and append
 - Autosave and resume: `*.autosave_draft.srt` plus `*.progress.json`; re-importing jumps back to the line you last edited
 - Import an external SRT as a baseline, then merge results either by replacing the baseline or by appending only new cues
+- **QA queue**: after a run, a floating dock merges "possible missed line / deleted by hallucination check / short line to confirm" into one time-ordered list. Each item can be listened to, auto-selected on the waveform, patched in, restored, or deleted; progress is saved to `*.qa.json` and survives a reload within the same app run; restarting the app starts with an empty queue
 
 **Other**
 
@@ -271,6 +272,7 @@ Presets live in `presets.json` at the repository root (`版本: 1`, split into `
 | `{name}.progress.json` | Last reviewed line, timestamps and text |
 | `{name}.reviewed.srt` | Exported from the review workspace |
 | `{name}.missed.json` | Suspected missed-speech spans (written only when there are any) |
+| `{name}.qa.json` | QA queue items and per-item progress (same-run resume; cleared on app restart) |
 | `outputs/web_proxies/{name}_{size}_preview.mp4` | 480p preview proxy, generated on demand |
 | `outputs/.cache/audio/*.wav` | 16k decode cache shared by transcription and the waveform |
 

@@ -64,7 +64,7 @@ def test_transcribe_media_rejects_second_session(tmp_path, monkeypatch):
         *defaults,
     )
     outputs = next(generator)
-    assert len(outputs) == 8
+    assert len(outputs) == 9
     assert "已有任务在运行" in outputs[-1]
     assert warnings and "已有任务在运行" in warnings[-1]
     assert owner.is_set() is False
