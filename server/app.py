@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
@@ -35,6 +37,31 @@ log = logging.getLogger("kikusub.server")
 API_VERSION = "0.1.0"
 
 
+def _warmup() -> None:
+    """后台预热推理内核。
+
+    为什么要单独起线程：`import core.pipeline` 会拉起 torch / transformers，
+    耗时约 7 秒。如果放在请求里做，用户点「开始转写」后会**干等 7 秒没反应**。
+    放在启动后的后台线程里，这 7 秒和「用户挑文件、看界面」重叠掉了。
+
+    握手仍然在 0.5 秒内完成，所以窗口该多快就多快（规划 §5 指标 5）。
+    """
+    try:
+        from core.transcribe import detect_device
+
+        import core.pipeline  # noqa: F401  —— 真正把 torch 拉起来的就是这一行
+
+        log.info("内核预热完成 | device=%s", detect_device())
+    except Exception:
+        log.exception("内核预热失败（不影响启动，首次转写会慢一些）")
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    threading.Thread(target=_warmup, daemon=True, name="kikusub-warmup").start()
+    yield
+
+
 def create_app(config: ServerConfig | None = None) -> FastAPI:
     config = config or ServerConfig()
 
@@ -45,10 +72,11 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_lifespan,
     )
     app.state.config = config
     app.state.token = config.token
-    app.state.media = MediaStore()
+    app.state.media = MediaStore(output_dir=config.output_dir)
     app.state.sessions = SessionStore()
     app.state.presets = PresetStore()
     app.state.jobs = JobManager(config.output_dir)

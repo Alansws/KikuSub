@@ -10,7 +10,11 @@
   let endText = $state('');
   let absolute = $state(true);
 
-  const running = $derived(app.job?.status === 'running' || app.job?.status === 'cancelling');
+  const running = $derived(
+  app.job?.status === 'queued' ||
+    app.job?.status === 'running' ||
+    app.job?.status === 'cancelling',
+);
   const pct = $derived(app.job?.percent ?? 0);
 
   function go() {
@@ -105,7 +109,9 @@
       </div>
       <div class="pc-bar"><i style="width:{pct}%"></i></div>
       <div class="pc-meta">
-        {#if app.job.status === 'running'}
+        {#if app.job.status === 'queued'}
+          <span>正在唤醒推理内核，通常需要几秒</span>
+        {:else if app.job.status === 'running'}
           <span>已用 {app.job.elapsed?.toFixed?.(1) ?? '0'} s</span>
           <span>引擎 {engine}</span>
         {:else if app.job.status === 'done'}

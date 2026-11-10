@@ -216,6 +216,15 @@ async function captureAndQuit() {
     // 让合成器把当前状态真正画出来。
     win.showInactive();
     await new Promise((r) => setTimeout(r, SHOT_DELAY_MS));
+    // 开发用：KIKUSUB_DEV_EVAL 里的 JS 会在渲染进程里执行并打印结果
+    if (!app.isPackaged && process.env.KIKUSUB_DEV_EVAL) {
+      try {
+        const out = await win.webContents.executeJavaScript(process.env.KIKUSUB_DEV_EVAL);
+        console.log('[eval]', typeof out === 'string' ? out : JSON.stringify(out));
+      } catch (err) {
+        console.log('[eval:error]', err.message);
+      }
+    }
     if (!app.isPackaged) {
       const info = await win.webContents.executeJavaScript(
         `JSON.stringify({
@@ -224,6 +233,11 @@ async function captureAndQuit() {
           active: document.querySelector('.sb-item.active')?.textContent?.trim(),
           title: document.querySelector('.tb-title')?.textContent,
           rows: document.querySelectorAll('.row').length,
+          video: (() => {
+            const v = document.querySelector('video');
+            return v ? { w: v.videoWidth, h: v.videoHeight, err: v.error && v.error.code, src: v.currentSrc.slice(-28) } : null;
+          })(),
+          notice: document.querySelector('.notice')?.textContent?.trim() ?? null,
         })`,
       );
       console.log('[probe]', info);

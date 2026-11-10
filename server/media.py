@@ -14,7 +14,8 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core import audio_cache
+from core import audio_cache, proxy
+from core.paths import OUTPUT_DIR
 from core.procutil import CommandCancelled, CommandTimeout, run_command
 
 # 与 app.py 的 SUPPORTED 保持一致；这里只做快速失败，真正的解码能力由 ffmpeg 决定。
@@ -45,6 +46,8 @@ class MediaInfo:
     video_codec: str = ""
     audio_codec: str = ""
     has_video: bool = False
+    # 是否已经存在压好的 480p 监看代理。由 MediaStore 在探测时刷新。
+    proxy_ready: bool = False
 
     @property
     def suffix(self) -> str:
@@ -70,6 +73,7 @@ class MediaInfo:
             "audio_codec": self.audio_codec,
             "has_video": self.has_video,
             "needs_proxy": self.needs_proxy,
+            "proxy_ready": self.proxy_ready,
         }
 
 
@@ -104,8 +108,9 @@ class _PeaksEntry:
 class MediaStore:
     """进程内媒体表。线程安全：所有读写都走同一把锁。"""
 
-    def __init__(self, max_peaks_entries: int = 16) -> None:
+    def __init__(self, max_peaks_entries: int = 16, output_dir: Path | None = None) -> None:
         self._lock = threading.RLock()
+        self._output_dir = Path(output_dir) if output_dir else OUTPUT_DIR
         self._items: dict[str, MediaInfo] = {}
         self._peaks: dict[tuple[str, int], _PeaksEntry] = {}
         self._max_peaks_entries = max_peaks_entries
@@ -136,6 +141,7 @@ class MediaStore:
                 size=path.stat().st_size,
             )
             self._probe(info)
+            info.proxy_ready = self.proxy_path(info) is not None
             self._items[media_id] = info
             return info
 
@@ -157,6 +163,23 @@ class MediaStore:
                 info.audio_codec = codec
 
     # -- 查询 ---------------------------------------------------------------
+
+    def proxy_path(self, info: MediaInfo) -> Path | None:
+        """已压好的 480p 代理路径；没有则 None。
+
+        每次都问一遍磁盘（而不是缓存）：压制任务在另一个线程里写文件，
+        缓存会让前端永远看不到「刚压好」这个状态。
+        """
+        try:
+            return proxy.get_existing_proxy(info.path, self._output_dir)
+        except Exception:
+            return None
+
+    def describe(self, media_id: str) -> dict:
+        """对外描述：带上实时的 proxy_ready。"""
+        info = self.get(media_id)
+        info.proxy_ready = self.proxy_path(info) is not None
+        return info.to_dict()
 
     def get(self, media_id: str) -> MediaInfo:
         with self._lock:

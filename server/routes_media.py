@@ -44,17 +44,21 @@ def import_media(payload: ImportRequest, request: Request) -> dict:
         info = _store(request).register(payload.path)
     except MediaError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return info.to_dict()
+    return _store(request).describe(info.id)
 
 
 @router.get("/api/media", dependencies=[Depends(require_token)])
 def list_media(request: Request) -> dict:
-    return {"items": [info.to_dict() for info in _store(request).list()]}
+    store = _store(request)
+    return {"items": [store.describe(info.id) for info in store.list()]}
 
 
 @router.get("/api/media/{media_id}", dependencies=[Depends(require_token)])
 def get_media(media_id: str, request: Request) -> dict:
-    return _info_or_400(request, media_id).to_dict()
+    """元数据。`proxy_ready` 是**实时**的——压制任务在另一个线程写盘，
+    前端靠它决定要不要把 `<video>` 切到代理。"""
+    _info_or_400(request, media_id)
+    return _store(request).describe(media_id)
 
 
 @router.delete("/api/media/{media_id}", dependencies=[Depends(require_token)])
@@ -89,10 +93,13 @@ _LOD_BINS = {
 
 
 @router.get("/media/{media_id}")
-def stream_media(media_id: str, request: Request):
-    """原始媒体流（支持 Range）。
+def stream_media(media_id: str, request: Request, proxy: int = 0):
+    """媒体流（支持 Range）。
 
     浏览器 `<video>` 发不了 `Authorization` 头，所以这里用 `?token=` 鉴权。
+
+    `?proxy=1` 时改发 480p 监看代理：Chromium 解不开 MKV / HEVC，
+    前端在压制完成后把 src 换成这个地址即可，不必再拉一次元数据。
     """
     if not token_ok(request):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or missing token")
@@ -102,6 +109,12 @@ def stream_media(media_id: str, request: Request):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     path: Path = info.path
+    if proxy:
+        found = _store(request).proxy_path(info)
+        if found is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="代理尚未生成")
+        path = found
+
     return FileResponse(
         path,
         media_type=_guess_media_type(path),

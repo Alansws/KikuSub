@@ -220,3 +220,62 @@ def test_api_proxy_job_reuses_existing(tmp_path):
         time.sleep(0.05)
     assert snapshot["status"] == "done"
     assert snapshot["result"]["proxy"]["reused"] is True
+
+
+# ---------------------------------------------------------------------------
+# 代理在 API 上的暴露（proxy_ready / ?proxy=1）
+# ---------------------------------------------------------------------------
+
+
+def _client(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from server.app import create_app
+    from server.config import ServerConfig
+
+    app = create_app(ServerConfig(token="proxy-api", output_dir=tmp_path))
+    return TestClient(app), {"Authorization": "Bearer proxy-api"}
+
+
+def test_media_reports_proxy_ready_after_proxy_exists(tmp_path):
+    client, auth = _client(tmp_path)
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"v" * 100)
+
+    media = client.post("/api/media", headers=auth, json={"path": str(source)}).json()
+    # 这里用的是空壳文件，ffprobe 探不到视频流，所以不断言 needs_proxy
+    # （needs_proxy 的判定由 test_proxy_paths_embed_media_size 那一组覆盖）
+    assert media["proxy_ready"] is False
+
+    # 压好一份代理后再问一次
+    standard, _ = proxy.proxy_paths(source, tmp_path)
+    _make(standard)
+    again = client.get(f"/api/media/{media['id']}", headers=auth).json()
+    assert again["proxy_ready"] is True
+
+
+def test_proxy_stream_404_before_ready(tmp_path):
+    client, auth = _client(tmp_path)
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"v" * 100)
+    media = client.post("/api/media", headers=auth, json={"path": str(source)}).json()
+    resp = client.get(f"/media/{media['id']}?token=proxy-api&proxy=1")
+    assert resp.status_code == 404
+    assert "代理" in resp.json()["detail"]
+
+
+def test_proxy_stream_serves_mp4_with_range(tmp_path):
+    client, auth = _client(tmp_path)
+    source = tmp_path / "clip.mkv"
+    source.write_bytes(b"v" * 100)
+    media = client.post("/api/media", headers=auth, json={"path": str(source)}).json()
+
+    standard, _ = proxy.proxy_paths(source, tmp_path)
+    _make(standard, size=200 * 1024)
+
+    resp = client.get(
+        f"/media/{media['id']}?token=proxy-api&proxy=1", headers={"Range": "bytes=0-1023"}
+    )
+    assert resp.status_code == 206
+    assert len(resp.content) == 1024
+    assert resp.headers["content-type"] == "video/mp4"

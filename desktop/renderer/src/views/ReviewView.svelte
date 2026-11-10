@@ -16,7 +16,11 @@
   let videoFailed = $state(false);
   let scrollTop = $state(0);
 
-  const src = $derived(app.media ? mediaUrl(app.media.id) : '');
+  // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
+  // proxy_ready 一变（压制完成）这里就自动换源，用户不用手动重开。
+  const src = $derived(
+    app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready)) : '',
+  );
   const cueIndex = $derived.by(() => {
     const t = play.time;
     const cues = app.cues;
@@ -227,10 +231,16 @@
       {#if src}
         <video
           {@attach bindVideo}
-          src={src}
+          {src}
           preload="auto"
           playsinline
           onerror={() => (videoFailed = true)}
+          onloadedmetadata={(e) => {
+            // 换源（原片 → 代理）后回到原来的位置，别把用户弹回片头
+            videoFailed = false;
+            const t = play.time;
+            if (t > 0.2) e.currentTarget.currentTime = t;
+          }}
         ></video>
       {:else}
         <div class="empty">还没有导入媒体</div>
@@ -240,12 +250,14 @@
         <div class="caption">{caption}</div>
       {/if}
 
-      {#if videoFailed || (app.media?.needs_proxy && !play.playing)}
+      {#if videoFailed || (app.media?.needs_proxy && !app.media?.proxy_ready)}
         <div class="notice">
           <Icon name="warn" size={13} />
-          {videoFailed
-            ? 'Chromium 无法直接解码这个容器，需要 480p 代理'
-            : '正在后台压制 480p 监看代理，压制完成后即可流畅拖动'}
+          {#if app.media?.proxy_ready}
+            Chromium 无法解码这个容器，代理已就绪但播放失败——请查看日志
+          {:else}
+            正在后台压制 480p 监看代理，完成后会自动切换
+          {/if}
         </div>
       {/if}
     </div>
