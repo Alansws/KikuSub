@@ -14,8 +14,65 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "electron": "^45.2.3",
+    "electron-builder": "^25.1.8",
     "svelte": "^5.19.0",
     "typescript": "^5.7.3",
     "vite": "^6.0.11"
+  },
+  "build": {
+    "appId": "com.kikusub.desktop",
+    "productName": "KikuSub",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main/**/*",
+      "renderer/dist/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "../build/pack/dist/sidecar",
+        "to": "python"
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.video",
+      "icon": "build/icon.icns",
+      "identity": null,
+      "darkModeSupport": true,
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "视频",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.movie",
+              "org.matroska.mkv"
+            ]
+          },
+          {
+            "CFBundleTypeName": "字幕",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.subtitle"
+            ]
+          }
+        ]
+      }
+    }
   }
 }

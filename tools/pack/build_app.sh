@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# 手工装配 KikuSub.app。
+#
+# 为什么不用 electron-builder：它在本机被宿主文件策略打断在 packaging 阶段
+# （复制 Electron 框架时对 default_app.asar 报 Operation not permitted）。
+# 手工装配的每一步都可控，出问题也看得见。
+#
+# 前置：bash tools/pack/build_sidecar.sh 已产出 build/pack/dist/sidecar
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
+
+APP="build/pack/KikuSub.app"
+ELECTRON_APP="desktop/node_modules/electron/dist/Electron.app"
+SIDECAR="build/pack/dist/sidecar"
+
+[ -d "$ELECTRON_APP" ] || { echo "缺少 Electron：cd desktop && npm install" >&2; exit 1; }
+[ -d "$SIDECAR" ] || { echo "缺少 sidecar：先跑 build_sidecar.sh" >&2; exit 1; }
+[ -d "desktop/renderer/dist" ] || { echo "缺少渲染层构建：cd desktop && npx vite build" >&2; exit 1; }
+
+echo "== 1/7 复制 Electron 框架 =="
+rm -rf "$APP"
+mkdir -p "$(dirname "$APP")"
+# default_app.asar 是 Electron 的占位应用，会被我们自己的 app 取代；
+# 本机策略可能拒绝复制它，允许失败。
+cp -R "$ELECTRON_APP" "$APP" || true
+rm -rf "$APP/Contents/Resources/default_app.asar"
+
+echo "== 2/7 改名主可执行文件 =="
+mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/KikuSub"
+
+echo "== 3/7 写入 Info.plist =="
+cat > "$APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>KikuSub</string>
+  <key>CFBundleDisplayName</key><string>KikuSub</string>
+  <key>CFBundleExecutable</key><string>KikuSub</string>
+  <key>CFBundleIdentifier</key><string>com.kikusub.desktop</string>
+  <key>CFBundleVersion</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleSignature</key><string>????</string>
+  <key>CFBundleIconFile</key><string>icon.icns</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSRequiresAquaSystemAppearance</key><false/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>视频</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.movie</string><string>org.matroska.mkv</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>字幕</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.subtitle</string><string>public.text</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
+
+echo "== 4/7 放入应用代码（main + renderer + package.json）=="
+mkdir -p "$APP/Contents/Resources/app"
+cp -R desktop/main "$APP/Contents/Resources/app/main"
+cp -R desktop/renderer/dist "$APP/Contents/Resources/app/renderer-dist"
+mkdir -p "$APP/Contents/Resources/app/renderer"
+mv "$APP/Contents/Resources/app/renderer-dist" "$APP/Contents/Resources/app/renderer/dist"
+cat > "$APP/Contents/Resources/app/package.json" <<'JSON'
+{
+  "name": "kikusub-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main/main.cjs"
+}
+JSON
+cp desktop/build/icon.icns "$APP/Contents/Resources/icon.icns"
+cp presets.json "$APP/Contents/Resources/python-presets.json" 2>/dev/null || true
+
+echo "== 5/7 放入 Python sidecar（737 MB，慢）=="
+cp -R "$SIDECAR" "$APP/Contents/Resources/python"
+cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || true
+
+echo "== 6/7 模型目录（本机自用：指向仓库里已下载的 6.6 GB）=="
+APPSUP="$HOME/Library/Application Support/KikuSub"
+mkdir -p "$APPSUP"
+MODELS_REAL="$(cd "$REPO_ROOT/models" 2>/dev/null && pwd -P || true)"
+if [ -n "$MODELS_REAL" ] && [ ! -e "$APPSUP/models" ]; then
+  ln -s "$MODELS_REAL" "$APPSUP/models"
+  echo "已建立软链：$APPSUP/models -> $MODELS_REAL"
+elif [ -e "$APPSUP/models" ]; then
+  echo "已存在：$APPSUP/models（保持不动）"
+else
+  echo "⚠️ 仓库里没有 models/，首次转写会触发下载"
+fi
+
+echo "== 7/7 自签 =="
+codesign --force --deep --sign - "$APP" 2>&1 | tail -3 || echo "（自签失败，本机运行通常也能启动）"
+
+echo
+echo "完成：$APP"
+du -sh "$APP"

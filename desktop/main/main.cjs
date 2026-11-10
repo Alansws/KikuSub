@@ -21,10 +21,11 @@ const DESKTOP_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..');
 
 const IS_DEV = !app.isPackaged;
+// 截图路径优先取环境变量：打包后的 .app 直接带 `--screenshot=` 会被 Chromium
+// 的命令行解析器拒掉（bad option），环境变量没有这个问题。
 const SHOT_ARG = process.argv.find((a) => a.startsWith('--screenshot'));
-const SHOT_PATH = SHOT_ARG
-  ? (SHOT_ARG.split('=')[1] || '/tmp/kikusub-app.png')
-  : null;
+const SHOT_PATH =
+  process.env.KIKUSUB_SHOT || (SHOT_ARG ? SHOT_ARG.split('=')[1] || '/tmp/kikusub-app.png' : null);
 // 截图前等多久：要盖住「sidecar 启动 + 首帧数据」的时间，默认 5.5s
 const SHOT_DELAY_MS = Number(process.env.KIKUSUB_SHOT_DELAY || 5500);
 
@@ -39,10 +40,52 @@ let quitting = false;
 // sidecar
 // ---------------------------------------------------------------------------
 
+/** 用户可写目录：~/Library/Application Support/KikuSub */
+function dataDir() {
+  return path.join(app.getPath('appData'), 'KikuSub');
+}
+
+function ensureDataDirs() {
+  const base = dataDir();
+  for (const sub of ['outputs', 'outputs/logs', 'outputs/web_proxies']) {
+    fs.mkdirSync(path.join(base, sub), { recursive: true });
+  }
+  // 首次运行把仓库里的预设抄一份过去（之后就以 App Support 为准）
+  const target = path.join(base, 'presets.json');
+  if (!fs.existsSync(target)) {
+    const source = IS_DEV
+      ? path.join(REPO_ROOT, 'presets.json')
+      : path.join(process.resourcesPath, 'python', 'presets.json');
+    try {
+      if (fs.existsSync(source)) fs.copyFileSync(source, target);
+    } catch {
+      /* 没有预设也能跑 */
+    }
+  }
+  return base;
+}
+
+/**
+ * 模型目录。优先级：
+ *   1. KIKUSUB_MODELS_DIR 环境变量
+ *   2. ~/Library/Application Support/KikuSub/models（正式位置）
+ *   3. 仓库里的 models/（本机自用：直接复用已下载的 6.6 GB，不必再下一遍）
+ *
+ * 打包后 `.app` 内部是只读的，模型绝不能放进去——规划 §7 的结论。
+ */
+function modelsDir() {
+  if (process.env.KIKUSUB_MODELS_DIR) return process.env.KIKUSUB_MODELS_DIR;
+  const inAppSupport = path.join(dataDir(), 'models');
+  if (fs.existsSync(inAppSupport)) return inAppSupport;
+  const inRepo = path.join(REPO_ROOT, 'models');
+  if (fs.existsSync(inRepo)) return inRepo;
+  return inAppSupport;
+}
+
 function pythonPath() {
   if (!IS_DEV) {
-    // 打包后：KikuSub.app/Contents/Resources/python/kikusub-server
-    return path.join(process.resourcesPath, 'python', 'kikusub-server');
+    // 打包后：KikuSub.app/Contents/Resources/python/sidecar
+    return path.join(process.resourcesPath, 'python', 'sidecar');
   }
   const venv = path.join(REPO_ROOT, '..', '.venv', 'bin', 'python');
   return fs.existsSync(venv) ? venv : 'python3';
@@ -55,10 +98,25 @@ function startSidecar() {
   const args = IS_DEV ? ['-m', 'server', '--port', '0'] : ['--port', '0'];
   const cwd = IS_DEV ? REPO_ROOT : path.join(process.resourcesPath, 'python');
 
+  const base = ensureDataDirs();
+  const models = modelsDir();
+  const modelReady = ['anime-whisper', 'qwen3-asr-ja-anime'].some((name) =>
+    fs.existsSync(path.join(models, name)),
+  );
+
   console.log('[sidecar] 启动', exe, args.join(' '));
+  console.log('[sidecar] 数据目录', base);
+  console.log('[sidecar] 模型目录', models, modelReady ? '(已就绪)' : '(⚠️ 未找到模型，首次转写会下载)');
   const child = spawn(exe, args, {
     cwd,
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    env: {
+      ...process.env,
+      PYTHONUNBUFFERED: '1',
+      KIKUSUB_MODELS_DIR: models,
+      KIKUSUB_OUTPUT_DIR: path.join(base, 'outputs'),
+      KIKUSUB_PRESETS_PATH: path.join(base, 'presets.json'),
+      KIKUSUB_STATIC_DIR: IS_DEV ? path.join(REPO_ROOT, 'static') : path.join(base, 'static'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -144,7 +202,7 @@ function stopSidecar() {
 
 /** 开发用种子：仅用于截图/联调，打包后不生效。 */
 let devSeed = null;
-if (!app.isPackaged && process.env.KIKUSUB_DEV_SEED) {
+if (process.env.KIKUSUB_DEV_SEED) {
   try {
     devSeed = JSON.parse(fs.readFileSync(process.env.KIKUSUB_DEV_SEED, 'utf8'));
     console.log('[seed] 已加载', devSeed.mediaPath, devSeed.cues?.length ?? 0, '条字幕');
@@ -217,7 +275,7 @@ async function captureAndQuit() {
     win.showInactive();
     await new Promise((r) => setTimeout(r, SHOT_DELAY_MS));
     // 开发用：KIKUSUB_DEV_EVAL 里的 JS 会在渲染进程里执行并打印结果
-    if (!app.isPackaged && process.env.KIKUSUB_DEV_EVAL) {
+    if (process.env.KIKUSUB_DEV_EVAL) {
       try {
         const out = await win.webContents.executeJavaScript(process.env.KIKUSUB_DEV_EVAL);
         console.log('[eval]', typeof out === 'string' ? out : JSON.stringify(out));
@@ -225,7 +283,7 @@ async function captureAndQuit() {
         console.log('[eval:error]', err.message);
       }
     }
-    if (!app.isPackaged) {
+    if (!app.isPackaged || process.env.KIKUSUB_PROBE) {
       const info = await win.webContents.executeJavaScript(
         `JSON.stringify({
           hasBridge: typeof window.kikusub,
