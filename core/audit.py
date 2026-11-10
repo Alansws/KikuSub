@@ -21,7 +21,7 @@ from .report import (
     _visible_missed_spans,
 )
 from .textio import write_text_atomic
-from .transcribe import SubtitleCue
+from .subtitles import SubtitleCue
 
 log = logging.getLogger(__name__)
 

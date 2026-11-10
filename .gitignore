@@ -85,3 +85,15 @@ Thumbs.db
 # Tool caches
 .ruff_cache/
 .pytest-tmp/
+
+# Electron 外壳
+desktop/node_modules/
+desktop/renderer/dist/
+desktop/build/
+desktop/dist/
+
+# Electron 外壳
+desktop/node_modules/
+desktop/renderer/dist/
+desktop/build/
+desktop/dist/

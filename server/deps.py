@@ -1,7 +1,11 @@
-"""共享依赖：会话 cookie。
+"""共享依赖：会话标识。
 
-`session_id` 走 cookie 而不是请求头，原因是前端有多个独立的 fetch 调用点
-（字幕表、波形、质检队列），让每个调用都带一个 id 头容易漏；cookie 由浏览器自动携带。
+**为什么是请求头而不是 cookie**：渲染进程用 `file://` 加载（打包后），
+对 `http://127.0.0.1` 的请求属于跨源，浏览器默认不发送 cookie
+（`credentials: 'same-origin'`），会话就会每次新建一个——表现为「刚写入的字幕
+下一次请求就没了」。所以改由客户端生成 id 并通过 `X-Kikusub-Session` 头带上。
+
+cookie 仍然保留作为兜底：万一将来从 http:// 同源页面访问，两种方式都能用。
 """
 
 from __future__ import annotations
@@ -11,6 +15,8 @@ from fastapi import Request, Response
 from .sessions import Session, SessionStore
 
 SESSION_COOKIE = "kikusub_sid"
+SESSION_HEADER = "x-kikusub-session"
+SESSION_HEADER = "x-kikusub-session"
 
 
 def session_store(request: Request) -> SessionStore:
@@ -19,7 +25,7 @@ def session_store(request: Request) -> SessionStore:
 
 def get_session(request: Request, response: Response) -> Session:
     store = session_store(request)
-    sid = request.cookies.get(SESSION_COOKIE)
+    sid = (request.headers.get(SESSION_HEADER) or "").strip() or request.cookies.get(SESSION_COOKIE)
     session = store.get(sid)
     if sid != session.id:
         response.set_cookie(

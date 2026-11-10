@@ -1,0 +1,401 @@
+/* ============================================================
+   设计令牌 —— 与静态高保真稿同一套值
+   注意：真实应用里没有「假窗口」。窗口边框、红绿灯、阴影都由 macOS 提供，
+   所以 body 是透明的，侧栏的 vibrancy 才能透出桌面。
+   ============================================================ */
+
+:root {
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur: 200ms;
+
+  --accent: #007aff;
+  --accent-hover: #0a6fd8;
+  --accent-soft: rgba(0, 122, 255, 0.1);
+  --accent-ring: rgba(0, 122, 255, 0.35);
+
+  --bg-content: #ffffff;
+  --bg-inspector: #fbfbfd;
+  --bg-toolbar: rgba(255, 255, 255, 0.84);
+  --bg-status: rgba(250, 250, 251, 0.92);
+  --bg-sidebar: rgba(246, 246, 248, 0.55);
+
+  --text: #1d1d1f;
+  --text-2: #6e6e73;
+  --text-3: #98989d;
+  --separator: rgba(0, 0, 0, 0.09);
+  --separator-soft: rgba(0, 0, 0, 0.055);
+
+  --fill: rgba(0, 0, 0, 0.045);
+  --fill-strong: rgba(0, 0, 0, 0.075);
+  --row-hover: rgba(0, 0, 0, 0.028);
+
+  --shadow-pop: 0 8px 26px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.1);
+  --caption-bg: rgba(0, 0, 0, 0.62);
+  --wave: #7b8a99;
+}
+
+html[data-theme='dark'] {
+  --accent: #0a84ff;
+  --accent-hover: #3b9bff;
+  --accent-soft: rgba(10, 132, 255, 0.16);
+  --accent-ring: rgba(10, 132, 255, 0.45);
+
+  --bg-content: #1e1e1e;
+  --bg-inspector: #232325;
+  --bg-toolbar: rgba(30, 30, 30, 0.86);
+  --bg-status: rgba(28, 28, 30, 0.94);
+  --bg-sidebar: rgba(38, 38, 40, 0.5);
+
+  --text: #f5f5f7;
+  --text-2: #a1a1a6;
+  --text-3: #7c7c81;
+  --separator: rgba(255, 255, 255, 0.11);
+  --separator-soft: rgba(255, 255, 255, 0.07);
+
+  --fill: rgba(255, 255, 255, 0.07);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+  --row-hover: rgba(255, 255, 255, 0.045);
+
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --caption-bg: rgba(0, 0, 0, 0.66);
+  --wave: #9aabbd;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent; /* vibrancy 需要它 */
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+    'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+  font-size: 13px;
+  line-height: 1.38;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+#app {
+  height: 100%;
+}
+
+/* ---------- 应用骨架 ---------- */
+
+.shell {
+  height: 100%;
+  display: flex;
+}
+
+.sidebar {
+  position: relative;
+  width: 224px;
+  flex: 0 0 224px;
+  background: var(--bg-sidebar);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  border-right: 1px solid var(--separator);
+  padding: 46px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-app-region: drag; /* 侧栏顶部空白可拖动窗口 */
+}
+.sidebar > * {
+  -webkit-app-region: no-drag;
+}
+.sidebar::before {
+  /* 顶部 46px 是红绿灯区，只用来拖动 */
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 46px;
+  -webkit-app-region: drag;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-content);
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- 通用控件 ---------- */
+
+.btn {
+  appearance: none;
+  border: 0;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+  background: var(--fill);
+  color: var(--text);
+  transition: background var(--dur) var(--ease), transform 120ms var(--ease);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  background: var(--fill-strong);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.985);
+}
+.btn:disabled {
+  opacity: 0.45;
+}
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--fill);
+}
+.btn.icon {
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.btn.danger {
+  color: #ff453a;
+}
+
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--fill);
+  border-radius: 7px;
+  gap: 2px;
+  height: 24px;
+}
+.seg button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 9px;
+  height: 20px;
+  border-radius: 5px;
+  cursor: default;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  white-space: nowrap;
+}
+.seg button:hover {
+  color: var(--text);
+}
+.seg button.on {
+  background: var(--bg-content);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  font-weight: 500;
+}
+html[data-theme='dark'] .seg button.on {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.field {
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--separator);
+  background: var(--bg-content);
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  font-size: 12.5px;
+  color: var(--text);
+  gap: 6px;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.field input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  user-select: text;
+}
+.field.mono,
+.field input.mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.kv .k {
+  color: var(--text-2);
+  flex: 0 0 auto;
+}
+.kv .v {
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kv .v.mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  letter-spacing: -0.02em;
+}
+
+.card {
+  background: var(--bg-content);
+  border: 1px solid var(--separator-soft);
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+html[data-theme='dark'] .card {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ins-h {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  background: var(--fill);
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.chip b {
+  color: var(--text);
+  font-weight: 600;
+}
+.chip.warn {
+  background: rgba(255, 159, 10, 0.14);
+  color: #b26a00;
+}
+.chip.warn b {
+  color: #b26a00;
+}
+.chip.ok {
+  background: rgba(48, 209, 88, 0.14);
+  color: #1c8b3c;
+}
+.chip.ok b {
+  color: #1c8b3c;
+}
+html[data-theme='dark'] .chip.warn,
+html[data-theme='dark'] .chip.warn b {
+  color: #ffb340;
+}
+html[data-theme='dark'] .chip.ok,
+html[data-theme='dark'] .chip.ok b {
+  color: #4ade80;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #30d158;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: 1px;
+  box-shadow: 0 0 0 2px rgba(48, 209, 88, 0.18);
+}
+.dot.off {
+  background: #ff9f0a;
+  box-shadow: 0 0 0 2px rgba(255, 159, 10, 0.18);
+}
+
+/* ---------- 滚动条（overlay 风格） ---------- */
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+  background-clip: content-box;
+}
+html[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

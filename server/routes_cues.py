@@ -11,12 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core.transcribe import (
-    SubtitleCue,
-    cues_to_srt,
-    cues_to_txt,
-    cues_to_vtt,
-)
+from core.subtitles import SubtitleCue, cues_to_srt, cues_to_txt, cues_to_vtt
 
 from .deps import get_session
 from .security import require_token

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from .audit import _audit_ensure_item_cues, _audit_match_cues, _parse_audit_payload, empty_audit_payload, make_audit_payload, write_audit_payload
 from .cues import _cues_to_dicts, _unique_sorted_cues
-from .transcribe import SubtitleCue, format_srt_timestamp
+from .subtitles import SubtitleCue, format_srt_timestamp
 
 log = logging.getLogger(__name__)
 

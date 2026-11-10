@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from .transcribe import SubtitleCue, format_srt_timestamp, parse_time_str
+from .subtitles import SubtitleCue, format_srt_timestamp, parse_time_str
 
 
 def _coerce_cues(raw_cues) -> list[SubtitleCue]:

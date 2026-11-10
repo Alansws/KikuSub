@@ -1,0 +1,21 @@
+{
+  "name": "kikusub-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "KikuSub macOS 原生外壳（Electron + Svelte）",
+  "main": "main/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "vite build && electron .",
+    "shot": "vite build && electron . --screenshot"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "electron": "^45.2.3",
+    "svelte": "^5.19.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11"
+  }
+}

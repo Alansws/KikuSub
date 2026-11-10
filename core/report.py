@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 from .paths import OUTPUT_DIR
-from .transcribe import format_duration, format_srt_timestamp
+from .subtitles import format_duration, format_srt_timestamp
 
 MISSED_REASON_LABELS = {
     "empty-after-retry": "重试后仍为空",

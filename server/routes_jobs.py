@@ -21,10 +21,6 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from core import pipeline
-from core.transcribe import WhisperVadConfig, build_whisper_config
-from core.qwen_ctc import QwenCtcConfig
-
 from .jobs import TERMINAL_EVENTS, JobConflict, JobManager, JobNotFound
 from .security import require_token, token_ok
 
@@ -51,7 +47,12 @@ def _manager(request: Request) -> JobManager:
     return request.app.state.jobs
 
 
-def _build_request(request: Request, payload: TranscribeJobRequest) -> pipeline.TranscribeRequest:
+def _build_request(request: Request, payload: TranscribeJobRequest):
+    # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
+    from core import pipeline
+    from core.qwen_ctc import QwenCtcConfig
+    from core.transcribe import WhisperVadConfig, build_whisper_config
+
     try:
         info = request.app.state.media.get(payload.media_id)
     except Exception as exc:

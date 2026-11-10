@@ -22,7 +22,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core import pipeline, proxy
+from core import proxy
 from core.jobs import CancelToken, JobBusy, JobRegistry
 from core.procutil import CommandCancelled
 from core.paths import OUTPUT_DIR
@@ -89,15 +89,15 @@ class JobManager:
         self._jobs: dict[str, JobRecord] = {}
         self._registry = JobRegistry()
         self._output_dir = Path(output_dir or OUTPUT_DIR)
-        # 可注入的编排入口：默认走 core.pipeline，测试里换成替身，
-        # 这样任务生命周期与 WS 语义可以在不加载模型的前提下验证。
-        self._runner = runner or pipeline.run_transcription
+        # 可注入的编排入口：默认走 core.pipeline（**延迟导入**——它会把 torch 拉进来，
+        # 而服务层启动时不该付这 7 秒），测试里换成替身。
+        self._runner = runner
 
     # -- 生命周期 -----------------------------------------------------------
 
     def start_transcribe(
         self,
-        request: pipeline.TranscribeRequest,
+        request,
         *,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
@@ -186,12 +186,17 @@ class JobManager:
         job.stage = str(event.get("stage") or job.stage)
         self._emit(job, {"type": "progress", **event, "job_percent": job.percent})
 
-    def _run_transcribe(self, job: JobRecord, request: pipeline.TranscribeRequest) -> None:
+    def _run_transcribe(self, job: JobRecord, request) -> None:
         job.status = "running"
         job.started_at = time.time()
         self._emit(job, {"type": "start", "job": job.snapshot()})
         try:
-            result = self._runner(
+            runner = self._runner
+            if runner is None:
+                from core.pipeline import run_transcription
+
+                runner = run_transcription
+            result = runner(
                 request,
                 on_progress=lambda ratio, stage: self._progress(job, ratio, stage),
                 cancel_event=job.token,

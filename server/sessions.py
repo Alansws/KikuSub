@@ -14,7 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from core.transcribe import SubtitleCue
+from core.subtitles import SubtitleCue
 
 # 撤销栈上限：100 步足够覆盖一次核对里的连续操作，再大只是占内存。
 UNDO_LIMIT = 100
