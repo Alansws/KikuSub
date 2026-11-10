@@ -18,6 +18,7 @@
   let startText = $state('');
   let endText = $state('');
   let absolute = $state(true);
+  let applyMode = $state<'auto' | 'replace' | 'append'>('auto');
   let presetName = $state('');
   let picked = $state('');
 
@@ -28,6 +29,18 @@
   );
   const pct = $derived(app.job?.percent ?? 0);
 
+  // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
+  // 不能每次渲染都覆盖用户手输的内容。
+  let seenSlice = 0;
+  $effect(() => {
+    const req = app.slice;
+    if (!req || req.nonce === seenSlice) return;
+    seenSlice = req.nonce;
+    startText = req.start;
+    endText = req.end;
+    applyMode = 'auto';
+  });
+
   // 只列出当前引擎可用的预设
   const presetsForEngine = $derived(
     tuning.presets.filter((p) => !p.engine || p.engine === engine),
@@ -35,7 +48,14 @@
 
   function go() {
     startTranscribe(
-      { engine, outputFormat, startText, endText, absoluteTimeline: absolute },
+      {
+        engine,
+        outputFormat,
+        startText,
+        endText,
+        absoluteTimeline: absolute,
+        apply: applyMode === 'auto' ? undefined : applyMode,
+      },
       parseTimeInput,
     );
   }
@@ -108,6 +128,22 @@
           {#each ['SRT', 'VTT', 'TXT'] as f (f)}
             <button class:on={outputFormat === f} onclick={() => (outputFormat = f)}>{f}</button>
           {/each}
+        </div>
+
+        <label for="apply">结果处理</label>
+        <div class="apply-row">
+          <div class="seg">
+            <button class:on={applyMode === 'auto'} onclick={() => (applyMode = 'auto')}>自动</button>
+            <button class:on={applyMode === 'replace'} onclick={() => (applyMode = 'replace')}>
+              覆盖
+            </button>
+            <button class:on={applyMode === 'append'} onclick={() => (applyMode = 'append')}>
+              追加
+            </button>
+          </div>
+          <span class="hint">
+            {applyMode === 'auto' ? '整片覆盖核对台，区间去重后追加' : applyMode === 'replace' ? '用本次结果替换整张表' : '与现有时间轴合并去重'}
+          </span>
         </div>
 
         <label></label>
@@ -261,6 +297,12 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+  .apply-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
   }
   .hint {
     font-size: 11.5px;

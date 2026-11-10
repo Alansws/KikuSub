@@ -40,8 +40,9 @@ let quitting = false;
 // sidecar
 // ---------------------------------------------------------------------------
 
-/** 用户可写目录：~/Library/Application Support/KikuSub */
+/** 用户可写目录：~/Library/Application Support/KikuSub（KIKUSUB_DATA_DIR 可覆盖）。 */
 function dataDir() {
+  if (process.env.KIKUSUB_DATA_DIR) return process.env.KIKUSUB_DATA_DIR;
   return path.join(app.getPath('appData'), 'KikuSub');
 }
 
@@ -393,7 +394,7 @@ function buildMenu() {
     {
       label: '文件',
       submenu: [
-        { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => pickMedia() },
+        { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => pickMedia(true) },
         { type: 'separator' },
         { label: '导出字幕…', accelerator: 'CmdOrCtrl+E', click: send('menu:export') },
         { type: 'separator' },
@@ -450,7 +451,7 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-async function pickMedia() {
+async function pickMedia(notify = false) {
   if (!win) return null;
   const result = await dialog.showOpenDialog(win, {
     title: '选择音视频或字幕',
@@ -463,7 +464,9 @@ async function pickMedia() {
   });
   if (result.canceled || !result.filePaths.length) return null;
   const file = result.filePaths[0];
-  win.webContents.send('file:opened', file);
+  // 只有菜单「打开…」需要走事件广播；渲染进程自己调 IPC 时已经有返回值，
+  // 再发一次事件会让同一个文件被导入两遍（会话被绑定两次）。
+  if (notify) win.webContents.send('file:opened', file);
   return file;
 }
 

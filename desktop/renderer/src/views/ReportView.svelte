@@ -1,99 +1,259 @@
 <script lang="ts">
+  /**
+   * 任务详报。
+   *
+   * 服务层返回的是结构化数据（overview / params / quality / sections），所以这里
+   * 不解析任何文本：三类质检明细、幻觉门控、逐字对齐降级都能展开看逐条，
+   * 点时间码直接跳回核对台并聚焦该区间。
+   */
   import Icon from '../components/Icon.svelte';
-  import { app, loadReport, toast } from '../lib/store.svelte';
+  import { api } from '../lib/api';
+  import {
+    app,
+    focusRange,
+    loadReport,
+    setView,
+    toast,
+    toggleQaPanel,
+  } from '../lib/store.svelte';
 
   $effect(() => {
     if (app.view === 'report' && !app.report) loadReport();
   });
 
   const report = $derived(app.report);
+  const q = $derived(report?.quality);
+
+  let lastExport = $state('');
 
   async function copyRaw() {
     if (!report) return;
     await navigator.clipboard.writeText(report.raw_text);
     toast('任务详报已复制到剪贴板');
   }
+
+  async function exportAs(fmt: 'SRT' | 'VTT' | 'TXT') {
+    try {
+      const res = await api.exportCues(fmt);
+      lastExport = res.path;
+      toast(`已导出 ${fmt}：${res.path.split('/').pop()}（${res.count} 条）`);
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  function reveal() {
+    if (lastExport) window.kikusub.revealInFinder(lastExport);
+  }
+
+  function goToItem(item: any) {
+    const start = Number(item.start ?? 0);
+    const end = Number(item.end ?? start + 0.5);
+    setView('review');
+    focusRange(start, end);
+  }
+
+  const sectionCount = $derived(
+    (report?.sections ?? []).reduce((n, s) => n + (s.items?.length ?? 0), 0),
+  );
+
+  /** 报告内核与旧 Gradio 界面共用，文案里带 ✅🔍 这类 emoji；桌面端视觉规范是零 emoji。 */
+  function plain(text: string | undefined | null): string {
+    return String(text ?? '')
+      .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/gu, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
 </script>
 
 <div class="report-wrap">
   {#if !report}
     <div class="empty">
+      <Icon name="doc" size={22} />
       <p>还没有报告。</p>
-      <p class="hint">跑一次转写后，这里会显示任务详报、质检速览与逐字对齐统计。</p>
+      <p class="hint">跑一次整片转写后，这里会显示任务概览、生效参数、质检清单与逐条明细。</p>
     </div>
   {:else}
     <div class="report-h">
-      <h2>转录任务详报</h2>
-      <span class="meta">{app.cues.length} 条 · {app.media?.name ?? ''}</span>
-      <button class="btn ghost" onclick={copyRaw} style="margin-left:auto">
-        <Icon name="export" size={12} />复制全文
-      </button>
+      <div class="rh-main">
+        <h2>转录任务详报</h2>
+        <span class="meta">
+          {app.cues.length} 条 · {app.media?.name ?? ''} · {sectionCount} 条明细
+        </span>
+      </div>
+      <div class="rh-actions">
+        <button class="btn ghost" onclick={copyRaw} title="复制纯文本报告">
+          <Icon name="export" size={11} />复制全文
+        </button>
+        <button class="btn ghost" onclick={() => loadReport()} title="重新拉取报告">
+          <Icon name="undo" size={11} />
+        </button>
+      </div>
     </div>
 
+    {#if report.overview.find((r) => r.label === '完成状态')?.value?.includes('打断') ||
+      report.raw_text.includes('转录已中途打断')}
+      <div class="banner">
+        <Icon name="warn" size={12} />
+        本次转写被中途打断，报告只统计已保存的字幕。
+      </div>
+    {/if}
+
+    <!-- 指标 -->
     <div class="grid">
       {#each report.overview as row (row.label)}
         <div class="kv">
           <span class="k">{row.label}</span>
-          <span class="v" class:mono={/路径|文件名/.test(row.label)}>{row.value}</span>
+          <span class="v" class:mono={/路径|文件名|耗时|时间/.test(row.label)}>{plain(row.value)}</span>
         </div>
       {/each}
     </div>
 
-    <div class="sec-h">质检速览</div>
+    <!-- 质检速览 -->
+    <div class="sec-head">
+      <span class="sec-h">质检速览</span>
+      <span class="sec-note">{plain(q?.headline)}</span>
+      <button class="btn tiny" onclick={() => toggleQaPanel(true)}>去逐项核对 →</button>
+    </div>
     <div class="chips">
-      <span class="chip" class:ok={report.quality.missed === 0}>
-        漏句 <b>{report.quality.missed}</b>
+      <span class="chip" class:ok={q?.missed === 0} class:warn={(q?.missed ?? 0) > 0}>
+        可能漏句 <b>{q?.missed ?? 0}</b>
       </span>
-      {#if !report.quality.qwen_limited}
-        <span class="chip" class:ok={report.quality.dropped === 0}>
-          误删 <b>{report.quality.dropped}</b>
+      {#if !q?.qwen_limited}
+        <span class="chip" class:ok={q?.dropped === 0} class:warn={(q?.dropped ?? 0) > 0}>
+          误删待核 <b>{q?.dropped ?? 0}</b>
         </span>
-        <span class="chip" class:warn={report.quality.suspect > 0}>
-          短句待确认 <b>{report.quality.suspect}</b>
+        <span class="chip" class:ok={q?.suspect === 0} class:soft={(q?.suspect ?? 0) > 0}>
+          短句待确认 <b>{q?.suspect ?? 0}</b>
         </span>
+      {:else}
+        <span class="chip muted">该引擎只覆盖漏句检查</span>
       {/if}
-      <span class="chip">降级对齐 <b>{report.quality.degraded}</b></span>
+      <span class="chip" class:muted={q?.degraded === 0}>
+        降级对齐 <b>{q?.degraded ?? 0}</b>
+      </span>
+      {#if q?.hidden_missed}
+        <span class="chip muted">另有 {q.hidden_missed} 处近静音段未列入</span>
+      {/if}
     </div>
 
-    <div class="sec-h">执行生效参数</div>
-    <div class="grid">
-      {#each report.params as row (row.label)}
-        <div class="kv">
-          <span class="k">{row.label}</span>
-          <span class="v">{row.value}</span>
-        </div>
-      {/each}
+    <!-- 分段明细 -->
+    <div class="sec-head">
+      <span class="sec-h">质检与对齐明细</span>
+      <span class="sec-note">展开看逐条，点时间码回核对台</span>
     </div>
-
-    <div class="sec-h">质检与对齐</div>
     <div class="sections">
       {#each report.sections as s (s.id)}
-        <div class="sec-row" class:disabled={s.disabled}>
-          <span class="st">{s.title}</span>
-          <span class="sh">{s.headline}</span>
-          {#if s.items?.length}
-            <span class="sn">{s.items.length} 条</span>
+        <details class="sec" open={s.id === 'missed' || (s.items?.length ?? 0) > 0}>
+          <summary>
+            <span class="st">{s.title}</span>
+            <span class="sh" class:muted={s.disabled}>{plain(s.headline)}</span>
+            {#if s.items?.length}
+              <span class="sn">{s.items.length}</span>
+            {/if}
+            {#if s.truncated}
+              <span class="sn muted">另有 {s.truncated} 条</span>
+            {/if}
+          </summary>
+
+          {#if s.note}
+            <div class="note">{plain(s.note)}</div>
           {/if}
-        </div>
+          {#if s.hidden_text}
+            <div class="note muted">{plain(s.hidden_text)}</div>
+          {/if}
+
+          {#if s.items?.length}
+            <div class="items">
+              {#each s.items as item, i (i)}
+                <div class="item">
+                  <button
+                    class="time-link"
+                    onclick={() => goToItem(item)}
+                    title="跳到核对台并聚焦这一段"
+                  >
+                    {item.time_text ?? `${Number(item.start ?? 0).toFixed(2)}s`}
+                  </button>
+                  {#if item.rule_text}
+                    <span class="tag">{item.rule_text}</span>
+                  {:else if item.reason_text}
+                    <span class="tag">{item.reason_text}</span>
+                  {/if}
+                  {#if item.dur}
+                    <span class="dur">{Number(item.dur).toFixed(2)}s</span>
+                  {/if}
+                  {#if item.chars}
+                    <span class="dur">{item.chars} 字</span>
+                  {/if}
+                  {#if item.text}
+                    <span class="it-text">{item.text}</span>
+                  {/if}
+                  {#if item.peak !== null && item.peak !== undefined}
+                    <span class="peak">峰值 {Number(item.peak).toFixed(2)}</span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else if s.empty_text && plain(s.empty_text) !== plain(s.headline)}
+            <div class="note muted">{plain(s.empty_text)}</div>
+          {/if}
+        </details>
       {/each}
+    </div>
+
+    <!-- 生效参数 -->
+    <details class="sec params">
+      <summary>
+        <span class="st">执行生效参数</span>
+        <span class="sh muted">{report.params.length} 项</span>
+      </summary>
+      <div class="grid inner">
+        {#each report.params as row (row.label)}
+          <div class="kv">
+            <span class="k">{row.label}</span>
+            <span class="v">{row.value}</span>
+          </div>
+        {/each}
+      </div>
+    </details>
+
+    <!-- 导出 -->
+    <div class="sec-head">
+      <span class="sec-h">导出</span>
+      <span class="sec-note">导出的是核对台当前时间轴（可直接交付）</span>
+    </div>
+    <div class="export-row">
+      <button class="btn" onclick={() => exportAs('SRT')}>导出 SRT</button>
+      <button class="btn" onclick={() => exportAs('VTT')}>导出 VTT</button>
+      <button class="btn" onclick={() => exportAs('TXT')}>导出 TXT</button>
+      {#if lastExport}
+        <button class="btn ghost" onclick={reveal}>
+          <Icon name="folder" size={11} />在访达中显示
+        </button>
+        <span class="path">{lastExport}</span>
+      {/if}
     </div>
   {/if}
 </div>
 
 <style>
   .report-wrap {
-    padding: 18px 26px 30px;
+    padding: 18px 26px 34px;
     overflow-y: auto;
     flex: 1;
   }
   .report-wrap > * {
-    max-width: 880px;
+    max-width: 900px;
   }
 
   .empty {
     color: var(--text-2);
     font-size: 13px;
-    padding-top: 40px;
+    padding-top: 46px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
   }
   .hint {
     color: var(--text-3);
@@ -102,9 +262,21 @@
 
   .report-h {
     display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 13px;
+  }
+  .rh-main {
+    display: flex;
     align-items: baseline;
     gap: 10px;
-    margin-bottom: 14px;
+    min-width: 0;
+  }
+  .rh-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    flex: 0 0 auto;
   }
   .report-h h2 {
     font-size: 15px;
@@ -116,6 +288,21 @@
     font-size: 11.5px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: #b26a00;
+    background: rgba(255, 159, 10, 0.12);
+    border-radius: 8px;
+    padding: 7px 10px;
+    margin-bottom: 12px;
   }
 
   .grid {
@@ -124,47 +311,254 @@
     gap: 0 22px;
     border: 1px solid var(--separator-soft);
     border-radius: 10px;
-    padding: 10px 14px;
+    padding: 9px 14px;
+  }
+  .grid.inner {
+    margin: 2px 14px 10px;
+    border: 0;
+    padding: 0;
+    gap: 0 22px;
+  }
+  .kv {
+    display: flex;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--separator-soft);
+    min-width: 0;
+  }
+  .kv:last-child {
+    border-bottom: 0;
+  }
+  .k {
+    color: var(--text-3);
+    flex: 0 0 auto;
+    min-width: 72px;
+  }
+  .v {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .v.mono {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
   }
 
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 18px 0 8px;
+  }
   .sec-h {
     font-size: 11px;
     font-weight: 600;
     color: var(--text-3);
-    margin: 18px 0 8px;
     letter-spacing: 0.02em;
+    flex: 0 0 auto;
+  }
+  .sec-note {
+    font-size: 10.5px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sec-head .btn {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+  .tiny {
+    height: 21px;
+    font-size: 10.5px;
+    padding: 0 7px;
+  }
+
+  .chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    font-size: 11.5px;
+    color: var(--text-2);
+    background: var(--fill);
+    border-radius: 8px;
+    padding: 4px 9px;
+  }
+  .chip b {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .chip.ok {
+    background: rgba(48, 209, 88, 0.12);
+    color: #1c7c36;
+  }
+  .chip.ok b {
+    color: #1c7c36;
+  }
+  .chip.warn {
+    background: rgba(255, 69, 58, 0.12);
+    color: #c0392b;
+  }
+  .chip.warn b {
+    color: #c0392b;
+  }
+  .chip.soft {
+    background: rgba(255, 159, 10, 0.13);
+    color: #b26a00;
+  }
+  .chip.soft b {
+    color: #b26a00;
+  }
+  .chip.muted {
+    background: transparent;
+    color: var(--text-3);
+    border: 1px solid var(--separator-soft);
+  }
+  html[data-theme='dark'] .chip.ok,
+  html[data-theme='dark'] .chip.ok b {
+    color: #4cd964;
+  }
+  html[data-theme='dark'] .chip.warn,
+  html[data-theme='dark'] .chip.warn b {
+    color: #ff7b70;
+  }
+  html[data-theme='dark'] .chip.soft,
+  html[data-theme='dark'] .chip.soft b {
+    color: #ffb340;
   }
 
   .sections {
     border: 1px solid var(--separator-soft);
     border-radius: 10px;
-    padding: 2px 14px;
+    overflow: hidden;
   }
-  .sec-row {
+  .sec {
+    border-bottom: 1px solid var(--separator-soft);
+  }
+  .sec:last-child {
+    border-bottom: 0;
+  }
+  .sec.params {
+    margin-top: 14px;
+    border: 1px solid var(--separator-soft);
+    border-radius: 10px;
+  }
+  summary {
     display: flex;
     align-items: baseline;
     gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--separator-soft);
+    padding: 8px 14px;
     font-size: 12.5px;
+    cursor: default;
+    list-style: none;
   }
-  .sec-row:last-child {
-    border-bottom: 0;
+  summary::-webkit-details-marker {
+    display: none;
   }
-  .sec-row.disabled .sh {
-    color: var(--text-3);
+  summary:hover {
+    background: var(--row-hover);
   }
   .st {
-    width: 116px;
-    flex: 0 0 116px;
+    width: 112px;
+    flex: 0 0 112px;
     color: var(--text-2);
   }
   .sh {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sh.muted,
+  .muted {
+    color: var(--text-3);
   }
   .sn {
-    font-size: 11px;
+    font-size: 10.5px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+    flex: 0 0 auto;
+  }
+
+  .note {
+    font-size: 11px;
+    color: var(--text-2);
+    padding: 0 14px 7px;
+    line-height: 1.5;
+  }
+  .items {
+    padding: 0 14px 8px;
+  }
+  .item {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    padding: 4px 0;
+    border-top: 1px solid var(--separator-soft);
+    font-size: 11.5px;
+    min-width: 0;
+  }
+  .time-link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 10.5px;
+    color: var(--accent);
+    padding: 0;
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .time-link:hover {
+    text-decoration: underline;
+  }
+  .tag {
+    font-size: 10px;
+    color: var(--text-2);
+    background: var(--fill);
+    border-radius: 6px;
+    padding: 0 5px;
+    flex: 0 0 auto;
+  }
+  .dur,
+  .peak {
+    font-size: 10px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    flex: 0 0 auto;
+  }
+  .it-text {
+    flex: 1;
+    min-width: 0;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .export-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .path {
+    font-size: 10.5px;
+    color: var(--text-3);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 420px;
   }
 </style>

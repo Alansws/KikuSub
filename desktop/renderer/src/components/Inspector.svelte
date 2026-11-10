@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { app, deleteCue, play, updateCue } from '../lib/store.svelte';
+  import { app, deleteCue, focusRange, play, previewRange, updateCue } from '../lib/store.svelte';
   import { tc } from '../lib/time';
 
   const cue = $derived(app.cues[play.selected] ?? null);
@@ -65,8 +65,11 @@
           rows="2"
         ></textarea>
         <div class="btn-row">
-          <button class="btn" onclick={() => (play.time = cue.start + 0.02)}>
+          <button class="btn" onclick={() => previewRange(cue.start, cue.end)}>
             <Icon name="play" size={11} />试听
+          </button>
+          <button class="btn ghost" onclick={() => focusRange(cue.start, cue.end)} title="在波形上聚焦放大这一句">
+            <Icon name="search" size={11} />聚焦
           </button>
           <button class="btn primary" onclick={commit} disabled={draft === cue.text}>
             更新此行

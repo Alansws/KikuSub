@@ -1,12 +1,9 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { app, toggleTheme } from '../lib/store.svelte';
+  import { app, redo, toggleTheme, undo } from '../lib/store.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
 
-  let {
-    engine = $bindable('whisper'),
-    lod = $bindable('mid'),
-  }: { engine?: string; lod?: string } = $props();
+  let { engine = $bindable('whisper') }: { engine?: string } = $props();
 
   const engines = $derived(app.config?.engines ?? []);
 
@@ -48,11 +45,22 @@
   <div class="tb-spacer"></div>
 
   {#if app.view === 'review'}
-    <div class="seg" title="波形缩放档位">
-      {#each [['overview', '概览'], ['mid', '中'], ['fine', '细']] as [key, label] (key)}
-        <button class:on={lod === key} onclick={() => (lod = key)}>{label}</button>
-      {/each}
-    </div>
+    <button
+      class="btn icon ghost"
+      onclick={undo}
+      disabled={!app.canUndo}
+      title="撤回（⌘Z）"
+    >
+      <Icon name="undo" size={14} />
+    </button>
+    <button
+      class="btn icon ghost"
+      onclick={redo}
+      disabled={!app.canRedo}
+      title="重做（⇧⌘Z）"
+    >
+      <Icon name="redo" size={14} />
+    </button>
   {/if}
 
   <button class="btn icon ghost" onclick={toggleTheme} title="切换外观（⇧⌘A）">

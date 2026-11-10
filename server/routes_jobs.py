@@ -21,8 +21,10 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from .deps import get_session
 from .jobs import TERMINAL_EVENTS, JobConflict, JobManager, JobNotFound
 from .security import require_token, token_ok
+from .sessions import Session
 
 router = APIRouter(tags=["jobs"])
 
@@ -31,14 +33,14 @@ class TranscribeJobRequest(BaseModel):
     media_id: str
     # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
     kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
-    # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
-    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
     engine: str = Field(default="whisper", pattern="^(whisper|qwen)$")
     output_format: str = Field(default="SRT", pattern="^(SRT|VTT|TXT)$")
     save_beside: bool = False
     start: float | None = None
     end: float | None = None
     keep_absolute_timeline: bool = True
+    # 结果如何进入核对台：整片覆盖 / 合并追加 / 只替换该区间（局部重转）
+    apply: str = Field(default="replace", pattern="^(replace|append|replace_range)$")
     # 引擎参数直接透传给 dataclass；字段名以 WhisperVadConfig / QwenCtcConfig 为准
     params: dict = Field(default_factory=dict)
 
@@ -93,14 +95,24 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
+        # 只有整片转写才代表「整片质检」；局部重转保留原有队列，
+        # 否则用户核对到一半就会被冲掉。
+        write_audit=payload.start is None and payload.end is None,
     )
 
 
 @router.post("/api/jobs", dependencies=[Depends(require_token)], status_code=201)
-async def create_job(payload: TranscribeJobRequest, request: Request) -> dict:
+async def create_job(
+    payload: TranscribeJobRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
     manager = _manager(request)
-    session_id = request.cookies.get("kikusub_sid", "")
     loop = asyncio.get_running_loop()
+
+    # 会话与媒体显式绑定：`/api/qa` 按媒体落盘，抢在转写前绑好，
+    # 任务完成时才能把结果写回同一个会话。
+    session.media_id = payload.media_id
 
     try:
         if payload.kind == "proxy":
@@ -109,20 +121,22 @@ async def create_job(payload: TranscribeJobRequest, request: Request) -> dict:
             except Exception as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             job = manager.start_proxy(
-                info.path, media_id=info.id, session_id=session_id, loop=loop
+                info.path,
+                media_id=info.id,
+                session_id=session.id,
+                loop=loop,
             )
         else:
             job = manager.start_transcribe(
-                _build_request(request, payload), session_id=session_id, loop=loop
+                _build_request(request, payload),
+                session=session,
+                apply=payload.apply,
+                session_id=session.id,
+                loop=loop,
             )
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    # 会话绑定到该媒体：质检队列按媒体落盘，后续 /api/qa 需要知道为谁服务
-    from .deps import SESSION_COOKIE
-
-    session = request.app.state.sessions.get(request.cookies.get(SESSION_COOKIE))
-    session.media_id = payload.media_id
     return job.snapshot()
 
 

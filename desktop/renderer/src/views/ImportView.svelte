@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import { app, openMedia } from '../lib/store.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
@@ -32,7 +33,10 @@
       duration: m.duration,
       at: Date.now(),
     };
-    const next = [entry, ...recents.filter((r) => r.path !== m.path)].slice(0, 6);
+    // 读 recents 必须 unrack：否则「读一下再写回」会让 effect 自己触发自己，
+    // 表现为 Svelte 的 effect_update_depth_exceeded，整个界面白屏。
+    const prev = untrack(() => recents);
+    const next = [entry, ...prev.filter((r) => r.path !== m.path)].slice(0, 6);
     recents = next;
     localStorage.setItem('kikusub.recent', JSON.stringify(next));
   });

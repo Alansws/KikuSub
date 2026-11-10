@@ -240,6 +240,24 @@ class MediaStore:
         self._remember_peaks(key, duration, values)
         return duration, list(values)
 
+    def peaks_window(
+        self, media_id: str, start_s: float, end_s: float, bins: int
+    ) -> tuple[float, list[float]]:
+        """窗口波形：只解码 `[start_s, end_s)` 这一段。
+
+        核对台缩放/平移时按可视窗口取点，放大到几秒区间也能保持锐利。
+        不缓存——窗口组合是连续的，缓存命中率低，而窗口读取本身只要几毫秒。
+        """
+        info = self.get(media_id)
+        bins = max(8, min(int(bins), 20_000))
+        try:
+            wav_path = audio_cache.ensure_wav(info.path, loudnorm=False)
+            return audio_cache.peaks_window(wav_path, start_s, end_s, bins)
+        except (CommandTimeout, CommandCancelled) as exc:
+            raise MediaError(f"解码音频超时或已取消：{exc}") from exc
+        except Exception as exc:
+            raise MediaError(f"无法生成波形：{exc}") from exc
+
     def _remember_peaks(self, key: tuple[str, int], duration: float, values: list[float]) -> None:
         with self._lock:
             if len(self._peaks) >= self._max_peaks_entries:

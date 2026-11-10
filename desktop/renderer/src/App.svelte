@@ -25,8 +25,11 @@
   } from './lib/store.svelte';
 
   let engine = $state('whisper');
-  let lod = $state('mid');
-  let review: { api_play: () => void; api_step: (d: number) => void } | undefined = $state();
+  let review: {
+    api_play: () => void;
+    api_step: (d: number) => void;
+    api_focus: () => void;
+  } | undefined = $state();
   let dragging = $state(false);
 
   // ---------------- 握手 ----------------
@@ -140,6 +143,11 @@
   }
 
   $effect(() => {
+    // 工具栏切引擎后，核对台的「重转此句 / 质检补录」用同一个引擎
+    app.engine = engine;
+  });
+
+  $effect(() => {
     // 窗口标题跟着媒体走，Dock 与 Mission Control 才对得上
     window.kikusub.setTitle(app.media ? `${app.media.name} — KikuSub` : 'KikuSub');
   });
@@ -156,7 +164,7 @@
   <Sidebar />
 
   <div class="main">
-    <Toolbar bind:engine bind:lod />
+    <Toolbar bind:engine />
 
     <div class="workspace">
       <section class="content">
@@ -165,7 +173,7 @@
         {:else if app.view === 'transcribe'}
           <TranscribeView bind:engine />
         {:else if app.view === 'review'}
-          <ReviewView bind:this={review} bind:lod />
+          <ReviewView bind:this={review} {engine} />
         {:else if app.view === 'report'}
           <ReportView />
         {/if}

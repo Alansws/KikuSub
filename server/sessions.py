@@ -37,6 +37,9 @@ class Session:
     undo_stack: list[list[SubtitleCue]] = field(default_factory=list)
     redo_stack: list[list[SubtitleCue]] = field(default_factory=list)
     updated_at: float = field(default_factory=time.time)
+    # 转写任务在 worker 线程里回写结果，请求线程同时在读；一把会话锁避免
+    # 「列表一半是旧结果一半是新结果」这种撕裂。
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     # -- 历史 ---------------------------------------------------------------
 

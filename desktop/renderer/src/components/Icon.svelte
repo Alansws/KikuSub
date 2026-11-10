@@ -25,6 +25,13 @@
     redo: '<path d="M11.8 6.2H6a3.8 3.8 0 0 0 0 7.6h3.6"/><path d="M9.4 3.8l2.4 2.4-2.4 2.4"/>',
     trash: '<path d="M2.8 4.4h10.4"/><path d="M6.4 4.4V3.2a1 1 0 0 1 1-1h1.2a1 1 0 0 1 1 1v1.2"/><path d="M4.4 4.4l.6 8a1.2 1.2 0 0 0 1.2 1.1h3.6a1.2 1.2 0 0 0 1.2-1.1l.6-8"/>',
     export: '<path d="M8 1.8v8.4"/><path d="M5.2 7.4 8 10.2l2.8-2.8"/><path d="M2.6 11.4v1.2a1.4 1.4 0 0 0 1.4 1.4h8a1.4 1.4 0 0 0 1.4-1.4v-1.2"/>',
+    plus: '<path d="M8 3v10"/><path d="M3 8h10"/>',
+    minus: '<path d="M3 8h10"/>',
+    close: '<path d="M4.2 4.2 11.8 11.8"/><path d="M11.8 4.2 4.2 11.8"/>',
+    'chevron-left': '<path d="M10 3.5 5.5 8 10 12.5"/>',
+    'chevron-right': '<path d="M6 3.5 10.5 8 6 12.5"/>',
+    target:
+      '<circle cx="8" cy="8" r="5.2"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/>',
   };
 
   const FILL: Record<string, string> = {

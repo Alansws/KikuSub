@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -68,20 +68,40 @@ def delete_media(media_id: str, request: Request) -> dict:
 
 
 @router.get("/api/media/{media_id}/peaks", dependencies=[Depends(require_token)])
-def get_peaks(media_id: str, request: Request, bins: int = 4000, lod: str | None = None) -> dict:
+def get_peaks(
+    media_id: str,
+    request: Request,
+    bins: int = 4000,
+    lod: str | None = None,
+    start: float | None = Query(default=None, alias="from"),
+    end: float | None = Query(default=None, alias="to"),
+) -> dict:
     """波形包络。
 
     `bins` 直接给点数；`lod` 是便捷档位（`overview` / `mid` / `fine`），前端缩放时
     按可视窗口选档，避免每次都传具体数字。
+
+    带 `from` / `to` 时只算这个时间窗口——核对台放大到几秒区间要靠它，
+    否则整片包络的横向精度根本不够画。
     """
     if lod:
         bins = _LOD_BINS.get(lod, bins)
     bins = max(64, min(int(bins), MAX_BINS))
     try:
-        duration, values = _store(request).peaks(media_id, bins)
+        if start is not None and end is not None and end > start:
+            duration, values = _store(request).peaks_window(media_id, start, end, bins)
+        else:
+            duration, values = _store(request).peaks(media_id, bins)
     except MediaError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return {"id": media_id, "bins": len(values), "duration": duration, "peaks": values}
+    return {
+        "id": media_id,
+        "bins": len(values),
+        "duration": duration,
+        "start": start,
+        "end": end,
+        "peaks": values,
+    }
 
 
 _LOD_BINS = {

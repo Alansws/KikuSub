@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core.subtitles import SubtitleCue, cues_to_srt, cues_to_txt, cues_to_vtt
+from core.subtitles import SubtitleCue, cues_to_srt, cues_to_txt, cues_to_vtt, srt_to_cues
 
 from .deps import get_session
 from .security import require_token
@@ -48,6 +48,10 @@ class ExportRequest(BaseModel):
     save_beside: bool = False
 
 
+class ImportPathRequest(BaseModel):
+    path: str = Field(min_length=1, description="本地字幕文件绝对路径")
+
+
 def _to_dicts(cues: list[SubtitleCue]) -> list[dict]:
     return [{"start": c.start, "end": c.end, "text": c.text} for c in cues]
 
@@ -82,6 +86,51 @@ def replace_cues(payload: CueList, session: Session = Depends(get_session)) -> d
         cues.append(SubtitleCue(start=item.start, end=item.end, text=item.text))
     session.replace_review(cues)
     return _snapshot(session)
+
+
+@router.post("/api/cues/import")
+def import_cues(payload: ImportPathRequest, session: Session = Depends(get_session)) -> dict:
+    """按路径导入 SRT / VTT 作为核对基线。
+
+    与媒体导入同一个约定：传路径而不是上传内容——桌面端拿到的就是本地路径。
+    导入会整表替换并压入撤回栈，用户可立即 Cmd+Z 退回。
+    """
+    path = Path(payload.path).expanduser()
+    try:
+        path = path.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail=f"文件不存在：{payload.path}") from exc
+    if path.suffix.lower() not in {".srt", ".vtt"}:
+        raise HTTPException(status_code=422, detail=f"只支持 .srt / .vtt：{path.suffix}")
+
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"读取失败：{exc}") from exc
+
+    # VTT 的 WEBVTT 头 / NOTE 块不是字幕行；时间戳格式与 SRT 兼容（解析器认 . 和 ,）
+    if path.suffix.lower() == ".vtt":
+        body: list[str] = []
+        skipping = False
+        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            stripped = line.strip()
+            if stripped.upper().startswith("WEBVTT"):
+                continue
+            if stripped.upper().startswith(("NOTE", "STYLE", "REGION")):
+                skipping = True
+                continue
+            if skipping:
+                if not stripped:
+                    skipping = False
+                continue
+            body.append(line)
+        text = "\n".join(body)
+
+    cues = srt_to_cues(text)
+    if not cues:
+        raise HTTPException(status_code=422, detail="没有从该文件里解析出字幕")
+    session.replace_review(cues)
+    return {**_snapshot(session), "source": str(path)}
 
 
 @router.patch("/api/cues/{index}")

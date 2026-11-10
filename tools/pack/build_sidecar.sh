@@ -21,6 +21,11 @@ OUT="build/pack"
   exit 1
 }
 
+# PyInstaller 默认把二进制缓存写到 ~/Library/Application Support/pyinstaller。
+# 本机文件策略不允许写那里，COLLECT 阶段会 PermissionError。把缓存钉在工作区内。
+export PYINSTALLER_CONFIG_DIR="$REPO_ROOT/$OUT/.pyinstaller"
+mkdir -p "$PYINSTALLER_CONFIG_DIR"
+
 rm -rf "$OUT/dist/$NAME"
 
 "$PYTHON" -m PyInstaller \

@@ -99,11 +99,13 @@ class JobManager:
         self,
         request,
         *,
+        session=None,
+        apply: str = "replace",
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
         job = self._launch("transcribe", str(request.media_path.name), session_id, loop)
-        self._spawn(self._run_transcribe, job, request)
+        self._spawn(self._run_transcribe, job, request, session, apply)
         return job
 
     def start_proxy(
@@ -186,7 +188,7 @@ class JobManager:
         job.stage = str(event.get("stage") or job.stage)
         self._emit(job, {"type": "progress", **event, "job_percent": job.percent})
 
-    def _run_transcribe(self, job: JobRecord, request) -> None:
+    def _run_transcribe(self, job: JobRecord, request, session=None, apply: str = "replace") -> None:
         job.status = "running"
         job.started_at = time.time()
         self._emit(job, {"type": "start", "job": job.snapshot()})
@@ -207,9 +209,19 @@ class JobManager:
             job.percent = 100
             job.result = result.to_dict()
             job.result["media_id"] = request.media_id
+            # 会话是服务端唯一真源：任务跑完必须把字幕写回去，否则前端
+            # `/api/cues` 永远是空的（表现为「转写完成但核对台没有字幕」）。
+            if session is not None:
+                job.result.update(self._apply_cues(session, request, result.cues, apply))
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
-            log.info("任务完成 | job=%s | cues=%s", job.id, len(result.cues))
+            log.info(
+                "任务完成 | job=%s | cues=%s | apply=%s | session=%s",
+                job.id,
+                len(result.cues),
+                apply,
+                getattr(session, "id", "-"),
+            )
         except Exception as exc:  # noqa: BLE001 —— 任何失败都要变成事件，不能只留在线程里
             cancelled = bool(job.token is not None and job.token.is_set())
             job.status = "cancelled" if cancelled else "error"
@@ -228,6 +240,46 @@ class JobManager:
         finally:
             # 槽位由真正停止工作的 worker 释放（与旧实现同一套语义）
             self._registry.finish(job.token)
+
+    def _apply_cues(self, session, request, cues, apply: str) -> dict:
+        """把一次转写的结果合并进会话。返回给前端的状态摘要。
+
+        三种语义（对应转写页的「结果处理」与核对台的局部重转）：
+
+        - `replace`：整片覆盖核对台；
+        - `append`：与现有时间轴合并去重，用于「局部转写后添加」；
+        - `replace_range`：只替换该区间内的旧字幕，其余原样保留——单句/选区重转
+          走这条，用户不会因为重转一句而丢掉整张表。
+        """
+        from core.cues import _unique_sorted_cues
+
+        fresh = _unique_sorted_cues(cues)
+        start_s = getattr(request, "start_s", None)
+        end_s = getattr(request, "end_s", None)
+        with session.lock:
+            session.latest_cues = list(fresh)
+            before = len(session.review_cues)
+            if apply == "append":
+                merged = _unique_sorted_cues([*session.review_cues, *fresh])
+            elif apply == "replace_range" and start_s is not None:
+                limit = end_s if end_s is not None else float("inf")
+                kept = [
+                    cue
+                    for cue in session.review_cues
+                    if cue.end <= start_s + 0.02 or cue.start >= limit - 0.02
+                ]
+                merged = _unique_sorted_cues([*kept, *fresh])
+            else:
+                merged = fresh
+            session.replace_review(merged)
+            session.updated_at = time.time()
+            return {
+                "applied": apply,
+                "cue_count": len(merged),
+                "added": max(0, len(merged) - before),
+                # 被本区间替换掉的旧条数：前端据此区分「新增」与「更新」
+                "removed": max(0, before + len(fresh) - len(merged)),
+            }
 
     def _progress(self, job: JobRecord, ratio: float, stage: str) -> None:
         # 引擎可能先报 2%（抽音频）再报 1%（载模型）；保持单调，避免进度倒退。

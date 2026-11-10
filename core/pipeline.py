@@ -90,6 +90,9 @@ class TranscribeRequest:
     no_repeat_ngram_size: int = 5
     repetition_penalty: float = 1.15
     use_alignment: bool = True
+    # 局部转写不该覆盖整片的质检队列：否则「重转这一句」会把用户刚核对完的
+    # 待核进度全部冲掉。服务层在区间任务里置 False。
+    write_audit: bool = True
 
     @property
     def is_qwen(self) -> bool:
@@ -325,7 +328,8 @@ def run_transcription(
         scanned=scanned,
         transcribed_at=time.time(),
     )
-    write_audit_payload(media_path, audit_payload)
+    if req.write_audit:
+        write_audit_payload(media_path, audit_payload)
 
     pending_qa = sum(1 for item in audit_items if item.get("status") == "pending")
     if pending_qa and not is_interrupted:

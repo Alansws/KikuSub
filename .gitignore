@@ -91,9 +91,5 @@ desktop/node_modules/
 desktop/renderer/dist/
 desktop/build/
 desktop/dist/
-
-# Electron 外壳
-desktop/node_modules/
-desktop/renderer/dist/
-desktop/build/
-desktop/dist/
+# 无头验证用的一次性 user-data-dir（截图/联调时创建）
+desktop/.userdata/

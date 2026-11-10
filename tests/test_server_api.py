@@ -44,7 +44,7 @@ def test_health_is_open(client: TestClient) -> None:
     assert client.get("/api/health").json()["ok"] is True
 
 
-@pytest.mark.parametrize("path", ["/api/config", "/api/media", "/api/cues", "/api/presets"])
+@pytest.mark.parametrize("path", ["/api/config", "/api/media", "/api/cues", "/api/presets", "/api/params"])
 def test_api_requires_token(client: TestClient, path: str) -> None:
     assert client.get(path).status_code == 401
 
@@ -220,3 +220,80 @@ def test_handshake_prints_port_and_token() -> None:
     finally:
         proc.terminate()
         proc.wait(timeout=15)
+
+
+# ---------------------------------------------------------------------------
+# 波形窗口（核对台缩放/平移的数据源）
+# ---------------------------------------------------------------------------
+
+
+def _make_two_second_wav(tmp_path: Path) -> Path:
+    """前半秒有音、后半段静音的 16k 单声道 wav。"""
+    import numpy as np
+    import soundfile as sf
+
+    sr = 16000
+    t = np.arange(sr * 2) / sr
+    tone = np.where(t < 1.0, np.sin(2 * np.pi * 440 * t) * 0.8, 0.0).astype("float32")
+    path = tmp_path / "tone.wav"
+    sf.write(path, tone, sr)
+    return path
+
+
+def test_params_endpoint_exposes_groups_and_defaults(client: TestClient) -> None:
+    data = client.get("/api/params", headers=auth()).json()
+    engines = {e["key"]: e for e in data["engines"]}
+    assert set(engines) == {"whisper", "qwen"}
+    keys = {p["key"] for p in engines["whisper"]["groups"][0]["params"]}
+    assert "whisper.vad_threshold" in {
+        p["key"] for g in engines["whisper"]["groups"] for p in g["params"]
+    }
+    assert engines["whisper"]["defaults"]["whisper.vad_threshold"] == 0.30
+    assert keys  # 第一组不能为空
+
+
+def test_peaks_window_returns_requested_window(client: TestClient, tmp_path: Path) -> None:
+    wav = _make_two_second_wav(tmp_path)
+    media_id = client.post("/api/media", headers=auth(), json={"path": str(wav)}).json()["id"]
+
+    loud = client.get(
+        f"/api/media/{media_id}/peaks",
+        headers=auth(),
+        params={"from": 0.0, "to": 1.0, "bins": 80},
+    ).json()
+    quiet = client.get(
+        f"/api/media/{media_id}/peaks",
+        headers=auth(),
+        params={"from": 1.0, "to": 2.0, "bins": 80},
+    ).json()
+
+    assert loud["bins"] == 80 == len(loud["peaks"])
+    assert max(loud["peaks"]) == pytest.approx(1.0, abs=0.02)
+    assert max(quiet["peaks"]) == pytest.approx(0.0, abs=0.001)
+    assert loud["start"] == 0.0 and loud["end"] == 1.0
+
+
+def test_import_srt_replaces_review_cues(client: TestClient, tmp_path: Path) -> None:
+    srt = tmp_path / "episode.srt"
+    srt.write_text(
+        "1\n00:00:01,000 --> 00:00:02,500\nおはよう\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\nまたね\n",
+        encoding="utf-8",
+    )
+    resp = client.post("/api/cues/import", headers=auth(), json={"path": str(srt)})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["count"] == 2
+    assert data["cues"][0]["text"] == "おはよう"
+    assert data["cues"][1]["start"] == 3.0
+
+    # 整表替换压入撤回栈
+    assert data["can_undo"] is True
+    assert client.post("/api/cues/undo", headers=auth()).json()["count"] == 0
+
+
+def test_import_rejects_unknown_suffix(client: TestClient, tmp_path: Path) -> None:
+    bad = tmp_path / "episode.ass"
+    bad.write_text("whatever", encoding="utf-8")
+    resp = client.post("/api/cues/import", headers=auth(), json={"path": str(bad)})
+    assert resp.status_code == 422
