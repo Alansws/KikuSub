@@ -212,6 +212,9 @@ function createWindow() {
 /** 自截图模式：不碰用户桌面，直接把窗口画面存成 PNG 后退出。 */
 async function captureAndQuit() {
   try {
+    // 隐藏窗口不会持续重绘，capturePage 会拿到首帧。先短暂显示（不抢焦点），
+    // 让合成器把当前状态真正画出来。
+    win.showInactive();
     await new Promise((r) => setTimeout(r, SHOT_DELAY_MS));
     if (!app.isPackaged) {
       const info = await win.webContents.executeJavaScript(
