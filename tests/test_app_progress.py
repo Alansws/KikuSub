@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
-from transcribe import SubtitleCue  # noqa: E402
+from core.transcribe import SubtitleCue  # noqa: E402
 
 
 def test_progress_rejects_other_media_with_same_stem(tmp_path, monkeypatch):

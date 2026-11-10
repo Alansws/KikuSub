@@ -84,3 +84,4 @@ Thumbs.db
 
 # Tool caches
 .ruff_cache/
+.pytest-tmp/

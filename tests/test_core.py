@@ -10,7 +10,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from transcribe import (  # noqa: E402
+from core.transcribe import (  # noqa: E402
     SubtitleCue,
     _is_blank,
     apply_cue_padding,

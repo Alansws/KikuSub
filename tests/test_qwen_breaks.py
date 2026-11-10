@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("torch")
 
-from qwen_ctc import (  # noqa: E402
+from core.qwen_ctc import (  # noqa: E402
     BREAK_FORBIDDEN,
     BREAK_PARTICLE,
     FoldedText,

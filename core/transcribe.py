@@ -43,8 +43,9 @@ import soundfile as sf
 import torch
 from silero_vad import get_speech_timestamps, load_silero_vad
 
-import audio_cache
-from procutil import CommandCancelled, CommandTimeout, run_command, tail
+from . import audio_cache
+from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
+from .procutil import CommandCancelled, CommandTimeout, run_command, tail
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +59,8 @@ SAMPLE_RATE = 16000
 # 数小时素材；超时说明输入/解码器异常，不应无限占用工作线程。
 FFMPEG_DECODE_TIMEOUT_S = 1800.0
 
-ROOT = Path(__file__).resolve().parent
-MODELS_DIR = ROOT / "models"
+ROOT = APP_ROOT
+MODELS_DIR = PATHS_MODELS_DIR
 
 
 def resolve_model_dir() -> Path:

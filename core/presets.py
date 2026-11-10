@@ -12,7 +12,9 @@ import re
 import tempfile
 from pathlib import Path
 
-PRESET_PATH = Path(__file__).resolve().parent / "presets.json"
+from .paths import PRESETS_PATH
+
+PRESET_PATH = PRESETS_PATH
 
 SCHEMA_VERSION = 1
 MAX_NAME_LENGTH = 40

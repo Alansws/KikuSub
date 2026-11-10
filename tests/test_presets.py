@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from presets import PresetError, PresetStore, clean_name
+from core.presets import PresetError, PresetStore, clean_name
 
 
 @pytest.fixture()

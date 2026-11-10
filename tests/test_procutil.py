@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from procutil import CommandCancelled, CommandTimeout, run_command, tail
+from core.procutil import CommandCancelled, CommandTimeout, run_command, tail
 
 
 def _python(code: str) -> list[str]:

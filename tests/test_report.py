@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
-from transcribe import WhisperVadConfig  # noqa: E402
+from core.transcribe import WhisperVadConfig  # noqa: E402
 
 
 def _report(**overrides) -> str:

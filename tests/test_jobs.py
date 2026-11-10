@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from jobs import JobBusy, JobRegistry
+from core.jobs import JobBusy, JobRegistry
 
 
 def test_start_and_finish_release_slot():

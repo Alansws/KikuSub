@@ -47,9 +47,9 @@ log = logging.getLogger(__name__)
 
 from silero_vad import get_speech_timestamps, load_silero_vad
 
-from procutil import CommandCancelled
+from .procutil import CommandCancelled
 
-from transcribe import (
+from .transcribe import (
     HONORIFIC_PREFIXES,
     JAPANESE_PARTICLES,
     MODELS_DIR,

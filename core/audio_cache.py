@@ -19,8 +19,9 @@ from typing import Callable
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent
-CACHE_DIR = ROOT / "outputs" / ".cache" / "audio"
+from .paths import OUTPUT_DIR
+
+CACHE_DIR = OUTPUT_DIR / ".cache" / "audio"
 
 SAMPLE_RATE = 16000
 ENV_FLAG = "KIKUSUB_AUDIO_CACHE"
@@ -68,7 +69,7 @@ def wav_path(
 
 
 def _default_extractor() -> Extractor:
-    from transcribe import decode_wav_16k
+    from .transcribe import decode_wav_16k
 
     return decode_wav_16k
 

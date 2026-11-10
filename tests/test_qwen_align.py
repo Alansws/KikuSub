@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("torch")
 
-from qwen_ctc import FoldedText, encode_target  # noqa: E402
+from core.qwen_ctc import FoldedText, encode_target  # noqa: E402
 
 
 def test_positions_stay_aligned_with_ids_across_punctuation():

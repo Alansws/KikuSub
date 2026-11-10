@@ -85,9 +85,9 @@ import transformers
 from transformers import logging as hf_logging
 hf_logging.set_verbosity_error()
 
-from presets import PresetError, PresetStore
-import audio_cache
-from transcribe import (
+from core.presets import PresetError, PresetStore
+from core import audio_cache
+from core.transcribe import (
     ENGINE,
     MODEL_DIR,
     SubtitleCue,
@@ -104,10 +104,10 @@ from transcribe import (
     remove_ellipsis_only_cues,
     srt_to_cues,
 )
-from qwen_ctc import QwenCtcConfig, QwenCtcEngine
-from jobs import JobBusy, JobRegistry
-from logging_setup import setup_logging
-from procutil import CommandCancelled, CommandTimeout, run_command, tail, terminate_process
+from core.qwen_ctc import QwenCtcConfig, QwenCtcEngine
+from core.jobs import JobBusy, JobRegistry
+from core.logging_setup import setup_logging
+from core.procutil import CommandCancelled, CommandTimeout, run_command, tail, terminate_process
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"

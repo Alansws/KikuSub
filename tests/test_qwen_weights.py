@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("torch")
 
-from qwen_ctc import HEAD_FILE, QwenCtcEngine  # noqa: E402
+from core.qwen_ctc import HEAD_FILE, QwenCtcEngine  # noqa: E402
 
 
 def _fake_model_dir(tmp_path, *, with_shard: bool):
