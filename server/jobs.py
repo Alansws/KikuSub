@@ -22,8 +22,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core import pipeline
+from core import pipeline, proxy
 from core.jobs import CancelToken, JobBusy, JobRegistry
+from core.procutil import CommandCancelled
 from core.paths import OUTPUT_DIR
 
 log = logging.getLogger("kikusub.server.jobs")
@@ -101,24 +102,89 @@ class JobManager:
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
+        job = self._launch("transcribe", str(request.media_path.name), session_id, loop)
+        self._spawn(self._run_transcribe, job, request)
+        return job
+
+    def start_proxy(
+        self,
+        media_path: Path,
+        *,
+        media_id: str = "",
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """压制 480p 监看代理。与转写共用单槽：两者都吃满 CPU/GPU，不能并行。"""
+        job = self._launch("proxy", Path(media_path).name, session_id, loop)
+        self._spawn(self._run_proxy, job, Path(media_path), media_id)
+        return job
+
+    def _launch(
+        self,
+        kind: str,
+        label: str,
+        session_id: str,
+        loop: asyncio.AbstractEventLoop | None,
+    ) -> JobRecord:
         try:
-            token = self._registry.start(session_id or "api", label=str(request.media_path.name))
+            token = self._registry.start(session_id or "api", label=label)
         except JobBusy as exc:
             raise JobConflict(str(exc)) from exc
-
-        job = JobRecord(id=uuid.uuid4().hex[:12], kind="transcribe", token=token, loop=loop)
+        job = JobRecord(id=uuid.uuid4().hex[:12], kind=kind, token=token, loop=loop)
         with self._lock:
             self._jobs[job.id] = job
             self._prune_locked()
+        return job
 
-        thread = threading.Thread(
-            target=self._run_transcribe,
-            args=(job, request),
+    def _spawn(self, target, job: JobRecord, *args) -> None:
+        threading.Thread(
+            target=target,
+            args=(job, *args),
             daemon=True,
             name=f"kikusub-job-{job.id}",
-        )
-        thread.start()
-        return job
+        ).start()
+
+    def _run_proxy(self, job: JobRecord, media_path: Path, media_id: str = "") -> None:
+        job.status = "running"
+        job.started_at = time.time()
+        self._emit(job, {"type": "start", "job": job.snapshot()})
+        try:
+            result = proxy.run_proxy_job(
+                media_path,
+                on_progress=lambda event: self._proxy_progress(job, event),
+                cancel_event=job.token,
+                output_dir=self._output_dir,
+            )
+            job.status = "done"
+            job.ratio = 1.0
+            job.percent = 100
+            job.stage = "代理已就绪"
+            job.result = {"proxy": result.to_dict(), "media_id": media_id}
+            job.finished_at = time.time()
+            self._emit(job, {"type": "done", "job": job.snapshot()})
+            log.info("代理任务完成 | job=%s | %s", job.id, result.path.name)
+        except CommandCancelled:
+            job.status = "cancelled"
+            job.error = "任务已取消"
+            job.finished_at = time.time()
+            self._emit(job, {"type": "cancelled", "message": job.error, "job": job.snapshot()})
+        except Exception as exc:  # noqa: BLE001
+            job.status = "error"
+            job.error = str(exc)
+            job.finished_at = time.time()
+            log.exception("代理任务失败 | job=%s", job.id)
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+        finally:
+            self._registry.finish(job.token)
+
+    def _proxy_progress(self, job: JobRecord, event: dict) -> None:
+        percent = event.get("percent")
+        if percent is not None:
+            # 与转写一致：只取单调最大值，进度条绝不倒走
+            job.ratio = max(job.ratio, max(0.0, min(1.0, percent / 100.0)))
+            job.percent = int(job.ratio * 100)
+        job.stage = str(event.get("stage") or job.stage)
+        self._emit(job, {"type": "progress", **event, "job_percent": job.percent})
 
     def _run_transcribe(self, job: JobRecord, request: pipeline.TranscribeRequest) -> None:
         job.status = "running"
@@ -135,6 +201,7 @@ class JobManager:
             job.ratio = 1.0
             job.percent = 100
             job.result = result.to_dict()
+            job.result["media_id"] = request.media_id
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info("任务完成 | job=%s | cues=%s", job.id, len(result.cues))
@@ -185,6 +252,18 @@ class JobManager:
         if job is None:
             raise JobNotFound(job_id)
         return job
+
+    def latest_completed(self, kind: str | None = None) -> JobRecord | None:
+        """最近一次成功完成的任务，供 /api/report 与前端恢复上次结果。"""
+        with self._lock:
+            done = [
+                job
+                for job in self._jobs.values()
+                if job.status == "done" and (kind is None or job.kind == kind)
+            ]
+        if not done:
+            return None
+        return max(done, key=lambda job: job.finished_at)
 
     def active(self) -> JobRecord | None:
         with self._lock:

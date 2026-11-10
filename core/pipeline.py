@@ -29,7 +29,7 @@ from .paths import OUTPUT_DIR
 from .report import (
     _missed_hidden_count,
     _visible_missed_spans,
-    build_transcription_report,
+    build_report_data,
     write_missed_report,
 )
 from .textio import write_text_atomic
@@ -77,6 +77,8 @@ def output_suffix(engine_key: str) -> str:
 @dataclass(slots=True)
 class TranscribeRequest:
     media_path: Path
+    # 服务层用：让结果能回指到 /api/media 的 id（桌面端导入的是路径，id 在服务层）
+    media_id: str = ""
     engine_key: str = "whisper"
     output_format: str = "SRT"
     save_beside: bool = False
@@ -114,6 +116,7 @@ class TranscribeResult:
     preview: str
     table: list[list] = field(default_factory=list)
     missed_spans: list[dict] = field(default_factory=list)
+    report_data: dict = field(default_factory=dict)
     segment_stats: dict = field(default_factory=dict)
     align_stats: dict = field(default_factory=dict)
     slice_tag: str = ""
@@ -129,6 +132,7 @@ class TranscribeResult:
             "cue_count": len(self.cues),
             "interrupted": self.interrupted,
             "report_text": self.report_text,
+            "report": self.report_data,
             "audit_payload": self.audit_payload,
             "pending_qa": self.pending_qa,
             "status_summary": self.status_summary,
@@ -256,7 +260,7 @@ def run_transcription(
 
     char_count = sum(len(c.text) for c in cues)
     write_missed_report(media_path, slice_tag, "qwen" if is_qwen else "whisper", missed_spans)
-    report_text = build_transcription_report(
+    report_data = build_report_data(
         media_name=media_path.name,
         out_filename=out_filename,
         out_path=str(out_path),
@@ -276,6 +280,7 @@ def run_transcription(
         segment_stats=segment_stats,
         align_stats=align_stats,
     )
+    report_text = report_data["raw_text"]
 
     preview_lines = [f"[{c.start:7.2f} → {c.end:7.2f}] {c.text}" for c in cues[:100]]
     preview = "\n".join(preview_lines)
@@ -349,6 +354,7 @@ def run_transcription(
         interrupted=is_interrupted,
         report_text=report_text,
         audit_payload=audit_payload,
+        report_data=report_data,
         pending_qa=pending_qa,
         status_summary=status_summary,
         final_progress=final_progress,

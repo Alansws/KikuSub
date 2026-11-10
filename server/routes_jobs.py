@@ -33,6 +33,10 @@ router = APIRouter(tags=["jobs"])
 
 class TranscribeJobRequest(BaseModel):
     media_id: str
+    # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
+    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
+    # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
+    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
     engine: str = Field(default="whisper", pattern="^(whisper|qwen)$")
     output_format: str = Field(default="SRT", pattern="^(SRT|VTT|TXT)$")
     save_beside: bool = False
@@ -71,6 +75,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest) -> pipeline.
 
     return pipeline.TranscribeRequest(
         media_path=info.path,
+        media_id=payload.media_id,
         engine_key=payload.engine,
         output_format=payload.output_format,
         save_beside=payload.save_beside,
@@ -93,16 +98,31 @@ def _filter(dataclass_type, params: dict) -> dict:
 
 @router.post("/api/jobs", dependencies=[Depends(require_token)], status_code=201)
 async def create_job(payload: TranscribeJobRequest, request: Request) -> dict:
-    req = _build_request(request, payload)
     manager = _manager(request)
+    session_id = request.cookies.get("kikusub_sid", "")
+    loop = asyncio.get_running_loop()
+
     try:
-        job = manager.start_transcribe(
-            req,
-            session_id=request.cookies.get("kikusub_sid", ""),
-            loop=asyncio.get_running_loop(),
-        )
+        if payload.kind == "proxy":
+            try:
+                info = request.app.state.media.get(payload.media_id)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            job = manager.start_proxy(
+                info.path, media_id=info.id, session_id=session_id, loop=loop
+            )
+        else:
+            job = manager.start_transcribe(
+                _build_request(request, payload), session_id=session_id, loop=loop
+            )
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # 会话绑定到该媒体：质检队列按媒体落盘，后续 /api/qa 需要知道为谁服务
+    from .deps import SESSION_COOKIE
+
+    session = request.app.state.sessions.get(request.cookies.get(SESSION_COOKIE))
+    session.media_id = payload.media_id
     return job.snapshot()
 
 

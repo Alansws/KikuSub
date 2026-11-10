@@ -197,6 +197,77 @@ def load_missed_spans(stem: str) -> list[dict]:
     return spans
 
 
+def overview_pairs(
+    *,
+    media_name: str,
+    time_slice_desc: str,
+    out_filename: str,
+    out_path: str,
+    engine_name: str,
+    output_format: str,
+    duration_str: str,
+    cue_count: int,
+    char_count: int,
+    is_interrupted: bool,
+    finish_time: str,
+) -> list[tuple[str, str]]:
+    """【任务概览】的字段对。文本报告与 JSON 报告共用，避免两套口径。"""
+    return [
+        ("媒体源文件", media_name),
+        ("处理时间段", time_slice_desc),
+        ("字幕文件名", out_filename),
+        ("保存完整路径", out_path),
+        ("识别引擎", engine_name),
+        ("输出格式", output_format),
+        ("转录耗时", duration_str),
+        ("字幕统计", f"共 {cue_count} 条字幕 ｜ 总计 {char_count} 字符"),
+        ("执行状态", "⚠️ 用户中途打断 (保存部分字幕)" if is_interrupted else "✅ 全部完成"),
+        ("归档时间", finish_time),
+    ]
+
+
+def param_pairs(
+    *,
+    is_qwen: bool,
+    config: object,
+    ngram: int,
+    penalty: float,
+    use_alignment: bool,
+) -> list[tuple[str, str]]:
+    """【执行生效参数清单】的字段对。"""
+    if is_qwen:
+        return [
+            ("识别方案", "Qwen3-ASR (JA Anime/Galgame) + CTC 对齐"),
+            ("VAD 语音检测阈值 (vad_threshold)", getattr(config, "vad_threshold", 0.30)),
+            ("最短语音长度 (vad_min_speech_ms)", f"{getattr(config, 'vad_min_speech_ms', 100)} ms"),
+            ("判定为停顿的静音 (vad_min_silence_ms)", f"{getattr(config, 'vad_min_silence_ms', 200)} ms"),
+            ("切片首尾留白缓冲 (vad_speech_pad_ms)", f"{getattr(config, 'vad_speech_pad_ms', 150)} ms"),
+            ("相邻片段合并间隔 (merge_gap_s)", f"{getattr(config, 'merge_gap_s', 0.5)} s"),
+            ("单次送模音频窗口 (max_segment_s)", f"{getattr(config, 'max_segment_s', 16.0)} s"),
+            ("单条字幕目标时长 (max_cue_dur)", f"{getattr(config, 'max_cue_dur', 4.3)} s"),
+            ("单条字幕最大字数 (max_cue_chars)", f"{getattr(config, 'max_cue_chars', 21)} 字"),
+            ("视为停顿静音长度 (min_pause_s)", f"{getattr(config, 'min_pause_s', 0.12)} s"),
+            ("字幕前后留白 (cue_pad_s)", f"{getattr(config, 'cue_pad_start_s', 0.12)} s"),
+            ("CTC 逐字发声帧对齐 (use_alignment)", "启用" if use_alignment else "停用"),
+            ("动态响度归一化 (enable_loudnorm)", "启用" if getattr(config, "enable_loudnorm", True) else "停用"),
+        ]
+    return [
+        ("识别方案", "Anime Whisper (litagin/anime-whisper)"),
+        ("智能句级分切 (enable_sentence_split)", "启用" if getattr(config, "enable_sentence_split", True) else "停用"),
+        ("动态响度归一化 (enable_loudnorm)", "启用" if getattr(config, "enable_loudnorm", False) else "停用"),
+        ("VAD 语音判定阈值 (threshold)", getattr(config, "threshold", 0.30)),
+        ("最短语音片段 (min_speech_ms)", f"{getattr(config, 'min_speech_ms', 120)} ms"),
+        ("判定停顿静音 (min_silence_ms)", f"{getattr(config, 'min_silence_ms', 150)} ms"),
+        ("首尾留白缓冲 (speech_pad_ms)", f"{getattr(config, 'speech_pad_ms', 200)} ms"),
+        ("相邻片段合并间隔 (merge_gap_s)", f"{getattr(config, 'merge_gap_s', 0.3)} s"),
+        ("单次送模最长秒数 (max_segment_s)", f"{getattr(config, 'max_segment_s', 12.0)} s"),
+        ("合并后最短片段 (min_speech_s)", f"{getattr(config, 'min_speech_s', 0.08)} s"),
+        ("字幕首尾外扩留白 (cue_pad_s)", f"{getattr(config, 'cue_pad_s', 0.02)} s"),
+        ("重复抑制 n-gram (no_repeat_ngram_size)", str(ngram)),
+        ("重复惩罚因子 (repetition_penalty)", str(penalty)),
+    ]
+
+
 def build_transcription_report(
     media_name: str,
     out_filename: str,
@@ -225,52 +296,26 @@ def build_transcription_report(
         "🎬 日语影片字幕转录任务详报 (Transcription Report)",
         "============================================================",
         "【任务概览】",
-        f"• 媒体源文件：{media_name}",
-        f"• 处理时间段：{time_slice_desc}",
-        f"• 字幕文件名：{out_filename}",
-        f"• 保存完整路径：{out_path}",
-        f"• 识别引擎：{engine_name}",
-        f"• 输出格式：{output_format}",
-        f"• 转录耗时：{duration_str}",
-        f"• 字幕统计：共 {cue_count} 条字幕 ｜ 总计 {char_count} 字符",
-        f"• 执行状态：{'⚠️ 用户中途打断 (保存部分字幕)' if is_interrupted else '✅ 全部完成'}",
-        f"• 归档时间：{finish_time}",
+        *[f"• {label}：{value}" for label, value in overview_pairs(
+            media_name=media_name,
+            time_slice_desc=time_slice_desc,
+            out_filename=out_filename,
+            out_path=out_path,
+            engine_name=engine_name,
+            output_format=output_format,
+            duration_str=duration_str,
+            cue_count=cue_count,
+            char_count=char_count,
+            is_interrupted=is_interrupted,
+            finish_time=finish_time,
+        )],
         "",
         "【执行生效参数清单】",
+        *[f"• {label}：{value}" for label, value in param_pairs(
+            is_qwen=is_qwen, config=config, ngram=ngram,
+            penalty=penalty, use_alignment=use_alignment,
+        )],
     ]
-
-    if is_qwen:
-        lines.extend([
-            "• 识别方案：Qwen3-ASR (JA Anime/Galgame) + CTC 对齐",
-            f"• VAD 语音检测阈值 (vad_threshold)：{getattr(config, 'vad_threshold', 0.30)}",
-            f"• 最短语音长度 (vad_min_speech_ms)：{getattr(config, 'vad_min_speech_ms', 100)} ms",
-            f"• 判定为停顿的静音 (vad_min_silence_ms)：{getattr(config, 'vad_min_silence_ms', 200)} ms",
-            f"• 切片首尾留白缓冲 (vad_speech_pad_ms)：{getattr(config, 'vad_speech_pad_ms', 150)} ms",
-            f"• 相邻片段合并间隔 (merge_gap_s)：{getattr(config, 'merge_gap_s', 0.5)} s",
-            f"• 单次送模音频窗口 (max_segment_s)：{getattr(config, 'max_segment_s', 16.0)} s",
-            f"• 单条字幕目标时长 (max_cue_dur)：{getattr(config, 'max_cue_dur', 4.3)} s",
-            f"• 单条字幕最大字数 (max_cue_chars)：{getattr(config, 'max_cue_chars', 21)} 字",
-            f"• 视为停顿静音长度 (min_pause_s)：{getattr(config, 'min_pause_s', 0.12)} s",
-            f"• 字幕前后留白 (cue_pad_s)：{getattr(config, 'cue_pad_start_s', 0.12)} s",
-            f"• CTC 逐字发声帧对齐 (use_alignment)：{'启用' if use_alignment else '停用'}",
-            f"• 动态响度归一化 (enable_loudnorm)：{'启用' if getattr(config, 'enable_loudnorm', True) else '停用'}",
-        ])
-    else:
-        lines.extend([
-            "• 识别方案：Anime Whisper (litagin/anime-whisper)",
-            f"• 智能句级分切 (enable_sentence_split)：{'启用' if getattr(config, 'enable_sentence_split', True) else '停用'}",
-            f"• 动态响度归一化 (enable_loudnorm)：{'启用' if getattr(config, 'enable_loudnorm', False) else '停用'}",
-            f"• VAD 语音判定阈值 (threshold)：{getattr(config, 'threshold', 0.30)}",
-            f"• 最短语音片段 (min_speech_ms)：{getattr(config, 'min_speech_ms', 120)} ms",
-            f"• 判定停顿静音 (min_silence_ms)：{getattr(config, 'min_silence_ms', 150)} ms",
-            f"• 首尾留白缓冲 (speech_pad_ms)：{getattr(config, 'speech_pad_ms', 200)} ms",
-            f"• 相邻片段合并间隔 (merge_gap_s)：{getattr(config, 'merge_gap_s', 0.3)} s",
-            f"• 单次送模最长秒数 (max_segment_s)：{getattr(config, 'max_segment_s', 12.0)} s",
-            f"• 合并后最短片段 (min_speech_s)：{getattr(config, 'min_speech_s', 0.08)} s",
-            f"• 字幕首尾外扩留白 (cue_pad_s)：{getattr(config, 'cue_pad_s', 0.02)} s",
-            f"• 重复抑制 n-gram (no_repeat_ngram_size)：{ngram}",
-            f"• 重复惩罚因子 (repetition_penalty)：{penalty}",
-        ])
 
     visible_missed = _visible_missed_spans(missed_spans)
     hidden = _missed_hidden_count(missed_spans)
@@ -373,3 +418,233 @@ def build_transcription_report(
 
     lines.append("============================================================")
     return "\n".join(lines)
+
+
+def build_report_data(
+    media_name: str,
+    out_filename: str,
+    out_path: str,
+    engine_name: str,
+    output_format: str,
+    elapsed_time: float,
+    cue_count: int,
+    char_count: int,
+    is_qwen: bool,
+    config: object,
+    is_interrupted: bool = False,
+    time_slice_desc: str = "全片完整转录",
+    ngram: int = 5,
+    penalty: float = 1.15,
+    use_alignment: bool = True,
+    missed_spans: list[dict] | None = None,
+    segment_stats: dict | None = None,
+    align_stats: dict | None = None,
+) -> dict:
+    """与 `build_transcription_report` 同参数，但返回**结构化数据**。
+
+    改造规划 §4 的要求：「`render_report_panel` 全部改为返回 JSON，渲染交给前端」。
+    新前端拿 `overview` / `params` 渲染指标胶囊，拿 `sections` 渲染明细列表；
+    `raw_text` 保留纯文本，供「一键复制」与归档使用，与旧界面逐字一致。
+
+    字段口径与文本报告完全同源（`overview_pairs` / `param_pairs` / 各 `_xxx` 助手），
+    所以不会出现「网页和报告对不上」。
+    """
+    raw_text = build_transcription_report(
+        media_name=media_name,
+        out_filename=out_filename,
+        out_path=out_path,
+        engine_name=engine_name,
+        output_format=output_format,
+        elapsed_time=elapsed_time,
+        cue_count=cue_count,
+        char_count=char_count,
+        is_qwen=is_qwen,
+        config=config,
+        is_interrupted=is_interrupted,
+        time_slice_desc=time_slice_desc,
+        ngram=ngram,
+        penalty=penalty,
+        use_alignment=use_alignment,
+        missed_spans=missed_spans,
+        segment_stats=segment_stats,
+        align_stats=align_stats,
+    )
+
+    visible_missed = _visible_missed_spans(missed_spans)
+    hidden = _missed_hidden_count(missed_spans)
+    stats = segment_stats or {}
+    dropped = int(stats.get("hallucination_drops", 0) or 0)
+    suspect = int(stats.get("suspect_cues", 0) or 0)
+    hallucination_spans = list(stats.get("hallucination_spans") or [])
+    degraded = list((align_stats or {}).get("spans") or [])
+    total_degraded = int((align_stats or {}).get("degraded", 0) or 0)
+
+    quality_parts = [f"🔍 可能漏句 {len(visible_missed)} 处"]
+    if not is_qwen:
+        quality_parts.append(f"✂️ 误删待核 {dropped} 段")
+        quality_parts.append(f"👂 短句待确认 {suspect} 段")
+
+    sections: list[dict] = [
+        {
+            "id": "missed",
+            "title": "疑似漏句区间",
+            "headline": _missed_spans_headline(visible_missed),
+            "note": "有声音、但两次识别都为空 → 建议试听补录" if visible_missed else "",
+            "empty_text": "未发现",
+            "hidden": hidden,
+            "hidden_text": (
+                f"另有 {hidden} 处峰值低于 {MISSED_MIN_PEAK} 的近静音段未展示"
+                "（多为配乐/底噪误判，已留在 .missed.json 备查）"
+            )
+            if hidden
+            else "",
+            "items": [
+                {
+                    "start": float(span.get("start", 0.0) or 0.0),
+                    "end": float(span.get("end", 0.0) or 0.0),
+                    "dur": float(span.get("dur", 0.0) or 0.0),
+                    "time_text": (
+                        f"{_fmt_report_time(span.get('start', 0.0))} → "
+                        f"{_fmt_report_time(span.get('end', 0.0))}"
+                    ),
+                    "reason": str(span.get("reason", "") or ""),
+                    "reason_text": _missed_reason_label(span.get("reason", "")),
+                    "peak": _span_peak(span) if "peak" in span else None,
+                }
+                for span in visible_missed
+            ],
+        },
+        {
+            "id": "cut_snap",
+            "title": "切分点吸附",
+            "headline": _cut_snap_summary(segment_stats),
+            "items": [],
+        },
+    ]
+
+    if is_qwen:
+        sections.append(
+            {
+                "id": "hallucination",
+                "title": "幻觉门控 / 复核",
+                "headline": "该引擎不启用（仅 Anime Whisper 做时间戳复核）",
+                "disabled": True,
+                "items": [],
+            }
+        )
+    else:
+        for section_id, title, verdict, count, empty_text in (
+            (
+                "hallucination_dropped",
+                "幻觉门控",
+                "dropped",
+                dropped,
+                "未触发（没有段落复核为空被删）",
+            ),
+            (
+                "hallucination_suspect",
+                "幻觉复核",
+                "suspect",
+                suspect,
+                "未触发（无短段/低密度结果需要复核）",
+            ),
+        ):
+            rows = [s for s in hallucination_spans if str(s.get("verdict", "")) == verdict]
+            sections.append(
+                {
+                    "id": section_id,
+                    "title": title,
+                    "headline": (
+                        f"{count} 段"
+                        + ("经时间戳复核为空被丢弃" if verdict == "dropped" else "短/低密度结果待人工核对")
+                    )
+                    if count
+                    else empty_text,
+                    "count": count,
+                    "truncated": max(0, len(rows) - HALLUCINATION_SPAN_LIMIT),
+                    "items": [
+                        {
+                            "start": float(span.get("start", 0.0) or 0.0),
+                            "end": float(span.get("end", 0.0) or 0.0),
+                            "dur": float(span.get("dur", 0.0) or 0.0),
+                            "time_text": (
+                                f"{_fmt_report_time(span.get('start', 0.0))} → "
+                                f"{_fmt_report_time(span.get('end', 0.0))}"
+                            ),
+                            "rule": str(span.get("rule", "") or ""),
+                            "rule_text": _hallucination_rule_label(span.get("rule", "")),
+                            "peak": _span_peak(span) if "peak" in span else None,
+                            "text": " ".join(str(span.get("text", "")).split()),
+                        }
+                        for span in rows[:HALLUCINATION_SPAN_LIMIT]
+                    ],
+                }
+            )
+
+    align_headline = _align_stats_headline(align_stats, is_qwen)
+    if is_interrupted and is_qwen and align_stats:
+        align_headline += "（统计截至中断处）"
+    sections.append(
+        {
+            "id": "alignment",
+            "title": "逐字对齐",
+            "headline": align_headline,
+            "total_degraded": total_degraded,
+            "items": [
+                {
+                    "start": float(span.get("start", 0.0) or 0.0),
+                    "end": float(span.get("end", 0.0) or 0.0),
+                    "dur": float(span.get("dur", 0.0) or 0.0),
+                    "time_text": (
+                        f"{_fmt_report_time(span.get('start', 0.0))} → "
+                        f"{_fmt_report_time(span.get('end', 0.0))}"
+                    ),
+                    "reason": str(span.get("reason", "unknown") or "unknown"),
+                    "chars": int(span.get("chars", 0) or 0),
+                }
+                for span in degraded
+            ],
+        }
+    )
+
+    finish_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "overview": [
+            {"label": label, "value": value}
+            for label, value in overview_pairs(
+                media_name=media_name,
+                time_slice_desc=time_slice_desc,
+                out_filename=out_filename,
+                out_path=out_path,
+                engine_name=engine_name,
+                output_format=output_format,
+                duration_str=format_duration(elapsed_time),
+                cue_count=cue_count,
+                char_count=char_count,
+                is_interrupted=is_interrupted,
+                finish_time=finish_time,
+            )
+        ],
+        "params": [
+            {"label": label, "value": value}
+            for label, value in param_pairs(
+                is_qwen=is_qwen,
+                config=config,
+                ngram=ngram,
+                penalty=penalty,
+                use_alignment=use_alignment,
+            )
+        ],
+        "quality": {
+            "headline": " ｜ ".join(quality_parts),
+            "missed": len(visible_missed),
+            "hidden_missed": hidden,
+            "dropped": dropped,
+            "suspect": suspect,
+            "degraded": total_degraded,
+            "has_findings": bool(len(visible_missed) or dropped or suspect),
+            "qwen_limited": bool(is_qwen),
+        },
+        "sections": sections,
+        "raw_text": raw_text,
+    }

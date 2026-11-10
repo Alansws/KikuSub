@@ -40,7 +40,6 @@ import sys
 import subprocess
 import tempfile
 import threading
-import time
 import queue
 import re
 import warnings
@@ -114,18 +113,16 @@ from core.cues import (
 )
 from core.textio import write_text_atomic
 from core import pipeline
-from core.procutil import CommandCancelled, CommandTimeout, run_command, tail, terminate_process
+from core import qa
+from core import proxy
+from core.procutil import CommandCancelled
 from core.report import (
     _visible_missed_spans,
     load_missed_spans,
 )
 from core.audit import (
-    _audit_match_cues,
-    _audit_ensure_item_cues,
-    empty_audit_payload,
     make_audit_payload,
     _parse_audit_payload,
-    write_audit_payload,
     load_audit_payload,
 )
 
@@ -567,233 +564,52 @@ def qa_apply_action(
     undo_stack=None,
     redo_stack=None,
 ):
-    """处理质检队列里的一次点击：标记 / 删除 / 恢复原句 / 定位编辑。
+    """Gradio 适配层：动作语义在 `core.qa.apply_action`，这里只做九元组映射。
 
-    所有会改动字幕的动作都走既有的撤回栈，且只在“真的找到对应字幕”时才改，
-    避免用户在核对台尚未设为基线时误删或误插。
+    `gr.Warning` 与四个编辑框的 `gr.update()` 是 Gradio 专有的，所以不能下沉到 core；
+    撤回栈也仍由 `gr.State` 持有（服务层用 `Session` 自己维护）。
     """
-    existing = _unique_sorted_cues(review_cues)
-    fallback_dicts = _cues_to_dicts(existing)
-    fallback_table = review_cues_to_table(existing)
+    res = qa.apply_action(cmd_json, review_cues, media_file, qa_payload)
+
     u_stack = list(undo_stack or [])
     r_stack = list(redo_stack or [])
-    payload = _parse_audit_payload(qa_payload)
-    items = [dict(item) for item in (payload.get("items") or []) if isinstance(item, dict)]
+    if res.cues_changed:
+        # 压入「变更前」的快照，与旧实现 _push_history(u_stack, existing) 同义
+        u_stack, r_stack = _push_history(u_stack, res.previous_cues)
+    if res.warning:
+        gr.Warning(res.warning)
 
-    def fallback(message: str, *, edit=None):
-        return (
-            fallback_dicts,
-            fallback_table,
-            gr.update(),
-            message,
-            u_stack,
-            r_stack,
-            qa_payload or empty_audit_payload(),
-            *(edit or (gr.update(), gr.update(), gr.update(), gr.update())),
-        )
-
-    if not items:
-        gr.Warning("⚠️ 质检队列为空或已失效，请先重新转写生成。")
-        return fallback("⚠️ 质检队列为空，请先转写。")
-
-    try:
-        cmd = json.loads(cmd_json or "{}")
-    except (TypeError, ValueError):
-        cmd = {}
-    if not isinstance(cmd, dict):
-        cmd = {}
-
-    action = str(cmd.get("action") or "")
-    item_id = str(cmd.get("id") or "")
-    item = next((entry for entry in items if str(entry.get("id")) == item_id), None)
-    if item is None:
-        gr.Warning("⚠️ 没有找到这条待核记录，可能已重新转写，请刷新队列。")
-        return fallback("⚠️ 待核记录已失效。")
-
-    statuses = dict(payload.get("statuses") or {})
-    media_name = str(payload.get("media") or (Path(media_file).name if media_file else ""))
-    start = float(item.get("start", 0.0) or 0.0)
-    end = float(item.get("end", 0.0) or 0.0)
-    cues_changed = False
-    force_table_sync = False
-    edit_fields = (gr.update(), gr.update(), gr.update(), gr.update())
-    message = ""
-
-    def mark(status: str, resolution: str = "") -> None:
-        if status == "pending":
-            statuses.pop(item_id, None)
-        else:
-            statuses[item_id] = {"status": status, "resolution": resolution}
-
-    if action == "mark":
-        status = str(cmd.get("status") or "done")
-        if status not in {"pending", "done", "skipped"}:
-            status = "done"
-        resolution = str(cmd.get("resolution") or "")
-        mark(status, resolution)
-        if status == "pending":
-            message = "↺ 已重新放回待核队列。"
-        else:
-            message = {
-                "filled": "⚡ 已补录并插入核对台。",
-                "restored": "↩ 已恢复原句。",
-                "deleted": "🗑 已删除此句。",
-                "kept": "✅ 已保留。",
-                "confirmed": "✓ 已确认删除。",
-                "not-speech": "✓ 已标记为不是台词。",
-                "skipped": "⏭ 已跳过。",
-            }.get(resolution, "✅ 已标记为本条处理完成。")
-            # 短句待确认点“保留”时，核对台可能因为“先设基线、后重转/删改”
-            # 而缺少这句。这里幂等补齐，并强制刷新表格，避免状态与表格不同步。
-            if resolution == "kept" and str(item.get("kind") or "") == "suspect":
-                before_ensure = existing
-                existing, added = _audit_ensure_item_cues(existing, item)
-                if added:
-                    u_stack, r_stack = _push_history(u_stack, before_ensure)
-                    cues_changed = True
-                    message = (
-                        f"✅ 已保留；核对台原先缺少这句，已自动补回 {added} 条字幕"
-                        "（可按 Cmd+Z 撤回）。"
-                    )
-                else:
-                    message = "✅ 已保留；核对台已包含这句，表格已刷新对齐。"
-                force_table_sync = True
-    elif action == "skip":
-        mark("skipped", "skipped")
-        message = "⏭ 已跳过这一条，可随时点「↺ 重新待核」找回。"
-    elif action == "delete_cue":
-        targets = [c for c in (item.get("cues") or []) if isinstance(c, dict)]
-        remove_keys = {
-            (
-                int(round(float(c.get("start", 0.0)) * 1000)),
-                int(round(float(c.get("end", 0.0)) * 1000)),
-                str(c.get("text") or ""),
-            )
-            for c in targets
-        }
-        if not remove_keys:
-            # 兜底：构建队列时没匹配到（例如用户刚改过字幕），按时间包含关系找
-            remove_keys = {
-                (int(round(cue.start * 1000)), int(round(cue.end * 1000)), cue.text)
-                for cue in existing
-                if cue.start >= start - 0.08 and cue.end <= end + 0.08
-            }
-        remaining = [
-            cue for cue in existing
-            if (int(round(cue.start * 1000)), int(round(cue.end * 1000)), cue.text) not in remove_keys
-        ]
-        if len(remaining) == len(existing):
-            gr.Warning("⚠️ 核对台里没有找到这句字幕。请先点「📌 本次设为基线」再试。")
-            return fallback("⚠️ 核对台未找到对应字幕，未做删除。")
-        removed_count = len(existing) - len(remaining)
-        u_stack, r_stack = _push_history(u_stack, existing)
-        existing = remaining
-        cues_changed = True
-        mark("done", "deleted")
-        message = f"🗑 已从核对台删除该段对应的 {removed_count} 条字幕（可按 Cmd+Z 撤回）。"
-    elif action == "restore":
-        text = " ".join(str(item.get("text") or "").split())
-        if not text:
-            gr.Warning("⚠️ 这条记录没有可恢复的原文，请改用「⚡ 重新识别」。")
-            return fallback("⚠️ 没有可恢复的原文。")
-        new_cue = SubtitleCue(round(start, 3), round(max(end, start + 0.1), 3), text)
-        combined = _unique_sorted_cues([*existing, new_cue])
-        if len(combined) == len(existing):
-            mark("done", "restored")
-            message = "ℹ️ 这句已经在核对台里了，未重复插入。"
-        else:
-            u_stack, r_stack = _push_history(u_stack, existing)
-            existing = combined
-            cues_changed = True
-            mark("done", "restored")
-            message = "↩ 已按原文恢复这句字幕（可按 Cmd+Z 撤回）。"
-    elif action == "focus":
-        targets = [c for c in (item.get("cues") or []) if isinstance(c, dict)]
-        target = targets[0] if targets else None
-        if target is None:
-            # 用区间内第一条字幕兜底
-            overlapping = _audit_match_cues(existing, start, end)
-            target = overlapping[0] if overlapping else None
-        idx = 0
-        if target is not None:
-            for i, cue in enumerate(existing, start=1):
-                if (
-                    int(round(cue.start * 1000)) == int(round(float(target.get("start", 0.0)) * 1000))
-                    and int(round(cue.end * 1000)) == int(round(float(target.get("end", 0.0)) * 1000))
-                ):
-                    idx = i
-                    break
-        text = str(target.get("text") if target else item.get("text") or "")
+    if res.focus:
         edit_fields = (
-            idx or gr.update(),
-            format_srt_timestamp(start),
-            format_srt_timestamp(end),
-            text,
+            res.focus["index"] or gr.update(),
+            res.focus["start"],
+            res.focus["end"],
+            res.focus["text"],
         )
-        message = "✏️ 已定位并填入上方单行精修框，改完点「✏️ 更新此行」。"
     else:
-        gr.Warning("⚠️ 未知的质检操作。")
-        return fallback("⚠️ 未知操作。")
+        edit_fields = (gr.update(), gr.update(), gr.update(), gr.update())
 
-    revision = int(payload.get("revision") or 0) + 1
-    auto_advance = action in {"mark", "skip", "delete_cue", "restore"} and not (
-        action == "mark" and str(cmd.get("status") or "") == "pending"
-    )
-    new_payload = make_audit_payload(
-        media_name,
-        items,
-        statuses,
-        payload.get("latest_cue_count") or len(existing),
-        payload.get("hidden_missed") or 0,
-        revision,
-        {
-            "id": item_id,
-            "action": action,
-            "seq": revision,
-            "auto_advance": auto_advance,
-            "message": message,
-        },
-        # 这些是「这次运行是什么」的元数据，处理动作必须原样带过去，
-        # 否则前端会把空闲/引擎能力误判成未知。
-        engine=payload.get("engine") or "",
-        phase=payload.get("phase") or "done",
-        scanned=payload.get("scanned") or {},
-        transcribed_at=payload.get("transcribed_at") or 0.0,
-    )
-    write_audit_payload(media_file, new_payload)
-
-    if cues_changed or force_table_sync:
-        log.info(
-            "质检动作 | action=%s | id=%s | cues=%s | media=%s | table_sync=%s",
-            action,
-            item_id,
-            len(existing),
-            media_name,
-            force_table_sync,
-        )
+    if res.cues_changed or res.force_table_sync:
         return (
-            _cues_to_dicts(existing),
-            review_cues_to_table(existing),
-            build_review_payload(media_file, existing, include_peaks=False),
-            message,
+            _cues_to_dicts(res.cues),
+            review_cues_to_table(res.cues),
+            build_review_payload(media_file, res.cues, include_peaks=False),
+            res.message,
             u_stack,
             r_stack,
-            new_payload,
+            res.qa_payload,
             *edit_fields,
         )
     return (
-        fallback_dicts,
+        _cues_to_dicts(res.cues),
         gr.update(),
         gr.update(),
-        message,
+        res.message,
         u_stack,
         r_stack,
-        new_payload,
+        res.qa_payload,
         *edit_fields,
     )
-
-
-
 
 _REPORT_SECTION_RE = re.compile(r"^【(?P<title>[^】]+)】(?P<note>.*)$")
 _REPORT_BANNER_CHARS = set("=-—_ ")
@@ -1296,31 +1112,15 @@ PROXIES_DIR = OUTPUT_DIR / "web_proxies"
 PROXIES_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _proxy_output_dir() -> Path:
+    """core.proxy 以「输出目录」为基准拼 `web_proxies/`；这里由 PROXIES_DIR 反推，
+    这样测试或用户重定向 `app.PROXIES_DIR` 时依然生效。"""
+    return PROXIES_DIR.parent
+
+
 def get_existing_proxy(media_path: Path) -> Path | None:
-    """检查是否已经存在压制好的轻量监看代理成片。"""
-    file_size = media_path.stat().st_size if media_path.exists() else 0
-    clean_stem = media_path.stem
-    standard_proxy = PROXIES_DIR / f"{clean_stem}_{file_size}_preview.mp4"
-
-    if standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
-        return standard_proxy
-
-    # 历史命名（旧版本没有体积字段）不能无条件复用：同名片源被替换后，
-    # 旧代理的画面和当前字幕会错位。只接受文件名中体积与当前片源一致的后缀。
-    legacy_candidates = []
-    for cand in PROXIES_DIR.glob("*_preview.mp4"):
-        if not cand.name.startswith(f"{clean_stem}_"):
-            continue
-        match = re.search(r"_(\d+)_preview\.mp4$", cand.name)
-        if match is None or int(match.group(1)) != file_size:
-            continue
-        try:
-            if cand.stat().st_size > 50 * 1024:
-                legacy_candidates.append(cand)
-        except OSError:
-            continue
-    legacy_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return legacy_candidates[0] if legacy_candidates else None
+    """检查是否已经存在压制好的轻量监看代理成片（实现见 `core.proxy`）。"""
+    return proxy.get_existing_proxy(media_path, _proxy_output_dir())
 
 
 def get_web_friendly_video(media_path: Path) -> Path:
@@ -1342,72 +1142,11 @@ def create_m4pro_hardware_proxy(
     dest: Path | None = None,
     cancel_event=None,
 ) -> Path | None:
-    """480p 监看代理压制：macOS 优先 VideoToolbox，其他平台直接走 libx264。
-
-    失败路径会删除目标文件，绝不把半成品留给下一次「历史代理」复用。
-    """
-    media_path = Path(media_path)
-    file_size = media_path.stat().st_size if media_path.exists() else 0
+    """非实时回退压制（实现见 `core.proxy.create_proxy`）。"""
     if dest is None:
-        dest = PROXIES_DIR / f"{media_path.stem}_{file_size}_preview.mp4"
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+        dest = PROXIES_DIR / f"{Path(media_path).stem}_{Path(media_path).stat().st_size}_preview.mp4"
+    return proxy.create_proxy(media_path, dest=dest, cancel_event=cancel_event)
 
-    base = ["ffmpeg", "-y", "-nostdin", "-threads", "0", "-i", str(media_path)]
-    video_filter = "scale=-2:480,format=yuv420p"
-    audio_args = ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
-    attempts: list[tuple[str, list[str], float]] = []
-
-    if sys.platform == "darwin":
-        attempts.append((
-            "VideoToolbox 全硬件",
-            ["ffmpeg", "-y", "-nostdin", "-hwaccel", "videotoolbox", "-i", str(media_path),
-             "-vf", video_filter, "-c:v", "h264_videotoolbox", "-b:v", "2200k",
-             *audio_args, str(dest)],
-            1200.0,
-        ))
-        attempts.append((
-            "软解 + VideoToolbox 编码",
-            [*base, "-vf", video_filter, "-c:v", "h264_videotoolbox", "-b:v", "2200k",
-             *audio_args, str(dest)],
-            1200.0,
-        ))
-
-    attempts.append((
-        "libx264 CPU",
-        [*base, "-vf", "scale=-2:480", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-         "-preset", "ultrafast", "-crf", "28", *audio_args, str(dest)],
-        1800.0,
-    ))
-
-    for label, cmd, timeout in attempts:
-        log.info("代理压制方案 | %s | dest=%s", label, dest.name)
-        try:
-            result = run_command(cmd, timeout=timeout, cancel_event=cancel_event)
-        except CommandCancelled:
-            _drop_broken_proxy(dest)
-            raise
-        except CommandTimeout as exc:
-            log.warning("代理压制超时 | %s | %s", label, tail(exc.stderr, 800))
-            _drop_broken_proxy(dest)
-            continue
-        except Exception as exc:
-            log.warning("代理压制启动失败 | %s | %s", label, exc)
-            _drop_broken_proxy(dest)
-            continue
-
-        if result.returncode == 0 and dest.exists() and dest.stat().st_size > 1024:
-            log.info("代理压制成功 | %s | %s", label, dest.name)
-            return dest
-        log.warning(
-            "代理压制失败 | %s | rc=%s | %s",
-            label,
-            result.returncode,
-            tail(result.stderr, 800),
-        )
-        _drop_broken_proxy(dest)
-
-    return None
 
 _MEDIA_CODEC_CACHE: dict[str, str] = {}
 
@@ -2932,11 +2671,7 @@ _PROXY_JOB_ACTIVE = False
 
 def _drop_broken_proxy(path: Path) -> None:
     """压制失败时删掉半成品，否则下一次点击会把它当成「历史代理」秒级复用。"""
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
-        pass
+    proxy.drop_broken_proxy(path)
 
 
 def _human_bytes(num: int) -> str:
@@ -3032,8 +2767,8 @@ def manual_transcode_proxy_generator(
     于是界面上就在两种形态之间反复横跳（19% ↔ 33%）。现在只保留卡片这一个进度源，
     事件侧用 ``show_progress="hidden"`` 彻底关掉原生追踪器。
 
-    子进程生命周期：ffmpeg 写到 ``*.part.mp4``，成功后才原子 rename 成正式代理；
-    客户端断开（GeneratorExit）会走 finally 终止 ffmpeg 并删除半成品。
+    压制编排在 ``core.proxy.run_proxy_job``（服务层共用同一份），这里只负责
+    Gradio 的那一层：单槽占用、把进度事件画成卡片、成功/失败后的文案与 payload 刷新。
     """
     session = _session_hash(request)
     if not media_file:
@@ -3047,16 +2782,12 @@ def manual_transcode_proxy_generator(
         yield gr.update(), "⚠️ 媒体临时文件已失效，请重新上传。"
         return
 
-    file_size = media_path.stat().st_size if media_path.exists() else 0
-    clean_stem = media_path.stem
-    standard_proxy = PROXIES_DIR / f"{clean_stem}_{file_size}_preview.mp4"
-    partial_proxy = PROXIES_DIR / f"{clean_stem}_{file_size}_preview.part.mp4"
-
-    if standard_proxy.exists() and standard_proxy.stat().st_size > 50 * 1024:
+    existing = get_existing_proxy(media_path)
+    if existing is not None:
         payload = build_review_payload(media_file, review_cues, include_peaks=True)
-        log.info("代理复用 | session=%s | %s", session, standard_proxy.name)
+        log.info("代理复用 | session=%s | %s", session, existing.name)
         gr.Info("⚡ 检测到已有历史压制代理，已秒级直接切换！")
-        yield payload, f"🎉 **已秒级复用历史代理（{standard_proxy.name}）！** 画面已对齐，拖拽现已流畅秒开。"
+        yield payload, f"🎉 **已秒级复用历史代理（{existing.name}）！** 画面已对齐，拖拽现已流畅秒开。"
         return
 
     # 同一时刻只允许一个压制任务，避免两个 ffmpeg 同时写同一个成片（会互相截断、进度互相打架）
@@ -3068,200 +2799,94 @@ def manual_transcode_proxy_generator(
             return
         _PROXY_JOB_ACTIVE = True
 
-    try:
-        log.info(
-            "代理压制开始 | session=%s | media=%s | size=%s",
-            session,
-            media_path.name,
-            file_size,
-        )
-        _drop_broken_proxy(partial_proxy)
+    log.info("代理压制开始 | session=%s | media=%s", session, media_path.name)
+    cancel_event = threading.Event()
+    q: queue.Queue = queue.Queue()
+    partial_proxy = proxy.proxy_paths(media_path, PROXIES_DIR.parent)[1]
 
-        total_duration = 0.0
+    def worker():
         try:
-            probe = run_command(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=nw=1:nk=1", str(media_path)],
-                timeout=20,
+            result = proxy.run_proxy_job(
+                media_path,
+                on_progress=lambda event: q.put(("progress", event)),
+                cancel_event=cancel_event,
+                output_dir=PROXIES_DIR.parent,
             )
-            total_duration = max(0.0, float(probe.stdout.strip()))
-        except Exception:
-            total_duration = 0.0  # 探不到时长就走「不确定进度」，不要瞎猜 180 秒
-
-        use_videotoolbox = sys.platform == "darwin"
-        if use_videotoolbox:
-            cmd_hw = [
-                "ffmpeg", "-y", "-nostdin",
-                "-hwaccel", "videotoolbox",
-                "-i", str(media_path),
-                "-vf", "scale=-2:480,format=yuv420p",
-                "-c:v", "h264_videotoolbox",
-                "-b:v", "2200k",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
-                "-progress", "pipe:1",
-                str(partial_proxy),
-            ]
-            stage_text = "正在启动 VideoToolbox 硬件压制…"
-        else:
-            cmd_hw = [
-                "ffmpeg", "-y", "-nostdin", "-threads", "0",
-                "-i", str(media_path),
-                "-vf", "scale=-2:480,format=yuv420p",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
-                "-progress", "pipe:1",
-                str(partial_proxy),
-            ]
-            stage_text = "正在启动 libx264 CPU 压制…"
-
-        yield gr.update(), _render_proxy_progress_card(
-            None, 0, total_duration, "准备中…", stage_text, "初始化编码器"
-        )
-
-        proc = None
-        ok = False
-        max_out_s = 0.0
-        current_speed = "1.0x"
-        err_tail = ""
-        err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
-        try:
-            proc = subprocess.Popen(
-                cmd_hw,
-                stdout=subprocess.PIPE,
-                stderr=err_file,
-                text=True,
-                bufsize=1,
-            )
-            last_yield_time = time.time()
-            last_pct = -1
-
-            while True:
-                line = proc.stdout.readline() if proc.stdout else ""
-                if not line and proc.poll() is not None:
-                    break
-                line_str = line.strip()
-                if "=" in line_str:
-                    k, v = line_str.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if k == "out_time_us":
-                        try:
-                            # 只认单调值：ffmpeg 偶发回退/重置时进度条绝不倒走
-                            max_out_s = max(max_out_s, float(v) / 1000000.0)
-                        except ValueError:
-                            pass
-                    elif k == "speed" and v.endswith("x"):
-                        current_speed = v
-
-                now = time.time()
-                if now - last_yield_time < 0.3:
-                    continue
-
-                if total_duration > 0:
-                    pct = int(min(99.0, max(0.0, (max_out_s / total_duration) * 100)))
-                else:
-                    pct = None
-
-                # 百分比没变就不刷新（只偶尔补一次速度/时间），避免每 0.3s 无意义重绘造成闪烁
-                if pct == last_pct and now - last_yield_time < 1.5:
-                    continue
-                last_pct = pct
-                last_yield_time = now
-                yield gr.update(), _render_proxy_progress_card(
-                    pct, max_out_s, total_duration, current_speed
-                )
-
-            proc.wait(timeout=10)
-            ok = proc.returncode == 0
-        except GeneratorExit:
-            log.warning("客户端断开，终止代理压制 | session=%s", session)
-            raise
-        except Exception:
-            log.exception("代理实时压制异常 | session=%s", session)
-        finally:
-            if proc is not None and proc.poll() is None:
-                log.warning("终止代理 ffmpeg | session=%s | pid=%s", session, proc.pid)
-                terminate_process(proc)
-            try:
-                err_file.seek(0)
-                err_tail = tail(err_file.read(), 1500)
-            except Exception:
-                err_tail = ""
-            try:
-                err_file.close()
-            except Exception:
-                pass
-
-        if ok:
-            try:
-                if partial_proxy.exists() and partial_proxy.stat().st_size > 50 * 1024:
-                    os.replace(partial_proxy, standard_proxy)
-                else:
-                    ok = False
-            except OSError:
-                log.exception("代理成片 rename 失败 | %s", partial_proxy.name)
-                ok = False
-
-        if ok:
-            # 收尾阶段（算峰值、切画面）也占时间，先补一帧 100%，避免卡片停在 90% 看起来像卡死
-            yield gr.update(), _render_proxy_progress_card(
-                100 if total_duration > 0 else None,
-                total_duration or max_out_s,
-                total_duration,
-                current_speed,
-                "压制完成，正在载入监看画面…",
-                "收尾：生成波形峰值",
-            )
-            payload = build_review_payload(media_file, review_cues, include_peaks=True)
-            log.info("代理压制完成 | session=%s | %s", session, standard_proxy.name)
-            gr.Info(f"🎉 480p 监看代理压制成功（{standard_proxy.name}）！")
-            yield payload, f"🎉 **480p 监看代理压制成功！** 已自动切换为轻量代理（`{standard_proxy.name}`），视频拖拽现已流畅秒开。"
-            return
-
-        _drop_broken_proxy(partial_proxy)
-        log.warning("标准代理压制失败 | session=%s | stderr=%s", session, err_tail)
-        yield gr.update(), _render_proxy_progress_card(
-            None, 0, total_duration, "回退模式", "标准压制失败，正在切换回退压制…", "软解编码（不确定进度）"
-        )
-        try:
-            proxy_fallback = create_m4pro_hardware_proxy(
-                media_path, dest=partial_proxy
-            )
+            q.put(("done", result))
         except CommandCancelled:
-            log.warning("代理回退压制已取消 | session=%s", session)
-            yield gr.update(), "⚠️ 代理压制已取消。"
-            return
-        if (
-            proxy_fallback
-            and proxy_fallback.exists()
-            and proxy_fallback.stat().st_size > 50 * 1024
-        ):
+            q.put(("cancelled", None))
+        except Exception as exc:
+            log.exception("代理压制失败 | session=%s | media=%s", session, media_path.name)
+            q.put(("error", exc))
+
+    thread = threading.Thread(
+        target=worker, daemon=True, name=f"kikusub-proxy-{media_path.stem[:16]}"
+    )
+    finished = False
+    try:
+        thread.start()
+        while True:
             try:
-                os.replace(partial_proxy, standard_proxy)
-            except OSError:
-                log.exception("回退代理 rename 失败 | %s", partial_proxy.name)
-                _drop_broken_proxy(partial_proxy)
+                item = q.get(timeout=0.1)
+            except queue.Empty:
+                if not thread.is_alive():
+                    break
+                continue
+
+            tag = item[0]
+            if tag == "progress":
+                event = item[1]
+                yield gr.update(), _render_proxy_progress_card(
+                    event.get("percent"),
+                    event.get("out_s", 0.0),
+                    event.get("duration", 0.0),
+                    event.get("speed", "1.0x"),
+                    event.get("stage", "正在压制 480p 流畅监看代理…"),
+                    event.get("note", "VideoToolbox 硬件加速中"),
+                )
+            elif tag == "done":
+                result = item[1]
+                finished = True
+                payload = build_review_payload(media_file, review_cues, include_peaks=True)
+                name = result.path.name
+                if result.reused:
+                    gr.Info("⚡ 检测到已有历史压制代理，已秒级直接切换！")
+                    yield payload, (
+                        f"🎉 **已秒级复用历史代理（{name}）！** 画面已对齐，拖拽现已流畅秒开。"
+                    )
+                elif result.fallback:
+                    gr.Info(f"🎉 回退方案压制成功（{name}）！")
+                    yield payload, (
+                        f"🎉 **480p 代理生成成功（回退方案）！** 已切换为轻量代理（`{name}`），"
+                        "拖拽现已流畅秒开。"
+                    )
+                else:
+                    gr.Info(f"🎉 480p 监看代理压制成功（{name}）！")
+                    yield payload, (
+                        f"🎉 **480p 监看代理压制成功！** 已自动切换为轻量代理（`{name}`），"
+                        "视频拖拽现已流畅秒开。"
+                    )
+                return
+            elif tag == "cancelled":
+                finished = True
+                log.warning("代理压制已取消 | session=%s", session)
+                yield gr.update(), "⚠️ 代理压制已取消。"
+                return
+            else:
+                finished = True
+                log.warning("代理压制最终失败 | session=%s | %s", session, item[1])
                 gr.Warning("⚠️ 代理压制未能成功，继续保持原片监看。")
                 yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
                 return
-            payload = build_review_payload(media_file, review_cues, include_peaks=True)
-            log.info("代理回退压制完成 | session=%s | %s", session, standard_proxy.name)
-            gr.Info(f"🎉 回退方案压制成功（{standard_proxy.name}）！")
-            yield payload, f"🎉 **480p 代理生成成功（回退方案）！** 已切换为轻量代理（`{standard_proxy.name}`），拖拽现已流畅秒开。"
-        else:
-            log.warning("代理压制最终失败 | session=%s", session)
-            gr.Warning("⚠️ 代理压制未能成功，继续保持原片监看。")
-            yield gr.update(), "⚠️ 代理压制未能成功，继续保持原片监看。"
     finally:
-        # 成功时 partial 已被 rename；失败/断连时清掉半成品，避免下次被当成历史代理。
+        # 客户端断开（GeneratorExit）时只发取消信号，由 worker 收尾并清理半成品
+        if thread.is_alive() and not finished:
+            log.warning("客户端断开，请求取消代理压制 | session=%s", session)
+            cancel_event.set()
         _drop_broken_proxy(partial_proxy)
         with _PROXY_JOB_LOCK:
             _PROXY_JOB_ACTIVE = False
+
 
 with gr.Blocks(title="🎬 日语影视字幕转录工作台", theme=CUSTOM_THEME, css=CSS_CUSTOM) as demo:
     with gr.Row(elem_classes=["app-header"]):
