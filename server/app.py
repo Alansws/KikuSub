@@ -95,6 +95,20 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     async def _media_error(_: Request, exc: MediaError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        """兜底：任何未捕获异常都回 JSON。
+
+        否则 Starlette 会回纯文本 `Internal Server Error`，
+        前端 `JSON.parse` 直接炸成「Unexpected token 'I'」——用户看不懂，
+        我们也定位不到。日志里仍然有完整堆栈。
+        """
+        log.exception("未处理异常 | %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"{type(exc).__name__}: {exc}"},
+        )
+
     app.include_router(media_router)
     app.include_router(cues_router)
     app.include_router(presets_router)

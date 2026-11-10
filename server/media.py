@@ -82,15 +82,26 @@ def media_id_for(path: Path) -> str:
 
 
 def _ffprobe_json(path: Path) -> dict:
-    proc = run_command(
-        [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration:stream=codec_type,codec_name",
-            "-of", "json", str(path),
-        ],
-        timeout=FFPROBE_TIMEOUT_S,
-    )
     import json
+
+    try:
+        proc = run_command(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration:stream=codec_type,codec_name",
+                "-of", "json", str(path),
+            ],
+            timeout=FFPROBE_TIMEOUT_S,
+        )
+    except FileNotFoundError as exc:
+        # 从访达启动的 app 只拿到 /usr/bin:/bin:/usr/sbin:/sbin，
+        # Homebrew 的 ffprobe 不在里面。这条错误必须说清楚，否则用户只看到 500。
+        raise MediaError(
+            "找不到 ffprobe。请安装 ffmpeg（brew install ffmpeg），"
+            "或用环境变量 KIKUSUB_FFMPEG_DIR 指向它所在目录。"
+        ) from exc
+    except OSError as exc:
+        raise MediaError(f"无法执行 ffprobe：{exc}") from exc
 
     try:
         return json.loads(proc.stdout or "{}")

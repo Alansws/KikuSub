@@ -82,6 +82,46 @@ function modelsDir() {
   return inAppSupport;
 }
 
+/**
+ * 补齐 PATH。
+ *
+ * **这是打包后最容易踩的坑**：从访达启动的 app 只拿到
+ * `/usr/bin:/bin:/usr/sbin:/sbin`，而 Homebrew 装的 ffmpeg 在 /opt/homebrew/bin。
+ * 结果就是「导入任何视频都失败」，报的还是 Internal Server Error。
+ *
+ * KIKUSUB_FFMPEG_DIR 可以显式指定（用户把 ffmpeg 装在别处时）。
+ */
+const PATH_CANDIDATES = [
+  '/opt/homebrew/bin',
+  '/opt/homebrew/sbin',
+  '/usr/local/bin',
+  '/usr/local/sbin',
+];
+
+function augmentedPath() {
+  const parts = (process.env.PATH || '').split(':').filter(Boolean);
+  const extra = process.env.KIKUSUB_FFMPEG_DIR
+    ? [process.env.KIKUSUB_FFMPEG_DIR, ...PATH_CANDIDATES]
+    : PATH_CANDIDATES;
+  for (const dir of extra) {
+    if (!parts.includes(dir)) parts.push(dir);
+  }
+  return parts.join(':');
+}
+
+/** 在 PATH 里找可执行文件，找不到返回 null（用于启动时把话说清楚）。 */
+function findTool(name) {
+  for (const dir of augmentedPath().split(':')) {
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* 忽略无权限的目录 */
+    }
+  }
+  return null;
+}
+
 function pythonPath() {
   if (!IS_DEV) {
     // 打包后：KikuSub.app/Contents/Resources/python/sidecar
@@ -106,7 +146,15 @@ function startSidecar() {
     fs.existsSync(path.join(models, name)),
   );
 
-  const env = { ...process.env, PYTHONUNBUFFERED: '1' };
+  const env = { ...process.env, PYTHONUNBUFFERED: '1', PATH: augmentedPath() };
+  const ffmpeg = findTool('ffmpeg');
+  const ffprobe = findTool('ffprobe');
+  if (!ffmpeg || !ffprobe) {
+    console.warn('[sidecar] ⚠️ 找不到 ffmpeg/ffprobe，导入会失败。');
+    console.warn('          装一个：brew install ffmpeg；或用 KIKUSUB_FFMPEG_DIR 指定目录。');
+  } else {
+    console.log('[sidecar] ffmpeg', ffmpeg);
+  }
   if (!IS_DEV) {
     Object.assign(env, {
       KIKUSUB_MODELS_DIR: models,
@@ -239,6 +287,9 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       spellcheck: false,
+      // 窗口被遮挡时 Chromium 会节流渲染，capturePage 就会拿到旧帧。
+      // 关掉节流后，后台窗口也能正确重绘（对截图验证很关键）。
+      backgroundThrottling: false,
     },
   });
 
@@ -470,7 +521,13 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     buildMenu();
-    startSidecar();
+    // sidecar 启动失败不能连累窗口：先建窗口，出问题也要能看见界面和日志
+    try {
+      startSidecar();
+    } catch (err) {
+      console.error('[sidecar] 启动异常', err);
+      dialog.showErrorBox('内核启动失败', String(err && err.message ? err.message : err));
+    }
     createWindow();
 
     app.on('activate', () => {
