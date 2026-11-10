@@ -49,6 +49,7 @@ def _manager(request: Request) -> JobManager:
 
 def _build_request(request: Request, payload: TranscribeJobRequest):
     # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
+    from core import params as param_specs
     from core import pipeline
     from core.qwen_ctc import QwenCtcConfig
     from core.transcribe import WhisperVadConfig, build_whisper_config
@@ -63,16 +64,20 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     if payload.start is not None and payload.end is not None and payload.end <= payload.start:
         raise HTTPException(status_code=422, detail="结束时间必须大于起始时间")
 
-    params = dict(payload.params or {})
+    # 参数键用 core.params 的规格键（whisper.vad_threshold 这种），
+    # 与预设文件里的键天然一致；缺失补默认、越界夹紧都由 normalize 负责。
+    values = dict(payload.params or {})
     whisper_config: WhisperVadConfig | None = None
     qwen_config: QwenCtcConfig | None = None
     try:
         if payload.engine == "qwen":
-            qwen_config = QwenCtcConfig(**_filter(QwenCtcConfig, params))
+            qwen_config = QwenCtcConfig(**param_specs.config_kwargs("qwen", values))
         else:
-            whisper_config = build_whisper_config(**_filter(WhisperVadConfig, params))
-    except TypeError as exc:
+            whisper_config = build_whisper_config(**param_specs.config_kwargs("whisper", values))
+    except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"引擎参数不合法：{exc}") from exc
+
+    extra = param_specs.passthrough_kwargs(payload.engine, values)
 
     return pipeline.TranscribeRequest(
         media_path=info.path,
@@ -85,16 +90,10 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         keep_absolute_timeline=payload.keep_absolute_timeline,
         whisper_config=whisper_config,
         qwen_config=qwen_config,
-        no_repeat_ngram_size=int(params.get("no_repeat_ngram_size", 5)),
-        repetition_penalty=float(params.get("repetition_penalty", 1.15)),
-        use_alignment=bool(params.get("use_alignment", True)),
+        no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
+        repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
+        use_alignment=bool(extra.get("use_alignment", True)),
     )
-
-
-def _filter(dataclass_type, params: dict) -> dict:
-    """只保留该 dataclass 认识的字段，避免前端多传一个键就 422。"""
-    allowed = set(getattr(dataclass_type, "__dataclass_fields__", {}))
-    return {k: v for k, v in params.items() if k in allowed}
 
 
 @router.post("/api/jobs", dependencies=[Depends(require_token)], status_code=201)
@@ -125,6 +124,14 @@ async def create_job(payload: TranscribeJobRequest, request: Request) -> dict:
     session = request.app.state.sessions.get(request.cookies.get(SESSION_COOKIE))
     session.media_id = payload.media_id
     return job.snapshot()
+
+
+@router.get("/api/params", dependencies=[Depends(require_token)])
+def get_params() -> dict:
+    """可调参数规格（含分组、范围、默认值）。前端据此渲染控件，预设也用同一套键。"""
+    from core import params as param_specs
+
+    return param_specs.schema()
 
 
 @router.get("/api/jobs", dependencies=[Depends(require_token)])

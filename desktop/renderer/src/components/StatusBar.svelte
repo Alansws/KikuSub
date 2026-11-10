@@ -1,9 +1,10 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { app } from '../lib/store.svelte';
+  import { app, qa, toggleQaPanel } from '../lib/store.svelte';
 
   const chars = $derived(app.cues.reduce((n, c) => n + c.text.length, 0));
   const engine = $derived(app.config?.engines?.find((e) => e.key === 'whisper')?.label ?? '—');
+  const pendingQa = $derived<number>(qa.payload?.counts?.pending ?? 0);
 </script>
 
 <footer class="statusbar">
@@ -22,13 +23,13 @@
       <span>{app.job.kind === 'proxy' ? '压制代理' : '转写'} {app.job.percent}%</span>
     {/if}
     <span class="path">outputs/logs/kikusub.log</span>
-    <span class="qa" title="质检队列（待实现展开面板）">
+    <button class="qa" class:on={qa.open} onclick={() => toggleQaPanel()} title="质检待核队列">
       <Icon name="search" size={11} />
       质检
-      {#if app.report?.quality?.suspect}
-        <b class="count">{app.report.quality.suspect}</b>
+      {#if pendingQa}
+        <b class="count">{pendingQa}</b>
       {/if}
-    </span>
+    </button>
   </div>
 </footer>
 
@@ -65,10 +66,25 @@
     max-width: 240px;
   }
   .qa {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 11px;
     display: inline-flex;
     align-items: center;
     gap: 4px;
     color: var(--text-2);
+    padding: 2px 6px;
+    border-radius: 5px;
+    height: 20px;
+  }
+  .qa:hover {
+    background: var(--fill);
+  }
+  .qa.on {
+    background: var(--accent-soft);
+    color: var(--accent);
   }
   .count {
     min-width: 15px;

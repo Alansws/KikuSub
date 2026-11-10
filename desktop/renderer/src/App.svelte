@@ -4,6 +4,7 @@
   import Toolbar from './components/Toolbar.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import Inspector from './components/Inspector.svelte';
+  import QaPanel from './components/QaPanel.svelte';
   import ImportView from './views/ImportView.svelte';
   import TranscribeView from './views/TranscribeView.svelte';
   import ReviewView from './views/ReviewView.svelte';
@@ -173,6 +174,8 @@
       {#if app.view === 'review'}
         <Inspector />
       {/if}
+
+      <QaPanel />
     </div>
 
     <StatusBar />

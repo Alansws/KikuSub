@@ -15,6 +15,12 @@
   let peakDuration = $state(0);
   let videoFailed = $state(false);
   let scrollTop = $state(0);
+  let viewH = $state(0);
+
+  // 虚拟列表：行高固定 26px，只渲染可视区 ± OVERSCAN 行。
+  // 1000 条字幕时 DOM 从 1000 个降到 ~40 个，滚动才不会掉帧（规划 §5 指标 3）。
+  const ROW_H = 26;
+  const OVERSCAN = 6;
 
   // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
   // proxy_ready 一变（压制完成）这里就自动换源，用户不用手动重开。
@@ -41,6 +47,15 @@
     return found;
   });
   const caption = $derived(cueIndex >= 0 ? app.cues[cueIndex]?.text ?? '' : '');
+
+  const rowStart = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN));
+  const rowEnd = $derived(
+    Math.min(
+      app.cues.length,
+      rowStart + Math.ceil((viewH || 400) / ROW_H) + OVERSCAN * 2,
+    ),
+  );
+  const visibleCues = $derived(app.cues.slice(rowStart, rowEnd));
 
   // ---------------- 播放头：rVFC 取 mediaTime + rAF 插值 ----------------
   let lastMedia = 0;
@@ -204,15 +219,23 @@
   // 播放时自动滚动到当前句
   $effect(() => {
     if (!play.playing || cueIndex < 0 || !rowsEl) return;
-    const row = rowsEl.querySelector<HTMLElement>(`[data-i="${cueIndex}"]`);
-    if (!row) return;
-    const top = row.offsetTop;
-    const bottom = top + row.offsetHeight;
+    const top = cueIndex * ROW_H;
     const viewTop = rowsEl.scrollTop;
     const viewBottom = viewTop + rowsEl.clientHeight;
-    if (top < viewTop + 26 || bottom > viewBottom - 26) {
+    if (top < viewTop + ROW_H || top + ROW_H > viewBottom - ROW_H) {
       rowsEl.scrollTo({ top: top - rowsEl.clientHeight / 2, behavior: 'smooth' });
     }
+  });
+
+  // 量可视高度（窗口缩放、检查器开关都会变）
+  $effect(() => {
+    if (!rowsEl) return;
+    const ro = new ResizeObserver(() => {
+      viewH = rowsEl.clientHeight;
+    });
+    ro.observe(rowsEl);
+    viewH = rowsEl.clientHeight;
+    return () => ro.disconnect();
   });
 
   // 暴露给菜单/快捷键
@@ -300,25 +323,31 @@
       <div class="c-text">字幕文本</div>
     </div>
     <div class="rows" bind:this={rowsEl} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
-      {#each app.cues as cue, i (i)}
-        <div
-          class="row"
-          class:sel={play.selected === i}
-          class:playing={cueIndex === i}
-          data-i={i}
-          onclick={() => selectCue(i)}
-          role="button"
-          tabindex="-1"
-        >
-          <div class="c-idx">{i + 1}</div>
-          <div class="c-t">{tcShort(cue.start)}</div>
-          <div class="c-t">{tcShort(cue.end)}</div>
-          <div class="c-dur">{(cue.end - cue.start).toFixed(2)}s</div>
-          <div class="c-text">{cue.text}</div>
-        </div>
-      {:else}
+      {#if !app.cues.length}
         <div class="empty-rows">还没有字幕。到「转写」跑一次。</div>
-      {/each}
+      {:else}
+        <!-- 上下两个撑高块代替未渲染的行，滚动条长度才和总行数一致 -->
+        <div style="height:{rowStart * ROW_H}px"></div>
+        {#each visibleCues as cue, k (rowStart + k)}
+          {@const i = rowStart + k}
+          <div
+            class="row"
+            class:sel={play.selected === i}
+            class:playing={cueIndex === i}
+            data-i={i}
+            onclick={() => selectCue(i)}
+            role="button"
+            tabindex="-1"
+          >
+            <div class="c-idx">{i + 1}</div>
+            <div class="c-t">{tcShort(cue.start)}</div>
+            <div class="c-t">{tcShort(cue.end)}</div>
+            <div class="c-dur">{(cue.end - cue.start).toFixed(2)}s</div>
+            <div class="c-text">{cue.text}</div>
+          </div>
+        {/each}
+        <div style="height:{Math.max(0, (app.cues.length - rowEnd) * ROW_H)}px"></div>
+      {/if}
     </div>
   </div>
 </div>

@@ -1,6 +1,15 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
-  import { app, cancelJob, startTranscribe } from '../lib/store.svelte';
+  import ParamPanel from '../components/ParamPanel.svelte';
+  import {
+    app,
+    applyPreset,
+    cancelJob,
+    deletePreset,
+    savePresetAs,
+    startTranscribe,
+    tuning,
+  } from '../lib/store.svelte';
   import { parseTimeInput } from '../lib/time';
 
   let { engine = $bindable('whisper') }: { engine?: string } = $props();
@@ -9,13 +18,20 @@
   let startText = $state('');
   let endText = $state('');
   let absolute = $state(true);
+  let presetName = $state('');
+  let picked = $state('');
 
   const running = $derived(
-  app.job?.status === 'queued' ||
-    app.job?.status === 'running' ||
-    app.job?.status === 'cancelling',
-);
+    app.job?.status === 'queued' ||
+      app.job?.status === 'running' ||
+      app.job?.status === 'cancelling',
+  );
   const pct = $derived(app.job?.percent ?? 0);
+
+  // 只列出当前引擎可用的预设
+  const presetsForEngine = $derived(
+    tuning.presets.filter((p) => !p.engine || p.engine === engine),
+  );
 
   function go() {
     startTranscribe(
@@ -34,106 +50,166 @@
       endText = `${m}:${s.padStart(5, '0')}`;
     }
   }
+
+  async function onPick(name: string) {
+    picked = name;
+    if (name) await applyPreset(name);
+  }
+
+  async function onSave() {
+    await savePresetAs(presetName || picked, engine);
+    presetName = '';
+  }
+
+  async function onDelete() {
+    await deletePreset(picked || tuning.activePreset);
+    picked = '';
+  }
 </script>
 
 <div class="pane">
-  <div class="h1">开始转写</div>
-  <p class="p">
-    {#if app.media}
-      当前媒体已就绪。留空时间区间即转写全片。
-    {:else}
-      还没有导入媒体——先去「导入」挑一个文件。
-    {/if}
-  </p>
-
-  <div class="form">
-    <label for="engine">识别引擎</label>
-    <div class="seg" style="justify-self:start">
-      {#each app.config?.engines ?? [] as e (e.key)}
-        <button class:on={engine === e.key} onclick={() => (engine = e.key)}>{e.label}</button>
-      {/each}
-    </div>
-
-    <label for="range">时间区间</label>
-    <div class="range">
-      <div class="field mono" style="width:118px">
-        <input id="range" class="mono" bind:value={startText} placeholder="留空 = 片头" />
-      </div>
-      <span class="dash">–</span>
-      <div class="field mono" style="width:118px">
-        <input class="mono" bind:value={endText} placeholder="留空 = 片尾" />
-      </div>
-      <button class="btn ghost" onclick={fillFull} title="填入完整时长">全片</button>
-      <label class="check">
-        <input type="checkbox" bind:checked={absolute} />
-        绝对时间轴
-      </label>
-    </div>
-
-    <label for="fmt">输出格式</label>
-    <div class="seg" style="justify-self:start">
-      {#each ['SRT', 'VTT', 'TXT'] as f (f)}
-        <button class:on={outputFormat === f} onclick={() => (outputFormat = f)}>{f}</button>
-      {/each}
-    </div>
-
-    <label for="out">保存位置</label>
-    <div class="field" style="max-width:460px">
-      <span style="color: var(--text-2)">outputs/</span>
-      <span class="out-name">
-        {app.media ? app.media.name.replace(/\.[^.]+$/, '') : '—'}_{outputFormat.toLowerCase()}
-      </span>
-    </div>
-
-    <label></label>
-    <div class="actions">
-      {#if running}
-        <button class="btn danger" onclick={cancelJob}>
-          <Icon name="stop" size={12} />中途打断
-        </button>
-        <span class="hint">同一时间只允许一个重任务</span>
-      {:else}
-        <button class="btn primary" onclick={go} disabled={!app.media || !app.connected}>
-          <Icon name="play" size={12} />开始转写
-        </button>
-        <span class="hint">⌘R</span>
-      {/if}
-    </div>
-  </div>
-
-  {#if app.job && app.jobKind === 'transcribe'}
-    <div class="progress-card">
-      <div class="pc-top">
-        <div class="pc-stage">{app.job.stage || '准备中…'}</div>
-        <div class="pc-pct">{pct}%</div>
-      </div>
-      <div class="pc-bar"><i style="width:{pct}%"></i></div>
-      <div class="pc-meta">
-        {#if app.job.status === 'queued'}
-          <span>正在唤醒推理内核，通常需要几秒</span>
-        {:else if app.job.status === 'running'}
-          <span>已用 {app.job.elapsed?.toFixed?.(1) ?? '0'} s</span>
-          <span>引擎 {engine}</span>
-        {:else if app.job.status === 'done'}
-          <span>完成 · {app.cues.length} 条字幕</span>
-        {:else if app.job.status === 'error'}
-          <span style="color: #ff453a">{app.job.error}</span>
+  <div class="cols">
+    <section class="left">
+      <div class="h1">开始转写</div>
+      <p class="p">
+        {#if app.media}
+          当前媒体已就绪。留空时间区间即转写全片。
         {:else}
-          <span>{app.job.status}</span>
+          还没有导入媒体——先去「导入」挑一个文件。
         {/if}
+      </p>
+
+      <div class="form">
+        <label for="engine">识别引擎</label>
+        <div class="seg" style="justify-self:start">
+          {#each app.config?.engines ?? [] as e (e.key)}
+            <button class:on={engine === e.key} onclick={() => (engine = e.key)}>{e.label}</button>
+          {/each}
+        </div>
+
+        <label for="range">时间区间</label>
+        <div class="range">
+          <div class="field mono" style="width:104px">
+            <input id="range" class="mono" bind:value={startText} placeholder="片头" />
+          </div>
+          <span class="dash">–</span>
+          <div class="field mono" style="width:104px">
+            <input class="mono" bind:value={endText} placeholder="片尾" />
+          </div>
+          <button class="btn ghost" onclick={fillFull} title="填入完整时长">全片</button>
+          <label class="check">
+            <input type="checkbox" bind:checked={absolute} />
+            绝对时间轴
+          </label>
+        </div>
+
+        <label for="fmt">输出格式</label>
+        <div class="seg" style="justify-self:start">
+          {#each ['SRT', 'VTT', 'TXT'] as f (f)}
+            <button class:on={outputFormat === f} onclick={() => (outputFormat = f)}>{f}</button>
+          {/each}
+        </div>
+
+        <label></label>
+        <div class="actions">
+          {#if running}
+            <button class="btn danger" onclick={cancelJob}>
+              <Icon name="stop" size={12} />中途打断
+            </button>
+            <span class="hint">同一时间只允许一个重任务</span>
+          {:else}
+            <button class="btn primary" onclick={go} disabled={!app.media || !app.connected}>
+              <Icon name="play" size={12} />开始转写
+            </button>
+            <span class="hint">⌘R</span>
+          {/if}
+        </div>
       </div>
-    </div>
-  {/if}
+
+      {#if app.job && app.jobKind === 'transcribe'}
+        <div class="progress-card">
+          <div class="pc-top">
+            <div class="pc-stage">{app.job.stage || '准备中…'}</div>
+            <div class="pc-pct">{pct}%</div>
+          </div>
+          <div class="pc-bar"><i style="width:{pct}%"></i></div>
+          <div class="pc-meta">
+            {#if app.job.status === 'queued'}
+              <span>正在唤醒推理内核，通常需要几秒</span>
+            {:else if app.job.status === 'running'}
+              <span>引擎 {engine}</span>
+            {:else if app.job.status === 'done'}
+              <span>完成 · {app.cues.length} 条字幕</span>
+            {:else if app.job.status === 'error'}
+              <span style="color: #ff453a">{app.job.error}</span>
+            {:else}
+              <span>{app.job.status}</span>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </section>
+
+    <section class="right">
+      <div class="preset-bar">
+        <span class="pb-label">预设</span>
+        <select value={picked} onchange={(e) => onPick(e.currentTarget.value)}>
+          <option value="">（未选择）</option>
+          {#each presetsForEngine as p (p.name)}
+            <option value={p.name}>{p.name}</option>
+          {/each}
+        </select>
+        <div class="field preset-name">
+          <input
+            bind:value={presetName}
+            placeholder="存为新预设…"
+            onkeydown={(e) => {
+              if (e.key === 'Enter') onSave();
+            }}
+          />
+        </div>
+        <button class="btn" onclick={onSave} disabled={!presetName.trim() && !picked}>
+          <Icon name="check" size={11} />保存
+        </button>
+        <button class="btn ghost" onclick={onDelete} disabled={!picked && !tuning.activePreset}>
+          <Icon name="trash" size={11} />
+        </button>
+      </div>
+
+      <ParamPanel {engine} />
+    </section>
+  </div>
 </div>
 
 <style>
   .pane {
-    padding: 22px 26px 28px;
-    overflow-y: auto;
+    padding: 18px 22px 22px;
+    overflow: hidden;
     flex: 1;
+    min-height: 0;
+    display: flex;
   }
-  .pane > * {
-    max-width: 720px;
+
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    gap: 26px;
+    width: 100%;
+    min-height: 0;
+  }
+
+  .left {
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .right {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    border-left: 1px solid var(--separator-soft);
+    padding-left: 22px;
   }
 
   .h1 {
@@ -150,8 +226,8 @@
 
   .form {
     display: grid;
-    grid-template-columns: 100px 1fr;
-    gap: 10px 14px;
+    grid-template-columns: 72px 1fr;
+    gap: 10px 12px;
     align-items: center;
   }
   label {
@@ -163,7 +239,8 @@
   .range {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .dash {
     color: var(--text-3);
@@ -180,12 +257,6 @@
     margin: 0;
   }
 
-  .out-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .actions {
     display: flex;
     gap: 8px;
@@ -197,7 +268,7 @@
   }
 
   .progress-card {
-    margin-top: 22px;
+    margin-top: 18px;
     border: 1px solid var(--separator-soft);
     border-radius: 10px;
     padding: 12px 14px;
@@ -238,5 +309,38 @@
     font-size: 11px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+
+  .preset-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+  .pb-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+  }
+  .preset-bar select {
+    appearance: none;
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--separator);
+    background-color: var(--bg-content);
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 0 22px 0 8px;
+    max-width: 190px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+      linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+    background-position: calc(100% - 12px) 11px, calc(100% - 8px) 11px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+  }
+  .preset-name {
+    width: 132px;
+    flex: 0 1 132px;
   }
 </style>
