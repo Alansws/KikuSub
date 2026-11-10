@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from core import engines
 from core import settings as settings_store
+from core.logging_setup import prune_logs
 from core.paths import MODELS_DIR, OUTPUT_DIR, PRESETS_PATH
 
 from . import API_VERSION
@@ -49,6 +50,8 @@ CLIENT_LEVELS = {
 class SettingsPatch(BaseModel):
     enabled_engines: list[str] | None = None
     auto_proxy: bool | None = None
+    # 空字符串表示恢复默认（应用输出目录）。非空必须是绝对路径。
+    export_dir: str | None = None
 
 
 class ClientLog(BaseModel):
@@ -108,9 +111,18 @@ def _runtime(request: Request) -> dict:
     }
 
 
-def _paths(request: Request) -> dict:
+def _export_dir(request: Request, settings: dict | None = None) -> Path:
+    current = settings if settings is not None else settings_store.load_settings(_settings_path(request))
+    return settings_store.resolve_export_dir(
+        current,
+        Path(getattr(request.app.state.config, "output_dir", OUTPUT_DIR)),
+    )
+
+
+def _paths(request: Request, settings: dict | None = None) -> dict:
     return {
         "output_dir": str(getattr(request.app.state.config, "output_dir", OUTPUT_DIR)),
+        "export_dir": str(_export_dir(request, settings)),
         "models_dir": str(MODELS_DIR),
         "presets_path": str(PRESETS_PATH),
         "settings_path": str(_settings_path(request)),
@@ -126,7 +138,7 @@ def _payload(request: Request, settings: dict) -> dict:
             enabled_keys=settings.get("enabled_engines") or [],
             include_size=True,
         ),
-        "paths": _paths(request),
+        "paths": _paths(request, settings),
         "runtime": _runtime(request),
         "ffmpeg": _ffmpeg_info(),
     }
@@ -148,6 +160,21 @@ def patch_settings(payload: SettingsPatch, request: Request) -> dict:
         patch["enabled_engines"] = payload.enabled_engines
     if payload.auto_proxy is not None:
         patch["auto_proxy"] = payload.auto_proxy
+    if payload.export_dir is not None:
+        raw = payload.export_dir.strip()
+        if not raw:
+            patch["export_dir"] = ""
+        else:
+            target = Path(raw).expanduser()
+            if not target.is_absolute():
+                raise HTTPException(status_code=422, detail="导出文件夹必须使用绝对路径")
+            if target.exists() and not target.is_dir():
+                raise HTTPException(status_code=422, detail=f"不是文件夹：{target}")
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise HTTPException(status_code=422, detail=f"无法创建导出文件夹：{exc}") from exc
+            patch["export_dir"] = str(target.resolve())
     if not patch:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 
@@ -242,7 +269,7 @@ def diagnostics(request: Request, lines: int = 200) -> dict:
     return {
         "generated_at": time.time(),
         "runtime": _runtime(request),
-        "paths": _paths(request),
+        "paths": _paths(request, settings),
         "ffmpeg": _ffmpeg_info(),
         "settings": settings,
         "engines": engines.describe(
@@ -254,6 +281,20 @@ def diagnostics(request: Request, lines: int = 200) -> dict:
         "log_tail": tail,
         "recent_problems": errors,
     }
+
+
+@router.post("/api/diagnostics/log/clean")
+def clean_logs(request: Request) -> dict:
+    """手动清理日志备份。正在写的 kikusub.log / main.log 不会被删。"""
+    result = prune_logs(_log_path(request).parent)
+    log.info(
+        "日志清理 | removed=%s | freed=%s | total=%s | dir=%s",
+        result.get("removed"),
+        result.get("freed"),
+        result.get("total_bytes"),
+        result.get("log_dir"),
+    )
+    return result
 
 
 @router.get("/api/diagnostics/log")

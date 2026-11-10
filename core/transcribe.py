@@ -44,6 +44,7 @@ import torch
 from silero_vad import get_speech_timestamps, load_silero_vad
 
 from . import audio_cache
+from .coverage import find_coverage_spans
 from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
 
@@ -1034,6 +1035,7 @@ class AnimeWhisperEngine:
         self.last_stats = VadStats()
         self.last_interrupted = False
         self.last_missed_spans: list[dict] = []
+        self.last_coverage_spans: list[dict] = []
         self.last_segment_stats: dict = {}
         self._pipe = None
         self._vad = None
@@ -1102,6 +1104,7 @@ class AnimeWhisperEngine:
     ) -> list[SubtitleCue]:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
+        self.last_coverage_spans = []
         cfg = config or self.config
         media_path = Path(media_path)
         if progress_cb:
@@ -1148,6 +1151,7 @@ class AnimeWhisperEngine:
 
         cfg = config or self.config
         self.last_missed_spans = []
+        self.last_coverage_spans = []
         self.last_segment_stats = {}
         wav_tensor = torch.from_numpy(audio)
         stamps = get_speech_timestamps(
@@ -1319,6 +1323,16 @@ class AnimeWhisperEngine:
                 )
 
         cues = apply_cue_padding(cues, cfg.cue_pad_s, (len(audio) / SAMPLE_RATE) + time_offset)
+
+        # 覆盖审计：只读旁路，不影响上面任何一条字幕。主 VAD 没切到的空白
+        # 在这里才有可能被看见；局部归一化后再跑一次 Silero 只用于打分。
+        if not self.last_interrupted and cues:
+            try:
+                self.last_coverage_spans = find_coverage_spans(
+                    audio, cues, self._vad, time_offset=time_offset
+                )
+            except Exception:
+                log.debug("覆盖审计失败（不影响转写）", exc_info=True)
 
         silence_cut = int(cfg.min_silence_ms) / 1000.0
         merge_cut = float(cfg.merge_gap_s)

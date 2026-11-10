@@ -5,9 +5,8 @@
    * 引擎卡片完全由服务端 `core/engines.py` 的注册表驱动：以后加引擎只改后端，
    * 这里自动多一张卡（语种、体积、安装状态、下载按钮都不用在 UI 里写死）。
    */
-  import { onMount } from 'svelte';
   import Icon from '../components/Icon.svelte';
-  import { api, type EngineInfo } from '../lib/api';
+  import { api, logEvent, type EngineInfo } from '../lib/api';
   import {
     app,
     downloadEngine,
@@ -26,8 +25,19 @@
   let diagLoading = $state(false);
   let copying = $state('');
   let wavePreset = $state(Number(localStorage.getItem('kikusub.waveHeight') || 148));
+  let changingModels = $state(false);
+  let changingExport = $state(false);
+  let cleaningLogs = $state(false);
+  let wasConnected = false;
 
-  onMount(() => {
+  // 内核重启（改模型目录 / 崩溃恢复）后重新拉设置，否则路径与安装状态还是旧的。
+  $effect(() => {
+    if (!app.connected) {
+      wasConnected = false;
+      return;
+    }
+    if (wasConnected) return;
+    wasConnected = true;
     void loadSettings(true);
     void loadDiag();
   });
@@ -36,6 +46,10 @@
   const enabledCount = $derived(engines.filter((e) => e.enabled).length);
   const installedCount = $derived(engines.filter((e) => e.installed).length);
   const autoProxy = $derived(settings.data?.settings.auto_proxy ?? true);
+  const exportDir = $derived(
+    settings.data?.paths.export_dir || diag?.paths.export_dir || app.config?.export_dir || '',
+  );
+  const exportDirIsCustom = $derived(Boolean(settings.data?.settings.export_dir));
   const downloading = $derived(settings.download);
 
   async function loadDiag() {
@@ -128,6 +142,129 @@
 
   async function onAutoProxy() {
     await updateSettings({ auto_proxy: !autoProxy });
+  }
+
+  async function cleanOldLogs() {
+    if (cleaningLogs) return;
+    if (
+      !window.confirm(
+        '清理所有轮转日志备份（kikusub.log.1 / main.log.1 等）。\n\n正在写入的日志会保留，只删除过期或超量的旧文件。',
+      )
+    ) {
+      return;
+    }
+    cleaningLogs = true;
+    try {
+      const result = await api.cleanLogs();
+      if (result.removed > 0) {
+        toast(`已清理 ${result.removed} 个旧日志，释放 ${formatBytes(result.freed)}`);
+      } else {
+        toast('没有需要清理的旧日志');
+      }
+      logEvent('info', 'logs-clean', `removed=${result.removed} freed=${result.freed}`);
+      await loadDiag();
+    } catch (err) {
+      toast(`清理失败：${(err as Error).message}`, 'error');
+    } finally {
+      cleaningLogs = false;
+    }
+  }
+
+  async function changeExportDir() {
+    if (changingExport) return;
+    let picked = '';
+    try {
+      picked = (await window.kikusub.pickDirectory({
+        title: '选择字幕默认导出文件夹',
+        defaultPath: exportDir,
+      })) || '';
+    } catch (err) {
+      toast((err as Error).message, 'error');
+      return;
+    }
+    if (!picked) return;
+    const current = (exportDir || '').replace(/\/+$/, '');
+    if (picked.replace(/\/+$/, '') === current) return;
+    changingExport = true;
+    try {
+      await updateSettings({ export_dir: picked });
+      logEvent('info', 'export-dir-change', picked);
+      await loadDiag();
+    } finally {
+      changingExport = false;
+    }
+  }
+
+  async function resetExportDir() {
+    if (changingExport) return;
+    if (!window.confirm('恢复为默认导出文件夹（运行数据目录）？\n\n已经导出的字幕不会被移动或删除。')) {
+      return;
+    }
+    changingExport = true;
+    try {
+      await updateSettings({ export_dir: '' });
+      logEvent('info', 'export-dir-reset', '');
+      await loadDiag();
+    } finally {
+      changingExport = false;
+    }
+  }
+
+  async function changeModelsDir() {
+    if (changingModels) return;
+    if (app.job?.status === 'running') {
+      toast('任务进行中，先等它结束或打断后再切换模型目录', 'warn');
+      return;
+    }
+    let picked = '';
+    try {
+      picked = (await window.kikusub.pickModelsDir()) || '';
+    } catch (err) {
+      toast((err as Error).message, 'error');
+      return;
+    }
+    if (!picked) return;
+    const current = (diag?.paths.models_dir ?? settings.data?.paths.models_dir ?? '').replace(/\/+$/, '');
+    if (picked.replace(/\/+$/, '') === current) return;
+    const sessionWarning = app.media
+      ? '\n\n注意：切换会重启内核，当前会话的媒体、字幕与撤回记录会清空；请先导出 SRT。'
+      : '';
+    const ok = window.confirm(
+      `将模型目录切换到：\n${picked}\n\n` +
+        '已下载的模型不会自动搬迁，需要重新下载或手动复制。' +
+        sessionWarning +
+        '\n\n确定继续吗？',
+    );
+    if (!ok) return;
+
+    // 先挂好「内核重启完成」的监听，再触发重启，避免 ready 比调用返回更早。
+    const ready = new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        off();
+        resolve();
+      };
+      const off = window.kikusub.onSidecarReady(() => finish());
+      setTimeout(finish, 30000);
+    });
+
+    changingModels = true;
+    try {
+      await window.kikusub.setModelsDir(picked);
+      toast('模型目录已切换，正在重启内核…');
+      logEvent('info', 'models-dir-change', picked);
+      await ready;
+      await loadSettings(true);
+      await loadDiag();
+      toast('内核已重启，新的模型目录已生效');
+    } catch (err) {
+      toast(`切换失败：${(err as Error).message}`, 'error');
+      logEvent('error', 'models-dir-change-failed', picked, String(err));
+    } finally {
+      changingModels = false;
+    }
   }
 </script>
 
@@ -261,7 +398,8 @@
       {/if}
       <p class="footnote">
         增加新引擎只需在后端 <code>core/engines.py</code> 注册一条；这张列表会自动出现，
-        不用改界面。模型目录：<span class="mono">{settings.data?.paths.models_dir ?? '—'}</span>
+        不用改界面。当前模型目录：<span class="mono">{settings.data?.paths.models_dir ?? '—'}</span>
+        （可在「运行环境」里更改）。
       </p>
     {/if}
   </section>
@@ -271,7 +409,9 @@
     <div class="sec-head">
       <div>
         <div class="sec-title">运行环境</div>
-        <div class="sec-desc">服务层与数据目录。打包后这些都在 Application Support 下。</div>
+        <div class="sec-desc">
+          字幕默认写到「导出文件夹」，可改成你常用的位置；日志、质检与代理缓存留在运行数据目录。
+        </div>
       </div>
     </div>
     <div class="grid">
@@ -287,13 +427,29 @@
       </div>
       {#if diag}
         <div class="kv wide">
-          <span>输出目录</span>
+          <span>导出文件夹</span>
+          <b class="mono" title={exportDir}>{exportDir}</b>
+          <button class="btn tiny ghost" onclick={() => openPath(exportDir)}>打开</button>
+          <button class="btn tiny" onclick={changeExportDir} disabled={changingExport}>
+            {changingExport ? '切换中…' : '更改…'}
+          </button>
+          {#if exportDirIsCustom}
+            <button class="btn tiny ghost" onclick={resetExportDir} disabled={changingExport}>
+              恢复默认
+            </button>
+          {/if}
+        </div>
+        <div class="kv wide">
+          <span>运行数据目录</span>
           <b class="mono">{diag.paths.output_dir}</b>
           <button class="btn tiny ghost" onclick={() => openPath(diag!.paths.output_dir)}>打开</button>
         </div>
         <div class="kv wide">
           <span>模型目录</span>
-          <b class="mono">{diag.paths.models_dir}</b>
+          <b class="mono" title={diag.paths.models_dir}>{diag.paths.models_dir}</b>
+          <button class="btn tiny ghost" onclick={changeModelsDir} disabled={changingModels}>
+            {changingModels ? '切换中…' : '更改…'}
+          </button>
           <button class="btn tiny ghost" onclick={() => openPath(diag!.paths.models_dir)}>打开</button>
         </div>
         <div class="kv wide">
@@ -326,6 +482,9 @@
       </button>
       <button class="btn" onclick={copyLogs}>
         <Icon name="doc" size={11} />{copying === 'log' ? '已复制' : '复制最近日志'}
+      </button>
+      <button class="btn" onclick={cleanOldLogs} disabled={cleaningLogs}>
+        <Icon name="undo" size={11} />{cleaningLogs ? '清理中…' : '清理旧日志'}
       </button>
       <button class="btn primary" onclick={copyDiagnostics}>
         <Icon name="export" size={11} />{copying === 'diag' ? '已复制' : '复制诊断信息'}

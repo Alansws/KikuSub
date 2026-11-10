@@ -7,9 +7,9 @@
    * 点时间码直接跳回核对台并聚焦该区间。
    */
   import Icon from '../components/Icon.svelte';
-  import { api, logEvent } from '../lib/api';
   import {
     app,
+    exportCues,
     focusRange,
     loadReport,
     setView,
@@ -18,13 +18,18 @@
   } from '../lib/store.svelte';
 
   $effect(() => {
-    if (app.view === 'report' && !app.report) loadReport();
+    if (app.view === 'report' && !app.report) loadReport({ silent: true });
   });
 
   const report = $derived(app.report);
   const q = $derived(report?.quality);
 
   let lastExport = $state('');
+
+  const exportDir = $derived(
+    app.job?.result?.export_dir || app.config?.export_dir || app.config?.output_dir || '',
+  );
+  const savedPath = $derived(app.lastSavedPath || '');
 
   async function copyRaw() {
     if (!report) return;
@@ -38,14 +43,8 @@
   }
 
   async function exportAs(fmt: 'SRT' | 'VTT' | 'TXT') {
-    try {
-      const res = await api.exportCues(fmt);
-      lastExport = res.path;
-      logEvent('info', 'export', `${fmt} | ${res.count} 条`, { path: res.path });
-      toast(`已导出 ${fmt}：${res.path.split('/').pop()}（${res.count} 条）`);
-    } catch (err) {
-      toast((err as Error).message, 'error');
-    }
+    const res = await exportCues(fmt);
+    if (res) lastExport = res.path;
   }
 
   function reveal() {
@@ -70,14 +69,41 @@
       .replace(/\s{2,}/g, ' ')
       .trim();
   }
+
+  function openExportFolder() {
+    if (!exportDir) {
+      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+      return;
+    }
+    void window.kikusub.openPath(exportDir);
+  }
 </script>
 
 <div class="report-wrap">
   {#if !report}
     <div class="empty">
       <Icon name="doc" size={22} />
-      <p>还没有报告。</p>
-      <p class="hint">跑一次整片转写后，这里会显示任务概览、生效参数、质检清单与逐条明细。</p>
+      <p>还没有任务报告。</p>
+      <p class="hint">
+        跑一次整片转写后，这里会显示任务概览、生效参数、质检清单与逐条明细。
+      </p>
+      {#if app.cues.length}
+        <div class="empty-export">
+          <p class="hint">
+            不过核对台当前已有 <b>{app.cues.length}</b> 条字幕（例如重开应用后手动导入的基线），
+            可以直接导出，不需要等任务报告。
+          </p>
+          <div class="export-row">
+            <button class="btn" onclick={() => exportAs('SRT')}>导出 SRT</button>
+            <button class="btn" onclick={() => exportAs('VTT')}>导出 VTT</button>
+            <button class="btn" onclick={() => exportAs('TXT')}>导出 TXT</button>
+            <button class="btn ghost" onclick={() => setView('review')}>回到核对台</button>
+          </div>
+          {#if lastExport}
+            <span class="path">{lastExport}</span>
+          {/if}
+        </div>
+      {/if}
     </div>
   {:else}
     <div class="report-h">
@@ -122,18 +148,22 @@
       <button class="btn tiny" onclick={() => toggleQaPanel(true)}>去逐项核对 →</button>
     </div>
     <div class="chips">
-      <span class="chip" class:ok={q?.missed === 0} class:warn={(q?.missed ?? 0) > 0}>
-        可能漏句 <b>{q?.missed ?? 0}</b>
+      <span class="chip" class:ok={(q?.coverage ?? 0) === 0} class:warn={(q?.coverage ?? 0) > 0}>
+        漏检（未覆盖） <b>{q?.coverage ?? 0}</b>
+      </span>
+      <span
+        class="chip"
+        class:ok={(q?.low_confidence ?? 0) === 0}
+        class:soft={(q?.low_confidence ?? 0) > 0}
+      >
+        低置信 <b>{q?.low_confidence ?? 0}</b>
       </span>
       {#if !q?.qwen_limited}
-        <span class="chip" class:ok={q?.dropped === 0} class:warn={(q?.dropped ?? 0) > 0}>
-          误删待核 <b>{q?.dropped ?? 0}</b>
-        </span>
-        <span class="chip" class:ok={q?.suspect === 0} class:soft={(q?.suspect ?? 0) > 0}>
-          短句待确认 <b>{q?.suspect ?? 0}</b>
+        <span class="chip muted">
+          切片内：空 {q?.missed ?? 0} / 删 {q?.dropped ?? 0} / 短 {q?.suspect ?? 0}
         </span>
       {:else}
-        <span class="chip muted">该引擎只覆盖漏句检查</span>
+        <span class="chip muted">该引擎只覆盖切片内空结果</span>
       {/if}
       <span class="chip" class:muted={q?.degraded === 0}>
         降级对齐 <b>{q?.degraded ?? 0}</b>
@@ -225,13 +255,25 @@
 
     <!-- 导出 -->
     <div class="sec-head">
-      <span class="sec-h">导出</span>
-      <span class="sec-note">导出的是核对台当前时间轴（可直接交付）</span>
+      <span class="sec-h">保存与导出</span>
+      <span class="sec-note">转写完成即自动写入导出文件夹；这里的按钮导出核对台当前时间轴</span>
     </div>
+    {#if savedPath}
+      <div class="saved-line">
+        <span class="saved-ok"><Icon name="check" size={10} />本次转写已自动保存</span>
+        <span class="path" title={savedPath}>{savedPath}</span>
+        <button class="btn tiny ghost" onclick={() => window.kikusub.revealInFinder(savedPath)}>
+          在访达中显示
+        </button>
+      </div>
+    {/if}
     <div class="export-row">
       <button class="btn" onclick={() => exportAs('SRT')}>导出 SRT</button>
       <button class="btn" onclick={() => exportAs('VTT')}>导出 VTT</button>
       <button class="btn" onclick={() => exportAs('TXT')}>导出 TXT</button>
+      <button class="btn ghost" onclick={openExportFolder} title={exportDir}>
+        <Icon name="folder" size={11} />打开导出文件夹
+      </button>
       {#if lastExport}
         <button class="btn ghost" onclick={reveal}>
           <Icon name="folder" size={11} />在访达中显示
@@ -264,6 +306,25 @@
   .hint {
     color: var(--text-3);
     font-size: 12px;
+  }
+
+  .empty-export {
+    margin-top: 18px;
+    padding: 12px 14px;
+    border: 1px solid var(--separator-soft);
+    border-radius: 10px;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 9px;
+  }
+  .empty-export .hint {
+    text-align: center;
+    line-height: 1.55;
+  }
+  .empty-export .path {
+    max-width: 100%;
   }
 
   .report-h {
@@ -550,6 +611,30 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .saved-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 0 9px;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .saved-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    color: #1c7c36;
+  }
+  .saved-line .path {
+    flex: 1;
+    min-width: 0;
+  }
+  .saved-line .btn {
+    flex: 0 0 auto;
   }
 
   .export-row {

@@ -132,3 +132,67 @@ def test_client_log_and_diagnostics(client: TestClient, tmp_path: Path, caplog) 
 
     config = client.get("/api/config", headers=AUTH).json()
     assert config["device"] in {"mps", "cuda", "cpu", "unknown", "unavailable"}
+
+
+def test_clean_logs_endpoint_prunes_backups(client: TestClient, tmp_path: Path) -> None:
+    import os
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    active = log_dir / "kikusub.log"
+    active.write_text("active", encoding="utf-8")
+    old = log_dir / "kikusub.log.2"
+    old.write_text("old", encoding="utf-8")
+    stale = time.time() - 30 * 24 * 3600
+    os.utime(old, (stale, stale))
+
+    resp = client.post("/api/diagnostics/log/clean", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["removed"] >= 1
+    assert not old.exists()
+    assert active.exists()
+
+
+def test_export_dir_defaults_to_output_dir_and_can_be_changed(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = client.get("/api/settings", headers=AUTH).json()
+    assert data["paths"]["export_dir"] == str(tmp_path)
+    assert data["settings"]["export_dir"] == ""
+
+    target = tmp_path / "字幕导出"
+    resp = client.patch(
+        "/api/settings", headers=AUTH, json={"export_dir": str(target)}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["settings"]["export_dir"] == str(target.resolve())
+    assert body["paths"]["export_dir"] == str(target.resolve())
+    assert target.is_dir()
+
+    config = client.get("/api/config", headers=AUTH).json()
+    assert config["export_dir"] == str(target.resolve())
+
+
+def test_export_dir_rejects_relative_and_file_paths(client: TestClient, tmp_path: Path) -> None:
+    relative = client.patch("/api/settings", headers=AUTH, json={"export_dir": "relative/dir"})
+    assert relative.status_code == 422
+    assert "绝对路径" in relative.json()["detail"]
+
+    file_path = tmp_path / "not-a-dir.txt"
+    file_path.write_text("x", encoding="utf-8")
+    bad = client.patch("/api/settings", headers=AUTH, json={"export_dir": str(file_path)})
+    assert bad.status_code == 422
+    assert "不是文件夹" in bad.json()["detail"]
+
+
+def test_export_dir_can_be_reset_to_default(client: TestClient, tmp_path: Path) -> None:
+    target = tmp_path / "custom"
+    assert client.patch(
+        "/api/settings", headers=AUTH, json={"export_dir": str(target)}
+    ).status_code == 200
+    reset = client.patch("/api/settings", headers=AUTH, json={"export_dir": ""})
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["settings"]["export_dir"] == ""
+    assert reset.json()["paths"]["export_dir"] == str(tmp_path)

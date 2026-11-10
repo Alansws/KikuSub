@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
-  import { app, openMedia } from '../lib/store.svelte';
+  import { app, openMedia, openSubtitle, toast } from '../lib/store.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
 
   interface Recent {
@@ -14,9 +14,22 @@
 
   let recents = $state<Recent[]>([]);
 
+  /** 字幕默认导出目录：设置页可改；旧配置没有 export_dir 时退回 output_dir。 */
+  const exportDir = $derived(app.config?.export_dir || app.settings?.export_dir || app.config?.output_dir || '');
+
+  function persistRecents(next: Recent[]) {
+    recents = next;
+    try {
+      localStorage.setItem('kikusub.recent', JSON.stringify(next));
+    } catch {
+      /* 隐私模式 / 存储满：界面状态保留在内存里即可 */
+    }
+  }
+
   $effect(() => {
     try {
-      recents = JSON.parse(localStorage.getItem('kikusub.recent') || '[]');
+      const raw = JSON.parse(localStorage.getItem('kikusub.recent') || '[]');
+      recents = Array.isArray(raw) ? raw.filter((r) => r && typeof r.path === 'string') : [];
     } catch {
       recents = [];
     }
@@ -36,10 +49,34 @@
     // 读 recents 必须 unrack：否则「读一下再写回」会让 effect 自己触发自己，
     // 表现为 Svelte 的 effect_update_depth_exceeded，整个界面白屏。
     const prev = untrack(() => recents);
-    const next = [entry, ...prev.filter((r) => r.path !== m.path)].slice(0, 6);
-    recents = next;
-    localStorage.setItem('kikusub.recent', JSON.stringify(next));
+    persistRecents([entry, ...prev.filter((r) => r.path !== m.path)].slice(0, 6));
   });
+
+  /** 单条删除最近打开记录；不影响磁盘上的视频与字幕。 */
+  function removeRecent(path: string) {
+    const prev = untrack(() => recents);
+    const item = prev.find((r) => r.path === path);
+    persistRecents(prev.filter((r) => r.path !== path));
+    toast(item ? `已从最近打开中移除「${item.name}」` : '已从最近打开中移除');
+  }
+
+  function openExportFolder() {
+    if (!exportDir) {
+      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+      return;
+    }
+    void window.kikusub.openPath(exportDir);
+  }
+
+  /** 原生对话框直接落在导出文件夹，用户挑一个上次转写的 SRT/VTT 就进核对台。 */
+  async function importFromExport() {
+    if (!exportDir) {
+      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+      return;
+    }
+    const file = await window.kikusub.pickSubtitle(exportDir);
+    if (file) await openSubtitle(file);
+  }
 
   async function pick() {
     const file = await window.kikusub.pickMedia();
@@ -71,20 +108,47 @@
     Chromium 解不开 MKV / HEVC，导入后会在后台自动压一份 480p 监看代理，拖动进度条才能流畅秒开。
   </p>
 
+  {#if exportDir}
+    <div class="ins-h" style="margin-top:22px">导出文件夹</div>
+    <div class="export-card">
+      <span class="ec-ico"><Icon name="folder" size={15} /></span>
+      <span class="ec-main">
+        <b>上次转写的字幕在这里</b>
+        <span class="ec-path mono" title={exportDir}>{exportDir}</span>
+      </span>
+      <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
+        打开文件夹
+      </button>
+      <button class="btn tiny primary" onclick={importFromExport} title="从导出文件夹选择字幕并导入核对台">
+        <Icon name="export" size={10} />导入字幕…
+      </button>
+    </div>
+  {/if}
+
   {#if recents.length}
     <div class="ins-h" style="margin-top:22px">最近打开</div>
     <div class="recent">
       {#each recents as r (r.path)}
-        <button class="recent-row" onclick={() => openMedia(r.path)} title={r.path}>
-          <span class="ri"><Icon name="film" size={13} /></span>
-          <span class="rn-wrap">
-            <span class="rn">{r.name}</span>
-            <span class="rm">
-              {formatBytes(r.size)} · {formatDuration(r.duration)}
+        <div class="recent-row">
+          <button class="recent-main" onclick={() => openMedia(r.path)} title={r.path}>
+            <span class="ri"><Icon name="film" size={13} /></span>
+            <span class="rn-wrap">
+              <span class="rn">{r.name}</span>
+              <span class="rm">
+                {formatBytes(r.size)} · {formatDuration(r.duration)}
+              </span>
             </span>
-          </span>
-          <span class="rt">{when(r.at)}</span>
-        </button>
+            <span class="rt">{when(r.at)}</span>
+          </button>
+          <button
+            class="recent-del"
+            onclick={() => removeRecent(r.path)}
+            title="从最近打开中移除（不删除文件）"
+            aria-label={`从最近打开中移除 ${r.name}`}
+          >
+            <Icon name="trash" size={12} />
+          </button>
+        </div>
       {/each}
     </div>
   {/if}
@@ -164,32 +228,93 @@
     border-radius: 4px;
   }
 
+  .export-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--separator-soft);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: var(--bg-content);
+  }
+  .ec-ico {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--fill);
+    display: grid;
+    place-items: center;
+    color: var(--text-2);
+    flex: 0 0 30px;
+  }
+  .ec-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+  .ec-main b {
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+  .ec-path {
+    font-size: 10.5px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .recent {
     border: 1px solid var(--separator-soft);
     border-radius: 10px;
     overflow: hidden;
   }
   .recent-row {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    width: 100%;
     display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 44px;
-    padding: 0 12px;
+    align-items: stretch;
     border-bottom: 1px solid var(--separator-soft);
-    text-align: left;
-    transition: background var(--dur) var(--ease);
   }
   .recent-row:last-child {
     border-bottom: 0;
   }
   .recent-row:hover {
     background: var(--row-hover);
+  }
+  .recent-main {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 4px 0 12px;
+    text-align: left;
+    cursor: default;
+  }
+  .recent-del {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text-3);
+    width: 38px;
+    flex: 0 0 38px;
+    display: grid;
+    place-items: center;
+    cursor: default;
+    border-left: 1px solid transparent;
+    transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+  }
+  .recent-del:hover {
+    color: #ff453a;
+    background: rgba(255, 69, 58, 0.08);
+    border-left-color: var(--separator-soft);
   }
   .ri {
     width: 26px;

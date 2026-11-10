@@ -82,6 +82,9 @@ class TranscribeRequest:
     engine_key: str = "whisper"
     output_format: str = "SRT"
     save_beside: bool = False
+    # 字幕落盘目录。服务层从设置里的「导出文件夹」解析后塞进来；直接调用
+    # pipeline 的旧界面/测试不传时仍用 OUTPUT_DIR（run_transcription 的参数）。
+    export_dir: Path | None = None
     start_s: float | None = None
     end_s: float | None = None
     keep_absolute_timeline: bool = True
@@ -119,6 +122,7 @@ class TranscribeResult:
     preview: str
     table: list[list] = field(default_factory=list)
     missed_spans: list[dict] = field(default_factory=list)
+    coverage_spans: list[dict] = field(default_factory=list)
     report_data: dict = field(default_factory=dict)
     segment_stats: dict = field(default_factory=dict)
     align_stats: dict = field(default_factory=dict)
@@ -143,6 +147,7 @@ class TranscribeResult:
             "preview": self.preview,
             "table": self.table,
             "missed_spans": self.missed_spans,
+            "coverage_spans": self.coverage_spans,
             "segment_stats": self.segment_stats,
             "align_stats": self.align_stats,
             "slice_tag": self.slice_tag,
@@ -242,6 +247,7 @@ def run_transcription(
         cancel_event is not None and cancel_event.is_set()
     )
     missed_spans = list(getattr(engine, "last_missed_spans", []) or [])
+    coverage_spans = list(getattr(engine, "last_coverage_spans", []) or [])
     segment_stats = dict(getattr(engine, "last_segment_stats", {}) or {})
     align_stats = dict(getattr(engine, "last_align_stats", {}) or {})
 
@@ -289,6 +295,7 @@ def run_transcription(
         penalty=req.repetition_penalty,
         use_alignment=req.use_alignment,
         missed_spans=missed_spans,
+        coverage_spans=coverage_spans,
         segment_stats=segment_stats,
         align_stats=align_stats,
     )
@@ -313,7 +320,9 @@ def run_transcription(
         )
         final_progress = f"✅ 转录完成！共生成 {len(cues)} 条字幕（耗时 {format_duration(elapsed)}）"
 
-    audit_items = build_audit_items(missed_spans, segment_stats, cues)
+    audit_items = build_audit_items(
+        missed_spans, segment_stats, cues, coverage_spans=coverage_spans
+    )
     segment_total = int((align_stats or {}).get("segments") or 0)
     if not segment_total:
         segment_total = int(getattr(getattr(engine, "last_stats", None), "segments", 0) or 0)
@@ -322,6 +331,7 @@ def run_transcription(
         "cues": len(cues),
         "missed": len(_visible_missed_spans(missed_spans)),
         "hidden_missed": _missed_hidden_count(missed_spans),
+        "coverage": len(coverage_spans),
     }
     if not is_qwen:
         scanned["dropped"] = int(segment_stats.get("hallucination_drops", 0) or 0)
@@ -382,6 +392,7 @@ def run_transcription(
         preview=preview,
         table=cues_to_table(cues),
         missed_spans=missed_spans,
+        coverage_spans=coverage_spans,
         segment_stats=segment_stats,
         align_stats=align_stats,
         slice_tag=slice_tag,

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:main": "node --test test/files.test.cjs",
     "start": "vite build && electron .",
     "shot": "vite build && electron . --screenshot"
   },

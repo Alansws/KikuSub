@@ -176,11 +176,12 @@ def test_report_data_structure(tmp_path):
         align_stats={"segments": 5, "degraded": 0, "spans": []},
     )
     assert [s["id"] for s in data["sections"]] == [
-        "missed", "cut_snap", "hallucination_dropped", "hallucination_suspect", "alignment",
+        "coverage", "missed", "cut_snap", "hallucination_dropped", "hallucination_suspect", "alignment",
     ]
+    assert data["quality"]["coverage"] == 0
     assert data["quality"]["missed"] == 1
     assert data["quality"]["dropped"] == 1
-    assert data["sections"][0]["items"][0]["reason_text"] == "重试后仍为空"
+    assert data["sections"][1]["items"][0]["reason_text"] == "重试后仍为空"
     assert "媒体源文件" in {row["label"] for row in data["overview"]}
     # raw_text 与旧文本报告逐字一致
     assert "【任务概览】" in data["raw_text"]

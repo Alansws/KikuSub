@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('kikusub', {
 
   // 原生对话框
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),
+  // 默认打开导出文件夹，只让用户挑字幕；设置页用 pickDirectory 选导出目录
+  pickSubtitle: (defaultDir) => ipcRenderer.invoke('dialog:pick-subtitle', defaultDir),
+  pickDirectory: (payload) => ipcRenderer.invoke('dialog:pick-directory', payload),
 
   // 剪贴板：file:// 页面里 navigator.clipboard 不一定可用，走主进程更稳
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
@@ -46,6 +49,22 @@ contextBridge.exposeInMainWorld('kikusub', {
   // 窗口状态
   setTitle: (title) => ipcRenderer.send('window:set-title', title),
   setDocumentEdited: (dirty) => ipcRenderer.send('window:set-dirty', dirty),
+  // 应用主题 → 原生 vibrancy / 红绿灯区域跟着深色走
+  setTheme: (theme) => ipcRenderer.send('window:set-theme', theme),
+
+  // 首次启动向导 / 模型目录
+  getSetupState: () => ipcRenderer.invoke('setup:get'),
+  completeSetup: (modelsDir) => ipcRenderer.invoke('setup:complete', modelsDir),
+  pickModelsDir: () => ipcRenderer.invoke('setup:pick-models-dir'),
+  setModelsDir: (modelsDir) => ipcRenderer.invoke('setup:set-models-dir', modelsDir),
+
+  // 退出前清理：主进程发清单，渲染进程回传要保留的路径
+  onQuitPrompt: (cb) => on('quit:prompt', cb),
+  onQuitCancelled: (cb) => on('quit:cancelled', cb),
+  // 页面可能比 before-quit 晚挂载：启动时补问一次当前待确认的清理清单
+  getQuitPrompt: () => ipcRenderer.invoke('quit:get'),
+  confirmQuit: (keepPaths) => ipcRenderer.invoke('quit:confirm', keepPaths),
+  cancelQuit: () => ipcRenderer.invoke('quit:cancel'),
 
   // 菜单事件
   onMenu: (cb) => {

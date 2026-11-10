@@ -12,10 +12,24 @@
  */
 
 // Electron 的 CJS 包在 ESM 下没有具名导出，只能默认导入再解构
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  shell,
+} = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  deleteCleanupCandidates,
+  listCleanupCandidates,
+  pruneLogs,
+} = require('./files.cjs');
 
 const DESKTOP_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..');
@@ -35,6 +49,16 @@ let win = null;
 let sidecar = null;
 let sidecarRestarts = 0;
 let quitting = false;
+/** 改模型目录等主动重启：旧进程退出后要立刻拉起新进程。 */
+let restartPending = false;
+/** 首次启动向导完成后才拉起 sidecar（模型目录要作为环境变量传进去）。 */
+let firstRunPending = false;
+/** 双击文件启动时，open-file 可能早于窗口/内核就绪；先存着，页面加载后再送。 */
+let pendingFile = null;
+/** 退出清理：用户确认前不能真正退出。 */
+let allowQuit = false;
+let quitFlow = null;
+let quitConfirming = false;
 
 // ---------------------------------------------------------------------------
 // sidecar
@@ -56,6 +80,44 @@ function logsDir() {
 }
 
 /**
+ * 应用级启动偏好（模型目录、主题、是否完成首次设置）。
+ *
+ * 为什么放在主进程：模型目录必须在 sidecar 启动前就定下来，它通过
+ * `KIKUSUB_MODELS_DIR` 传给 Python；渲染进程/服务层都来不及参与。
+ */
+function preferencesPath() {
+  const override = (process.env.KIKUSUB_PREFERENCES_PATH || '').trim();
+  return override || path.join(dataDir(), 'preferences.json');
+}
+
+function expandPath(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (text === '~') return app.getPath('home');
+  if (text.startsWith('~/')) return path.join(app.getPath('home'), text.slice(2));
+  return path.resolve(text);
+}
+
+function loadPreferences() {
+  try {
+    const payload = JSON.parse(fs.readFileSync(preferencesPath(), 'utf8'));
+    return payload && typeof payload === 'object' ? payload : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePreferences(patch) {
+  const target = preferencesPath();
+  const merged = { ...loadPreferences(), ...patch };
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, target);
+  return merged;
+}
+
+/**
  * 主进程日志。
  *
  * sidecar 自己的日志在 `kikusub.log`；但「窗口起没起来、ffmpeg 找没找到、sidecar
@@ -68,7 +130,15 @@ function mainLog(message) {
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, 'main.log');
     try {
-      if (fs.statSync(file).size > 5 * 1024 * 1024) fs.renameSync(file, `${file}.1`);
+      if (fs.statSync(file).size > 5 * 1024 * 1024) {
+        // Windows 上 rename 到已存在的 .1 会失败；先删旧备份
+        try {
+          fs.unlinkSync(`${file}.1`);
+        } catch {
+          /* 还没有旧备份 */
+        }
+        fs.renameSync(file, `${file}.1`);
+      }
     } catch {
       /* 文件还不存在 */
     }
@@ -76,6 +146,17 @@ function mainLog(message) {
   } catch {
     /* 日志失败不能影响主流程 */
   }
+}
+
+/**
+ * 原生外观跟随应用主题。
+ *
+ * 侧栏用 `vibrancy: 'sidebar'`，它的颜色由 macOS 的明暗外观决定，不受
+ * `<html data-theme>` 影响。如果只切 CSS，深色主题下最左侧（红绿灯那一列）
+ * 会透出系统浅色的毛玻璃，看起来像没切过去。设置 nativeTheme 后原生材质一起变。
+ */
+function applyTheme(theme) {
+  nativeTheme.themeSource = theme === 'dark' ? 'dark' : 'light';
 }
 
 function ensureDataDirs() {
@@ -98,21 +179,76 @@ function ensureDataDirs() {
   return base;
 }
 
+/** 默认模型目录：打包后必须落在可写的 Application Support，不能进只读的 .app。 */
+function defaultModelsDir() {
+  return path.join(dataDir(), 'models');
+}
+
 /**
  * 模型目录。优先级：
- *   1. KIKUSUB_MODELS_DIR 环境变量
- *   2. ~/Library/Application Support/KikuSub/models（正式位置）
- *   3. 仓库里的 models/（本机自用：直接复用已下载的 6.6 GB，不必再下一遍）
+ *   1. KIKUSUB_MODELS_DIR 环境变量（高级用户/调试）
+ *   2. 首次启动时用户选的目录（preferences.json）
+ *   3. ~/Library/Application Support/KikuSub/models
+ *   4. 开发期的仓库 models/（本机已下载的权重直接复用）
  *
  * 打包后 `.app` 内部是只读的，模型绝不能放进去——规划 §7 的结论。
  */
 function modelsDir() {
-  if (process.env.KIKUSUB_MODELS_DIR) return process.env.KIKUSUB_MODELS_DIR;
-  const inAppSupport = path.join(dataDir(), 'models');
+  const fromEnv = (process.env.KIKUSUB_MODELS_DIR || '').trim();
+  if (fromEnv) return expandPath(fromEnv);
+
+  const saved = loadPreferences().modelsDir;
+  if (saved) return expandPath(saved);
+
+  const inAppSupport = defaultModelsDir();
   if (fs.existsSync(inAppSupport)) return inAppSupport;
   const inRepo = path.join(REPO_ROOT, 'models');
-  if (fs.existsSync(inRepo)) return inRepo;
-  return inAppSupport;
+  if (IS_DEV && fs.existsSync(inRepo)) return inRepo;
+  return IS_DEV ? inRepo : inAppSupport;
+}
+
+/** 目录里至少有任一引擎的**必需文件**，才算“老用户已经装过”，不再弹首次向导。 */
+function modelsPresent(dir) {
+  const whisper = path.join(dir, 'anime-whisper', 'model.safetensors');
+  try {
+    if (fs.existsSync(whisper)) return true;
+  } catch {
+    /* 权限问题按未安装处理 */
+  }
+  const qwenDir = path.join(dir, 'qwen3-asr-ja-anime');
+  try {
+    if (!fs.existsSync(path.join(qwenDir, 'config.json'))) return false;
+    return fs.readdirSync(qwenDir).some((name) => name.endsWith('.safetensors'));
+  } catch {
+    return false;
+  }
+}
+
+function shouldFirstRun() {
+  if (process.env.KIKUSUB_FORCE_FIRST_RUN === '1') return true;
+  if ((process.env.KIKUSUB_MODELS_DIR || '').trim()) return false;
+  const prefs = loadPreferences();
+  if (prefs.setupCompleted || prefs.modelsDir) return false;
+  // 从旧版本升级：模型已经在默认目录里，不需要再问一遍
+  return !modelsPresent(modelsDir());
+}
+
+/** 校验并创建模型目录；失败抛中文错误，首次向导/设置页直接展示。 */
+function ensureWritableDir(raw) {
+  const target = expandPath(raw);
+  if (!target) throw new Error('请先选择模型目录');
+  const resources = path.resolve(process.resourcesPath || '');
+  const resolved = path.resolve(target);
+  if (resources && (resolved === resources || resolved.startsWith(resources + path.sep))) {
+    throw new Error('不能把模型目录放在应用包内部（只读），请选择其他位置');
+  }
+  try {
+    fs.mkdirSync(resolved, { recursive: true });
+    fs.accessSync(resolved, fs.constants.W_OK);
+  } catch (err) {
+    throw new Error(`目录不可写：${resolved}（${err && err.message ? err.message : err}）`);
+  }
+  return resolved;
 }
 
 /**
@@ -165,7 +301,7 @@ function pythonPath() {
 }
 
 function startSidecar() {
-  if (quitting) return;
+  if (quitting || firstRunPending) return;
 
   const exe = pythonPath();
   const args = IS_DEV ? ['-m', 'server', '--port', '0'] : ['--port', '0'];
@@ -174,10 +310,18 @@ function startSidecar() {
   // 开发模式沿用仓库目录（和 `python app.py` 共用同一份 outputs/presets，
   // 三个入口看到的是同一套数据）；打包后才切到 Application Support。
   const base = IS_DEV ? REPO_ROOT : ensureDataDirs();
-  const models = modelsDir();
-  const modelReady = ['anime-whisper', 'qwen3-asr-ja-anime'].some((name) =>
-    fs.existsSync(path.join(models, name)),
-  );
+  let models = modelsDir();
+  try {
+    models = ensureWritableDir(models);
+  } catch (err) {
+    console.error('[sidecar] 模型目录不可用', err);
+    mainLog(`[sidecar] models dir unusable ${models} | ${err && err.message ? err.message : err}`);
+    dialog.showErrorBox(
+      '模型目录不可用',
+      `${models}\n\n请到「设置 → 引擎与模型」里改一个可写目录。\n${err && err.message ? err.message : err}`,
+    );
+  }
+  const modelReady = modelsPresent(models);
 
   const env = { ...process.env, PYTHONUNBUFFERED: '1', PATH: augmentedPath() };
   const ffmpeg = findTool('ffmpeg');
@@ -188,12 +332,13 @@ function startSidecar() {
   } else {
     console.log('[sidecar] ffmpeg', ffmpeg);
   }
+  // 模型目录在两种模式下都显式传：开发期默认还是仓库 models/，但设置页改成
+  // 自定义目录后必须让 sidecar 立刻看到同一个路径。
+  env.KIKUSUB_MODELS_DIR = models;
   if (!IS_DEV) {
     Object.assign(env, {
-      KIKUSUB_MODELS_DIR: models,
       KIKUSUB_OUTPUT_DIR: path.join(base, 'outputs'),
       KIKUSUB_PRESETS_PATH: path.join(base, 'presets.json'),
-      KIKUSUB_STATIC_DIR: path.join(base, 'static'),
     });
   }
 
@@ -232,7 +377,7 @@ function startSidecar() {
         sidecarRestarts = 0;
         console.log(`[sidecar] ready port=${payload.port} pid=${payload.pid}`);
         mainLog(`[sidecar] ready port=${payload.port} pid=${payload.pid}`);
-        win?.webContents.send('sidecar:ready', payload);
+        sendToRenderer('sidecar:ready', payload);
         resolvePending?.();
       }
     } catch {
@@ -248,8 +393,15 @@ function startSidecar() {
     console.warn(`[sidecar] 退出 code=${code} signal=${signal}`);
     mainLog(`[sidecar] exit code=${code} signal=${signal}`);
     sidecar = null;
-    win?.webContents.send('sidecar:down', { code, signal });
+    sendToRenderer('sidecar:down', { code, signal });
     if (quitting) return;
+    if (restartPending) {
+      // 主动重启（例如改了模型目录）：不走崩溃计数，也不弹错误框
+      restartPending = false;
+      sidecarRestarts = 0;
+      setTimeout(startSidecar, 150);
+      return;
+    }
     if (sidecarRestarts >= 3) {
       dialog.showErrorBox('内核启动失败', '转写内核连续 3 次异常退出，请查看日志后重启应用。');
       return;
@@ -261,6 +413,8 @@ function startSidecar() {
   child.on('error', (err) => {
     console.error('[sidecar] 无法启动', err);
     mainLog(`[sidecar] spawn error ${err && err.stack ? err.stack : err}`);
+    sidecar = null;
+    sendToRenderer('sidecar:down', { code: null, signal: null });
     dialog.showErrorBox(
       '找不到 Python 内核',
       `无法执行：${exe}\n\n开发模式下请确认仓库根目录存在 .venv/。\n${err.message}`,
@@ -276,7 +430,9 @@ let resolvePending = null;
 
 function stopSidecar() {
   const child = childRef;
-  if (!child || child.killed) return;
+  // 注意：`child.killed` 只表示「SIGTERM 发出去了」，不代表进程已退出。
+  // 用它判断会让 3 秒后的 SIGKILL 永远不执行，留下占着模型的孤儿进程。
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
   try {
     child.kill('SIGTERM');
   } catch {
@@ -285,11 +441,46 @@ function stopSidecar() {
   // 3 秒还没退就强杀，绝不留下孤儿进程占着模型
   setTimeout(() => {
     try {
-      if (!child.killed) child.kill('SIGKILL');
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     } catch {
       /* ignore */
     }
   }, 3000).unref?.();
+}
+
+/** 等 sidecar 真退出（最多 timeoutMs），退出清理删代理前必须等它停手。 */
+function stopSidecarAndWait(timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    const child = childRef;
+    if (!child || child.exitCode !== null) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    child.once('exit', finish);
+    stopSidecar();
+    setTimeout(finish, timeoutMs).unref?.();
+  });
+}
+
+/** 改了模型目录后重启内核；渲染进程会收到 sidecar:down → sidecar:ready 并重新握手。 */
+function restartSidecar() {
+  if (quitting || firstRunPending) {
+    startSidecar();
+    return;
+  }
+  if (!childRef || childRef.exitCode !== null) {
+    startSidecar();
+    return;
+  }
+  restartPending = true;
+  sidecarRestarts = 0;
+  stopSidecar();
 }
 
 
@@ -341,7 +532,11 @@ function createWindow() {
 
   // 渲染进程就绪后把已有握手补发一次（避免 sidecar 比页面先好的竞态）
   win.webContents.on('did-finish-load', () => {
-    if (sidecar) win.webContents.send('sidecar:ready', sidecar);
+    if (sidecar) sendToRenderer('sidecar:ready', sidecar);
+    if (pendingFile) {
+      sendToRenderer('file:opened', pendingFile);
+      pendingFile = null;
+    }
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -360,9 +555,32 @@ function createWindow() {
     if (!app.isPackaged) console.log(`[renderer:${level}] ${event.message}`);
   });
 
+  // 关窗口也走同一套清理：否则点红绿灯关闭会绕过 ⌘Q 的提示。
+  win.on('close', (event) => {
+    if (allowQuit || quitting) return;
+    if (quitConfirming) {
+      event.preventDefault();
+      return;
+    }
+    if (quitFlow) {
+      event.preventDefault();
+      return;
+    }
+    const files = sessionCleanupCandidates();
+    if (!files.length) return;
+    event.preventDefault();
+    requestQuitCleanup('close', files);
+  });
+
   win.on('closed', () => {
     win = null;
   });
+}
+
+/** 向渲染进程发事件；窗口/页面已销毁时静默丢弃，别让退出路径反过来崩主进程。 */
+function sendToRenderer(channel, payload) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send(channel, payload);
 }
 
 /** 自截图模式：不碰用户桌面，直接把窗口画面存成 PNG 后退出。 */
@@ -411,11 +629,57 @@ async function captureAndQuit() {
 }
 
 // ---------------------------------------------------------------------------
+// 退出前清理（选区碎 SRT / 视频代理）
+// ---------------------------------------------------------------------------
+
+function sessionCleanupCandidates() {
+  // 不按进程启动时间过滤：用户要求「每次 ⌘Q 都问」，包括上次崩溃/强退留下的
+  // 碎片字幕与代理。sinceMs=0 表示列出当前输出目录里的全部候选。
+  return listCleanupCandidates(path.join(baseDir(), 'outputs'), 0);
+}
+
+function finishQuit() {
+  allowQuit = true;
+  quitting = true;
+  quitFlow = null;
+  quitConfirming = false;
+  stopSidecar();
+  app.quit();
+}
+
+/**
+ * 拦截退出，把清单交给渲染进程。
+ *
+ * 用原生 dialog 也能做，但 macOS 的 message box 只有一个 checkbox，无法满足
+ * “逐个勾选要保留的文件”。这里用窗口内的模态面板，用户确认后再由主进程删。
+ */
+function requestQuitCleanup(kind, files) {
+  if (quitFlow) return;
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+    // 没有窗口可问：宁可保留文件，也不在无人确认时删除
+    mainLog(`[quit] no window, keep ${files.length} temp files`);
+    finishQuit();
+    return;
+  }
+  quitFlow = { kind, files };
+  mainLog(`[quit] prompt kind=${kind} files=${files.length}`);
+  sendToRenderer('quit:prompt', { files });
+  // 用户一直不选：取消退出（不删任何文件），而不是替他做决定
+  quitFlow.timer = setTimeout(() => {
+    if (!quitFlow) return;
+    mainLog('[quit] prompt timeout, cancel quit');
+    quitFlow = null;
+    sendToRenderer('quit:cancelled');
+  }, 5 * 60 * 1000);
+  quitFlow.timer.unref?.();
+}
+
+// ---------------------------------------------------------------------------
 // 菜单
 // ---------------------------------------------------------------------------
 
 function buildMenu() {
-  const send = (channel, payload) => () => win?.webContents.send(channel, payload);
+  const send = (channel, payload) => () => sendToRenderer(channel, payload);
 
   const template = [
     {
@@ -461,7 +725,7 @@ function buildMenu() {
         { label: '导入', accelerator: 'CmdOrCtrl+1', click: send('menu:view', 'import') },
         { label: '转写', accelerator: 'CmdOrCtrl+2', click: send('menu:view', 'transcribe') },
         { label: '核对', accelerator: 'CmdOrCtrl+3', click: send('menu:view', 'review') },
-        { label: '报告', accelerator: 'CmdOrCtrl+4', click: send('menu:view', 'report') },
+        { label: '详情与导出', accelerator: 'CmdOrCtrl+4', click: send('menu:view', 'report') },
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
         { label: '切换外观', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:theme') },
@@ -508,8 +772,69 @@ async function pickMedia(notify = false) {
   const file = result.filePaths[0];
   // 只有菜单「打开…」需要走事件广播；渲染进程自己调 IPC 时已经有返回值，
   // 再发一次事件会让同一个文件被导入两遍（会话被绑定两次）。
-  if (notify) win.webContents.send('file:opened', file);
+  if (notify) sendToRenderer('file:opened', file);
   return file;
+}
+
+/** 打开导出目录里的字幕文件：默认定位到用户设置的导出文件夹，省去逐层翻目录。 */
+async function pickSubtitle(defaultDir) {
+  if (!win) return null;
+  let defaultPath = typeof defaultDir === 'string' && defaultDir.trim() ? defaultDir.trim() : '';
+  try {
+    if (defaultPath && !fs.existsSync(defaultPath)) defaultPath = path.dirname(defaultPath);
+  } catch {
+    defaultPath = '';
+  }
+  if (!defaultPath) defaultPath = baseDir();
+  const result = await dialog.showOpenDialog(win, {
+    title: '选择要导入核对台的字幕',
+    message: '从导出文件夹里选择上次转写的 .srt / .vtt',
+    defaultPath,
+    properties: ['openFile'],
+    filters: [
+      { name: '字幕', extensions: ['srt', 'vtt'] },
+      { name: '全部文件', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+}
+
+/** 通用目录选择：设置页切换导出文件夹。 */
+async function pickDirectory(title, defaultPath) {
+  if (!win) return null;
+  let initial = typeof defaultPath === 'string' && defaultPath.trim() ? defaultPath.trim() : '';
+  try {
+    if (initial && !fs.existsSync(initial)) initial = path.dirname(initial);
+  } catch {
+    initial = '';
+  }
+  const result = await dialog.showOpenDialog(win, {
+    title: title || '选择文件夹',
+    defaultPath: initial || app.getPath('home'),
+    buttonLabel: '使用此文件夹',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+}
+
+async function pickModelsDir() {
+  if (!win) return null;
+  let defaultPath = modelsDir();
+  try {
+    if (!fs.existsSync(defaultPath)) defaultPath = path.dirname(defaultPath);
+  } catch {
+    defaultPath = app.getPath('home');
+  }
+  const result = await dialog.showOpenDialog(win, {
+    title: '选择模型保存目录',
+    defaultPath,
+    buttonLabel: '使用此目录',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -522,11 +847,96 @@ ipcMain.handle('app:info', () => ({
   arch: process.arch,
   dev: IS_DEV,
   repoRoot: REPO_ROOT,
+  dataDir: dataDir(),
+  modelsDir: modelsDir(),
+  preferencesPath: preferencesPath(),
 }));
 
 ipcMain.handle('dialog:pick-media', () => pickMedia());
+ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir) => pickSubtitle(defaultDir));
+ipcMain.handle('dialog:pick-directory', (_e, payload) =>
+  pickDirectory(payload && payload.title, payload && payload.defaultPath),
+);
 
 ipcMain.handle('sidecar:get', () => sidecar);
+
+// ---- 首次启动 / 模型目录 ----
+ipcMain.handle('setup:get', () => ({
+  firstRun: firstRunPending,
+  modelsDir: modelsDir(),
+  defaultModelsDir: defaultModelsDir(),
+  dataDir: dataDir(),
+  preferencesPath: preferencesPath(),
+  ffmpeg: findTool('ffmpeg') || '',
+  appVersion: app.getVersion(),
+}));
+
+ipcMain.handle('setup:pick-models-dir', () => pickModelsDir());
+
+ipcMain.handle('setup:complete', (_event, chosen) => {
+  const target = ensureWritableDir(chosen || defaultModelsDir());
+  savePreferences({
+    version: 1,
+    setupCompleted: true,
+    modelsDir: target,
+    setupCompletedAt: new Date().toISOString(),
+  });
+  firstRunPending = false;
+  mainLog(`[setup] first run complete models=${target}`);
+  if (!childRef) startSidecar();
+  return { ok: true, modelsDir: target };
+});
+
+ipcMain.handle('setup:set-models-dir', (_event, chosen) => {
+  if ((process.env.KIKUSUB_MODELS_DIR || '').trim()) {
+    throw new Error(
+      '当前模型目录由 KIKUSUB_MODELS_DIR 环境变量指定；请先取消该环境变量再在应用内更改。',
+    );
+  }
+  const target = ensureWritableDir(chosen);
+  const previous = modelsDir();
+  savePreferences({ version: 1, setupCompleted: true, modelsDir: target });
+  mainLog(`[setup] models dir ${previous} -> ${target}`);
+  if (path.resolve(previous) !== path.resolve(target)) restartSidecar();
+  return { ok: true, modelsDir: target };
+});
+
+// ---- 退出清理 ----
+ipcMain.handle('quit:get', () => (quitFlow ? { files: quitFlow.files } : null));
+
+ipcMain.handle('quit:confirm', async (_event, keepPaths) => {
+  const flow = quitFlow;
+  if (!flow) return { ok: false, removed: 0, failed: 0 };
+  clearTimeout(flow.timer);
+  quitFlow = null;
+  quitConfirming = true;
+  // 先让 sidecar 停手（可能正在写代理/字幕），再删文件
+  quitting = true;
+  let result = { removed: 0, failed: 0, freed: 0, errors: [] };
+  try {
+    await stopSidecarAndWait(5000);
+    result = deleteCleanupCandidates(flow.files, Array.isArray(keepPaths) ? keepPaths : []);
+    mainLog(
+      `[quit] kind=${flow.kind} removed=${result.removed} failed=${result.failed} ` +
+        `freed=${result.freed} keep=${(keepPaths || []).length}`,
+    );
+    if (result.errors.length) mainLog(`[quit] delete errors ${result.errors.join(' | ')}`);
+  } catch (err) {
+    mainLog(`[quit] cleanup failed ${err && err.stack ? err.stack : err}`);
+  } finally {
+    // 无论删除是否成功都要退出；文件留在盘上比卡死在“清理中”好
+    finishQuit();
+  }
+  return { ok: true, removed: result.removed, failed: result.failed };
+});
+
+ipcMain.handle('quit:cancel', () => {
+  if (!quitFlow) return;
+  clearTimeout(quitFlow.timer);
+  quitFlow = null;
+  mainLog('[quit] cancelled by user');
+  sendToRenderer('quit:cancelled');
+});
 
 ipcMain.handle('dev:seed', () => {
   console.log('[seed] 渲染进程来取种子:', devSeed ? 'ok' : 'null');
@@ -559,6 +969,17 @@ ipcMain.on('window:set-dirty', (_e, dirty) => {
   if (win) win.setDocumentEdited(Boolean(dirty));
 });
 
+ipcMain.on('window:set-theme', (_e, theme) => {
+  const next = theme === 'dark' ? 'dark' : 'light';
+  applyTheme(next);
+  // 让下次冷启动的窗口在首帧就是正确外观（渲染进程的 localStorage 主进程读不到）
+  try {
+    if (loadPreferences().theme !== next) savePreferences({ theme: next });
+  } catch {
+    /* 主题写盘失败不影响本次切换 */
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 生命周期
 // ---------------------------------------------------------------------------
@@ -574,11 +995,22 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // 日志保留策略：过期备份 / 超出总量上限的旧轮转在这里清掉
+    try {
+      const pruned = pruneLogs(logsDir());
+      if (pruned.removed) {
+        mainLog(`[logs] pruned ${pruned.removed} old file(s), freed=${pruned.freed}`);
+      }
+    } catch {
+      /* 日志清理失败不能挡启动 */
+    }
+    firstRunPending = shouldFirstRun();
+    applyTheme(loadPreferences().theme === 'dark' ? 'dark' : 'light');
     mainLog(
       `[main] KikuSub start version=${app.getVersion()} electron=${process.versions.electron} ` +
         `platform=${process.platform}/${process.arch} packaged=${app.isPackaged} ` +
-        `data=${baseDir()} logs=${logsDir()} models=${modelsDir()} ` +
-        `ffmpeg=${findTool('ffmpeg') || '(none)'}`,
+        `data=${baseDir()} logs=${logsDir()} models=${modelsDir()} prefs=${preferencesPath()} ` +
+        `firstRun=${firstRunPending} ffmpeg=${findTool('ffmpeg') || '(none)'}`,
     );
     process.on('uncaughtException', (err) => {
       mainLog(`[main] uncaughtException ${err && err.stack ? err.stack : err}`);
@@ -588,16 +1020,21 @@ if (!app.requestSingleInstanceLock()) {
     });
     buildMenu();
     // sidecar 启动失败不能连累窗口：先建窗口，出问题也要能看见界面和日志
-    try {
-      startSidecar();
-    } catch (err) {
-      console.error('[sidecar] 启动异常', err);
-      dialog.showErrorBox('内核启动失败', String(err && err.message ? err.message : err));
-    }
     createWindow();
+    if (!firstRunPending) {
+      try {
+        startSidecar();
+      } catch (err) {
+        console.error('[sidecar] 启动异常', err);
+        dialog.showErrorBox('内核启动失败', String(err && err.message ? err.message : err));
+      }
+    } else {
+      mainLog('[setup] waiting for first-run model directory');
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (!firstRunPending && !childRef && !quitting) startSidecar();
     });
   });
 
@@ -607,13 +1044,36 @@ if (!app.requestSingleInstanceLock()) {
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
-      win.webContents.send('file:opened', filePath);
+      if (win.webContents.isLoading()) {
+        pendingFile = filePath;
+      } else {
+        sendToRenderer('file:opened', filePath);
+      }
+    } else {
+      // 首次启动 / 窗口尚未创建：等 did-finish-load 再送，别把用户双击的文件丢掉
+      pendingFile = filePath;
     }
   });
 
-  app.on('before-quit', () => {
-    quitting = true;
-    stopSidecar();
+  app.on('before-quit', (event) => {
+    if (allowQuit) {
+      quitting = true;
+      stopSidecar();
+      return;
+    }
+    // 正在清理 / 已经弹过面板：别重复弹，等这一次走完
+    if (quitConfirming || quitFlow) {
+      event.preventDefault();
+      return;
+    }
+    const files = sessionCleanupCandidates();
+    if (!files.length) {
+      quitting = true;
+      stopSidecar();
+      return;
+    }
+    event.preventDefault();
+    requestQuitCleanup('quit', files);
   });
 
   app.on('window-all-closed', () => {

@@ -13,6 +13,7 @@ import logging.handlers
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 
 _LOG_FORMAT = "%(asctime)s %(levelname)-7s [%(threadName)s] %(name)s: %(message)s"
@@ -31,6 +32,12 @@ class _RedactingFormatter(logging.Formatter):
             text = pattern.sub(replacement, text)
         return text
 
+
+# 保留策略：14 天或整个日志目录 64 MB，先到先删。只删轮转备份，永远不碰
+# 正在写入的 kikusub.log / main.log（活动文件由 RotatingFileHandler 轮转）。
+LOG_RETENTION_DAYS = 14
+LOG_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+ACTIVE_LOG_NAMES = frozenset({"kikusub.log", "main.log"})
 
 _NOISY_LOGGERS = (
     "httpx",
@@ -67,6 +74,95 @@ def _install_thread_excepthook() -> None:
 
     threading.excepthook = hook
     _thread_hook_installed = True
+
+
+def _is_log_file(name: str) -> bool:
+    lower = name.lower()
+    return lower.endswith(".log") or ".log." in lower
+
+
+def prune_logs(
+    log_dir: str | Path,
+    *,
+    max_age_days: int = LOG_RETENTION_DAYS,
+    max_total_bytes: int = LOG_MAX_TOTAL_BYTES,
+    active_names: frozenset[str] | set[str] = ACTIVE_LOG_NAMES,
+) -> dict:
+    """清理过期/超量的日志备份，返回可展示的统计（供设置页「清理旧日志」）。
+
+    只处理形如 ``*.log`` / ``*.log.N`` 的文件；活动日志即使过期也不删，
+    否则正在写的 handler 会指向一个已删除的 inode。
+    """
+    directory = Path(log_dir)
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return {"removed": 0, "freed": 0, "total_bytes": 0, "kept": 0}
+
+    files: list[tuple[Path, int, float]] = []
+    for path in entries:
+        try:
+            if not path.is_file() or not _is_log_file(path.name):
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        files.append((path, stat.st_size, stat.st_mtime))
+
+    cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
+    removed = 0
+    freed = 0
+
+    def remove(path: Path, size: int) -> bool:
+        nonlocal removed, freed
+        try:
+            path.unlink()
+        except OSError:
+            return False
+        removed += 1
+        freed += size
+        return True
+
+    for path, size, mtime in files:
+        if path.name in active_names:
+            continue
+        if mtime < cutoff:
+            remove(path, size)
+
+    def total_bytes() -> int:
+        total = 0
+        for path, size, _ in files:
+            try:
+                if path.exists():
+                    total += size
+            except OSError:
+                continue
+        return total
+
+    total = total_bytes()
+    backups = sorted(
+        (item for item in files if item[0].name not in active_names),
+        key=lambda item: item[2],
+    )
+    for path, size, _ in backups:
+        if total <= max_total_bytes:
+            break
+        try:
+            if not path.exists():
+                continue
+        except OSError:
+            continue
+        if remove(path, size):
+            total -= size
+
+    kept = sum(1 for path, _, _ in files if path.exists())
+    return {
+        "removed": removed,
+        "freed": freed,
+        "total_bytes": max(0, total),
+        "kept": kept,
+        "log_dir": str(directory),
+    }
 
 
 def setup_logging(
@@ -121,4 +217,9 @@ def setup_logging(
     for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(max(logging.WARNING, level))
     _install_thread_excepthook()
+    # 启动时清一次：旧版本可能留下很多 5 MB 的轮转文件
+    try:
+        prune_logs(directory)
+    except Exception:  # noqa: BLE001 - 日志清理失败不能拖垮启动
+        logging.getLogger(__name__).debug("日志清理失败", exc_info=True)
     return path

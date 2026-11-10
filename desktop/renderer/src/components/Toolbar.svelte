@@ -21,7 +21,7 @@
       case 'review':
         return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
       case 'report':
-        return app.report ? `${app.cues.length} 条字幕` : '尚无报告';
+        return app.report ? `${app.cues.length} 条字幕 · 详情与导出` : '任务详情 · 导出';
       case 'settings':
         return '引擎与模型 · 日志与诊断';
       default:

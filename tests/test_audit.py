@@ -301,3 +301,38 @@ def test_qa_queue_is_empty_after_restart(tmp_path, monkeypatch):
     assert restarted["items"] == []
     assert restarted["counts"]["total"] == 0
     assert restarted["session"] == "new-process-session"
+
+
+def test_coverage_items_are_a_separate_high_priority_group():
+    cues = [SubtitleCue(0.0, 1.0, "前"), SubtitleCue(20.0, 21.0, "后")]
+    coverage = [{
+        "start": 8.0, "end": 10.0, "dur": 2.0,
+        "gap_start": 1.0, "gap_end": 20.0, "gap_dur": 19.0,
+        "peak": 0.03, "rms": 0.005, "vad_mean": 0.6, "vad_max": 0.9,
+        "reason": "uncovered-energy", "rule": "audio-gap",
+    }]
+    items = audit.build_audit_items([], {}, cues, coverage_spans=coverage)
+    assert len(items) == 1
+    item = items[0]
+    assert item["kind"] == "coverage"
+    assert item["group"] == "miss"
+    assert item["gap_start"] == 1.0
+    assert item["gap_end"] == 20.0
+    assert item["label"] == "未覆盖空白"
+    assert "空白 19.0s" in item["text"]
+
+    payload = json.loads(audit.make_audit_payload("demo.mp4", items))
+    assert payload["counts"]["by_group"] == {"miss": 1, "low": 0}
+    assert payload["counts"]["by_kind"]["coverage"] == 1
+
+
+def test_coverage_item_suppresses_overlapping_missed_item():
+    cues = [SubtitleCue(0.0, 1.0, "前"), SubtitleCue(20.0, 21.0, "后")]
+    missed = [{"start": 8.2, "end": 9.8, "dur": 1.6, "peak": 0.05}]
+    coverage = [{
+        "start": 8.0, "end": 10.0, "dur": 2.0,
+        "gap_start": 1.0, "gap_end": 20.0, "gap_dur": 19.0,
+        "peak": 0.03, "rms": 0.005, "vad_mean": 0.6, "vad_max": 0.9,
+    }]
+    items = audit.build_audit_items(missed, {}, cues, coverage_spans=coverage)
+    assert [item["kind"] for item in items] == ["coverage"]

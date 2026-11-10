@@ -171,6 +171,86 @@ def test_export_writes_file(client: TestClient, tmp_path: Path) -> None:
     assert data["format"] == "SRT"
 
 
+def test_export_uses_configured_export_dir(client: TestClient, tmp_path: Path) -> None:
+    target = tmp_path / "deliver"
+    assert client.patch(
+        "/api/settings", headers=auth(), json={"export_dir": str(target)}
+    ).status_code == 200
+    client.post("/api/cues", headers=auth(), json={"cues": [{"start": 0.0, "end": 1.0, "text": "x"}]})
+    data = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+    out = Path(data["path"])
+    assert out.parent == target.resolve()
+    assert out.exists()
+
+
+def test_review_draft_roundtrip(client: TestClient, tmp_path: Path) -> None:
+    """核对期暂存：全量写盘、可查询、可恢复，且不进入导出目录。"""
+    cues = [
+        {"start": 0.0, "end": 1.0, "text": "一"},
+        {"start": 1.0, "end": 2.0, "text": "二"},
+    ]
+    client.post("/api/cues", headers=auth(), json={"cues": cues})
+
+    saved = client.post("/api/cues/draft", headers=auth())
+    assert saved.status_code == 200, saved.text
+    info = saved.json()
+    assert info["exists"] is True
+    assert info["count"] == 2
+    draft = Path(info["path"])
+    assert draft.parent == tmp_path
+    # 与旧 Gradio 的草稿同名，重开桌面版能接着用
+    assert draft.name.endswith(".autosave_draft.srt")
+    assert "一" in draft.read_text(encoding="utf-8")
+
+    fetched = client.get("/api/cues/draft", headers=auth()).json()
+    assert fetched["exists"] is True
+    assert fetched["count"] == 2
+    assert fetched["saved_at"] > 0
+
+    # 覆盖当前核对台后，恢复草稿必须能整表回来，并压一次撤回栈
+    client.post("/api/cues", headers=auth(), json={"cues": [{"start": 5.0, "end": 6.0, "text": "新"}]})
+    restored = client.post("/api/cues/draft/restore", headers=auth())
+    assert restored.status_code == 200, restored.text
+    data = restored.json()
+    assert data["count"] == 2
+    assert [c["text"] for c in data["cues"]] == ["一", "二"]
+    assert data["can_undo"] is True
+    assert client.post("/api/cues/undo", headers=auth()).json()["cues"][0]["text"] == "新"
+
+
+def test_review_draft_uses_bound_media_stem(client: TestClient, tmp_path: Path) -> None:
+    """草稿按媒体主干名落盘，换片后不会继续读写上一部片的草稿。"""
+    wav = _make_two_second_wav(tmp_path)
+    media_id = client.post("/api/media", headers=auth(), json={"path": str(wav)}).json()["id"]
+    client.post("/api/session/bind", headers=auth(), json={"media_id": media_id})
+    client.post("/api/cues", headers=auth(), json={"cues": [{"start": 0.0, "end": 1.0, "text": "x"}]})
+
+    info = client.post("/api/cues/draft", headers=auth()).json()
+    assert Path(info["path"]).name == f"{wav.stem}.autosave_draft.srt"
+    assert Path(info["path"]).parent == tmp_path
+    assert client.get("/api/cues/draft", headers=auth()).json()["count"] == 1
+
+
+def test_review_draft_missing_and_separate_from_export(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assert client.post("/api/cues/draft/restore", headers=auth()).status_code == 404
+
+    target = tmp_path / "deliver"
+    client.patch("/api/settings", headers=auth(), json={"export_dir": str(target)})
+    client.post("/api/cues", headers=auth(), json={"cues": [{"start": 0.0, "end": 1.0, "text": "x"}]})
+    info = client.post("/api/cues/draft", headers=auth()).json()
+    assert Path(info["path"]).parent == tmp_path
+    # 暂存只写运行数据目录，不会往导出目录里塞任何文件
+    assert target.exists() and not list(target.iterdir())
+
+    exported = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+    assert Path(exported["path"]).parent == target.resolve()
+    # 导出的是交付文件，不是草稿
+    assert Path(exported["path"]).name.endswith(".srt")
+    assert "autosave_draft" not in Path(exported["path"]).name
+
+
 # ---------------------------------------------------------------------------
 # 预设
 # ---------------------------------------------------------------------------

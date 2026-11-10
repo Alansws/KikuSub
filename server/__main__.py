@@ -20,15 +20,31 @@ import platform
 import shutil
 import socket
 import sys
+import threading
+import time
 from pathlib import Path
 
 import uvicorn
 
-from core.logging_setup import setup_logging
+from core.logging_setup import prune_logs, setup_logging
 from core.paths import MODELS_DIR, PRESETS_PATH
 
 from .app import API_VERSION, create_app
 from .config import ServerConfig, new_token
+
+
+def _start_log_maintenance(log_dir: Path, interval_s: float = 6 * 3600) -> None:
+    """长驻进程也要定期清日志；用户可能开着应用好几天。"""
+
+    def loop() -> None:
+        while True:
+            time.sleep(interval_s)
+            try:
+                prune_logs(log_dir)
+            except Exception:  # noqa: BLE001 - 维护失败不能影响服务
+                pass
+
+    threading.Thread(target=loop, daemon=True, name="kikusub-log-maintenance").start()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -63,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         force=True,
     )
     log = logging.getLogger("kikusub.server")
+    _start_log_maintenance(Path(config.output_dir) / "logs")
     log.info("=" * 68)
     log.info(
         "KikuSub sidecar 启动 | version=%s | pid=%s | frozen=%s | python=%s",

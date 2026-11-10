@@ -181,3 +181,31 @@ def test_unknown_engine_key_rejected(media, tmp_path):
             pipeline.TranscribeRequest(media_path=media, engine_key="nope"),
             output_dir=tmp_path,
         )
+
+
+def test_coverage_spans_reach_audit_payload_and_report(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+
+    class _CoverageEngine(_FakeEngine):
+        def transcribe_file(self, media_path, **kwargs):
+            cues = super().transcribe_file(media_path, **kwargs)
+            self.last_coverage_spans = [{
+                "start": 0.6, "end": 1.2, "dur": 0.6,
+                "gap_start": 0.5, "gap_end": 2.0, "gap_dur": 1.5,
+                "peak": 0.03, "rms": 0.005, "vad_mean": 0.5, "vad_max": 0.8,
+            }]
+            return cues
+
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(media_path=media),
+        output_dir=tmp_path,
+        engine=_CoverageEngine(),
+    )
+    payload = json.loads(result.audit_payload)
+    assert payload["scanned"]["coverage"] == 1
+    coverage_items = [item for item in payload["items"] if item["kind"] == "coverage"]
+    assert len(coverage_items) == 1
+    assert coverage_items[0]["group"] == "miss"
+    assert result.report_data["quality"]["coverage"] == 1
+    assert any(section["id"] == "coverage" for section in result.report_data["sections"])
+    assert result.coverage_spans

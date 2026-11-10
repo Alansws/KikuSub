@@ -40,24 +40,43 @@ log = logging.getLogger(__name__)
 # 重启后旧 .qa.json 视为上一次运行的记录，不自动带入，保证面板默认清空。
 AUDIT_SESSION_ID = f"{os.getpid()}:{time.time_ns()}"
 
-AUDIT_KIND_ORDER = {"missed": 0, "dropped": 1, "suspect": 2}
+AUDIT_KIND_ORDER = {"coverage": -1, "missed": 0, "dropped": 1, "suspect": 2}
+
+# 对用户只暴露两个大组：真正可能漏台词的「漏检」，和切片内部的
+# 短句/空结果/误删「低置信」。kind 仍保留，作为组内原因标签。
+GROUP_BY_KIND = {
+    "coverage": "miss",
+    "missed": "low",
+    "dropped": "low",
+    "suspect": "low",
+}
 
 AUDIT_KIND_META = {
+    "coverage": {
+        "icon": "📭",
+        "name": "未覆盖空白",
+        "group": "miss",
+        "plain": "这段有声音，但一整段没有字幕；主 VAD 没有切到它，Whisper 根本没收到",
+        "hint": "先听建议子区间；若确有台词，点「补录」只转这一段；若只是喘息/配乐，点「不是台词」。",
+    },
     "missed": {
         "icon": "🔍",
-        "name": "可能漏句",
-        "plain": "这里有声音，但两次识别都没有出字幕",
+        "name": "切片内为空",
+        "group": "low",
+        "plain": "VAD 切到了这段，但两次识别都没有出字幕",
         "hint": "听一下：若确实有台词，点「⚡ 补录并插入」；若只是配乐/底噪，点「✓ 不是台词」。",
     },
     "dropped": {
         "icon": "✂️",
         "name": "误删待核",
+        "group": "low",
         "plain": "识别出过文字，但复核为空，已自动删除",
         "hint": "若你听到确实有声音，点「↩ 恢复原句」或「⚡ 重新识别」；若确认是脑补，点「✓ 确认删除」。",
     },
     "suspect": {
         "icon": "👂",
         "name": "短句待确认",
+        "group": "low",
         "plain": "字幕已保留，但太短或信息量低，容易是模型脑补",
         "hint": "听一遍：没问题点「✓ 保留」（核对台缺这句会自动补回），不对劲点「🗑 删除此句」或「✏️ 定位编辑」。",
     },
@@ -109,16 +128,22 @@ def build_audit_items(
     missed_spans: list[dict] | None,
     segment_stats: dict | None,
     cues,
+    coverage_spans: list[dict] | None = None,
 ) -> list[dict]:
-    """把三类问题合并成一条按时间排序的待核队列。
+    """把四类问题合并成一条按时间排序的待核队列。
 
-    · missed   —— VAD 认为是语音，但模型重试后仍为空（报告里的“疑似漏句”）
-    · dropped  —— 识别出文字、时间戳复核为空，被自动删掉（“幻觉门控”）
-    · suspect  —— 短/低密度但被保留、建议人工核对（“幻觉复核”）
+    对用户只暴露两个组：
+
+    · ``miss`` 漏检  —— ``coverage``：字幕空白里还有像语音的声音，主 VAD 没切到。
+      这是唯一能看见「Whisper 根本没收到这段音频」的类别，必须排在前面。
+    · ``low``  低置信 —— ``missed`` / ``dropped`` / ``suspect``：切片内部已经
+      送过模型的空结果、被幻觉门控删掉的、以及太短的句子。它们都发生在主 VAD
+      已经切出来的片段里，所以对「整段漏切」不敏感，默认折叠。
     """
     cue_list = _coerce_cues(cues or [])
     items: list[dict] = []
     seen: set[str] = set()
+    coverage_items: list[dict] = []
 
     def add(
         kind: str,
@@ -129,22 +154,26 @@ def build_audit_items(
         rule: str = "",
         text: str = "",
         reason: str = "",
-    ) -> None:
+        extra: dict | None = None,
+    ) -> dict | None:
         start = round(max(0.0, float(start or 0.0)), 3)
         end = round(max(start + 0.001, float(end or 0.0)), 3)
         item_id = _audit_item_id(kind, start, end)
         if item_id in seen:
-            return
+            return None
         seen.add(item_id)
         meta = AUDIT_KIND_META[kind]
         matched = _audit_match_cues(cue_list, start, end)
-        rule_label = (
-            _missed_reason_label(reason) if kind == "missed"
-            else _hallucination_rule_label(rule)
-        )
-        items.append({
+        if kind == "coverage":
+            rule_label = "主 VAD 未切到"
+        elif kind == "missed":
+            rule_label = _missed_reason_label(reason)
+        else:
+            rule_label = _hallucination_rule_label(rule)
+        item = {
             "id": item_id,
             "kind": kind,
+            "group": GROUP_BY_KIND.get(kind, "low"),
             "start": start,
             "end": end,
             "dur": round(end - start, 2),
@@ -158,9 +187,56 @@ def build_audit_items(
             "hint": meta["hint"],
             "status": "pending",
             "resolution": "",
-        })
+        }
+        if extra:
+            item.update(extra)
+        items.append(item)
+        return item
+
+    # 先放覆盖审计：它是唯一不经过主 VAD 判决的类别，优先级最高。
+    for span in coverage_spans or []:
+        gap_start = float(span.get("gap_start", span.get("start", 0.0)) or 0.0)
+        gap_end = float(span.get("gap_end", span.get("end", 0.0)) or 0.0)
+        gap_dur = max(0.0, gap_end - gap_start)
+        text = (
+            f"空白 {gap_dur:.1f}s 中检测到 "
+            f"{float(span.get('dur', 0.0) or 0.0):.1f}s 语音"
+        )
+        item = add(
+            "coverage",
+            span.get("start", 0.0),
+            span.get("end", 0.0),
+            peak=span.get("peak"),
+            rule="audio-gap",
+            text=text,
+            reason="uncovered-energy",
+            extra={
+                "gap_start": round(gap_start, 3),
+                "gap_end": round(gap_end, 3),
+                "gap_dur": round(gap_dur, 2),
+                "rms": span.get("rms"),
+                "vad_mean": span.get("vad_mean"),
+                "vad_max": span.get("vad_max"),
+            },
+        )
+        if item is not None:
+            coverage_items.append(item)
+
+    def overlaps_coverage(span: dict) -> bool:
+        """同一个空白里已经有一条覆盖项时，不再重复放切片内的 missed。"""
+        start = float(span.get("start", 0.0) or 0.0)
+        end = float(span.get("end", 0.0) or 0.0)
+        mid = (start + end) / 2.0
+        for item in coverage_items:
+            if float(item["start"]) <= mid <= float(item["end"]):
+                return True
+            if min(float(item["end"]), end) - max(float(item["start"]), start) >= 0.5 * max(0.001, end - start):
+                return True
+        return False
 
     for span in _visible_missed_spans(missed_spans):
+        if overlaps_coverage(span):
+            continue
         add(
             "missed",
             span.get("start", 0.0),
@@ -244,6 +320,7 @@ def _audit_ensure_item_cues(existing, item: dict) -> tuple[list[SubtitleCue], in
 def _audit_counts(items: list[dict]) -> dict:
     counts = {"total": len(items), "pending": 0, "done": 0, "skipped": 0}
     by_kind = {kind: 0 for kind in AUDIT_KIND_ORDER}
+    by_group = {"miss": 0, "low": 0}
     for item in items:
         status = str(item.get("status") or "pending")
         if status not in counts:
@@ -252,7 +329,12 @@ def _audit_counts(items: list[dict]) -> dict:
         kind = str(item.get("kind") or "")
         if kind in by_kind:
             by_kind[kind] += 1
+        group = str(item.get("group") or GROUP_BY_KIND.get(kind) or "low")
+        if group not in by_group:
+            group = "low"
+        by_group[group] += 1
     counts["by_kind"] = by_kind
+    counts["by_group"] = by_group
     return counts
 
 

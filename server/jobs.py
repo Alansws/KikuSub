@@ -36,6 +36,33 @@ JOB_RETENTION = 64
 TERMINAL_EVENTS = {"done", "error", "cancelled"}
 
 
+def _range_replaces_cue(cue, start_s: float, limit: float) -> bool:
+    """判断旧字幕是否真的被这次区间重转“覆盖”，而不是只在边缘被切到。
+
+    旧逻辑是 ``cue.end <= start + 0.02 or cue.start >= limit - 0.02``，
+    只要区间跨过句子的第一个字，整句就会被删掉。QA「补录」的区间末通常只比
+    下一句开头多 0.2–0.3s 的 padding；这会把下一句整条误删。
+
+    这里沿用 ``_audit_cue_overlaps`` 的口径：覆盖超过该句一半，或这句话的
+    中点落在区间内，才算替换；只在边缘被切到的小比例重叠必须保留。
+    """
+    overlap = min(float(cue.end), limit) - max(float(cue.start), start_s)
+    if overlap <= 0:
+        return False
+    cue_dur = max(0.001, float(cue.end) - float(cue.start))
+    midpoint = (float(cue.start) + float(cue.end)) / 2.0
+    return overlap / cue_dur >= 0.5 or (start_s <= midpoint <= limit)
+
+
+def merge_replace_range(review_cues, fresh, start_s: float, end_s: float | None):
+    """``replace_range`` 的纯函数版本：只替换真正被区间覆盖的旧字幕。"""
+    from core.cues import _unique_sorted_cues
+
+    limit = end_s if end_s is not None else float("inf")
+    kept = [cue for cue in review_cues if not _range_replaces_cue(cue, start_s, limit)]
+    return _unique_sorted_cues([*kept, *fresh])
+
+
 class JobNotFound(KeyError):
     pass
 
@@ -299,17 +326,21 @@ class JobManager:
                 from core.pipeline import run_transcription
 
                 runner = run_transcription
+            # 字幕的落盘目录由设置里的「导出文件夹」决定；漏句清单 / 质检队列 /
+            # 代理缓存仍然留在 output_dir（运行数据与用户交付物分开）。
+            out_dir = Path(getattr(request, "export_dir", None) or self._output_dir)
             result = runner(
                 request,
                 on_progress=lambda ratio, stage: self._progress(job, ratio, stage),
                 cancel_event=job.token,
-                output_dir=self._output_dir,
+                output_dir=out_dir,
             )
             job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.result = result.to_dict()
             job.result["media_id"] = request.media_id
+            job.result["export_dir"] = str(out_dir)
             # 会话是服务端唯一真源：任务跑完必须把字幕写回去，否则前端
             # `/api/cues` 永远是空的（表现为「转写完成但核对台没有字幕」）。
             if session is not None:
@@ -363,13 +394,7 @@ class JobManager:
             if apply == "append":
                 merged = _unique_sorted_cues([*session.review_cues, *fresh])
             elif apply == "replace_range" and start_s is not None:
-                limit = end_s if end_s is not None else float("inf")
-                kept = [
-                    cue
-                    for cue in session.review_cues
-                    if cue.end <= start_s + 0.02 or cue.start >= limit - 0.02
-                ]
-                merged = _unique_sorted_cues([*kept, *fresh])
+                merged = merge_replace_range(session.review_cues, fresh, start_s, end_s)
             else:
                 merged = fresh
             session.replace_review(merged)

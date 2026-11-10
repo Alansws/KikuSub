@@ -17,6 +17,7 @@ WS 鉴权同样走 `?token=`：浏览器的 `WebSocket` 构造函数不接受自
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -53,6 +54,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
     from core import params as param_specs
     from core import pipeline
+    from core import settings as settings_store
     from core.qwen_ctc import QwenCtcConfig
     from core.transcribe import WhisperVadConfig, build_whisper_config
 
@@ -81,12 +83,23 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
 
     extra = param_specs.passthrough_kwargs(payload.engine, values)
 
+    # 设置里的「导出文件夹」在每次任务开始时读取：用户在设置页改完之后，
+    # 下一次点「开始转写」立即生效，不需要重启 sidecar。
+    current_settings = settings_store.load_settings(
+        Path(getattr(request.app.state, "settings_path", settings_store.SETTINGS_PATH))
+    )
+    export_dir = settings_store.resolve_export_dir(
+        current_settings,
+        Path(request.app.state.config.output_dir),
+    )
+
     return pipeline.TranscribeRequest(
         media_path=info.path,
         media_id=payload.media_id,
         engine_key=payload.engine,
         output_format=payload.output_format,
         save_beside=payload.save_beside,
+        export_dir=export_dir,
         start_s=payload.start,
         end_s=payload.end,
         keep_absolute_timeline=payload.keep_absolute_timeline,

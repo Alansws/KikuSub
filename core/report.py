@@ -285,6 +285,7 @@ def build_transcription_report(
     penalty: float = 1.15,
     use_alignment: bool = True,
     missed_spans: list[dict] | None = None,
+    coverage_spans: list[dict] | None = None,
     segment_stats: dict | None = None,
     align_stats: dict | None = None,
 ) -> str:
@@ -318,27 +319,31 @@ def build_transcription_report(
     ]
 
     visible_missed = _visible_missed_spans(missed_spans)
+    coverage = list(coverage_spans or [])
     hidden = _missed_hidden_count(missed_spans)
     hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
     suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
     hallucination_spans = list((segment_stats or {}).get("hallucination_spans") or [])
+    low_confidence = len(visible_missed) + (0 if is_qwen else hallucination_drops + suspect_cues)
 
-    # 先用一句「人话」把三类问题放到同一张速览里，再接原来的明细。
-    # 用户不需要先理解 VAD / 幻觉 / 复核这些术语，也能知道下一步做什么。
-    quality_parts = [f"🔍 可能漏句 {len(visible_missed)} 处"]
-    if not is_qwen:
-        quality_parts.append(f"✂️ 误删待核 {hallucination_drops} 段")
-        quality_parts.append(f"👂 短句待确认 {suspect_cues} 段")
+    # 对用户只保留两个组：漏检（主 VAD 没切到）和低置信（切片内异常）。
+    quality_parts = [
+        f"📭 未覆盖空白 {len(coverage)} 处",
+        f"🔎 切片内异常 {low_confidence} 处",
+    ]
     lines.append("【质检速览】" + " ｜ ".join(quality_parts))
-    if len(visible_missed) or hallucination_drops or suspect_cues:
+    lines.append(
+        "• 两组口径：漏检 = 字幕空白里还有像语音的声音，主 VAD 没切到；"
+        "低置信 = 已切片内的空结果 / 短句 / 误删，默认折叠。"
+    )
+    if coverage or low_confidence:
         lines.append(
-            "• 已生成可交互队列：页面上方 / 右下角「🔎 质检待核队列」可逐条试听、定位、补录、确认；"
+            "• 已生成可交互队列：右下角「🔎 质检待核」可逐条试听、定位、补录、确认；"
             "本报告保留为归档与一键复制用。"
         )
     else:
         lines.append(
-            "• 本次没有需要人工试听复核的片段；「🔎 质检待核队列」仍会保留入口，"
-            "可随时打开查看三类检查的说明。"
+            "• 本次没有需要人工试听复核的片段；「🔎 质检待核」仍会保留入口。"
         )
     if is_qwen:
         # Qwen 路径没有时间戳复核这一步：明确写「不启用」，避免 0 条被读成「复查过且干净」。
@@ -349,6 +354,21 @@ def build_transcription_report(
     lines.append(
         "• 队列入口常驻右下角「🔎 质检」：0 处待核时显示为「✅ 质检完成」，不会因为队列为空而消失。"
     )
+
+    coverage_total = sum(float(span.get("dur", 0.0) or 0.0) for span in coverage)
+    lines.append(
+        "【未覆盖空白】" + (f"{len(coverage)} 处 / {coverage_total:.1f} 秒" if coverage else "未发现")
+    )
+    if coverage:
+        for span in coverage:
+            lines.append(
+                f"• {_fmt_report_time(span.get('start', 0.0))} → {_fmt_report_time(span.get('end', 0.0))}"
+                f"  ({float(span.get('dur', 0.0) or 0.0):.2f}s)"
+                f"  所在空白 {float(span.get('gap_dur', 0.0) or 0.0):.1f}s"
+                f"  局部 VAD {float(span.get('vad_mean', 0.0) or 0.0):.2f}"
+            )
+    else:
+        lines.append("• 未发现（>=8s 的空白里没有达到阈值的语音候选）")
 
     lines.append(
         "【疑似漏句区间】" + _missed_spans_headline(visible_missed)
@@ -437,6 +457,7 @@ def build_report_data(
     penalty: float = 1.15,
     use_alignment: bool = True,
     missed_spans: list[dict] | None = None,
+    coverage_spans: list[dict] | None = None,
     segment_stats: dict | None = None,
     align_stats: dict | None = None,
 ) -> dict:
@@ -466,10 +487,12 @@ def build_report_data(
         penalty=penalty,
         use_alignment=use_alignment,
         missed_spans=missed_spans,
+        coverage_spans=coverage_spans,
         segment_stats=segment_stats,
         align_stats=align_stats,
     )
 
+    coverage = list(coverage_spans or [])
     visible_missed = _visible_missed_spans(missed_spans)
     hidden = _missed_hidden_count(missed_spans)
     stats = segment_stats or {}
@@ -479,12 +502,46 @@ def build_report_data(
     degraded = list((align_stats or {}).get("spans") or [])
     total_degraded = int((align_stats or {}).get("degraded", 0) or 0)
 
-    quality_parts = [f"🔍 可能漏句 {len(visible_missed)} 处"]
-    if not is_qwen:
-        quality_parts.append(f"✂️ 误删待核 {dropped} 段")
-        quality_parts.append(f"👂 短句待确认 {suspect} 段")
+    low_confidence = len(visible_missed) + (0 if is_qwen else dropped + suspect)
+    quality_parts = [
+        f"📭 未覆盖空白 {len(coverage)} 处",
+        f"🔎 切片内异常 {low_confidence} 处",
+    ]
+    coverage_total = sum(float(span.get("dur", 0.0) or 0.0) for span in coverage)
 
     sections: list[dict] = [
+        {
+            "id": "coverage",
+            "title": "未覆盖空白",
+            "headline": (
+                f"{len(coverage)} 处 / {coverage_total:.1f}s" if coverage else "未发现"
+            ),
+            "note": (
+                "字幕空白里还有像语音的声音，主 VAD 没有切到 → 优先试听补录"
+                if coverage
+                else ""
+            ),
+            "empty_text": "未发现（>=8s 的空白里没有达到阈值的语音候选）",
+            "items": [
+                {
+                    "start": float(span.get("start", 0.0) or 0.0),
+                    "end": float(span.get("end", 0.0) or 0.0),
+                    "dur": float(span.get("dur", 0.0) or 0.0),
+                    "time_text": (
+                        f"{_fmt_report_time(span.get('start', 0.0))} → "
+                        f"{_fmt_report_time(span.get('end', 0.0))}"
+                    ),
+                    "reason": "uncovered-energy",
+                    "reason_text": f"空白 {float(span.get('gap_dur', 0.0) or 0.0):.1f}s",
+                    "peak": _span_peak(span) if "peak" in span else None,
+                    "text": (
+                        f"局部 VAD {float(span.get('vad_mean', 0.0) or 0.0):.2f}"
+                        f" / VAD 峰 {float(span.get('vad_max', 0.0) or 0.0):.2f}"
+                    ),
+                }
+                for span in coverage
+            ],
+        },
         {
             "id": "missed",
             "title": "疑似漏句区间",
@@ -637,12 +694,14 @@ def build_report_data(
         ],
         "quality": {
             "headline": " ｜ ".join(quality_parts),
+            "coverage": len(coverage),
+            "low_confidence": low_confidence,
             "missed": len(visible_missed),
             "hidden_missed": hidden,
             "dropped": dropped,
             "suspect": suspect,
             "degraded": total_degraded,
-            "has_findings": bool(len(visible_missed) or dropped or suspect),
+            "has_findings": bool(coverage or len(visible_missed) or dropped or suspect),
             "qwen_limited": bool(is_qwen),
         },
         "sections": sections,

@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 
 from silero_vad import get_speech_timestamps, load_silero_vad
 
+from .coverage import find_coverage_spans
 from .procutil import CommandCancelled
 
 from .transcribe import (
@@ -604,6 +605,7 @@ class QwenCtcEngine:
         self.config = config or QwenCtcConfig()
         self.last_interrupted = False
         self.last_missed_spans: list[dict] = []
+        self.last_coverage_spans: list[dict] = []
         self.last_segment_stats: dict = {}
         self.last_align_stats: dict = {}
         self._last_truncated = False
@@ -980,6 +982,7 @@ class QwenCtcEngine:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
         self.last_missed_spans = []
+        self.last_coverage_spans = []
         self.last_segment_stats = {}
         self.last_align_stats = {}
         cfg = config or self.config
@@ -1157,7 +1160,15 @@ class QwenCtcEngine:
             note = f"（{aligned}/{total} 段完成逐字对齐）" if use_alignment else ""
             progress_cb(0.95, f"正在整理字幕…{note}")
         cues.sort(key=lambda c: (c.start, c.end))
-        return _dedupe(cues)
+        final_cues = _dedupe(cues)
+        if not self.last_interrupted and final_cues:
+            try:
+                self.last_coverage_spans = find_coverage_spans(
+                    audio, final_cues, self._vad, time_offset=time_offset
+                )
+            except Exception:
+                log.debug("覆盖审计失败（不影响转写）", exc_info=True)
+        return final_cues
 
     def transcribe_file(
         self,
@@ -1171,6 +1182,7 @@ class QwenCtcEngine:
         end_time_s: float | None = None,
         time_offset: float = 0.0,
     ) -> list[SubtitleCue]:
+        self.last_coverage_spans = []
         cfg = config or self.config
         media_path = Path(media_path)
         if progress_cb:

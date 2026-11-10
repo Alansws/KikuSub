@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from core.paths import MODELS_DIR, OUTPUT_DIR
+from core.paths import MODELS_DIR
 from core.presets import PresetStore
 
 from . import API_VERSION
@@ -195,7 +195,11 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             "version": API_VERSION,
             "device": getattr(app.state, "device", "unknown"),
             "models_dir": str(MODELS_DIR),
-            "output_dir": str(OUTPUT_DIR),
+            "output_dir": str(config.output_dir),
+            # 字幕实际落盘目录（设置页可改）；output_dir 仍存放日志/质检/代理。
+            "export_dir": str(
+                settings_store.resolve_export_dir(current, Path(config.output_dir))
+            ),
             "settings_path": str(config.settings_path),
             "formats": ["SRT", "VTT", "TXT"],
             "engines": [

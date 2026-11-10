@@ -31,7 +31,7 @@ python app.py
 | `core/audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台波形共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。partial 文件名带 pid + 随机后缀，支持取消。 |
 | `core/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同一时间只允许一个重任务，取消只能由发起它的 Gradio session 发出。 |
 | `core/procutil.py` | 可取消、带超时的子进程执行器（Popen + 读线程 + terminate/kill），ffmpeg/ffprobe 统一走这里。 |
-| `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）与后台线程 excepthook。 |
+| `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理与后台线程 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
 | `static/` | 主题 CSS、核对台 JS、质检队列 JS/HTML、空态 HTML；`app.py` 启动时读取。JS 改动必须过 `node --check static/reviewer.js` 与 `node --check static/qa_panel.js`。 |
@@ -52,7 +52,7 @@ python app.py
 - **字幕叠加层两条硬约束**（改 `REVIEWER_CLIENT_JS` 时必须保持）：
   1. **多行聚合**：画面字幕由 `rebuildCaptionIndex()` 按 `(start, end)` 归并成「字幕块」，同区间的多条字幕（中日双语 SRT 的日/中两行）合并为多行渲染，行序沿用导入顺序。禁止退回 `cues.find(...)` 单条查找，否则双语只显示一行。`_unique_sorted_cues()` 的排序也因此保留原始下标做末位 tiebreak。
   2. **与视窗解耦**：`updateCaption()` 必须在 `updatePlayhead()` 中位于「播放头是否在可视区」的 early-return **之前**，任何缩放比例、光标位置、进度条拖动状态下都要更新，否则放大波形后播放会出现「字幕卡住不跳句」。
-- 放大波形后播放时，视窗按「整页平移」跟随播放头（`ensurePlayheadVisible()`，落点约在窗口左侧 15%），工具栏 `#rw-follow-toggle` 可开关；播放中用户主动拖动/缩放波形会自动关闭跟随，避免框选区被拽走。
+- 放大波形后播放时，视窗按「整页平移」跟随播放头（`ensurePlayheadVisible()`，落点约在窗口左侧 15%），工具栏 `#rw-follow-toggle` 可开关。**跟随是持久偏好，只能由按钮改变**：缩放/平移波形、点字幕、点表格都不得把它悄悄关掉；暂停状态下跳转（点字幕/点波形/拖播放头松手）也必须把播放头带回视窗，不能要求用户先播放一下（`revealPlayhead()`）。
 - 触控板缩放（捏合）与双指横移操作需精准平滑支持，允许将局部波形横向大幅放大（如放大至数秒区间），方便精细框选。
 - 框选范围后，提供一键将该时间段同步到上方“时间片段截取”输入框（`slice-start`, `slice-end`），且能够联动更新上方的状态或者直接触发局部转录。
 - 重新导入 SRT 时，必须彻底更新 `review_cues_state` 以及前端表格和波形展示，杜绝旧基线残留。
@@ -63,6 +63,52 @@ python app.py
 - **压制进度只允许一个数据源**：`manual_transcode_proxy_generator` 是流式生成器，**禁止**再给它加 `progress=gr.Progress()` 或调用 `progress()`，`.click()` 也必须保持 `show_progress="hidden"`。Gradio 原生追踪器会被渲染进 `proxy_status` 容器，其文案还受「每 10% 一档（milestone）+ 两次换文案至少间隔 5 秒 + 文案 1 秒后自动清空」三重限制（见 `gradio/templates/frontend/assets/statustracker-*.js`），与卡片按 0.3s 刷新的真实百分比完全错拍，界面就会在「原生浮层」和「卡片」两种形态之间反复横跳（曾表现为 19% ↔ 33% 交替）。卡片样式统一走 `.ppc-*` 类并使用 `<div>/<b>/<em>`，不要用 `<span>` 内联样式——`.proxy-status-box span { ... !important }` 会把配色和字号全部覆盖掉。进度值还必须取单调最大值（`max_out_s`），并在时长探测失败时走 `pct=None` 的不确定进度态，绝不凭空造百分比。
 - **全片转写进度也只允许一个数据源**：`transcribe_media` 的 `.then()` **必须**保持 `show_progress="hidden"`，并且**禁止**再调用 `progress()`。`show_progress="full"` 会把原生追踪器画进每一个 output 组件，于是「📊 全片转录原始结果、表格与任务详报」区域及以下会同时出现多条进度条，与顶部卡片错拍闪烁。进度只由 `_render_transcribe_progress_card()` 渲染进「3 输出与执行」的 `transcribe_progress`，样式走 `.tpc-*` 类（`<div>/<b>`），百分比同样取单调最大值。
 
+### 3.4 桌面版核对台（`desktop/renderer/src/views/ReviewView.svelte`）
+
+- **单击 vs 框选**：`pointerdown` 先进入 `pending`，移动超过 `CLICK_SLOP=4px` 才升级为
+  `select`。禁止恢复「按下即建选区」：全局视图下 1px 就是好几秒，用户报障过“单击跳转被
+  识别成框选”。
+- **擦洗区**：顶部 `RULER_H=17px` 和播放头两侧 `PLAYHEAD_GRAB=8px` 是专属 scrub；
+  `beginScrub / setScrub / endScrub` 负责暂停、16ms 节流写 `video.currentTime`、松手
+  恢复原播放状态。视频进度条复用同一套（禁止再写独立的 click-to-seek），三者共同保证
+  拖动时能逐帧预览。
+- **底部字幕轨道**：`LANE_H=17px`，`cueBlockAt()` 按 `(start, end)` 把同区间的双语/
+  三语行聚合成一块。拖块体整体平移、拖两端单独改起止；提交走 `applyCueTimes()`
+  （整表替换，服务端只压一次历史，⌘Z 一次能退回整块）。
+- **同步**：`cueIndex` 变化时（点波形、拖播放头、播放中）表格 `revealRow()` 且
+  `play.selected` 跟到该块；用户点的行若已在当前块内则保留其选择，不能被“块内第一条”
+  规则抢回去。
+- **核对期保存**：右侧检查器底部常驻 `save-dock`。`暂存进度` 调
+  `POST /api/cues/draft`，只写运行数据目录的 `{stem}.autosave_draft.srt`（与旧 Gradio
+  同名共用），不覆盖导出交付文件；编辑成功后由 `scheduleDraftSave()` 0.9s 防抖自动写一次。
+  `导出` 调 `POST /api/cues/export` 写 `settings.json` 的 `export_dir`。两者语义不同：
+  草稿是防丢备份，导出是交付文件；即使没有任务报告（重开应用后手动导入字幕）也必须能导出。
+- **跟随**：状态持久化在 `localStorage['kikusub.follow']`；**只有按钮能改它**，缩放/平移、
+  点击字幕、表格、画面、质检定位一律不得改——这曾经被报成「缩放时间线/点一下字幕
+  跟随就被取消」。暂停时跳转依靠 `revealPlayhead()` 平移视窗让播放头保持可见，
+  不应依赖“先敲空格开始播放”。
+- 字幕轨道配色走 `app.css` 的 `--cue-lane / --cue-wash / --cue-block / --cue-block-hover /
+  --cue-block-active / --cue-edge`，亮暗两套；禁止退回 `--separator` 那种 5% 灰。
+- **侧栏（红绿灯列）必须跟着应用主题走**：窗口是 `hiddenInset + vibrancy:'sidebar'`，
+  原生毛玻璃的明暗由系统外观决定，不受 `<html data-theme>` 控制。渲染层切主题时要
+  通过 preload 的 `setTheme()` 通知主进程 `nativeTheme.themeSource`；同时深色
+  `--bg-sidebar` 必须足够不透明（当前 `rgba(30,30,32,.92)`），否则浅色系统下会透成灰白。
+  `main.ts` 在挂载前先应用 localStorage 里的主题，避免冷启动闪一下浅色。
+- 修改后必须 `cd desktop && npm run build`，并至少实际验证：单击跳转、抖动单击不建选区、
+  刻度/播放头/进度条拖动、字幕块整体与两端拖动、⌘Z 一次回退整块、播放头同步表格与检查器。
+
+### 3.4.1 导出目录与转写自动保存（2026-11 新增）
+
+- 字幕交付文件的唯一目标是 `settings.json` 的 `export_dir`；空值才回退到
+  `OUTPUT_DIR`（打包后 `~/Library/Application Support/KikuSub/outputs`）。
+  新增写字幕的路径必须走 `core.settings.resolve_export_dir()`，不要在
+  `core/pipeline.py` 或路由里硬编码 `OUTPUT_DIR`（会绕过设置页）。
+- 转写页的整片与区间任务都经 `server/jobs.py` 调 `core.pipeline.run_transcription`，
+  完成即落盘；`TranscribeRequest.export_dir` 是服务层把设置传下去的唯一通道。
+  漏句清单 / 质检 JSON / 代理缓存仍属于运行数据，留在 `output_dir`。
+- 桌面端的导入页、转写页与核对台都有「导入字幕…」，原生对话框的 `defaultPath` 就是导出目录；
+  新增入口时继续走 `window.kikusub.pickSubtitle()`，不要让用户自己逐层找路径。
+
 ## 3.5 日志与诊断（2026-11 新增）
 
 - **服务层必须在 `server/__main__.py` 里调 `core.logging_setup.setup_logging()`**：漏掉这一步会导致 `outputs/logs/kikusub.log` 永远为空（曾经就是这样）。日志目录是 `config.output_dir/logs`。
@@ -71,6 +117,67 @@ python app.py
 - 请求中间件会对 `/api/*` 记录方法/路径/状态/耗时/`X-Request-Id`/会话 id；波峰与 `/media/*` 降为 DEBUG，避免刷屏。
 - 渲染端 API 失败会自动带 `X-Request-Id` 记日志；新增「用户关键动作」时同时 `logEvent(...)`，否则用户报障时无法还原操作序列。
 - 局部转写的 `write_audit` 语义：`replace_range`（核对台单句/选区修正）**不写**整片质检队列；转写页的整片/区间任务都要写，否则报告与质检面板数字不一致。
+
+### 3.5.1 应用图标（2026-11 修复）
+
+- `desktop/build/icon.icns` 必须由 `docs/logo.svg` 重新渲染后打包，不能用
+  `docs/logo-1024.png` 直接转 icns——那张是白底 flattened PNG，四角不透明，
+  在深色 Finder 下会露出白角（用户报过「访达里图标异常、Dock 正常」）。
+  `tools/pack/make_icon.swift` 负责按 macOS 全部尺寸渲染透明圆角图标，
+  `build_app.sh` 的 0/7 步会先执行它。
+- 装配后删除 Electron 自带的 `Contents/Resources/electron.icns`，避免图标缓存
+  误用旧图；`build_app.sh` 末尾会 `touch` + `lsregister -f`。Finder 缓存仍顽固时
+  运行 `bash tools/pack/refresh_finder_icon.sh --restart`。
+
+## 3.6 桌面启动、设置与退出清理（2026-11 新增）
+
+### 首次启动与模型目录
+
+- 首次启动由主进程判定（`shouldFirstRun()`，`desktop/main/main.cjs`）：没有
+  `preferences.json`、没有 `KIKUSUB_MODELS_DIR`、且默认/已有模型目录里没有权重时才弹
+  选择模型目录的向导。旧用户目录里已有模型则**跳过**，保持原样。
+- 向导完成前**不得启动 sidecar**：模型目录必须作为 `KIKUSUB_MODELS_DIR` 在 spawn 时传入，
+  Python 的 `core.paths.MODELS_DIR` 是 import 期常量，运行中改不了。
+- 偏好写在 `dataDir()/preferences.json`（`KIKUSUB_PREFERENCES_PATH` 可覆盖）：
+  `setupCompleted / modelsDir / theme`。开发模式 `dataDir()` 是仓库根，文件已 gitignore。
+- 设置页「运行环境 → 模型目录 → 更改…」会保存新目录并重启 sidecar；重启走
+  `restartPending`（不计崩溃次数），渲染进程必须能在 `sidecar:down → sidecar:ready`
+  后重新 `boot()`，否则界面会停在“内核未连接”。
+- 模型下载目标由 `core/engines.model_dir()` 从 `MODELS_DIR` 派生；改目录后下载/安装检测
+  自然落在新目录。`KIKUSUB_MODELS_DIR` 优先级最高，设置页不允许在它存在时改目录。
+- **双击素材启动不能丢文件**：首次启动时 `open-file` 可能早于窗口/sidecar。主进程用
+  `pendingFile` 等 `did-finish-load` 再送；渲染层 `openMedia()` 在内核未连接时把路径存进
+  `pendingMediaPath`，`boot()` 成功后自动补导入。菜单打开/拖放到 Dock 走同一条链路。
+
+### 快捷键
+
+- **⌘,（Ctrl+,）** 打开设置。菜单 `设置…` 已绑 accelerator，渲染层 `onKey` 还要再兜一层：
+  输入框聚焦时菜单快捷键可能被吃掉，且设置快捷键要在 `typing` early-return **之前**处理。
+
+### 退出前清理（⌘Q / 关窗）
+
+- 主进程 `before-quit` 与 `win.on('close')` 都拦截：扫描 `outputs/` 顶层的时间区间碎字幕
+  与 `outputs/web_proxies/*.mp4`，通过 `quit:prompt` 交给渲染进程逐个勾选。
+- **默认全部不勾选，不勾选即删除**；勾选才保留。面板没有可询问的窗口时宁可保留文件，
+  绝不无人确认就删。没有候选时不弹空面板，直接退出。
+- 删除前必须 `stopSidecarAndWait()`，避免和正在写的 `.part.mp4` / SRT 抢文件；删除只允许
+  操作主进程捕获的候选路径，渲染进程传别的路径不得生效。
+- 确认/清理期间用 `quitConfirming` 阻断重复的 `before-quit`/`close`；取消退出时必须清掉
+  `quitFlow` 并让窗口继续活着。`quit:confirm` 期间 `quitting=true`，sidecar 退出后不得自动重启。
+- 清理逻辑在 `desktop/main/files.cjs`，用 `node --test desktop/test/files.test.cjs` 回归；
+  区间文件名正则要与 `core/subtitles.format_time_tag` 保持一致（`00m40s-00m52s`、
+  `01h02m03s`、`from_`/`to_`）。`isFragmentSubtitle()` 必须排除
+  `*.autosave_draft.srt` / `*.reviewed.srt` / `*.clean.srt`：核对工作稿与成片不是临时碎片，
+  不能因为媒体名里带区间标记就在退出时被默认删除。
+
+### 日志清理
+
+- `setup_logging()` 启动时调用 `prune_logs()`：只删 `*.log.N` 轮转备份，
+  **永不删正在写的 `kikusub.log` / `main.log`**；策略为 14 天或整个日志目录 64 MB。
+- sidecar 每 6 小时后台清理一次；Electron 主进程启动时用 `main/files.cjs` 的
+  `pruneLogs()` 执行同一策略。
+- 设置页「清理旧日志」走 `POST /api/diagnostics/log/clean`，是同一份 `prune_logs()`；
+  不要为了“清空”去 truncate 活动日志（会破坏 handler 的 inode/offset）。
 
 ## 4. 转录任务详报面板（禁止退回 Textbox）
 
@@ -96,3 +203,6 @@ python app.py
 - **补录链路**：前端把区间写进 `#hidden-sync-start/end`，点 `#btn-hidden-bridge-transcribe`；成功后在转写事件的 `.then(js=...)` 调用 `window.__qaPanel.afterTranscribe(status)`，由它把该条标成 `done/filled`。失败或空结果不得标记完成。
 - **「保留」不是纯状态**：`qa_apply_action()` 对 `suspect + kept` 必须调用 `_audit_ensure_item_cues()` 幂等补齐核对台缺失的 cue（按重叠/同文本去重，避免用户改过文字后重复插），并且**显式返回 `review_cues_table` 与 `review_payload`**（不能用 `gr.update()`），否则会出现“导出 SRT 里有这句、核对台表格里没有”的显示不同步。前端在 `keep` 前也必须 `requireBaseline()`，防止只往空核对台里补一条。
 
+- **覆盖审计（2026-11 新增）**：主 VAD 的漏检（VAD 没切到、Whisper 根本没收到）不会产生 `missed` 记录，所以 `core/coverage.py` 必须保持一条**只读旁路**：按字幕切空白间隙 → 20ms/40ms RMS 包络 → 每个间隙取最长候选 → 局部峰值归一化后跑一次 Silero 只取概率 → `last_coverage_spans` 交给 `build_audit_items(coverage_spans=...)`。它**不回写**字幕、不改主 VAD 参数、不改 `load_wav_mono` 的电平；`find_coverage_spans()` 失败必须吞掉，不能影响转写。质检对用户只暴露两个组：`coverage` → `miss`（漏检，默认置顶），`missed/dropped/suspect` → `low`（低置信，默认折叠）；`_audit_coverage()` 仍然只表达引擎能力，不要把 `coverage` 塞进去。默认参数（8s 空白 / 1.5s 候选 / 65 分位 / 局部 VAD 均值 0.20）是在 2026-11-10 的 14 分钟样本上调的；改阈值前先用同一段音频跑 `find_coverage_spans()` 看召回与条数。
+
+- **补录区间必须夹在空白边界内（2026-11 修复）**：`QaPanel.fill()` 的 `padEnd:0.3` 会把覆盖项尾部的下一句开头也切进来；`transcribeRange()` 现在接受 `clampStart/clampEnd`，调用方必须传 `item.gap_start/gap_end`。`server/jobs.py` 的 `replace_range` 也不能再按「cue.start < 区间尾就删」处理：只删除重叠 ≥50% 或中点落入区间的 cue，边缘被切到 0.2s 的邻句必须保留。回归用例在 `tests/test_server_jobs_range.py`。

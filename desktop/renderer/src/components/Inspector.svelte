@@ -1,6 +1,18 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { app, deleteCue, focusRange, play, previewRange, updateCue } from '../lib/store.svelte';
+  import {
+    app,
+    deleteCue,
+    exportCues,
+    focusRange,
+    play,
+    previewRange,
+    refreshDraftInfo,
+    restoreDraft,
+    reviewDraft,
+    saveDraft,
+    updateCue,
+  } from '../lib/store.svelte';
   import { tc } from '../lib/time';
 
   const cue = $derived(app.cues[play.selected] ?? null);
@@ -8,6 +20,37 @@
 
   let draft = $state('');
   let editingIndex = $state(-1);
+  let exportFormat = $state<'SRT' | 'VTT' | 'TXT'>('SRT');
+  let exporting = $state(false);
+
+  /** 进入核对屏 / 换片时刷新工作草稿状态（是否存在、多少条、最后写入时间）。 */
+  $effect(() => {
+    void app.media?.id;
+    if (app.connected && app.media) void refreshDraftInfo();
+  });
+
+  const draftLabel = $derived.by(() => {
+    if (reviewDraft.saving) return '正在暂存…';
+    if (!reviewDraft.exists) return '尚未暂存';
+    const when = new Date(reviewDraft.saved_at * 1000).toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    return `上次暂存 ${when} · ${reviewDraft.count} 条`;
+  });
+
+  async function doExport() {
+    if (exporting) return;
+    exporting = true;
+    try {
+      await exportCues(exportFormat);
+    } finally {
+      exporting = false;
+    }
+  }
 
   // 选中行变化时把文本灌进编辑框（不覆盖正在输入的内容）
   $effect(() => {
@@ -90,13 +133,20 @@
     <div>
       <div class="ins-h">质检速览</div>
       <div class="chips">
-        <span class="chip" class:ok={quality.missed === 0}>漏句 <b>{quality.missed}</b></span>
-        {#if !quality.qwen_limited}
-          <span class="chip" class:ok={quality.dropped === 0}>误删 <b>{quality.dropped}</b></span>
-          <span class="chip" class:warn={quality.suspect > 0}>
-            短句 <b>{quality.suspect}</b>
-          </span>
-        {/if}
+        <span
+          class="chip"
+          class:ok={(quality.coverage ?? 0) === 0}
+          class:warn={(quality.coverage ?? 0) > 0}
+        >
+          漏检 <b>{quality.coverage ?? 0}</b>
+        </span>
+        <span
+          class="chip"
+          class:ok={(quality.low_confidence ?? 0) === 0}
+          class:soft={(quality.low_confidence ?? 0) > 0}
+        >
+          低置信 <b>{quality.low_confidence ?? 0}</b>
+        </span>
       </div>
     </div>
   {/if}
@@ -136,6 +186,73 @@
         <span class="v">{app.cues.reduce((n, c) => n + c.text.length, 0)} 字</span>
       </div>
     </div>
+  </div>
+
+  <!--
+    常驻保存区：核对期间总是在右侧栏底部可见。
+    「暂存」= 写工作草稿（运行数据目录，防丢，不覆盖交付文件）；
+    「导出」= 写设置里的导出文件夹，不依赖「详情与导出」是否有任务报告。
+  -->
+  <div class="save-dock">
+    <div class="sd-head">
+      <span class="sd-title">保存</span>
+      <span class="sd-state" class:warn={!reviewDraft.exists}>{draftLabel}</span>
+    </div>
+    <div class="sd-row">
+      <button
+        class="btn ghost sd-save"
+        onclick={() => saveDraft()}
+        disabled={!app.cues.length || reviewDraft.saving}
+        title={reviewDraft.path
+          ? `把当前全部字幕写入工作草稿 ${reviewDraft.path}，不会覆盖导出文件`
+          : '把当前核对台的全部字幕写入工作草稿，防止应用关闭或崩溃后丢失'}
+      >
+        <Icon name="save" size={11} />{reviewDraft.saving ? '暂存中' : '暂存进度'}
+      </button>
+      <select
+        class="sd-fmt"
+        bind:value={exportFormat}
+        disabled={exporting}
+        title="导出格式"
+      >
+        <option value="SRT">SRT</option>
+        <option value="VTT">VTT</option>
+        <option value="TXT">TXT</option>
+      </select>
+      <button
+        class="btn primary sd-export"
+        onclick={doExport}
+        disabled={!app.cues.length || exporting}
+        title={app.config?.export_dir
+          ? `把核对台当前时间轴导出到 ${app.config.export_dir}`
+          : '把核对台当前时间轴导出到导出文件夹'}
+      >
+        <Icon name="export" size={11} />{exporting ? '导出中' : '导出'}
+      </button>
+    </div>
+    {#if reviewDraft.exists || app.lastExportPath}
+      <div class="sd-foot">
+        {#if reviewDraft.exists}
+          <button
+            class="sd-link"
+            onclick={restoreDraft}
+            disabled={reviewDraft.restoring}
+            title="用工作草稿覆盖核对台（压入撤回栈，⌘Z 可一步退回）"
+          >
+            {reviewDraft.restoring ? '正在恢复…' : '恢复上次暂存'}
+          </button>
+        {/if}
+        {#if app.lastExportPath}
+          <button
+            class="sd-link"
+            onclick={() => window.kikusub.revealInFinder(app.lastExportPath)}
+            title={app.lastExportPath}
+          >
+            最近导出：{app.lastExportPath.split('/').pop()}
+          </button>
+        {/if}
+      </div>
+    {/if}
   </div>
 </aside>
 
@@ -201,5 +318,102 @@
   .btn-row .btn {
     flex: 1;
     justify-content: center;
+  }
+
+  /* 常驻保存区：吸在右侧栏底部，滚动检查器时也不消失 */
+  .save-dock {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    margin: 0 -14px -20px;
+    padding: 9px 14px 12px;
+    border-top: 1px solid var(--separator);
+    background: color-mix(in srgb, var(--bg-inspector) 94%, var(--bg-content));
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 -10px 20px -16px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sd-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
+  .sd-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+    letter-spacing: 0.02em;
+    flex: 0 0 auto;
+  }
+  .sd-state {
+    font-size: 10.5px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sd-state.warn {
+    color: #b26a00;
+  }
+  :global(html[data-theme='dark']) .sd-state.warn {
+    color: #ffb340;
+  }
+  .sd-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .sd-save {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+  }
+  .sd-fmt {
+    appearance: none;
+    height: 26px;
+    width: 58px;
+    flex: 0 0 58px;
+    border-radius: 6px;
+    border: 1px solid var(--separator);
+    background: var(--bg-content);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 11.5px;
+    padding: 0 4px;
+  }
+  .sd-export {
+    min-width: 64px;
+    justify-content: center;
+  }
+  .sd-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .sd-link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 10.5px;
+    text-align: left;
+    padding: 0;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sd-link:hover:not(:disabled) {
+    text-decoration: underline;
+  }
+  .sd-link:disabled {
+    color: var(--text-3);
   }
 </style>

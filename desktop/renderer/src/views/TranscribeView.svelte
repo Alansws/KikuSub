@@ -6,9 +6,11 @@
     applyPreset,
     cancelJob,
     deletePreset,
+    openSubtitle,
     savePresetAs,
     setView,
     startTranscribe,
+    toast,
     tuning,
   } from '../lib/store.svelte';
   import { parseTimeInput } from '../lib/time';
@@ -88,6 +90,32 @@
   async function onDelete() {
     await deletePreset(picked || tuning.activePreset);
     picked = '';
+  }
+
+  /** 转写线程已经把字幕写到导出文件夹；这里只负责把用户带过去。 */
+  function openExportFolder() {
+    const dir =
+      app.job?.result?.export_dir || app.config?.export_dir || app.config?.output_dir || '';
+    if (!dir) {
+      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+      return;
+    }
+    void window.kikusub.openPath(dir);
+  }
+
+  function revealSaved() {
+    if (app.lastSavedPath) window.kikusub.revealInFinder(app.lastSavedPath);
+  }
+
+  /** 上次转写完成后 app 退出了？直接从导出文件夹挑字幕回核对台，不必重跑。 */
+  async function importSubtitleFromExport() {
+    const dir = app.config?.export_dir || app.config?.output_dir || '';
+    if (!dir) {
+      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+      return;
+    }
+    const file = await window.kikusub.pickSubtitle(dir);
+    if (file) await openSubtitle(file);
   }
 </script>
 
@@ -172,6 +200,14 @@
             >
               <Icon name="play" size={12} />开始转写
             </button>
+            <button
+              class="btn ghost"
+              onclick={importSubtitleFromExport}
+              disabled={!app.connected || running}
+              title="从导出文件夹选择上次转写的字幕，导入核对台（不重新转写）"
+            >
+              <Icon name="folder" size={11} />导入字幕…
+            </button>
             <span class="hint">⌘R</span>
           {/if}
         </div>
@@ -197,6 +233,16 @@
               <span>{app.job.status}</span>
             {/if}
           </div>
+          {#if app.job.status === 'done' && app.lastSavedPath}
+            <div class="saved-row">
+              <span class="saved-ok"><Icon name="check" size={10} />已自动保存</span>
+              <span class="saved-path mono" title={app.lastSavedPath}>{app.lastSavedPath}</span>
+              <button class="btn tiny ghost" onclick={revealSaved}>在访达中显示</button>
+              <button class="btn tiny" onclick={openExportFolder}>
+                <Icon name="folder" size={10} />导出文件夹
+              </button>
+            </div>
+          {/if}
         </div>
       {/if}
     </section>
@@ -373,6 +419,36 @@
     font-size: 11px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+
+  .saved-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--separator-soft);
+    min-width: 0;
+  }
+  .saved-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    color: #1c7c36;
+  }
+  .saved-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 10px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .saved-row .btn {
+    flex: 0 0 auto;
   }
 
   .preset-bar {

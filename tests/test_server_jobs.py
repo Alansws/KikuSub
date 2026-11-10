@@ -334,3 +334,42 @@ def test_append_job_writes_audit_so_qa_matches_report(make_client, tmp_path):
     job = _post_job(client, media_id, apply="append", start=4.8, end=6.4)
     _wait_done(client, job["id"])
     assert seen["write_audit"] is True
+
+
+def test_transcribe_uses_configured_export_dir(tmp_path: Path) -> None:
+    """设置里的导出文件夹必须传给 pipeline，否则用户改了路径仍然写旧目录。"""
+    from core import settings as settings_store
+
+    settings_path = tmp_path / "settings.json"
+    export_dir = tmp_path / "最终交付"
+    settings_store.save_settings({"export_dir": str(export_dir)}, settings_path)
+
+    app = create_app(
+        ServerConfig(token=TOKEN, output_dir=tmp_path, settings_path=settings_path)
+    )
+    captured: dict = {}
+
+    class _CaptureRunner:
+        def __call__(self, request, *, on_progress, cancel_event, output_dir):
+            captured["output_dir"] = Path(output_dir)
+            captured["request_export_dir"] = request.export_dir
+            return _result(tmp_path)
+
+    app.state.jobs = JobManager(tmp_path, runner=_CaptureRunner())
+    client = TestClient(app)
+    media_id = _import_media(client, tmp_path)
+    created = client.post("/api/jobs", headers=AUTH, json={"media_id": media_id})
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        snapshot = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snapshot["status"] in {"done", "error"}:
+            break
+        time.sleep(0.02)
+
+    assert snapshot["status"] == "done", snapshot
+    assert captured["request_export_dir"] == export_dir.resolve()
+    assert captured["output_dir"] == export_dir.resolve()
+    assert snapshot["result"]["export_dir"] == str(export_dir.resolve())

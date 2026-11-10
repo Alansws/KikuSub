@@ -4,10 +4,16 @@
    *
    * 这一屏是整个应用最像「专业工具」的地方，交互必须对得上肌肉记忆：
    *
-   * - 波形可缩放（滚轮 / 捏合 / 滑块）与平移（双指横移 / 拖动选区外部），
-   *   放大到数秒区间仍然清晰——服务端按可视窗口返回包络；
-   * - 播放头始终可见，点哪里跳哪里，拖动播放头可搓碟；
-   * - 在波形上拖出选区，可直接试听、局部转写、或同步到转写页；
+   * - 波形可缩放（滚轮 / 捏合 / 滑块）与平移（双指横移 / ⌥ 拖动选区外部），
+   * - 单击波形 = 跳转；按住并移动超过 4px 才算框选——全局视图下 1px 就是好几秒，
+   *   手抖绝不能把「单击」判成「框选」；
+   * - 顶部刻度条与播放头两侧 8px 是专属擦洗区：按住拖动即可逐帧预览，
+   *   视频进度条同样支持拖动，三者共用一个「暂停 → 跟手 seek → 松手恢复」的擦洗器；
+   * - 底部字幕轨道用品牌蓝块表示「这段有字幕」：拖块体整体平移、拖两端改起止；
+   *   双语同区间的多行作为一块成组编辑，提交走一次撤回；
+   * - 播放头进入某句字幕时，底部表格滚到该句、右侧检查器同步选中（播放中也一样）；
+   * - 跟随是持久化偏好：只有点按钮才会改变；跳转（哪怕暂停）会把播放头带回视窗，
+   *   播放时则整页平移跟随。缩放/平移波形不会偷偷关掉它；
    * - 每一行都能单独重转，不会冲掉整张表；
    * - 质检面板通过 store 的 focusRange 定位到这里，跳转是真的跳。
    */
@@ -17,7 +23,9 @@
   import { logEvent } from '../lib/api';
   import {
     app,
+    applyCueTimes,
     focusRange,
+    openSubtitle,
     play,
     previewRange,
     seekTo,
@@ -49,10 +57,36 @@
   const duration = $derived(app.media?.duration ?? 0);
   let viewStart = $state(0);
   let viewSpan = $state(60);
-  let follow = $state(true);
+  /**
+   * 跟随是「用户偏好」，不是临时状态：
+   * 只由用户点按钮改变，并持久化。缩放/平移波形、单击跳转、点字幕行、
+   * 点底部字幕块都不许把它悄悄关掉（这些都被用户报成 bug）。
+   */
+  let follow = $state(localStorage.getItem('kikusub.follow') !== '0');
   let selection = $state<{ start: number; end: number } | null>(null);
 
   const MIN_SPAN = 0.5;
+
+  // 时间轴三条竖带。绘制与命中判定共用同一组常量，避免“看到的”和“点到的”错位。
+  const RULER_H = 17; // 顶部刻度条：按住拖动 = 擦洗播放头
+  const LANE_H = 17; // 底部字幕轨道：拖块体移动整句，拖两端改时间戳
+  const RESIZE_H = 6; // 最底部的波形高度把手
+  const EDGE = 6; // 字幕块左右端的抓取宽度（px）
+  const PLAYHEAD_GRAB = 8; // 播放头两侧的抓取宽度（px）
+  const CLICK_SLOP = 4; // 按下后移动超过它才算框选，否则算单击跳转
+
+  const laneTopOf = (h: number) => h - RESIZE_H - LANE_H;
+
+  // 光标与高亮（悬停/拖动的字幕块用 key 标识，双语同区间的两行算同一块）
+  let waveCursor = $state('crosshair');
+  let hoverKey = $state('');
+  let dragKey = $state('');
+  let cueTip = $state<{ x: number; label: string } | null>(null);
+
+  // 视频进度条拖动
+  let trackDrag = $state(false);
+  // 最近一次自动滚到/选中过的字幕行，避免同一句反复滚动
+  let lastRevealed = -1;
 
   // 虚拟列表：行高固定 26px，只渲染可视区 ± OVERSCAN 行。
   const ROW_H = 26;
@@ -108,6 +142,15 @@
     return -1;
   });
 
+  /**
+   * 当前画面对应的「字幕块」区间。双语 SRT 的日/中两行完全同区间，
+   * 表格高亮与检查器都必须认这一整块，而不是只认第一条。
+   */
+  const activeKey = $derived.by(() => {
+    const c = cueIndex >= 0 ? app.cues[cueIndex] : null;
+    return c ? `${c.start}:${c.end}` : '';
+  });
+
   const rowStart = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN));
   const rowEnd = $derived(
     Math.min(
@@ -118,6 +161,9 @@
   const visibleCues = $derived(app.cues.slice(rowStart, rowEnd));
 
   const zoomX = $derived(duration > 0 ? Math.max(1, duration / Math.max(viewSpan, 0.001)) : 1);
+  const progressPct = $derived(
+    Math.max(0, Math.min(100, duration > 0 ? (play.time / duration) * 100 : 0)),
+  );
   const busy = $derived(
     app.job?.status === 'queued' ||
       app.job?.status === 'running' ||
@@ -133,11 +179,33 @@
     return { start: a, span: s };
   }
 
-  function setView(start: number, span: number, userAction = true) {
+  /**
+   * 改视窗只负责缩放/平移；跟随是独立偏好，绝不在这里被顺手关掉。
+   * 专业剪辑软件也不会因为缩放时间线就取消「跟随播放头」。
+   */
+  function setView(start: number, span: number) {
     const next = clampView(start, span);
     viewStart = next.start;
     viewSpan = next.span;
-    if (userAction && play.playing && follow) follow = false;
+  }
+
+  /**
+   * 跳转（包括暂停状态下点字幕）后把播放头带回视窗。
+   *
+   * 以前只有「播放中 + 跟随」才会平移视窗，于是暂停时点一句远处的字幕，
+   * 视频跳到了对应帧，波形上的播放头却跑出画面外；用户只能先开跟随再敲空格。
+   * 现在跟随开启时，任何 seek 都会补一次平移，不要求先播放。
+   */
+  function revealPlayhead(t = play.time) {
+    if (!follow) return;
+    const span = viewSpan;
+    if (!(span > 0) || !(duration > 0)) return;
+    // 已经在视窗里就不动，避免每次点当前句都把波形甩一下
+    if (t >= viewStart && t <= viewStart + span) return;
+    // 从右侧出去就从左侧 15% 处回来，反之亦然；缩放比例保持不变
+    const anchor = t > viewStart + span ? 0.85 : 0.15;
+    const next = clampView(t - span * anchor, span);
+    viewStart = next.start;
   }
 
   function xOf(time: number) {
@@ -163,7 +231,10 @@
     peaks = [];
     peaksFrom = 0;
     peaksSpan = 0;
-    follow = true;
+    hoverKey = '';
+    dragKey = '';
+    cueTip = null;
+    lastRevealed = -1;
   });
 
   // ---------------- 波形包络 ----------------
@@ -201,6 +272,28 @@
   });
 
   // ---------------- 画布 ----------------
+  function roundRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+  ) {
+    const rad = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(x, y, w, h, rad);
+      return;
+    }
+    ctx.moveTo(x + rad, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rad);
+    ctx.arcTo(x + w, y + h, x, y + h, rad);
+    ctx.arcTo(x, y + h, x, y, rad);
+    ctx.arcTo(x, y, x + w, y, rad);
+    ctx.closePath();
+  }
+
   function draw() {
     if (!canvas || !waveWrap) return;
     const w = waveWrap.clientWidth;
@@ -215,20 +308,41 @@
     ctx.clearRect(0, 0, w, h);
 
     const css = getComputedStyle(document.documentElement);
-    const sep = css.getPropertyValue('--separator-soft').trim() || 'rgba(0,0,0,.06)';
-    const sepStrong = css.getPropertyValue('--separator').trim() || 'rgba(0,0,0,.1)';
-    const waveColor = css.getPropertyValue('--wave').trim() || '#7b8a99';
-    const accent = css.getPropertyValue('--accent').trim() || '#007aff';
-    const text3 = css.getPropertyValue('--text-3').trim() || '#98989d';
+    const token = (name: string, fallback: string) =>
+      css.getPropertyValue(name).trim() || fallback;
+    const sep = token('--separator-soft', 'rgba(0,0,0,.06)');
+    const sepStrong = token('--separator', 'rgba(0,0,0,.1)');
+    const waveColor = token('--wave', '#7b8a99');
+    const accent = token('--accent', '#007aff');
+    const text3 = token('--text-3', '#98989d');
+    const cueLane = token('--cue-lane', 'rgba(0,0,0,.055)');
+    const cueWash = token('--cue-wash', 'rgba(0,122,255,.035)');
+    const cueBlock = token('--cue-block', 'rgba(0,122,255,.28)');
+    const cueBlockHover = token('--cue-block-hover', 'rgba(0,122,255,.46)');
+    const cueBlockActive = token('--cue-block-active', 'rgba(0,122,255,.82)');
+    const cueEdge = token('--cue-edge', 'rgba(0,122,255,.9)');
 
-    const rulerH = 17;
-    const cueH = 11;
-    const mid = rulerH + (h - rulerH - cueH) / 2;
-    const ampH = Math.max(8, (h - rulerH - cueH) * 0.94);
+    const laneTop = laneTopOf(h);
+    const mid = RULER_H + (laneTop - RULER_H) / 2;
+    const ampH = Math.max(8, (laneTop - RULER_H) * 0.94);
+
+    // 字幕覆盖区在波形背后垫一层极淡的蓝：不抢波形，但一眼能看出「这段有字幕」。
+    // 同区间的双语行只画一次，否则重叠区间会越叠越深。
+    const drawn = new Set<string>();
+    for (const cue of app.cues) {
+      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
+      const key = `${cue.start}:${cue.end}`;
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      const x0 = Math.max(0, xOf(cue.start));
+      const x1 = Math.min(w, xOf(cue.end));
+      if (x1 <= x0) continue;
+      ctx.fillStyle = cueWash;
+      ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
+    }
 
     // 时间刻度
     const step = pickStep(viewSpan);
-    ctx.fillStyle = text3;
     ctx.font = '9.5px -apple-system, ui-monospace, Menlo, monospace';
     ctx.textBaseline = 'top';
     const first = Math.ceil(viewStart / step) * step;
@@ -243,7 +357,7 @@
       }
     }
     ctx.fillStyle = sep;
-    ctx.fillRect(0, rulerH - 0.5, w, 1);
+    ctx.fillRect(0, RULER_H - 0.5, w, 1);
 
     // 波形：逐像素取该像素覆盖的所有采样点的最大值。
     // 之前是「一个采样点画一根柱子」，放大后柱子间距会被拉开；逐像素合并后
@@ -278,34 +392,58 @@
       ctx.globalAlpha = 1;
     }
 
-    // 字幕覆盖块（底部一条），让「哪里已经有字幕」一眼可见
-    const cueY = h - cueH + 1;
-    for (const cue of app.cues) {
-      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
-      const x0 = Math.max(0, xOf(cue.start));
-      const x1 = Math.min(w, xOf(cue.end));
-      if (x1 <= x0) continue;
-      ctx.fillStyle = sep;
-      ctx.fillRect(x0, cueY, Math.max(1, x1 - x0 - 0.5), cueH - 3);
-    }
-    const sel = play.selected >= 0 ? app.cues[play.selected] : null;
-    if (sel) {
+    // 选中行的区间高亮（不是选区，只是当前条目）
+    if (play.selected >= 0 && app.cues[play.selected]) {
+      const sel = app.cues[play.selected];
       const x0 = Math.max(0, xOf(sel.start));
       const x1 = Math.min(w, xOf(sel.end));
-      ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.75;
-      ctx.fillRect(x0, cueY, Math.max(1, x1 - x0), cueH - 3);
-      ctx.globalAlpha = 1;
+      if (x1 > x0) {
+        ctx.fillStyle = accent;
+        ctx.globalAlpha = 0.07;
+        ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
+        ctx.globalAlpha = 1;
+      }
     }
 
-    // 选中行的区间高亮（不是选区，只是当前条目）
-    if (sel) {
-      const x0 = Math.max(0, xOf(sel.start));
-      const x1 = Math.min(w, xOf(sel.end));
-      ctx.fillStyle = accent;
-      ctx.globalAlpha = 0.07;
-      ctx.fillRect(x0, rulerH, Math.max(1, x1 - x0), h - rulerH - cueH);
-      ctx.globalAlpha = 1;
+    // ---------------- 底部字幕轨道 ----------------
+    // 底槽：明确区分「轨道」与「波形」，哪怕整片都没有字幕也能看出这里有东西。
+    ctx.fillStyle = cueLane;
+    ctx.fillRect(0, laneTop, w, LANE_H - 1);
+
+    const blockY = laneTop + 3;
+    const blockH = LANE_H - 6;
+    const selectedCue = play.selected >= 0 ? app.cues[play.selected] : null;
+    const selectedKey = selectedCue ? `${selectedCue.start}:${selectedCue.end}` : '';
+    drawn.clear();
+    for (const cue of app.cues) {
+      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
+      const key = `${cue.start}:${cue.end}`;
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      const x0 = Math.max(0, xOf(cue.start));
+      const x1 = Math.min(w, xOf(cue.end));
+      if (x1 <= x0 + 0.5) continue;
+      const bw = Math.max(2, x1 - x0 - 0.5);
+      const active = key === activeKey;
+      const touched = key === hoverKey || key === dragKey;
+      ctx.fillStyle = active ? cueBlockActive : touched ? cueBlockHover : cueBlock;
+      roundRect(ctx, x0, blockY, bw, blockH, 2.5);
+      ctx.fill();
+      // 当前句/悬停/选中块描一圈边，哪怕底色很浅也能一眼分清边界
+      if (active || touched || key === selectedKey) {
+        ctx.strokeStyle = cueEdge;
+        ctx.globalAlpha = active ? 0.95 : 0.45;
+        ctx.lineWidth = 1;
+        roundRect(ctx, x0 + 0.5, blockY + 0.5, Math.max(1, bw - 1), blockH - 1, 2.5);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // 当前句/被拖动的块加两端抓手，告诉用户「这里可以左右拉」
+      if (active || touched) {
+        ctx.fillStyle = cueEdge;
+        ctx.fillRect(x0 + 2, blockY + 4, 1.5, blockH - 8);
+        ctx.fillRect(x0 + bw - 3.5, blockY + 4, 1.5, blockH - 8);
+      }
     }
   }
 
@@ -338,6 +476,9 @@
     void viewSpan;
     void app.cues;
     void play.selected;
+    void activeKey;
+    void hoverKey;
+    void dragKey;
     void app.theme;
     void waveW;
     requestAnimationFrame(draw);
@@ -354,8 +495,75 @@
     return () => ro.disconnect();
   });
 
-  // ---------------- 播放头 ----------------
+  // ---------------- 播放头 / 擦洗 ----------------
   let rafId = 0;
+
+  // 擦洗：拖动播放头或进度条时，play.time 立刻跟手，video.currentTime 每帧最多写一次，
+  // 避免一次拖动触发上百个 seek 请求把解码器拖死。
+  let scrubbing = false;
+  let scrubTarget = 0;
+  let scrubRaf = 0;
+  let scrubResume = false;
+  let lastSeekAt = 0;
+
+  function setScrub(t: number) {
+    const max = duration || video?.duration || Number.POSITIVE_INFINITY;
+    const value = Math.max(0, Math.min(max, t));
+    play.time = value;
+    play.stopAt = 0;
+    scrubTarget = value;
+    // 每帧最多写一次 currentTime；窗口被遮挡时 rAF 会被节流，
+    // 所以再加一条 16ms 的“立即写”分支，保证拖动时画面真的跟手。
+    const now = performance.now();
+    if (now - lastSeekAt >= 16) {
+      lastSeekAt = now;
+      flushScrub();
+    } else if (!scrubRaf) {
+      scrubRaf = requestAnimationFrame(flushScrub);
+    }
+  }
+
+  function flushScrub() {
+    scrubRaf = 0;
+    if (!video) return;
+    if (Math.abs(video.currentTime - scrubTarget) < 0.004) return;
+    try {
+      video.currentTime = scrubTarget;
+    } catch {
+      /* 媒体还没就绪：播放头数字照样跟手 */
+    }
+  }
+
+  function beginScrub(t: number) {
+    if (!scrubbing) {
+      scrubResume = !video?.paused && !video?.ended && play.playing;
+      if (scrubResume) video?.pause();
+    }
+    scrubbing = true;
+    setScrub(t);
+  }
+
+  function endScrub() {
+    if (!scrubbing) return;
+    scrubbing = false;
+    if (scrubRaf) {
+      cancelAnimationFrame(scrubRaf);
+      scrubRaf = 0;
+    }
+    if (video) {
+      try {
+        video.currentTime = scrubTarget;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (scrubResume) {
+      scrubResume = false;
+      void video?.play().catch(() => {});
+    }
+    // 擦洗期间不自动平移（手还在拖）；松手后把最终位置带回视窗
+    revealPlayhead(scrubTarget);
+  }
 
   function tick() {
     rafId = requestAnimationFrame(tick);
@@ -366,9 +574,11 @@
     const ready = video.readyState >= 2 && !video.error;
     const t = ready ? video.currentTime : play.time;
     if (ready) {
-      if (!video.paused && !video.ended) play.time = t;
+      // 擦洗期间由手指说了算：seek 还没落盘时 currentTime 是滞后的，
+      // 不能拿它把 play.time 拽回去，否则播放头会来回抖。
+      if (!scrubbing && !video.paused && !video.ended) play.time = t;
       play.playing = !video.paused && !video.ended;
-    } else {
+    } else if (!scrubbing) {
       play.playing = false;
     }
     if (play.stopAt > 0 && play.playing && t >= play.stopAt - 0.01) {
@@ -382,6 +592,7 @@
     if (
       follow &&
       play.playing &&
+      !scrubbing &&
       viewSpan < duration * 0.96 &&
       (t > viewStart + viewSpan * 0.92 || t < viewStart + viewSpan * 0.02)
     ) {
@@ -434,12 +645,24 @@
     const nonce = play.seekNonce;
     if (nonce === seenSeek) return;
     seenSeek = nonce;
-    if (!video) return;
     // 只依赖 nonce：play.time / playAfterSeek 用 untrack 读，否则「读一下再写回」
     // 会让这个 effect 自己触发自己（effect_update_depth_exceeded）。
     const request = untrack(() => ({ time: play.time, play: play.playAfterSeek }));
-    const t = Math.max(0, Math.min(request.time, video.duration || duration || request.time));
-    video.currentTime = t;
+    const t = Math.max(0, Math.min(request.time, video?.duration || duration || request.time));
+    // 暂停时的跳转也要让播放头可见（跟随开启时）；视频尚未绑定也要平移波形
+    untrack(() => revealPlayhead(t));
+    if (!video) return;
+    scrubbing = false;
+    if (scrubRaf) {
+      cancelAnimationFrame(scrubRaf);
+      scrubRaf = 0;
+    }
+    scrubTarget = t;
+    try {
+      video.currentTime = t;
+    } catch {
+      /* 媒体还没就绪 */
+    }
     if (request.play) {
       play.playAfterSeek = false;
       void video.play().catch(() => {});
@@ -455,18 +678,43 @@
     const pad = Math.min(2.5, Math.max(0.5, (req.end - req.start) * 0.6));
     const span = Math.max(2, req.end - req.start + pad * 2);
     const center = (req.start + req.end) / 2;
-    setView(center - span / 2, span, false);
+    // 这是程序化定位，不是用户手势：不要顺手关掉跟随
+    setView(center - span / 2, span);
     selection = { start: req.start, end: req.end };
-    follow = false;
   });
 
   // ---------------- 交互 ----------------
-  type DragMode = 'none' | 'select' | 'playhead' | 'resize-l' | 'resize-r' | 'pan';
+  type DragMode =
+    | 'none'
+    | 'pending' // 已按下但还没超过阈值：仍可能只是单击
+    | 'select'
+    | 'playhead'
+    | 'pan'
+    | 'cue-move'
+    | 'cue-l'
+    | 'cue-r'
+    | 'resize-l'
+    | 'resize-r';
+
   let dragMode: DragMode = $state('none');
   let dragAnchor = 0;
   let dragMoved = false;
+  let downX = 0;
+  let downY = 0;
   let panStartX = 0;
   let panStartView = 0;
+
+  type CueBlock = { key: string; start: number; end: number; indices: number[] };
+
+  let cueDrag: {
+    indices: number[];
+    start: number;
+    end: number;
+    edge: 'move' | 'start' | 'end';
+    anchorT: number;
+    curStart: number | null;
+    curEnd: number | null;
+  } | null = null;
 
   function xPlayhead() {
     return xOf(play.time);
@@ -479,7 +727,220 @@
   }
 
   function seek(time: number) {
+    scrubbing = false;
+    if (scrubRaf) {
+      cancelAnimationFrame(scrubRaf);
+      scrubRaf = 0;
+    }
+    scrubTarget = time;
     seekTo(time);
+  }
+
+  // ---------------- 视频进度条（逐帧拖动预览） ----------------
+  function timeFromTrack(clientX: number, el: HTMLElement) {
+    const r = el.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - r.left) / Math.max(1, r.width)));
+    return ratio * (duration || 0);
+  }
+
+  function onTrackPointerDown(e: PointerEvent) {
+    if (e.button !== 0 || duration <= 0) return;
+    e.preventDefault();
+    trackDrag = true;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    beginScrub(timeFromTrack(e.clientX, e.currentTarget as HTMLElement));
+  }
+
+  function onTrackPointerMove(e: PointerEvent) {
+    if (!trackDrag) return;
+    setScrub(timeFromTrack(e.clientX, e.currentTarget as HTMLElement));
+  }
+
+  function onTrackPointerUp(e: PointerEvent) {
+    if (!trackDrag) return;
+    trackDrag = false;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    endScrub();
+  }
+
+  function wavePoint(e: PointerEvent) {
+    const r = (waveWrap as HTMLDivElement).getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height };
+  }
+
+  /**
+   * 底部轨道上 x 处的字幕块。
+   * 双语 SRT 的日/中两行共享同一区间，必须作为一块整体移动；这里返回整块的下标。
+   */
+  function cueBlockAt(x: number): CueBlock | null {
+    const seen = new Set<string>();
+    let bestKey = '';
+    let bestSpan = Infinity;
+    for (const cue of app.cues) {
+      const key = `${cue.start}:${cue.end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const x0 = xOf(cue.start);
+      const x1 = xOf(cue.end);
+      if (x < x0 - 1 || x > x1 + 1) continue;
+      const span = x1 - x0;
+      if (span < bestSpan) {
+        bestSpan = span;
+        bestKey = key;
+      }
+    }
+    if (!bestKey) return null;
+    const indices: number[] = [];
+    app.cues.forEach((cue, i) => {
+      if (`${cue.start}:${cue.end}` === bestKey) indices.push(i);
+    });
+    if (!indices.length) return null;
+    const first = app.cues[indices[0]];
+    return { key: bestKey, start: first.start, end: first.end, indices };
+  }
+
+  function beginPlayhead(t: number) {
+    dragMode = 'playhead';
+    dragMoved = true;
+    waveCursor = 'ew-resize';
+    beginScrub(t);
+  }
+
+  function beginSelect(a: number, b: number) {
+    dragMode = 'select';
+    dragMoved = true;
+    dragAnchor = a;
+    selection = { start: Math.min(a, b), end: Math.max(a, b) };
+  }
+
+  function beginCueDrag(e: PointerEvent, block: CueBlock, x: number) {
+    const pixelWidth = Math.abs(xOf(block.end) - xOf(block.start));
+    // 全景视图里很短的一句可能只有几像素宽：这时两端抓手会重叠，
+    // 整个块都当“移动”处理，否则根本拖不动。
+    const edge: 'move' | 'start' | 'end' =
+      pixelWidth < EDGE * 3
+        ? 'move'
+        : Math.abs(x - xOf(block.start)) <= EDGE
+          ? 'start'
+          : Math.abs(x - xOf(block.end)) <= EDGE
+            ? 'end'
+            : 'move';
+    cueDrag = {
+      indices: block.indices,
+      start: block.start,
+      end: block.end,
+      edge,
+      anchorT: timeAt(e.clientX),
+      curStart: null,
+      curEnd: null,
+    };
+    dragMode = edge === 'move' ? 'cue-move' : edge === 'start' ? 'cue-l' : 'cue-r';
+    dragKey = block.key;
+    hoverKey = block.key;
+    waveCursor = edge === 'move' ? 'grabbing' : 'ew-resize';
+    selection = null;
+    // 检查器与表格跟着正在调整的这句走
+    if (block.indices.length) play.selected = block.indices[0];
+  }
+
+  const roundMs = (v: number) => Math.round(v * 1000) / 1000;
+
+  function updateCueDrag(t: number) {
+    const drag = cueDrag;
+    if (!drag) return;
+    const max = duration > 0 ? duration : Math.max(drag.end, t0());
+    let start = drag.start;
+    let end = drag.end;
+    const minDur = 0.05;
+    if (drag.edge === 'move') {
+      const dur = drag.end - drag.start;
+      start = Math.max(0, Math.min(Math.max(0, max - dur), drag.start + (t - drag.anchorT)));
+      end = start + dur;
+    } else if (drag.edge === 'start') {
+      start = Math.max(0, Math.min(drag.end - minDur, t));
+    } else {
+      end = Math.min(max, Math.max(drag.start + minDur, t));
+    }
+    start = roundMs(start);
+    end = roundMs(end);
+    if (drag.curStart === start && drag.curEnd === end) return;
+    drag.curStart = start;
+    drag.curEnd = end;
+    for (const i of drag.indices) {
+      const cue = app.cues[i];
+      if (cue) {
+        cue.start = start;
+        cue.end = end;
+      }
+    }
+    const mid = (start + end) / 2;
+    cueTip = {
+      x: Math.max(44, Math.min(Math.max(44, waveW - 44), xOf(mid))),
+      label: `${tcShort(start)} → ${tcShort(end)}`,
+    };
+    requestAnimationFrame(draw);
+  }
+
+  function finishCueDrag() {
+    const drag = cueDrag;
+    cueDrag = null;
+    dragMode = 'none';
+    dragKey = '';
+    cueTip = null;
+    waveCursor = 'crosshair';
+    if (!drag) return;
+    const moved =
+      drag.curStart !== null &&
+      drag.curEnd !== null &&
+      (Math.abs(drag.curStart - drag.start) > 1e-6 ||
+        Math.abs(drag.curEnd - drag.end) > 1e-6);
+    if (!moved) {
+      // 点了一下字幕块：和点表格行一样，直接把播放头放到这句开头
+      seek(drag.start + 0.02);
+      return;
+    }
+    const changes = drag.indices.map((index) => ({
+      index,
+      start: drag.curStart as number,
+      end: drag.curEnd as number,
+    }));
+    void applyCueTimes(changes);
+  }
+
+  function updateHover(e: PointerEvent) {
+    if (!waveWrap) return;
+    const pt = wavePoint(e);
+    if (pt.y <= RULER_H + 1 || Math.abs(pt.x - xPlayhead()) <= PLAYHEAD_GRAB) {
+      if (hoverKey) hoverKey = '';
+      waveCursor = 'ew-resize';
+      return;
+    }
+    if (pt.y >= pt.h - RESIZE_H - LANE_H) {
+      const block = cueBlockAt(pt.x);
+      if (!block) {
+        if (hoverKey) hoverKey = '';
+        waveCursor = 'crosshair';
+        return;
+      }
+      if (hoverKey !== block.key) hoverKey = block.key;
+      const pixelWidth = Math.abs(xOf(block.end) - xOf(block.start));
+      const onEdge =
+        pixelWidth >= EDGE * 3 &&
+        (Math.abs(pt.x - xOf(block.start)) <= EDGE ||
+          Math.abs(pt.x - xOf(block.end)) <= EDGE);
+      waveCursor = onEdge ? 'ew-resize' : 'grab';
+      return;
+    }
+    if (hoverKey) hoverKey = '';
+    waveCursor = 'crosshair';
   }
 
   function onWavePointerDown(e: PointerEvent) {
@@ -489,54 +950,91 @@
     } catch {
       /* 合成事件 / 已释放的 pointerId：忽略即可，拖动逻辑不依赖捕获 */
     }
+    const pt = wavePoint(e);
     const t = timeAt(e.clientX);
     dragMoved = false;
-    const nearPlayhead = Math.abs(e.clientX - (waveWrap.getBoundingClientRect().left + xPlayhead())) < 6;
+    downX = e.clientX;
+    downY = e.clientY;
+    cueTip = null;
 
     if (e.altKey) {
       dragMode = 'pan';
       panStartX = e.clientX;
       panStartView = viewStart;
+      waveCursor = 'grabbing';
+      // ⌥ 拖动只是临时平移视窗；跟随偏好保持不变（下次跳转/播放仍会带回播放头）
       return;
     }
-    if (nearPlayhead) {
-      dragMode = 'playhead';
-      seek(t);
+
+    // 1) 顶部刻度条：专属擦洗带，拖它就只移动播放头，永远不会变成框选
+    if (pt.y <= RULER_H + 1) {
+      beginPlayhead(t);
       return;
     }
+
+    // 2) 播放头两侧 8px：随时抓得住（不用精确点到 1px 的线）
+    if (Math.abs(pt.x - xPlayhead()) <= PLAYHEAD_GRAB) {
+      beginPlayhead(t);
+      return;
+    }
+
+    // 3) 底部字幕轨道：拖块体移动整句，拖两端改时间戳
+    if (pt.y >= pt.h - RESIZE_H - LANE_H) {
+      const block = cueBlockAt(pt.x);
+      if (block) {
+        beginCueDrag(e, block, pt.x);
+        return;
+      }
+      dragMode = 'pending';
+      dragAnchor = t;
+      return;
+    }
+
+    // 4) 波形主体：Shift 直接框选；否则先当作「可能是单击」
     if (e.shiftKey) {
-      const a = play.time;
-      dragMode = 'select';
-      dragAnchor = a;
-      selection = { start: Math.min(a, t), end: Math.max(a, t) };
+      beginSelect(play.time, t);
       return;
     }
-    dragMode = 'select';
+    dragMode = 'pending';
     dragAnchor = t;
-    selection = { start: t, end: t };
   }
 
   function onWavePointerMove(e: PointerEvent) {
-    if (dragMode === 'none') return;
-    if (dragMode === 'pan') {
-      const dx = e.clientX - panStartX;
-      const shift = -(dx / Math.max(1, waveW)) * viewSpan;
-      setView(panStartView + shift, viewSpan, false);
-      dragMoved = true;
+    if (!waveWrap) return;
+    if (dragMode === 'none') {
+      updateHover(e);
       return;
     }
     const t = Math.max(0, Math.min(duration || t0(), timeAt(e.clientX)));
-    if (dragMode === 'playhead') {
-      seek(t);
+    if (dragMode === 'pan') {
+      const dx = e.clientX - panStartX;
+      const shift = -(dx / Math.max(1, waveW)) * viewSpan;
+      setView(panStartView + shift, viewSpan);
       dragMoved = true;
       return;
     }
-    if (dragMode === 'resize-l' && selection) {
+    if (dragMode === 'pending') {
+      // 超过阈值才升级成框选：全局视图下 1px 可能是好几秒，
+      // 但手抖不该把「单击跳转」判成「框选了几秒」。
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_SLOP) return;
+      beginSelect(dragAnchor, t);
+      return;
+    }
+    if (dragMode === 'playhead') {
+      setScrub(t);
+      return;
+    }
+    if (dragMode === 'cue-move' || dragMode === 'cue-l' || dragMode === 'cue-r') {
+      updateCueDrag(t);
+      return;
+    }
+    if (!selection) return;
+    if (dragMode === 'resize-l') {
       selection = { start: Math.min(t, selection.end - 0.05), end: selection.end };
       dragMoved = true;
       return;
     }
-    if (dragMode === 'resize-r' && selection) {
+    if (dragMode === 'resize-r') {
       selection = { start: selection.start, end: Math.max(t, selection.start + 0.05) };
       dragMoved = true;
       return;
@@ -549,13 +1047,39 @@
     return viewStart + viewSpan;
   }
 
-  function onWavePointerUp() {
+  function onWavePointerUp(e: PointerEvent) {
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
     const mode = dragMode;
+    if (mode === 'playhead') {
+      dragMode = 'none';
+      endScrub();
+      return;
+    }
+    if (mode === 'pan') {
+      dragMode = 'none';
+      waveCursor = 'crosshair';
+      return;
+    }
+    if (mode === 'cue-move' || mode === 'cue-l' || mode === 'cue-r') {
+      finishCueDrag();
+      return;
+    }
+    if (mode === 'pending') {
+      // 没超过阈值 = 单击跳转；绝不因为手抖变成框选
+      dragMode = 'none';
+      selection = null;
+      seek(dragAnchor);
+      return;
+    }
     dragMode = 'none';
     if (mode === 'select') {
       if (!selection || !dragMoved || selection.end - selection.start < 0.08) {
         // 单击：跳转并清掉选区
-        const t = selection ? selection.start : play.time;
+        const t = selection ? selection.start : dragAnchor;
         selection = null;
         seek(t);
       } else {
@@ -614,7 +1138,7 @@
   /** 一键聚焦：把播放头附近放大到便于核对的尺度。 */
   function focusPlayhead() {
     const span = Math.max(2, Math.min(12, viewSpan / 6 || 6));
-    setView(play.time - span / 2, span, false);
+    setView(play.time - span / 2, span);
     follow = true;
   }
 
@@ -622,7 +1146,7 @@
     if (!selection) return;
     const span = Math.max(1.5, (selection.end - selection.start) * 1.6);
     const center = (selection.start + selection.end) / 2;
-    setView(center - span / 2, span, false);
+    setView(center - span / 2, span);
   }
 
   function clearSelection() {
@@ -631,10 +1155,8 @@
 
   function toggleFollow() {
     follow = !follow;
-    if (follow && play.playing) {
-      const next = clampView(play.time - viewSpan * 0.15, viewSpan);
-      viewStart = next.start;
-    }
+    // 开启的瞬间就把当前播放头带回画面，不必先播放一下
+    if (follow) revealPlayhead(play.time);
   }
 
   function selectCue(i: number, doSeek = true) {
@@ -686,15 +1208,63 @@
     toast('已把选区时间填入转写页，可直接开始局部转写');
   }
 
-  // 播放时自动滚动到当前句
-  $effect(() => {
-    if (!play.playing || cueIndex < 0 || !rowsEl) return;
-    const top = cueIndex * ROW_H;
+  /** 用户正在输入框里打字时，不要自动改选中行，否则会把草稿换掉。 */
+  function isTyping() {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return false;
+    if (el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
+    if (el.tagName === 'INPUT') {
+      const type = (el as HTMLInputElement).type;
+      // 缩放滑块也是 input：它失焦后不该继续拦住自动同步
+      return !['range', 'checkbox', 'radio', 'button', 'submit', 'file'].includes(type);
+    }
+    return false;
+  }
+
+  function revealRow(i: number) {
+    if (!rowsEl) return;
+    const top = i * ROW_H;
     const viewTop = rowsEl.scrollTop;
     const viewBottom = viewTop + rowsEl.clientHeight;
-    if (top < viewTop + ROW_H || top + ROW_H > viewBottom - ROW_H) {
-      rowsEl.scrollTo({ top: top - rowsEl.clientHeight / 2, behavior: 'smooth' });
+    // 已经在可视区中间就不动，避免播放时每句都抖一下
+    if (top >= viewTop + ROW_H * 2 && top + ROW_H <= viewBottom - ROW_H * 2) return;
+    // 用即时滚动而不是 smooth：跳转要「同步」，动画在后台窗口会被节流，
+    // 让人以为表格没跟上。落点按整行对齐，避免顶部永远卡着半行。
+    const above = Math.max(1, Math.floor((rowsEl.clientHeight * 0.4) / ROW_H));
+    rowsEl.scrollTop = Math.max(0, (i - above) * ROW_H);
+  }
+
+  /**
+   * 播放头（点波形 / 拖播放头 / 播放中）进入某句字幕时：
+   * 底部表格滚到那一行，右侧检查器切到那一条。
+   * 双语同区间的两行以块内第一条为准，表格里整块都会高亮。
+   */
+  $effect(() => {
+    const hit = cueIndex;
+    if (hit < 0) return;
+    const hitCue = app.cues[hit];
+    if (!hitCue) return;
+    const key = `${hitCue.start}:${hitCue.end}`;
+    const selected = app.cues[play.selected];
+    // 用户点的是同一块里的第 2/3 行（双语/三语）时保留他的选择，
+    // 不要因为我们“块内第一条”的规则把选中行抢回去。
+    const selectedInBlock = Boolean(
+      selected && `${selected.start}:${selected.end}` === key,
+    );
+    let first = hit;
+    while (first > 0 && `${app.cues[first - 1].start}:${app.cues[first - 1].end}` === key) {
+      first -= 1;
     }
+    if (first === lastRevealed) return;
+    lastRevealed = first;
+    if (isTyping()) return;
+    if (!selectedInBlock && play.selected !== first) play.selected = first;
+    revealRow(selectedInBlock ? play.selected : first);
+  });
+
+  // 跟随是持久偏好：重开应用也记住用户的选择
+  $effect(() => {
+    localStorage.setItem('kikusub.follow', follow ? '1' : '0');
   });
 
   $effect(() => {
@@ -717,6 +1287,17 @@
   }
   export function api_focus() {
     focusPlayhead();
+  }
+
+  /** 从设置里的导出文件夹挑一个字幕导入核对台（换基线，不动当前媒体）。 */
+  async function importSubtitleFromExport() {
+    const dir = app.config?.export_dir || app.config?.output_dir || '';
+    if (!dir) {
+      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+      return;
+    }
+    const file = await window.kikusub.pickSubtitle(dir);
+    if (file) await openSubtitle(file);
   }
 </script>
 
@@ -774,25 +1355,31 @@
       </div>
       <div
         class="tp-track"
+        class:dragging={trackDrag}
         role="slider"
         tabindex="-1"
+        aria-label="播放进度"
+        aria-valuemin="0"
+        aria-valuemax={duration}
         aria-valuenow={play.time}
-        onclick={(e) => {
-          const el = e.currentTarget as HTMLElement;
-          const r = el.getBoundingClientRect();
-          seek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * (duration || 1));
-          follow = true;
-        }}
+        onpointerdown={onTrackPointerDown}
+        onpointermove={onTrackPointerMove}
+        onpointerup={onTrackPointerUp}
+        onpointercancel={onTrackPointerUp}
+        title="拖动逐帧预览画面"
       >
-        <div class="tp-fill" style="width:{(play.time / (duration || 1)) * 100}%"></div>
-        <div class="tp-knob" style="left:{(play.time / (duration || 1)) * 100}%"></div>
+        <div class="tp-rail">
+          <div class="tp-fill" style="width:{progressPct}%"></div>
+        </div>
+        <div class="tp-knob" style="left:{progressPct}%"></div>
       </div>
       <div class="tp-dur">{formatDuration(duration)}</div>
     </div>
   </div>
 
   <div class="timeline">
-    <div class="tl-bar">
+    <div class="tl-head">
+      <div class="tl-bar">
       <div class="zoom-group">
         <button
           class="btn icon ghost"
@@ -825,18 +1412,29 @@
         </button>
         <button
           class="btn ghost"
-          class:on={follow}
-          onclick={toggleFollow}
-          title="播放时视窗跟随播放头"
+          onclick={importSubtitleFromExport}
+          disabled={busy}
+          title="从导出文件夹选择上次转写的字幕，导入核对台作为基线"
         >
-          跟随
+          <Icon name="export" size={11} />导入字幕
+        </button>
+        <button
+          class="btn ghost"
+          class:on={follow}
+          aria-pressed={follow}
+          onclick={toggleFollow}
+          title={follow ? '跟随中：播放与跳转时保持播放头在视窗内；缩放/平移不会关闭它' : '开启后，播放或跳转字幕时波形会跟随播放头'}
+        >
+          {follow ? '跟随中' : '跟随'}
         </button>
       </div>
 
       <div class="tl-spacer"></div>
 
       {#if !selection}
-        <span class="tl-hint">在波形上拖动框选 · 滚轮/捏合缩放 · 双指横移平移 · ⌥ 拖动平移</span>
+        <span class="tl-hint">
+          单击跳转 · 拖动框选 · 顶部刻度 / 播放头拖动逐帧擦洗 · 底部字幕块可拖动改时间
+        </span>
       {/if}
     </div>
 
@@ -868,27 +1466,37 @@
         <button class="btn tiny ghost" onclick={clearSelection} title="清除选区">
           <Icon name="close" size={10} />
         </button>
-      </div>
-    {/if}
+        </div>
+      {/if}
+    </div>
 
     <div
       class="wave-wrap"
       bind:this={waveWrap}
-      style="height:{waveHeight}px"
+      style="height:{waveHeight}px;cursor:{waveCursor}"
       onpointerdown={onWavePointerDown}
       onpointermove={onWavePointerMove}
       onpointerup={onWavePointerUp}
       onpointercancel={onWavePointerUp}
+      onpointerleave={(e) => {
+        if (dragMode === 'none') {
+          hoverKey = '';
+          waveCursor = 'crosshair';
+        }
+      }}
       onwheel={onWaveWheel}
       ondblclick={(e) => {
         const t = timeAt(e.clientX);
         const span = Math.max(1.5, Math.min(10, viewSpan / 5 || 5));
-        setView(t - span / 2, span, false);
-        follow = true;
+        setView(t - span / 2, span);
       }}
       class:dragging={dragMode !== 'none'}
     >
       <canvas bind:this={canvas}></canvas>
+
+      {#if cueTip}
+        <div class="cue-tip" style="left:{cueTip.x}px">{cueTip.label}</div>
+      {/if}
 
       {#if selection}
         <div
@@ -973,7 +1581,7 @@
           <div
             class="row"
             class:row-sel={play.selected === i}
-            class:playing={cueIndex === i}
+            class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
             onclick={() => selectCue(i)}
             ondblclick={() => previewRange(cue.start, cue.end)}
@@ -1127,11 +1735,36 @@
   }
   .tp-track {
     flex: 1;
+    height: 16px; /* 比视觉轨道高：4px 的细线根本捏不住 */
+    position: relative;
+    cursor: pointer;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+  }
+  .tp-track::before {
+    /* 悬停时给一条淡淡的底，提示这里可拖动 */
+    content: '';
+    position: absolute;
+    inset: -2px -4px;
+    border-radius: 6px;
+    background: transparent;
+    transition: background 120ms var(--ease);
+  }
+  .tp-track:hover::before,
+  .tp-track.dragging::before {
+    background: var(--accent-soft);
+  }
+  .tp-rail {
+    position: relative;
+    width: 100%;
     height: 4px;
     border-radius: 2px;
     background: var(--fill-strong);
-    position: relative;
-    cursor: pointer;
+  }
+  .tp-track:hover .tp-rail,
+  .tp-track.dragging .tp-rail {
+    height: 6px;
   }
   .tp-fill {
     position: absolute;
@@ -1149,6 +1782,11 @@
     background: #fff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
     transform: translateY(-50%);
+    transition: transform 100ms var(--ease);
+  }
+  .tp-track:hover .tp-knob,
+  .tp-track.dragging .tp-knob {
+    transform: translateY(-50%) scale(1.18);
   }
 
   /* ---------------- 波形区 ---------------- */
@@ -1158,6 +1796,10 @@
     flex-direction: column;
     gap: 5px;
     flex: 0 0 auto;
+  }
+  .tl-head {
+    position: relative;
+    min-height: 26px;
   }
   .tl-bar {
     display: flex;
@@ -1190,17 +1832,25 @@
     font-size: 10.5px;
     color: var(--text-3);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .sel-bar {
     display: flex;
     align-items: center;
     gap: 5px;
-    background: var(--accent-soft);
+    /* 悬浮在工具栏上层：出现/消失不能让波形上下跳，
+       否则刚拖完选区的下一次点击会落到别的位置。 */
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: color-mix(in srgb, var(--accent) 9%, var(--bg-content));
+    box-shadow: inset 0 0 0 1px var(--accent-ring);
     border-radius: 7px;
     padding: 2px 5px 2px 9px;
     height: 26px;
-    margin-top: 1px;
   }
   .sel-info {
     font-size: 10.5px;
@@ -1249,15 +1899,32 @@
     border: 1px solid var(--separator-soft);
     overflow: hidden;
     touch-action: none;
+    /* 具体光标由脚本按命中区域切换（刻度/播放头/字幕块/波形） */
     cursor: crosshair;
-  }
-  .wave-wrap.dragging {
-    cursor: default;
   }
   canvas {
     display: block;
     width: 100%;
     height: 100%;
+  }
+
+  .cue-tip {
+    position: absolute;
+    bottom: 26px;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+    z-index: 3;
   }
 
   .wave-resize {
@@ -1269,8 +1936,22 @@
     cursor: ns-resize;
     touch-action: none;
   }
+  .wave-resize::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 2px;
+    width: 34px;
+    height: 2px;
+    margin-left: -17px;
+    border-radius: 1px;
+    background: var(--separator);
+  }
   .wave-resize:hover {
     background: var(--accent-soft);
+  }
+  .wave-resize:hover::after {
+    background: var(--accent);
   }
 
   .sel {
@@ -1285,7 +1966,8 @@
   .sel-handle {
     position: absolute;
     top: 0;
-    bottom: 0;
+    /* 留出底部字幕轨道：选区的把手不能挡住字幕块的左右端拖动 */
+    bottom: 23px;
     width: 8px;
     pointer-events: auto;
     cursor: ew-resize;

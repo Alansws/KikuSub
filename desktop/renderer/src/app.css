@@ -32,6 +32,15 @@
   --shadow-pop: 0 8px 26px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.1);
   --caption-bg: rgba(0, 0, 0, 0.62);
   --wave: #7b8a99;
+
+  /* 波形底部字幕轨道。灰条时代和底色的对比只有 4%，几乎看不见；
+     这里改用品牌蓝的分层透明度：底槽 → 有字幕 → 悬停 → 当前句。 */
+  --cue-lane: rgba(0, 0, 0, 0.055);
+  --cue-wash: rgba(0, 122, 255, 0.035);
+  --cue-block: rgba(0, 122, 255, 0.36);
+  --cue-block-hover: rgba(0, 122, 255, 0.46);
+  --cue-block-active: rgba(0, 122, 255, 0.82);
+  --cue-edge: rgba(0, 122, 255, 0.9);
 }
 
 html[data-theme='dark'] {
@@ -44,7 +53,10 @@ html[data-theme='dark'] {
   --bg-inspector: #232325;
   --bg-toolbar: rgba(30, 30, 30, 0.86);
   --bg-status: rgba(28, 28, 30, 0.94);
-  --bg-sidebar: rgba(38, 38, 40, 0.5);
+  /* 侧栏叠在 macOS 原生 vibrancy 上。原生材质的明暗由系统外观决定，
+     应用内切到深色时它可能仍是浅色；0.5 的透明度会被透成灰白，看起来像
+     「整列没切过去」。这里提高到 0.92：既压住浅色底，又保留一点毛玻璃。 */
+  --bg-sidebar: rgba(30, 30, 32, 0.92);
 
   --text: #f5f5f7;
   --text-2: #a1a1a6;
@@ -59,6 +71,13 @@ html[data-theme='dark'] {
   --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
   --caption-bg: rgba(0, 0, 0, 0.66);
   --wave: #9aabbd;
+
+  --cue-lane: rgba(255, 255, 255, 0.075);
+  --cue-wash: rgba(10, 132, 255, 0.06);
+  --cue-block: rgba(10, 132, 255, 0.42);
+  --cue-block-hover: rgba(10, 132, 255, 0.6);
+  --cue-block-active: rgba(10, 132, 255, 0.88);
+  --cue-edge: rgba(90, 170, 255, 0.95);
 }
 
 * {

@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from core import settings as settings_store
 from core.subtitles import SubtitleCue, cues_to_srt, cues_to_txt, cues_to_vtt, srt_to_cues
+from core.textio import write_text_atomic
 
 from .deps import get_session
 from .security import require_token
@@ -72,6 +75,46 @@ def _validate(start: float, end: float) -> None:
         raise HTTPException(status_code=422, detail="结束时间必须大于起始时间")
 
 
+# 与 app.py 的校对断点使用同一套后缀清理规则：草稿/复核版再存一次仍然回到主干名。
+_DRAFT_SUFFIX_RE = re.compile(r"(\.autosave_draft|\.reviewed|\.clean|\.part_cancelled)$")
+
+
+def _media_stem(request: Request, session: Session) -> str:
+    """当前会话绑定媒体的主干名；未绑定或文件已被移走时返回空串。"""
+    if not session.media_id:
+        return ""
+    try:
+        info = request.app.state.media.get(session.media_id)
+        return Path(info.path).stem
+    except Exception:
+        return ""
+
+
+def _draft_stem(stem: str) -> str:
+    return _DRAFT_SUFFIX_RE.sub("", stem) or "subtitles"
+
+
+def _draft_path(request: Request, session: Session) -> Path:
+    """工作草稿放在运行数据目录，绝不占用导出文件夹里的交付文件名。
+
+    文件名沿用旧界面的 `{stem}.autosave_draft.srt`：两个界面共用同一份草稿，
+    用户在桌面版里接着 Legacy 的进度核对时不会出现两套互相覆盖的备份。
+    """
+    stem = _draft_stem(_media_stem(request, session))
+    return Path(request.app.state.config.output_dir) / f"{stem}.autosave_draft.srt"
+
+
+def _draft_info(path: Path) -> dict:
+    if not path.exists():
+        return {"exists": False, "path": str(path), "count": 0, "saved_at": 0.0}
+    try:
+        stat = path.stat()
+        cues = srt_to_cues(path.read_text(encoding="utf-8-sig", errors="replace"))
+    except OSError:
+        return {"exists": False, "path": str(path), "count": 0, "saved_at": 0.0}
+    return {"exists": True, "path": str(path), "count": len(cues), "saved_at": stat.st_mtime}
+
+
 @router.get("/api/cues")
 def list_cues(session: Session = Depends(get_session)) -> dict:
     return _snapshot(session)
@@ -129,6 +172,55 @@ def import_cues(payload: ImportPathRequest, session: Session = Depends(get_sessi
     cues = srt_to_cues(text)
     if not cues:
         raise HTTPException(status_code=422, detail="没有从该文件里解析出字幕")
+    session.replace_review(cues)
+    return {**_snapshot(session), "source": str(path)}
+
+
+# ---------------------------------------------------------------------------
+# 核对草稿（临时全量保存）
+#
+# 注意：`/api/cues/draft/restore` 必须在 `/api/cues/{index}/insert` 之前注册。
+# FastAPI 按声明顺序匹配，否则 "draft" 会被当成 index 并回 422。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/cues/draft")
+def get_draft(request: Request, session: Session = Depends(get_session)) -> dict:
+    """查询当前媒体的工作草稿是否存在、多少条、最后写入时间。"""
+    return _draft_info(_draft_path(request, session))
+
+
+@router.post("/api/cues/draft")
+def save_draft(request: Request, session: Session = Depends(get_session)) -> dict:
+    """把核对台**全部**字幕写进工作草稿。
+
+    这是核对精修期间的防丢备份：只写运行数据目录里的 `*.autosave_draft.srt`，
+    不改导出文件夹里的交付文件，也不进入撤回栈（保存本身不是一次编辑）。
+    """
+    if not session.review_cues:
+        raise HTTPException(status_code=409, detail="当前没有可暂存的字幕")
+    path = _draft_path(request, session)
+    write_text_atomic(path, cues_to_srt(session.review_cues))
+    return {
+        "exists": True,
+        "path": str(path),
+        "count": len(session.review_cues),
+        "saved_at": path.stat().st_mtime,
+    }
+
+
+@router.post("/api/cues/draft/restore")
+def restore_draft(request: Request, session: Session = Depends(get_session)) -> dict:
+    """用工作草稿覆盖核对台（压入撤回栈，⌘Z 可一步退回）。"""
+    path = _draft_path(request, session)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="还没有可恢复的暂存草稿")
+    try:
+        cues = srt_to_cues(path.read_text(encoding="utf-8-sig", errors="replace"))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"读取暂存草稿失败：{exc}") from exc
+    if not cues:
+        raise HTTPException(status_code=422, detail="暂存草稿里没有解析出字幕")
     session.replace_review(cues)
     return {**_snapshot(session), "source": str(path)}
 
@@ -202,15 +294,14 @@ def export_cues(
     render, ext = exporter
     text = render(session.review_cues)
 
-    media_name = ""
-    if session.media_id:
-        try:
-            info = request.app.state.media.get(session.media_id)
-            media_name = info.path.stem
-        except Exception:
-            media_name = ""
-    stem = media_name or "subtitles"
-    out_dir: Path = request.app.state.config.output_dir
+    stem = _media_stem(request, session) or "subtitles"
+    current = settings_store.load_settings(
+        Path(getattr(request.app.state, "settings_path", settings_store.SETTINGS_PATH))
+    )
+    out_dir: Path = settings_store.resolve_export_dir(
+        current,
+        Path(request.app.state.config.output_dir),
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stem}{ext}"
     out_path.write_text(text, encoding="utf-8")

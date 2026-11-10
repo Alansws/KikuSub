@@ -20,6 +20,35 @@ SIDECAR="build/pack/dist/sidecar"
 [ -d "$SIDECAR" ] || { echo "缺少 sidecar：先跑 build_sidecar.sh" >&2; exit 1; }
 [ -d "desktop/renderer/dist" ] || { echo "缺少渲染层构建：cd desktop && npx vite build" >&2; exit 1; }
 
+# 防止“只重打了 app、没有重打 sidecar”：渲染层会出现新按钮，而 Python 侧还是旧接口
+# （典型症状：点暂存报 Method Not Allowed / 404）。sidecar 是独立二进制，必须比
+# core/ 与 server/ 的源码新。
+SIDECAR_BIN="$SIDECAR/sidecar"
+if [ -x "$SIDECAR_BIN" ]; then
+  STALE_PY="$(find core server -name '*.py' -newer "$SIDECAR_BIN" -print -quit 2>/dev/null || true)"
+  if [ -z "$STALE_PY" ] && [ tools/pack/sidecar_entry.py -nt "$SIDECAR_BIN" ]; then
+    STALE_PY="tools/pack/sidecar_entry.py"
+  fi
+  if [ -n "$STALE_PY" ]; then
+    echo "❌ sidecar 比 Python 源码旧：$STALE_PY" >&2
+    echo "   先运行：bash tools/pack/build_sidecar.sh" >&2
+    echo "   然后再执行本脚本；否则新界面会调用旧接口。" >&2
+    exit 1
+  fi
+fi
+
+echo "== 0/7 生成应用图标 =="
+# 从矢量源按 macOS 尺寸重新渲染：docs/logo-1024.png 是白底 flattened 图，
+# 直接打包会在深色背景的 Finder 里露出白角。
+if [ -f "docs/logo.svg" ]; then
+  rm -rf "build/pack/icon.iconset"
+  swift tools/pack/make_icon.swift docs/logo.svg "build/pack/icon.iconset"
+  mkdir -p desktop/build
+  iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
+else
+  echo "⚠️ 没找到 docs/logo.svg，沿用 desktop/build/icon.icns"
+fi
+
 echo "== 1/7 复制 Electron 框架 =="
 rm -rf "$APP"
 mkdir -p "$(dirname "$APP")"
@@ -27,12 +56,18 @@ mkdir -p "$(dirname "$APP")"
 # 本机策略可能拒绝复制它，允许失败。
 cp -R "$ELECTRON_APP" "$APP" || true
 rm -rf "$APP/Contents/Resources/default_app.asar"
+# Electron 自带的 electron.icns 留着会让 IconServices/Finder 偶尔沿用旧图标；
+# 我们的 Info.plist 已经指向 icon.icns，这份完全是噪声。
+rm -f "$APP/Contents/Resources/electron.icns"
 
 echo "== 2/7 改名主可执行文件 =="
 mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/KikuSub"
 
 echo "== 3/7 写入 Info.plist =="
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# 每次构建给 CFBundleVersion 一个唯一值：Finder/IconServices 会按 bundle 版本
+# 缓存图标，版本永远不变时替换了 icon.icns 也可能继续显示旧图。
+BUILD_NUMBER="$(date +%Y%m%d%H%M)"
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -41,7 +76,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>KikuSub</string>
   <key>CFBundleExecutable</key><string>KikuSub</string>
   <key>CFBundleIdentifier</key><string>com.kikusub.desktop</string>
-  <key>CFBundleVersion</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleSignature</key><string>????</string>
@@ -107,6 +142,12 @@ fi
 
 echo "== 7/7 自签 =="
 codesign --force --deep --sign - "$APP" 2>&1 | tail -3 || echo "（自签失败，本机运行通常也能启动）"
+
+# 重新打包后 Finder/LaunchServices 仍可能缓存旧图标；touch + 重新注册能强制刷新。
+# 如果用户眼前的 Finder 窗口还是旧图，执行 tools/pack/refresh_finder_icon.sh。
+touch "$APP"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+[ -x "$LSREGISTER" ] && "$LSREGISTER" -f -R -trusted "$APP" >/dev/null 2>&1 || true
 
 echo
 echo "完成：$APP"

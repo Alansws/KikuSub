@@ -6,8 +6,16 @@
     { view: 'import', icon: 'tray', label: '导入' },
     { view: 'transcribe', icon: 'wave', label: '转写' },
     { view: 'review', icon: 'listcheck', label: '核对' },
-    { view: 'report', icon: 'doc', label: '报告' },
+    { view: 'report', icon: 'doc', label: '详情与导出' },
   ];
+
+  // 底部状态块必须跟随顶部工具栏当前选中的引擎，而不是永远显示注册表第一个。
+  const activeEngine = $derived(
+    (app.config?.engines ?? []).find((e) => e.key === app.engine) ?? null,
+  );
+  const activeEngineLabel = $derived(
+    activeEngine ? (activeEngine.short_label || activeEngine.label) : '—',
+  );
 </script>
 
 <aside class="sidebar">
@@ -35,7 +43,10 @@
       <span><i class="dot" class:off={!app.connected}></i>设备</span>
       <b>{app.config?.device?.toUpperCase() ?? '—'}</b>
     </div>
-    <div class="row"><span>引擎</span><b>{app.config?.engines?.[0]?.label ?? '—'}</b></div>
+    <div class="row">
+      <span>引擎</span>
+      <b title={activeEngine?.label ?? '还没有可用引擎'}>{activeEngineLabel}</b>
+    </div>
     <div class="row">
       <span>状态</span>
       <b>{app.connected ? '就绪' : app.connecting ? '连接中' : '未连接'}</b>

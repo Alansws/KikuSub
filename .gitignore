@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -62,6 +62,7 @@ venv.bak/
 models/
 outputs/
 settings.json
+preferences.json
 *.part_cancelled.srt
 *.autosave_draft.srt
 *.progress.json

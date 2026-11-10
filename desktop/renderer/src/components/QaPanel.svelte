@@ -27,17 +27,27 @@
   const items = $derived<any[]>(qa.payload?.items ?? []);
   const statuses = $derived<Record<string, any>>(qa.payload?.statuses ?? {});
   const counts = $derived<any>(qa.payload?.counts ?? {});
-  const coverage = $derived<any>(qa.payload?.coverage ?? {});
   const scanned = $derived<any>(qa.payload?.scanned ?? {});
   const phase = $derived<string>(qa.payload?.phase ?? 'idle');
   // 报告有数字、队列却是空的时候必须说出来，而不是让用户看到「0 条」
   const reportFindings = $derived(
-    Number(app.report?.quality?.missed ?? 0) +
-      Number(app.report?.quality?.dropped ?? 0) +
-      Number(app.report?.quality?.suspect ?? 0),
+    Number(app.report?.quality?.coverage ?? 0) +
+      Number(app.report?.quality?.low_confidence ?? 0),
   );
 
   let filter = $state<'pending' | 'all' | 'done'>('pending');
+  type GroupFilter = 'miss' | 'low' | 'all';
+  let group = $state<GroupFilter>('miss');
+
+  const byGroup = $derived<Record<string, number>>(counts.by_group ?? {});
+  const groupOf = (item: any): string =>
+    item.group ?? (item.kind === 'coverage' ? 'miss' : 'low');
+  const missCount = $derived(
+    Number(byGroup.miss ?? items.filter((item) => groupOf(item) === 'miss').length),
+  );
+  const lowCount = $derived(
+    Number(byGroup.low ?? items.filter((item) => groupOf(item) === 'low').length),
+  );
 
   const busy = $derived(
     app.job?.status === 'queued' ||
@@ -64,7 +74,8 @@
   };
 
   const KIND_LABEL: Record<string, string> = {
-    missed: '可能漏句',
+    coverage: '未覆盖空白',
+    missed: '切片内为空',
     dropped: '误删待核',
     suspect: '短句待确认',
   };
@@ -75,12 +86,16 @@
       const sa = statusOf(a.id) === 'pending' ? 0 : 1;
       const sb = statusOf(b.id) === 'pending' ? 0 : 1;
       if (sa !== sb) return sa - sb;
+      const ga = groupOf(a) === 'miss' ? 0 : 1;
+      const gb = groupOf(b) === 'miss' ? 0 : 1;
+      if (ga !== gb) return ga - gb;
       return Number(a.start) - Number(b.start);
     }),
   );
 
   const shown = $derived(
     ordered.filter((item) => {
+      if (group !== 'all' && groupOf(item) !== group) return false;
       const st = statusOf(item.id);
       if (filter === 'pending') return st === 'pending';
       if (filter === 'done') return st !== 'pending';
@@ -90,6 +105,18 @@
 
   const total = $derived(Number(counts.total ?? 0));
   const doneCount = $derived(Number(counts.done ?? 0) + Number(counts.skipped ?? 0));
+  const groupItems = $derived(
+    ordered.filter((item) => group === 'all' || groupOf(item) === group),
+  );
+  const viewTotal = $derived(group === 'all' ? total : groupItems.length);
+  const viewDone = $derived(
+    group === 'all'
+      ? doneCount
+      : groupItems.filter((item) => statusOf(item.id) !== 'pending').length,
+  );
+  const viewPending = $derived(
+    group === 'all' ? Number(counts.pending ?? 0) : groupItems.filter((item) => statusOf(item.id) === 'pending').length,
+  );
 
   function locate(item: any) {
     setView('review');
@@ -107,8 +134,14 @@
   }
 
   /** 处理完一条后，自动定位到下一条待核——「逐项核对」的手感全靠这一下。 */
+  function inGroup(item: any): boolean {
+    return group === 'all' || groupOf(item) === group;
+  }
+
   function advance(justHandled: string) {
-    const next = ordered.find((it) => it.id !== justHandled && statusOf(it.id) === 'pending');
+    const next = ordered.find(
+      (it) => it.id !== justHandled && inGroup(it) && statusOf(it.id) === 'pending',
+    );
     if (next) {
       setView('review');
       focusRange(Number(next.start), Number(next.end));
@@ -127,6 +160,8 @@
     }
     locate(item);
     app.qaFillId = item.id;
+    const gapStart = item.gap_start != null ? Number(item.gap_start) : NaN;
+    const gapEnd = item.gap_end != null ? Number(item.gap_end) : NaN;
     await transcribeRange({
       start: Number(item.start),
       end: Number(item.end),
@@ -134,13 +169,17 @@
       label: '质检补录',
       padStart: 0.2,
       padEnd: 0.3,
+      // 覆盖项带 gap_start/gap_end：补录区间不能越过空白边界，否则 0.3s
+      // 的尾部 padding 会切进下一句，Whisper 把下一句的开头也一起转出来。
+      clampStart: Number.isFinite(gapStart) ? gapStart : undefined,
+      clampEnd: Number.isFinite(gapEnd) ? gapEnd : undefined,
     });
   }
 
   function jumpNext() {
-    const next = ordered.find((it) => statusOf(it.id) === 'pending');
+    const next = ordered.find((it) => inGroup(it) && statusOf(it.id) === 'pending');
     if (next) locate(next);
-    else toast('没有待核项了');
+    else toast('这一组没有待核项了');
   }
 </script>
 
@@ -151,22 +190,22 @@
         <Icon name="close" size={11} />
       </button>
       <span class="title">质检待核</span>
-      <span class="meta">{doneCount} / {total} 已核对</span>
+      <span class="meta">{viewDone} / {viewTotal} 已核对</span>
       <button class="icon-btn" onclick={() => refreshQa()} title="刷新队列">
         <Icon name="undo" size={11} />
       </button>
     </div>
 
     <div class="progress">
-      <i style="width:{total ? (doneCount / total) * 100 : 0}%"></i>
+      <i style="width:{viewTotal ? (viewDone / viewTotal) * 100 : 0}%"></i>
     </div>
 
     <div class="tabs">
       {#each [['pending', '待核'], ['all', '全部'], ['done', '已处理']] as [key, label] (key)}
         <button class:on={filter === key} onclick={() => (filter = key as typeof filter)}>
           {label}
-          {#if key === 'pending' && counts.pending}
-            <b>{counts.pending}</b>
+          {#if key === 'pending' && viewPending}
+            <b>{viewPending}</b>
           {/if}
         </button>
       {/each}
@@ -174,6 +213,16 @@
       <button class="next-btn" onclick={jumpNext} title="定位到下一条待核">
         下一个 <Icon name="play" size={9} />
       </button>
+    </div>
+
+    <div class="groups">
+      <button class:on={group === 'miss'} onclick={() => (group = 'miss')}>
+        漏检 <b>{missCount}</b>
+      </button>
+      <button class:on={group === 'low'} onclick={() => (group = 'low')}>
+        低置信 <b>{lowCount}</b>
+      </button>
+      <button class:on={group === 'all'} onclick={() => (group = 'all')}>全部</button>
     </div>
 
     <div class="qa-body">
@@ -191,25 +240,38 @@
           {:else}
             <div class="empty-title">本次检查完成 · 0 处待核</div>
             <div class="empty-sub">
-              检查了 {scanned.segments ?? 0} 个切片 / {scanned.cues ?? 0} 条字幕。
+              检查了 {scanned.segments ?? 0} 个切片 / {scanned.cues ?? 0} 条字幕；
+              另审计出 {scanned.coverage ?? 0} 段未覆盖空白。
             </div>
           {/if}
           <div class="coverage">
-            <span class="cov" class:off={!coverage.missed}>
-              漏句 {coverage.missed ? (scanned.missed ?? 0) : '引擎不启用'}
-            </span>
-            <span class="cov" class:off={!coverage.dropped}>
-              误删 {coverage.dropped ? (scanned.dropped ?? 0) : '引擎不启用'}
-            </span>
-            <span class="cov" class:off={!coverage.suspect}>
-              短句 {coverage.suspect ? (scanned.suspect ?? 0) : '引擎不启用'}
+            <span class="cov" class:off={missCount === 0}>漏检 <b>{missCount}</b></span>
+            <span class="cov" class:off={lowCount === 0}>低置信 <b>{lowCount}</b></span>
+            <span class="cov off">
+              空 {scanned.missed ?? 0} / 删 {scanned.dropped ?? 0} / 短 {scanned.suspect ?? 0}
             </span>
           </div>
         </div>
       {:else if !shown.length}
         <div class="empty">
-          <div class="empty-title">{filter === 'pending' ? '所有条目都已核对' : '这一栏没有条目'}</div>
-          <div class="empty-sub">可以切到「全部」回看已处理的记录。</div>
+          <div class="empty-title">
+            {#if group === 'miss' && missCount === 0}
+              没有未覆盖空白
+            {:else if group === 'low' && lowCount === 0}
+              没有低置信条目
+            {:else}
+              {filter === 'pending' ? '所有条目都已核对' : '这一栏没有条目'}
+            {/if}
+          </div>
+          <div class="empty-sub">
+            {#if group === 'miss' && missCount === 0}
+              主 VAD 的切片里没有发现新的空白语音；可切到「低置信」查看切片内异常。
+            {:else if group === 'low' && lowCount === 0}
+              切片内没有空结果 / 短句 / 误删。
+            {:else}
+              可以切到「全部」回看已处理的记录。
+            {/if}
+          </div>
         </div>
       {:else}
         {#each shown as item (item.id)}
@@ -246,7 +308,7 @@
                   <Icon name="search" size={9} />定位
                 </button>
 
-                {#if item.kind === 'missed'}
+                {#if item.kind === 'coverage' || item.kind === 'missed'}
                   <button class="btn tiny primary" onclick={() => fill(item)} disabled={busy}>
                     {#if app.qaFillId === item.id}<span class="spin"></span>{/if}
                     补录
@@ -379,6 +441,51 @@
   .tabs-spacer {
     flex: 1;
   }
+  .groups {
+    display: flex;
+    gap: 4px;
+    padding: 5px 9px;
+    border-bottom: 1px solid var(--separator-soft);
+    flex: 0 0 auto;
+  }
+  .groups button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 10.5px;
+    color: var(--text-3);
+    padding: 2px 7px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .groups button:hover {
+    background: var(--fill);
+    color: var(--text-2);
+  }
+  .groups button.on {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .groups b {
+    font-size: 10px;
+    min-width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    background: var(--fill);
+    color: var(--text-2);
+    display: grid;
+    place-items: center;
+    font-weight: 600;
+    padding: 0 3px;
+  }
+  .groups button.on b {
+    background: var(--accent);
+    color: #fff;
+  }
   .next-btn {
     appearance: none;
     border: 0;
@@ -495,6 +602,10 @@
     color: var(--text-2);
     white-space: nowrap;
   }
+  .k-coverage {
+    background: rgba(255, 59, 48, 0.16);
+    color: #c0392b;
+  }
   .k-missed {
     background: rgba(255, 159, 10, 0.16);
     color: #b26a00;
@@ -506,6 +617,9 @@
   .k-suspect {
     background: rgba(10, 132, 255, 0.14);
     color: var(--accent);
+  }
+  html[data-theme='dark'] .k-coverage {
+    color: #ff8a80;
   }
   html[data-theme='dark'] .k-missed {
     color: #ffb340;
