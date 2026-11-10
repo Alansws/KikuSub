@@ -24,4 +24,7 @@ ROOT = APP_ROOT
 MODELS_DIR = _env_path("KIKUSUB_MODELS_DIR", ROOT / "models")
 OUTPUT_DIR = _env_path("KIKUSUB_OUTPUT_DIR", ROOT / "outputs")
 PRESETS_PATH = _env_path("KIKUSUB_PRESETS_PATH", ROOT / "presets.json")
+# 应用级设置（启用的引擎、自动压制代理等）。和 presets.json 同级，打包后落在
+# ~/Library/Application Support/KikuSub/settings.json。
+SETTINGS_PATH = _env_path("KIKUSUB_SETTINGS_PATH", OUTPUT_DIR.parent / "settings.json")
 STATIC_DIR = _env_path("KIKUSUB_STATIC_DIR", ROOT / "static")

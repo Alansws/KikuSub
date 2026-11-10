@@ -36,6 +36,9 @@ python app.py
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
 | `static/` | 主题 CSS、核对台 JS、质检队列 JS/HTML、空态 HTML；`app.py` 启动时读取。JS 改动必须过 `node --check static/reviewer.js` 与 `node --check static/qa_panel.js`。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
+| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
+| `core/settings.py` | 应用级设置（启用的引擎、自动压制代理），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。 |
+| `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`。 |
 | `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
 | `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
 | `outputs/` | 生成的字幕样例和运行产物。 |
@@ -59,6 +62,15 @@ python app.py
 - **并发与取消（2026-11 加固）**：转写/局部转写必须通过 `jobs.JobRegistry` 单槽占用，**禁止**再引入模块级 `CANCEL_EVENT`。取消令牌必须归属于发起它的 Gradio session（`gr.Request.session_hash`）；别的窗口点「打断」只能收到“本会话没有任务”的提示，绝不能误伤正在跑的任务。客户端断开（GeneratorExit）只发取消信号，槽位由真正停止工作的 worker 在 `finally` 中释放，避免“界面已返回、模型还在跑”时被新任务覆盖。所有 `subprocess` 外部命令必须走 `procutil.run_command`（超时/取消/terminate），代理成片先写 `*.part.mp4` 再原子 rename。
 - **压制进度只允许一个数据源**：`manual_transcode_proxy_generator` 是流式生成器，**禁止**再给它加 `progress=gr.Progress()` 或调用 `progress()`，`.click()` 也必须保持 `show_progress="hidden"`。Gradio 原生追踪器会被渲染进 `proxy_status` 容器，其文案还受「每 10% 一档（milestone）+ 两次换文案至少间隔 5 秒 + 文案 1 秒后自动清空」三重限制（见 `gradio/templates/frontend/assets/statustracker-*.js`），与卡片按 0.3s 刷新的真实百分比完全错拍，界面就会在「原生浮层」和「卡片」两种形态之间反复横跳（曾表现为 19% ↔ 33% 交替）。卡片样式统一走 `.ppc-*` 类并使用 `<div>/<b>/<em>`，不要用 `<span>` 内联样式——`.proxy-status-box span { ... !important }` 会把配色和字号全部覆盖掉。进度值还必须取单调最大值（`max_out_s`），并在时长探测失败时走 `pct=None` 的不确定进度态，绝不凭空造百分比。
 - **全片转写进度也只允许一个数据源**：`transcribe_media` 的 `.then()` **必须**保持 `show_progress="hidden"`，并且**禁止**再调用 `progress()`。`show_progress="full"` 会把原生追踪器画进每一个 output 组件，于是「📊 全片转录原始结果、表格与任务详报」区域及以下会同时出现多条进度条，与顶部卡片错拍闪烁。进度只由 `_render_transcribe_progress_card()` 渲染进「3 输出与执行」的 `transcribe_progress`，样式走 `.tpc-*` 类（`<div>/<b>`），百分比同样取单调最大值。
+
+## 3.5 日志与诊断（2026-11 新增）
+
+- **服务层必须在 `server/__main__.py` 里调 `core.logging_setup.setup_logging()`**：漏掉这一步会导致 `outputs/logs/kikusub.log` 永远为空（曾经就是这样）。日志目录是 `config.output_dir/logs`。
+- 日志分三层：sidecar 的 `kikusub.log`、Electron 主进程的 `main.log`、渲染端通过 `POST /api/log` 写入的 `kikusub.renderer`。排查用户问题优先看 `~/Library/Application Support/KikuSub/outputs/logs/`。
+- **不要把 token、cookie、完整音视频内容写进日志**；文件路径与转写片段文本可以记。
+- 请求中间件会对 `/api/*` 记录方法/路径/状态/耗时/`X-Request-Id`/会话 id；波峰与 `/media/*` 降为 DEBUG，避免刷屏。
+- 渲染端 API 失败会自动带 `X-Request-Id` 记日志；新增「用户关键动作」时同时 `logEvent(...)`，否则用户报障时无法还原操作序列。
+- 局部转写的 `write_audit` 语义：`replace_range`（核对台单句/选区修正）**不写**整片质检队列；转写页的整片/区间任务都要写，否则报告与质检面板数字不一致。
 
 ## 4. 转录任务详报面板（禁止退回 Textbox）
 

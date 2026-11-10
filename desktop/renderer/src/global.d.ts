@@ -35,6 +35,7 @@ declare global {
       onSidecarReady(cb: (payload: SidecarHandshake) => void): () => void;
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
       pickMedia(): Promise<string | null>;
+      writeClipboard(text: string): Promise<boolean>;
       revealInFinder(target: string): Promise<void>;
       openPath(target: string): Promise<string>;
       setTitle(title: string): void;

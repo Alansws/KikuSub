@@ -27,7 +27,12 @@ TOKEN = "test-token-abc"
 
 @pytest.fixture()
 def client(tmp_path: Path) -> TestClient:
-    config = ServerConfig(token=TOKEN, legacy=False, output_dir=tmp_path)
+    config = ServerConfig(
+        token=TOKEN,
+        legacy=False,
+        output_dir=tmp_path,
+        settings_path=tmp_path / "settings.json",
+    )
     return TestClient(create_app(config))
 
 
@@ -63,8 +68,10 @@ def test_token_accepted_as_query_param(client: TestClient) -> None:
 
 def test_config_reports_device_and_engines(client: TestClient) -> None:
     data = client.get("/api/config", headers=auth()).json()
-    assert data["device"] in {"mps", "cuda", "cpu"}
+    # 设备探测在后台预热线程里做；刚启动时可能是 unknown，前端会在几秒后刷新。
+    assert data["device"] in {"mps", "cuda", "cpu", "unknown", "unavailable"}
     assert {e["key"] for e in data["engines"]} == {"whisper", "qwen"}
+    assert all("enabled" in e and "installed" in e for e in data["engines"])
 
 
 # ---------------------------------------------------------------------------

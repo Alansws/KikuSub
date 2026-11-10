@@ -5,7 +5,8 @@
 
   let { engine = $bindable('whisper') }: { engine?: string } = $props();
 
-  const engines = $derived(app.config?.engines ?? []);
+  // 设置页可以停用引擎；工具栏只显示启用的那几个，引擎变多也不会挤爆。
+  const engines = $derived((app.config?.engines ?? []).filter((e) => e.enabled));
 
   const sub = $derived.by(() => {
     const m = app.media;
@@ -21,6 +22,8 @@
         return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
       case 'report':
         return app.report ? `${app.cues.length} 条字幕` : '尚无报告';
+      case 'settings':
+        return '引擎与模型 · 日志与诊断';
       default:
         return '';
     }
@@ -35,11 +38,19 @@
   {#if engines.length}
     <div class="seg">
       {#each engines as e (e.key)}
-        <button class:on={engine === e.key} onclick={() => (engine = e.key)} title={e.desc}>
-          {e.label}
+        <button
+          class:on={engine === e.key}
+          onclick={() => (engine = e.key)}
+          title={e.desc ?? e.description}
+        >
+          {e.short_label ?? e.label}
         </button>
       {/each}
     </div>
+  {:else}
+    <button class="btn ghost" onclick={() => (app.view = 'settings')}>
+      <Icon name="warn" size={12} />没有启用的引擎
+    </button>
   {/if}
 
   <div class="tb-spacer"></div>

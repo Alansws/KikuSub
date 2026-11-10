@@ -7,7 +7,7 @@
    * 点时间码直接跳回核对台并聚焦该区间。
    */
   import Icon from '../components/Icon.svelte';
-  import { api } from '../lib/api';
+  import { api, logEvent } from '../lib/api';
   import {
     app,
     focusRange,
@@ -28,14 +28,20 @@
 
   async function copyRaw() {
     if (!report) return;
-    await navigator.clipboard.writeText(report.raw_text);
-    toast('任务详报已复制到剪贴板');
+    try {
+      if (window.kikusub.writeClipboard) await window.kikusub.writeClipboard(report.raw_text);
+      else await navigator.clipboard.writeText(report.raw_text);
+      toast('任务详报已复制到剪贴板');
+    } catch (err) {
+      toast(`复制失败：${(err as Error).message}`, 'error');
+    }
   }
 
   async function exportAs(fmt: 'SRT' | 'VTT' | 'TXT') {
     try {
       const res = await api.exportCues(fmt);
       lastExport = res.path;
+      logEvent('info', 'export', `${fmt} | ${res.count} 条`, { path: res.path });
       toast(`已导出 ${fmt}：${res.path.split('/').pop()}（${res.count} 条）`);
     } catch (err) {
       toast((err as Error).message, 'error');

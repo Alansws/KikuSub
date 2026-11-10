@@ -61,6 +61,7 @@ venv.bak/
 # KikuSub Runtime Models & Outputs (Local Only)
 models/
 outputs/
+settings.json
 *.part_cancelled.srt
 *.autosave_draft.srt
 *.progress.json
@@ -92,4 +93,4 @@ desktop/renderer/dist/
 desktop/build/
 desktop/dist/
 # 无头验证用的一次性 user-data-dir（截图/联调时创建）
-desktop/.userdata/
+desktop/.userdata*/

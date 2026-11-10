@@ -316,3 +316,21 @@ def test_partial_job_does_not_reset_qa_payload(make_client, tmp_path):
     job = _post_job(client, media_id, apply="replace_range", start=4.8, end=6.4)
     _wait_done(client, job["id"])
     assert seen["write_audit"] is False
+
+
+def test_append_job_writes_audit_so_qa_matches_report(make_client, tmp_path):
+    """片段转录（apply=append）必须写质检队列，否则报告有数字、面板 0 条。"""
+    seen: dict = {}
+
+    class _Recorder(_FixedRunner):
+        def __call__(self, request, *, on_progress, cancel_event, output_dir):
+            seen["write_audit"] = request.write_audit
+            return super().__call__(
+                request, on_progress=on_progress, cancel_event=cancel_event, output_dir=output_dir
+            )
+
+    client = make_client(_Recorder(tmp_path, [SubtitleCue(5.0, 6.0, "片段")]))
+    media_id = _import_media(client, tmp_path)
+    job = _post_job(client, media_id, apply="append", start=4.8, end=6.4)
+    _wait_done(client, job["id"])
+    assert seen["write_audit"] is True

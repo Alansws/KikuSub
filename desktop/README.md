@@ -60,12 +60,24 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
 - 报告页逐条明细可展开，点时间码跳回核对台，支持导出 SRT / VTT / TXT；
 - 双击 `.srt/.vtt`（或 ⌘O）导入字幕基线。
 
+## 设置 / 引擎 / 日志
+
+- 左下「设置」：引擎与模型、运行环境、日志与诊断、工作流偏好；
+- 引擎卡片由 `core/engines.py` 注册表驱动：语种、用途、预计/实际占用、安装状态、
+  启用开关、一键下载与进度。顶部工具栏只显示已启用的引擎；
+- **新增引擎**：在 `core/engines.py` 加一条 `EngineSpec`，在 `core/pipeline.py`
+  注册推理对象并提供 `ensure_model(progress_cb)`。设置页与工具栏不用改。
+- 日志：`outputs/logs/kikusub.log`（sidecar，含每条 API 请求与渲染端事件）、
+  `outputs/logs/main.log`（Electron 主进程）。打包后在
+  `~/Library/Application Support/KikuSub/outputs/logs/`；
+- 设置页可直接「复制诊断信息」（版本、目录、引擎状态、最近日志）用于报障。
+
 ## 已知缺口
 
 - 「监看画面与转录源解耦」还没移植：原 Gradio 工作台可以单独导入监看画面、
   切换历史 480p 代理、关闭画面；桌面端目前只有自动跟随 + 代理自动切换。
 - 虚拟列表、`content-visibility` 等剩余丝滑工程（阶段 4 的另一半）。
-- 设置页仍是占位（点侧栏「设置」会去报告页）。
+- 监看画面解耦仍未移植（见上）。
 
 ## 打包成 .app
 

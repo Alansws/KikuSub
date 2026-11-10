@@ -12,7 +12,7 @@
  */
 
 // Electron 的 CJS 包在 ESM 下没有具名导出，只能默认导入再解构
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -44,6 +44,38 @@ let quitting = false;
 function dataDir() {
   if (process.env.KIKUSUB_DATA_DIR) return process.env.KIKUSUB_DATA_DIR;
   return path.join(app.getPath('appData'), 'KikuSub');
+}
+
+/** 开发模式沿用仓库目录；打包后是 Application Support。 */
+function baseDir() {
+  return IS_DEV ? REPO_ROOT : dataDir();
+}
+
+function logsDir() {
+  return path.join(baseDir(), 'outputs', 'logs');
+}
+
+/**
+ * 主进程日志。
+ *
+ * sidecar 自己的日志在 `kikusub.log`；但「窗口起没起来、ffmpeg 找没找到、sidecar
+ * 为什么退出」这些只在主进程里，用户看不到终端。单独写一份 `main.log`，
+ * 让设置页的「打开日志目录」能拿到完整链路。
+ */
+function mainLog(message) {
+  try {
+    const dir = logsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'main.log');
+    try {
+      if (fs.statSync(file).size > 5 * 1024 * 1024) fs.renameSync(file, `${file}.1`);
+    } catch {
+      /* 文件还不存在 */
+    }
+    fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`, 'utf8');
+  } catch {
+    /* 日志失败不能影响主流程 */
+  }
 }
 
 function ensureDataDirs() {
@@ -168,6 +200,10 @@ function startSidecar() {
   console.log('[sidecar] 启动', exe, args.join(' '));
   console.log('[sidecar] 数据目录', base);
   console.log('[sidecar] 模型目录', models, modelReady ? '(已就绪)' : '(⚠️ 未找到模型，首次转写会下载)');
+  mainLog(
+    `[sidecar] start exe=${exe} args=${args.join(' ')} cwd=${cwd} data=${base} models=${models} ` +
+      `modelReady=${modelReady} ffmpeg=${ffmpeg || '(none)'}`,
+  );
   const child = spawn(exe, args, {
     cwd,
     env,
@@ -195,6 +231,7 @@ function startSidecar() {
         sidecar = payload;
         sidecarRestarts = 0;
         console.log(`[sidecar] ready port=${payload.port} pid=${payload.pid}`);
+        mainLog(`[sidecar] ready port=${payload.port} pid=${payload.pid}`);
         win?.webContents.send('sidecar:ready', payload);
         resolvePending?.();
       }
@@ -209,6 +246,7 @@ function startSidecar() {
 
   child.on('exit', (code, signal) => {
     console.warn(`[sidecar] 退出 code=${code} signal=${signal}`);
+    mainLog(`[sidecar] exit code=${code} signal=${signal}`);
     sidecar = null;
     win?.webContents.send('sidecar:down', { code, signal });
     if (quitting) return;
@@ -222,6 +260,7 @@ function startSidecar() {
 
   child.on('error', (err) => {
     console.error('[sidecar] 无法启动', err);
+    mainLog(`[sidecar] spawn error ${err && err.stack ? err.stack : err}`);
     dialog.showErrorBox(
       '找不到 Python 内核',
       `无法执行：${exe}\n\n开发模式下请确认仓库根目录存在 .venv/。\n${err.message}`,
@@ -313,11 +352,13 @@ function createWindow() {
   }
 
   // 开发期把渲染进程的 console 接到终端，省得为了看一行错误去开 DevTools
-  if (!app.isPackaged) {
-    win.webContents.on('console-message', (event) => {
-      console.log(`[renderer:${event.level}] ${event.message}`);
-    });
-  }
+  win.webContents.on('console-message', (event) => {
+    const level = String(event.level ?? '');
+    if (level.includes('error') || level.includes('warning')) {
+      mainLog(`[renderer:${level}] ${event.message}`);
+    }
+    if (!app.isPackaged) console.log(`[renderer:${level}] ${event.message}`);
+  });
 
   win.on('closed', () => {
     win = null;
@@ -442,7 +483,8 @@ function buildMenu() {
       role: 'help',
       label: '帮助',
       submenu: [
-        { label: '打开日志目录', click: () => shell.openPath(path.join(REPO_ROOT, 'outputs', 'logs')) },
+        { label: '打开日志目录', click: () => shell.openPath(logsDir()) },
+        { label: '打开数据目录', click: () => shell.openPath(baseDir()) },
         { label: '项目主页', click: () => shell.openExternal('https://github.com/') },
       ],
     },
@@ -491,6 +533,15 @@ ipcMain.handle('dev:seed', () => {
   return devSeed;
 });
 
+ipcMain.handle('clipboard:write', (_e, text) => {
+  try {
+    clipboard.writeText(String(text ?? ''));
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle('shell:reveal', (_e, target) => {
   if (typeof target === 'string' && target) shell.showItemInFolder(target);
 });
@@ -523,6 +574,18 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    mainLog(
+      `[main] KikuSub start version=${app.getVersion()} electron=${process.versions.electron} ` +
+        `platform=${process.platform}/${process.arch} packaged=${app.isPackaged} ` +
+        `data=${baseDir()} logs=${logsDir()} models=${modelsDir()} ` +
+        `ffmpeg=${findTool('ffmpeg') || '(none)'}`,
+    );
+    process.on('uncaughtException', (err) => {
+      mainLog(`[main] uncaughtException ${err && err.stack ? err.stack : err}`);
+    });
+    process.on('unhandledRejection', (reason) => {
+      mainLog(`[main] unhandledRejection ${reason && reason.stack ? reason.stack : reason}`);
+    });
     buildMenu();
     // sidecar 启动失败不能连累窗口：先建窗口，出问题也要能看见界面和日志
     try {

@@ -378,13 +378,19 @@ def write_audit_payload(media_file, payload_text: str) -> Path | None:
 def load_audit_payload(media_file) -> str:
     """读取同名媒体的历史质检队列；没有/损坏时返回空队列。"""
     path = audit_state_path(media_file)
-    if path is None or not path.exists():
+    if path is None:
+        log.info("质检队列路径不可用 | media=%s", media_file)
+        return empty_audit_payload()
+    if not path.exists():
+        log.info("质检队列文件不存在 | path=%s", path)
         return empty_audit_payload()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        log.warning("质检队列读取失败 | path=%s", path, exc_info=True)
         return empty_audit_payload()
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        log.warning("质检队列格式不对 | path=%s | keys=%s", path, list(data)[:8] if isinstance(data, dict) else type(data).__name__)
         return empty_audit_payload()
     # 跨进程不恢复：重启应用后默认就是空队列，不把上一次的核对进度带进来。
     if str(data.get("session") or "") != AUDIT_SESSION_ID:
@@ -400,6 +406,13 @@ def load_audit_payload(media_file) -> str:
     data.setdefault("transcribed_at", 0.0)
     # 老版本 .qa.json 没有 phase：只要有条目就视为已完成的队列，避免入口被误判成 idle。
     data.setdefault("phase", "done" if data.get("items") else "idle")
+    log.info(
+        "质检队列已载入 | path=%s | phase=%s | items=%s | engine=%s",
+        path.name,
+        data.get("phase"),
+        len(data.get("items") or []),
+        data.get("engine") or "-",
+    )
     # 重新合并一次，保证老文件里的 status 形状也能被前端识别
     return make_audit_payload(
         data.get("media") or (Path(media_file).name if media_file else ""),

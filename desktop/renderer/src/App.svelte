@@ -9,6 +9,7 @@
   import TranscribeView from './views/TranscribeView.svelte';
   import ReviewView from './views/ReviewView.svelte';
   import ReportView from './views/ReportView.svelte';
+  import SettingsView from './views/SettingsView.svelte';
   import {
     app,
     applyDevSeed,
@@ -95,6 +96,9 @@
         case 'theme':
           toggleTheme();
           break;
+        case 'settings':
+          setView('settings');
+          break;
       }
     });
   });
@@ -143,7 +147,13 @@
   }
 
   $effect(() => {
-    // 工具栏切引擎后，核对台的「重转此句 / 质检补录」用同一个引擎
+    // 工具栏只列「已启用」的引擎；当前引擎被停用/移除时自动切到第一个可用的。
+    const enabled = (app.config?.engines ?? []).filter((e) => e.enabled);
+    if (!enabled.length) return;
+    if (!enabled.some((e) => e.key === engine)) {
+      engine = (enabled.find((e) => e.installed) ?? enabled[0]).key;
+    }
+    // 核对台的「重转此句 / 质检补录」用同一个引擎
     app.engine = engine;
   });
 
@@ -176,6 +186,8 @@
           <ReviewView bind:this={review} {engine} />
         {:else if app.view === 'report'}
           <ReportView />
+        {:else if app.view === 'settings'}
+          <SettingsView />
         {/if}
       </section>
 

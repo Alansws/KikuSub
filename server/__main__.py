@@ -16,10 +16,16 @@ import argparse
 import json
 import logging
 import os
+import platform
+import shutil
 import socket
 import sys
+from pathlib import Path
 
 import uvicorn
+
+from core.logging_setup import setup_logging
+from core.paths import MODELS_DIR, PRESETS_PATH
 
 from .app import API_VERSION, create_app
 from .config import ServerConfig, new_token
@@ -48,6 +54,38 @@ def main(argv: list[str] | None = None) -> int:
         token=args.token or new_token(),
         legacy=args.legacy,
     )
+
+    # 日志必须最先落地：之后任何启动失败（模型目录、ffmpeg、端口）都要能在
+    # ~/Library/Application Support/KikuSub/outputs/logs/kikusub.log 里查到。
+    log_path = setup_logging(
+        Path(config.output_dir) / "logs",
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        force=True,
+    )
+    log = logging.getLogger("kikusub.server")
+    log.info("=" * 68)
+    log.info(
+        "KikuSub sidecar 启动 | version=%s | pid=%s | frozen=%s | python=%s",
+        API_VERSION,
+        os.getpid(),
+        bool(getattr(sys, "frozen", False)),
+        sys.version.split()[0],
+    )
+    log.info(
+        "运行环境 | %s %s | ffmpeg=%s | ffprobe=%s",
+        platform.platform(),
+        platform.machine(),
+        shutil.which("ffmpeg") or "(未找到)",
+        shutil.which("ffprobe") or "(未找到)",
+    )
+    log.info(
+        "运行期目录 | output=%s | models=%s | presets=%s | log=%s",
+        config.output_dir,
+        MODELS_DIR,
+        PRESETS_PATH,
+        log_path,
+    )
+
     app = create_app(config)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -90,5 +128,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     sys.exit(main())

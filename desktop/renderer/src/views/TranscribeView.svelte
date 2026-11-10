@@ -7,6 +7,7 @@
     cancelJob,
     deletePreset,
     savePresetAs,
+    setView,
     startTranscribe,
     tuning,
   } from '../lib/store.svelte';
@@ -28,6 +29,9 @@
       app.job?.status === 'cancelling',
   );
   const pct = $derived(app.job?.percent ?? 0);
+  const hasEnabledEngine = $derived(
+    (app.config?.engines ?? []).some((e) => e.enabled && e.key === engine),
+  );
 
   // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
   // 不能每次渲染都覆盖用户手输的内容。
@@ -101,11 +105,18 @@
 
       <div class="form">
         <label for="engine">识别引擎</label>
-        <div class="seg" style="justify-self:start">
-          {#each app.config?.engines ?? [] as e (e.key)}
-            <button class:on={engine === e.key} onclick={() => (engine = e.key)}>{e.label}</button>
-          {/each}
-        </div>
+        {#if (app.config?.engines ?? []).some((e) => e.enabled)}
+          <div class="seg" style="justify-self:start">
+            {#each (app.config?.engines ?? []).filter((e) => e.enabled) as e (e.key)}
+              <button class:on={engine === e.key} onclick={() => (engine = e.key)}>{e.label}</button>
+            {/each}
+          </div>
+        {:else}
+          <div class="no-engine">
+            没有启用的引擎。
+            <button class="btn tiny" onclick={() => setView('settings')}>去设置里启用</button>
+          </div>
+        {/if}
 
         <label for="range">时间区间</label>
         <div class="range">
@@ -154,7 +165,11 @@
             </button>
             <span class="hint">同一时间只允许一个重任务</span>
           {:else}
-            <button class="btn primary" onclick={go} disabled={!app.media || !app.connected}>
+            <button
+              class="btn primary"
+              onclick={go}
+              disabled={!app.media || !app.connected || !hasEnabledEngine}
+            >
               <Icon name="play" size={12} />开始转写
             </button>
             <span class="hint">⌘R</span>
@@ -303,6 +318,13 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+  .no-engine {
+    font-size: 12px;
+    color: var(--text-3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .hint {
     font-size: 11.5px;

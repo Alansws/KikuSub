@@ -50,3 +50,18 @@ def test_force_repoints_to_new_directory(tmp_path):
     assert first.exists()
     assert second.exists()
     assert "second-dir" in second.read_text(encoding="utf-8")
+
+
+def test_tokens_are_redacted_in_log_file(tmp_path):
+    path = setup_logging(tmp_path, force=True)
+    logging.getLogger("uvicorn.error").info(
+        'WebSocket /ws/jobs/x?token=SECRET123 [accepted] Authorization: Bearer abc.def'
+    )
+    for handler in _kikusub_handlers():
+        handler.flush()
+
+    text = path.read_text(encoding="utf-8")
+    assert "SECRET123" not in text
+    assert "abc.def" not in text
+    assert "token=***" in text
+    assert "Bearer ***" in text

@@ -10,11 +10,28 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import re
 import sys
 import threading
 from pathlib import Path
 
 _LOG_FORMAT = "%(asctime)s %(levelname)-7s [%(threadName)s] %(name)s: %(message)s"
+# 日志会被用户复制出来发人，token 绝不能跟着走。uvicorn 的 WebSocket 访问日志
+# 会原样打印 `?token=...`，所以统一在格式化出口做一次脱敏。
+_SECRET_PATTERNS = (
+    (re.compile(r"(token=)[^&\s\"']+", re.IGNORECASE), r"\1***"),
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE), r"\1***"),
+)
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        for pattern, replacement in _SECRET_PATTERNS:
+            text = pattern.sub(replacement, text)
+        return text
+
+
 _NOISY_LOGGERS = (
     "httpx",
     "httpx2",
@@ -80,7 +97,7 @@ def setup_logging(
                     pass
 
     if not any(getattr(h, "_kikusub_handler", False) for h in root.handlers):
-        formatter = logging.Formatter(_LOG_FORMAT)
+        formatter = _RedactingFormatter(_LOG_FORMAT)
 
         file_handler = logging.handlers.RotatingFileHandler(
             path,

@@ -95,9 +95,10 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
-        # 只有整片转写才代表「整片质检」；局部重转保留原有队列，
-        # 否则用户核对到一半就会被冲掉。
-        write_audit=payload.start is None and payload.end is None,
+        # 只有核对台里的「单句/选区修正」保留原队列；转写页的整片或区间任务
+        # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
+        # 报告显示「漏句 1、短句 4」而质检面板是 0 条。
+        write_audit=payload.apply != "replace_range",
     )
 
 

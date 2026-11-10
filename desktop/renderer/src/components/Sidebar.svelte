@@ -42,7 +42,12 @@
     </div>
   </div>
 
-  <button class="sb-item" onclick={() => (app.view = 'report')} title="设置（待实现）">
+  <button
+    class="sb-item"
+    class:active={app.view === 'settings'}
+    onclick={() => setView('settings')}
+    title="设置：引擎与模型、日志与诊断"
+  >
     <span class="ico"><Icon name="gear" /></span>
     <span>设置</span>
   </button>

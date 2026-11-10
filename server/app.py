@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib
 import logging
 import threading
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from fastapi.responses import JSONResponse
 from core.paths import MODELS_DIR, OUTPUT_DIR
 from core.presets import PresetStore
 
+from . import API_VERSION
 from .config import ServerConfig
 from .jobs import JobManager
 from .media import MediaError, MediaStore
@@ -29,15 +32,13 @@ from .routes_presets import router as presets_router
 from .routes_qa import router as qa_router
 from .routes_report import router as report_router
 from .routes_session import router as session_router
+from .routes_settings import router as settings_router
 from .security import require_token
 from .sessions import SessionStore
 
 log = logging.getLogger("kikusub.server")
 
-API_VERSION = "0.1.0"
-
-
-def _warmup() -> None:
+def _warmup(app: FastAPI) -> None:
     """后台预热推理内核。
 
     为什么要单独起线程：`import core.pipeline` 会拉起 torch / transformers，
@@ -51,14 +52,16 @@ def _warmup() -> None:
 
         import core.pipeline  # noqa: F401  —— 真正把 torch 拉起来的就是这一行
 
-        log.info("内核预热完成 | device=%s", detect_device())
+        app.state.device = detect_device()
+        log.info("内核预热完成 | device=%s", app.state.device)
     except Exception:
+        app.state.device = "unavailable"
         log.exception("内核预热失败（不影响启动，首次转写会慢一些）")
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    threading.Thread(target=_warmup, daemon=True, name="kikusub-warmup").start()
+    threading.Thread(target=_warmup, args=(app,), daemon=True, name="kikusub-warmup").start()
     yield
 
 
@@ -76,6 +79,9 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     )
     app.state.config = config
     app.state.token = config.token
+    app.state.settings_path = config.settings_path
+    # 由后台预热线程写入；设置页/底部状态栏在预热完成前显示“检测中”。
+    app.state.device = "unknown"
     app.state.media = MediaStore(output_dir=config.output_dir)
     app.state.sessions = SessionStore()
     app.state.presets = PresetStore()
@@ -91,6 +97,53 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         allow_credentials=False,
     )
 
+    @app.middleware("http")
+    async def _log_requests(request: Request, call_next):
+        """把每个 API 请求写进日志。
+
+        排查用户问题时最缺的往往不是 traceback，而是「他到底点了什么、服务回了几
+        几毫秒、哪个会话」。`/media/*` 与波形轮询量太大，降为 DEBUG；写操作、
+        错误、任务/质检/报告接口保留 INFO。token 永远不写进日志。
+        """
+        req_id = uuid.uuid4().hex[:8]
+        request.state.req_id = req_id
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            # 统一由下面的 exception_handler 记录堆栈，这里只把 req id 带过去，
+            # 避免同一个异常打两遍。
+            raise
+        elapsed = (time.perf_counter() - started) * 1000
+        response.headers["X-Request-Id"] = req_id
+        path = request.url.path
+        if path.startswith(("/api", "/media")):
+            noisy = path.endswith("/peaks") or path.startswith("/media/")
+            important = (
+                request.method != "GET"
+                or response.status_code >= 400
+                or path in {"/api/jobs", "/api/qa", "/api/report", "/api/diagnostics"}
+            )
+            # 客户端日志自己会写一行，不必再让中间件重复一条
+            if path == "/api/log":
+                important = False
+            level = logging.INFO if (important and not noisy) or response.status_code >= 400 else logging.DEBUG
+            session_id = (
+                request.headers.get("x-kikusub-session", "")
+                or request.cookies.get("kikusub_sid", "")
+            )[:8]
+            log.log(
+                level,
+                "%s %s -> %s | %.0fms | req=%s | sid=%s",
+                request.method,
+                path,
+                response.status_code,
+                elapsed,
+                req_id,
+                session_id or "-",
+            )
+        return response
+
     @app.exception_handler(MediaError)
     async def _media_error(_: Request, exc: MediaError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
@@ -103,7 +156,12 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         前端 `JSON.parse` 直接炸成「Unexpected token 'I'」——用户看不懂，
         我们也定位不到。日志里仍然有完整堆栈。
         """
-        log.exception("未处理异常 | %s %s", request.method, request.url.path)
+        log.exception(
+            "未处理异常 | %s %s | req=%s",
+            request.method,
+            request.url.path,
+            getattr(request.state, "req_id", "-"),
+        )
         return JSONResponse(
             status_code=500,
             content={"detail": f"{type(exc).__name__}: {exc}"},
@@ -116,6 +174,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(report_router)
     app.include_router(qa_router)
     app.include_router(session_router)
+    app.include_router(settings_router)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -123,19 +182,30 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/api/config", dependencies=[Depends(require_token)])
     def runtime_config() -> dict:
-        """前端启动时拉一次的运行期信息（对应旧界面的 `device_banner`）。"""
-        from core.transcribe import detect_device
+        """前端启动时拉一次的运行期信息（对应旧界面的 `device_banner`）。
 
+        引擎列表来自 `core.engines` 注册表，带上 installed/enabled，工具栏据此
+        只显示用户启用的引擎；`size` 字段特意不算（目录遍历留给设置页）。
+        """
+        from core import engines as engine_registry
+        from core import settings as settings_store
+
+        current = settings_store.load_settings(config.settings_path)
         return {
             "version": API_VERSION,
-            "device": detect_device(),
+            "device": getattr(app.state, "device", "unknown"),
             "models_dir": str(MODELS_DIR),
             "output_dir": str(OUTPUT_DIR),
+            "settings_path": str(config.settings_path),
             "formats": ["SRT", "VTT", "TXT"],
             "engines": [
-                {"key": "whisper", "label": "Anime Whisper", "desc": "自然连贯的日语对话转写"},
-                {"key": "qwen", "label": "Qwen3-ASR + CTC", "desc": "逐字发声时间对齐"},
+                {**item, "desc": item["description"]}
+                for item in engine_registry.describe(
+                    enabled_keys=current.get("enabled_engines") or [],
+                    include_size=False,
+                )
             ],
+            "settings": current,
             "legacy_ui": bool(config.legacy),
         }
 

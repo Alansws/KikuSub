@@ -121,6 +121,107 @@ class JobManager:
         self._spawn(self._run_proxy, job, Path(media_path), media_id)
         return job
 
+    def start_download(
+        self,
+        engine_key: str,
+        *,
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """下载/补齐某个引擎的模型权重。
+
+        与转写共用单槽：下载会持续吃网络与磁盘，和转写并跑只会让两边都变慢。
+        """
+        job = self._launch("download", engine_key, session_id, loop)
+        self._spawn(self._run_download, job, engine_key)
+        return job
+
+    def _run_download(self, job: JobRecord, engine_key: str) -> None:
+        from core import engines
+
+        job.status = "running"
+        job.started_at = time.time()
+        self._emit(job, {"type": "start", "job": job.snapshot()})
+        stop = threading.Event()
+        monitor = None
+        try:
+            spec = engines.get(engine_key)
+            directory = engines.model_dir(spec)
+            if engines.is_installed(spec):
+                job.stage = "模型已就绪"
+            else:
+                expected = max(1, spec.approx_bytes)
+
+                def monitor_size() -> None:
+                    # 下载器不提供可靠进度，靠磁盘增长估算总进度；只报单调值。
+                    while not stop.wait(0.8):
+                        size = engines.dir_size(directory, ttl_s=0)
+                        ratio = min(0.97, 0.02 + size / expected * 0.95)
+                        self._progress(
+                            job,
+                            ratio,
+                            f"正在下载模型 {size / 1024**3:.2f} / {spec.approx_bytes / 1024**3:.1f} GB",
+                        )
+
+                monitor = threading.Thread(
+                    target=monitor_size, daemon=True, name=f"kikusub-dl-{job.id}"
+                )
+                monitor.start()
+
+                def on_progress(ratio: float, stage: str) -> None:
+                    # 下载器只在开始时给一帧「正在连接镜像」，不要用它覆盖磁盘估算
+                    if stage:
+                        job.stage = stage
+                        self._emit(
+                            job,
+                            {
+                                "type": "progress",
+                                "ratio": round(job.ratio, 4),
+                                "percent": job.percent,
+                                "stage": stage,
+                            },
+                        )
+
+                engines.ensure_model(engine_key, progress_cb=on_progress)
+
+            installed = engines.is_installed(spec)
+            if not installed:
+                raise RuntimeError(
+                    "下载结束后仍没有找到完整权重，请检查网络或代理后重试。"
+                )
+            stop.set()
+            if monitor is not None:
+                monitor.join(timeout=2)
+            size = engines.dir_size(directory, ttl_s=0)
+            job.status = "done"
+            job.ratio = 1.0
+            job.percent = 100
+            job.stage = "模型下载完成"
+            job.result = {
+                "engine": engine_key,
+                "installed": True,
+                "size_bytes": size,
+                "model_dir": str(directory),
+            }
+            job.finished_at = time.time()
+            self._emit(job, {"type": "done", "job": job.snapshot()})
+            log.info(
+                "模型下载完成 | engine=%s | size=%.2fGB | dir=%s",
+                engine_key,
+                size / 1024**3,
+                directory,
+            )
+        except Exception as exc:  # noqa: BLE001
+            stop.set()
+            job.status = "error"
+            job.error = str(exc)
+            job.finished_at = time.time()
+            log.exception("模型下载失败 | engine=%s", engine_key)
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+        finally:
+            stop.set()
+            self._registry.finish(job.token)
+
     def _launch(
         self,
         kind: str,

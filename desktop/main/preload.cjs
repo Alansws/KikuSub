@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('kikusub', {
   // 原生对话框
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),
 
+  // 剪贴板：file:// 页面里 navigator.clipboard 不一定可用，走主进程更稳
+  writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
+
   // 文件操作（只给「在访达中显示」，不给读写）
   revealInFinder: (target) => ipcRenderer.invoke('shell:reveal', target),
   openPath: (target) => ipcRenderer.invoke('shell:open', target),
@@ -76,15 +79,4 @@ contextBridge.exposeInMainWorld('kikusub', {
   // 开发用：截图/联调时由主进程注入「媒体 + 字幕」，打包后恒为 null
   getDevSeed: () => ipcRenderer.invoke('dev:seed'),
 
-  // 开发用：截图/联调时由主进程注入「媒体 + 字幕」，打包后恒为 null
-  getDevSeed: () => ipcRenderer.invoke('dev:seed'),
-
-  // 拖进窗口的文件：Electron 32+ 去掉了 File.path，只能由主进程侧换算
-  getPathForFile: (file) => {
-    try {
-      return webUtils.getPathForFile(file);
-    } catch {
-      return '';
-    }
-  },
 });

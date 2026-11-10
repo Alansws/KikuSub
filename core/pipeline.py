@@ -202,6 +202,15 @@ def run_transcription(
             on_progress(max(0.0, min(1.0, float(ratio))), message)
 
     started = time.perf_counter()
+    log.info(
+        "转写开始 | engine=%s | media=%s | start=%s | end=%s | format=%s | absolute=%s",
+        req.engine_key,
+        media_path.name,
+        req.start_s,
+        req.end_s,
+        req.output_format,
+        req.keep_absolute_timeline,
+    )
     if is_qwen:
         cues = engine.transcribe_file(
             media_path,
@@ -329,7 +338,15 @@ def run_transcription(
         transcribed_at=time.time(),
     )
     if req.write_audit:
-        write_audit_payload(media_path, audit_payload)
+        audit_path = write_audit_payload(media_path, audit_payload)
+        log.info(
+            "质检队列已写入 | path=%s | items=%s | pending=%s",
+            audit_path.name if audit_path else "(失败)",
+            len(audit_items),
+            sum(1 for item in audit_items if item.get("status") == "pending"),
+        )
+    else:
+        log.info("局部修正保留原质检队列 | media=%s | cues=%s", media_path.name, len(cues))
 
     pending_qa = sum(1 for item in audit_items if item.get("status") == "pending")
     if pending_qa and not is_interrupted:

@@ -30,6 +30,12 @@
   const coverage = $derived<any>(qa.payload?.coverage ?? {});
   const scanned = $derived<any>(qa.payload?.scanned ?? {});
   const phase = $derived<string>(qa.payload?.phase ?? 'idle');
+  // 报告有数字、队列却是空的时候必须说出来，而不是让用户看到「0 条」
+  const reportFindings = $derived(
+    Number(app.report?.quality?.missed ?? 0) +
+      Number(app.report?.quality?.dropped ?? 0) +
+      Number(app.report?.quality?.suspect ?? 0),
+  );
 
   let filter = $state<'pending' | 'all' | 'done'>('pending');
 
@@ -173,7 +179,13 @@
     <div class="qa-body">
       {#if !items.length}
         <div class="empty">
-          {#if phase === 'idle'}
+          {#if phase === 'idle' && reportFindings > 0}
+            <div class="empty-title">队列为空，但报告里有 {reportFindings} 处待核</div>
+            <div class="empty-sub">
+              这通常是旧版本局部转写没有把队列落盘。请重新转写一次；若仍为空，到「设置 →
+              日志与诊断」复制日志发给我。
+            </div>
+          {:else if phase === 'idle'}
             <div class="empty-title">还没有可核对的转写</div>
             <div class="empty-sub">转写完成后，这里会列出需要人工试听确认的片段；入口会一直保留。</div>
           {:else}

@@ -14,6 +14,7 @@
   import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import { api, mediaUrl } from '../lib/api';
+  import { logEvent } from '../lib/api';
   import {
     app,
     focusRange,
@@ -40,6 +41,9 @@
   let scrollTop = $state(0);
   let viewH = $state(0);
   let waveW = $state(0);
+  // 波形高度：默认比旧版高一半，可拖动底部把手调整；记住用户选择。
+  const savedHeight = Number(localStorage.getItem('kikusub.waveHeight') || 0);
+  let waveHeight = $state(Math.max(110, Math.min(300, savedHeight || 148)));
 
   // 波形视窗（秒）。duration 来自媒体元数据。
   const duration = $derived(app.media?.duration ?? 0);
@@ -170,7 +174,9 @@
     const seq = ++peakSeq;
     loadingPeaks = true;
     try {
-      const bins = Math.max(160, Math.min(4000, Math.round(width)));
+      // 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，
+      // 不会退化成一排可数的柱子。服务端只读这一小段样本，成本可忽略。
+      const bins = Math.max(512, Math.min(12000, Math.round(width * 3)));
       const data = await api.peaks(id, { from, to: from + span, bins });
       if (seq !== peakSeq) return;
       peaks = data.peaks;
@@ -218,7 +224,7 @@
     const rulerH = 17;
     const cueH = 11;
     const mid = rulerH + (h - rulerH - cueH) / 2;
-    const ampH = Math.max(8, (h - rulerH - cueH) * 0.92);
+    const ampH = Math.max(8, (h - rulerH - cueH) * 0.94);
 
     // 时间刻度
     const step = pickStep(viewSpan);
@@ -239,22 +245,35 @@
     ctx.fillStyle = sep;
     ctx.fillRect(0, rulerH - 0.5, w, 1);
 
-    // 波形
+    // 波形：逐像素取该像素覆盖的所有采样点的最大值。
+    // 之前是「一个采样点画一根柱子」，放大后柱子间距会被拉开；逐像素合并后
+    // 无论缩放到多深都是一条连续的包络，不会出现可数的柱形。
     const n = peaks.length;
     if (!n) {
       ctx.fillStyle = sepStrong;
       ctx.fillRect(0, Math.round(mid), w, 1);
     } else {
       ctx.fillStyle = waveColor;
-      ctx.globalAlpha = 0.82;
+      ctx.globalAlpha = 0.88;
       const span = peaksSpan || 1;
-      const barTime = span / n;
-      for (let i = 0; i < n; i += 1) {
-        const t = peaksFrom + (i + 0.5) * barTime;
-        if (t < viewStart || t > viewStart + viewSpan) continue;
-        const x = ((t - viewStart) / viewSpan) * w;
-        const bw = Math.max(1, (barTime / viewSpan) * w * 0.72);
-        constamp(peaks[i], ampH, ctx, x, mid, bw);
+      const perBin = span / n;
+      for (let x = 0; x < w; x += 1) {
+        const t0 = viewStart + (x / w) * viewSpan;
+        const t1 = viewStart + ((x + 1) / w) * viewSpan;
+        let i0 = Math.floor((t0 - peaksFrom) / perBin);
+        let i1 = Math.ceil((t1 - peaksFrom) / perBin);
+        if (i1 <= 0 || i0 >= n) continue;
+        i0 = Math.max(0, i0);
+        i1 = Math.min(n, Math.max(i0 + 1, i1));
+        let amp = 0;
+        for (let i = i0; i < i1; i += 1) {
+          if (peaks[i] > amp) amp = peaks[i];
+        }
+        // 全局峰值归一化会让对白显得很小；用轻微 gamma 把弱信号抬起来，
+        // 满幅配乐仍然封顶，不会糊成一片。
+        const shaped = Math.min(1, Math.pow(Math.max(0, amp), 0.72) * 1.08);
+        const bh = Math.max(1.2, shaped * ampH);
+        ctx.fillRect(x, mid - bh / 2, 1, bh);
       }
       ctx.globalAlpha = 1;
     }
@@ -290,20 +309,6 @@
     }
   }
 
-  // 小的辅助函数放外面会让参数一大堆，就地定义更清楚
-  function constamp(
-    value: number,
-    ampH: number,
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    mid: number,
-    bw: number,
-  ) {
-    const amp = Math.max(0.012, Math.min(1, value));
-    const bh = amp * ampH;
-    ctx.fillRect(x - bw / 2, mid - bh / 2, bw, bh);
-  }
-
   function pickStep(span: number) {
     const candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
     for (const c of candidates) {
@@ -313,10 +318,16 @@
   }
 
   function rulerLabel(t: number, step: number) {
+    if (step < 1) {
+      // 按 0.1 秒取整再拆分，避免 99.999 → "1:39.10" 这种两位小数
+      const tenths = Math.round(Math.max(0, t) * 10);
+      const m = Math.floor(tenths / 600);
+      const s = Math.floor(tenths / 10) % 60;
+      return `${m}:${String(s).padStart(2, '0')}.${tenths % 10}`;
+    }
     const total = Math.round(t);
     const m = Math.floor(total / 60);
     const s = total % 60;
-    if (step < 1) return `${m}:${String(s).padStart(2, '0')}.${String(Math.round((t % 1) * 10))}`;
     if (step < 60) return `${m}:${String(s).padStart(2, '0')}`;
     return `${m}:00`;
   }
@@ -388,6 +399,33 @@
         video = null;
       },
     };
+  }
+
+  // 波形高度拖拽
+  let resizeStart: { y: number; h: number } | null = null;
+
+  function onResizeDown(e: PointerEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    resizeStart = { y: e.clientY, h: waveHeight };
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function onResizeMove(e: PointerEvent) {
+    if (!resizeStart) return;
+    const next = Math.max(110, Math.min(300, resizeStart.h + (e.clientY - resizeStart.y)));
+    waveHeight = next;
+  }
+
+  function onResizeUp() {
+    if (!resizeStart) return;
+    resizeStart = null;
+    localStorage.setItem('kikusub.waveHeight', String(Math.round(waveHeight)));
+    requestAnimationFrame(draw);
   }
 
   // 所有「定位」入口都通过 seekNonce 进来，视频与播放头不会各走各的
@@ -691,7 +729,11 @@
           {src}
           preload="auto"
           playsinline
-          onerror={() => (videoFailed = true)}
+          onerror={(e) => {
+            videoFailed = true;
+            const el = e.currentTarget as HTMLVideoElement;
+            logEvent('warn', 'video-error', `code=${el.error?.code ?? '?'} src=${el.currentSrc.slice(0, 160)}`);
+          }}
           onloadedmetadata={(e) => {
             videoFailed = false;
             play.duration = e.currentTarget.duration || duration;
@@ -832,6 +874,7 @@
     <div
       class="wave-wrap"
       bind:this={waveWrap}
+      style="height:{waveHeight}px"
       onpointerdown={onWavePointerDown}
       onpointermove={onWavePointerMove}
       onpointerup={onWavePointerUp}
@@ -897,6 +940,15 @@
       {#if loadingPeaks && !peaks.length}
         <div class="wave-loading">正在解码波形…</div>
       {/if}
+
+      <div
+        class="wave-resize"
+        onpointerdown={onResizeDown}
+        onpointermove={onResizeMove}
+        onpointerup={onResizeUp}
+        onpointercancel={onResizeUp}
+        title="拖动调整波形高度"
+      ></div>
     </div>
   </div>
 
@@ -1192,7 +1244,6 @@
 
   .wave-wrap {
     position: relative;
-    height: 96px;
     border-radius: 8px;
     background: var(--bg-inspector);
     border: 1px solid var(--separator-soft);
@@ -1207,6 +1258,19 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+
+  .wave-resize {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 6px;
+    cursor: ns-resize;
+    touch-action: none;
+  }
+  .wave-resize:hover {
+    background: var(--accent-soft);
   }
 
   .sel {

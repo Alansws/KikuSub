@@ -24,7 +24,6 @@ if __name__ == "__main__":
 from server.__main__ import main  # noqa: E402
 
 if __name__ == "__main__":
-    import logging
-
-    logging.basicConfig(level=logging.INFO)
+    # 日志由 server.__main__ 里的 setup_logging 统一配置（文件 + stderr），
+    # 这里不要再 basicConfig，否则会出现重复的 stderr handler。
     sys.exit(main())
