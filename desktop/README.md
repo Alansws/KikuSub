@@ -1,6 +1,7 @@
 # KikuSub 桌面外壳（Electron + Svelte）
 
-改造规划 §2 的产物：Electron 主进程 + Svelte 5 渲染进程，Python sidecar 提供内核。
+Electron 主进程 + Svelte 5 渲染层，Python sidecar 提供内核。用户文档见仓库根目录的
+[README.md](../README.md)，实现约束见 [AGENTS.md](../AGENTS.md) 的 §3.4–§3.7。
 
 ## 跑起来
 
@@ -8,38 +9,43 @@
 cd desktop
 npm install                       # 首次
 npm run build                     # 构建渲染进程
-npm run test:main                 # 退出清理 / 日志保留的 node:test
+npm run test:main                 # 主进程单测（清理 / 密钥 / 技能）
 npx electron .                    # 启动
 ```
 
-**注意：本机 shell 里存在 `ELECTRON_RUN_AS_NODE=1`（WorkBuddy 的 Electron 宿主设的），
+**注意：本机 shell 里可能已有 `ELECTRON_RUN_AS_NODE=1`（某些 Electron 宿主会设），
 它会让任何 Electron 二进制退化成纯 Node。启动前必须清掉：**
 
 ```bash
 env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .
 ```
 
-被 WorkBuddy 沙箱拦住时再加 `--no-sandbox`（仅调试用，正常双击启动不需要）。
+被沙箱拦住时再加 `--no-sandbox`（仅调试用，正常双击启动不需要）。
+
+如果桌面上已经开着另一个 KikuSub 实例，新实例会因单实例锁直接退出；调试时换一个
+`--user-data-dir=/tmp/kikusub-dev` 即可并存。
 
 ## 结构
 
 ```
 desktop/
 ├── main/
-│   ├── main.cjs       主进程：窗口 / 菜单 / sidecar 生命周期 / 单实例 / 首次启动 / 退出清理
+│   ├── main.cjs       主进程：窗口 / 菜单 / sidecar 生命周期 / 单实例 / 首次启动 / 退出清理 / 截图模式
 │   ├── files.cjs      临时产物扫描、删除与日志保留策略（纯 Node，可单测）
-│   └── preload.cjs    contextIsolation 下唯一的桥（只给端口、token、对话框）
-├── test/
-│   └── files.test.cjs main/files.cjs 的 node:test 回归
+│   ├── aikey.cjs      AI Key 的本机加密（AES-256-GCM + 0600 主密钥）
+│   ├── skill.cjs      随包 Agent 技能的安装器（纯 Node，可单测）
+│   └── preload.cjs    contextIsolation 下唯一的桥（端口、token、对话框、AI Key、主题）
+├── resources/skill/   随包的 kikusub-subtitle 技能（打包时复制进 .app）
+├── test/              files / aikey / skill / 模板导入的 node:test
 └── renderer/
     └── src/
         ├── App.svelte        外壳：握手、菜单、拖放、快捷键、首次向导与退出面板
         ├── app.css           设计令牌（与静态高保真稿同一套值）
         ├── lib/api.ts        服务层客户端（Bearer + X-Kikusub-Session）
-        ├── lib/store.svelte.ts  状态与动作（runes）
+        ├── lib/store.svelte.ts   状态与动作（runes）
         ├── components/       Sidebar / Toolbar / Inspector / StatusBar / Icon /
-        │                     FirstRun / QuitPrompt
-        └── views/            Import / Transcribe / Review / Report / Settings
+        │                     ParamPanel / QaPanel / FirstRun / QuitPrompt
+        └── views/            Import / Transcribe / Review / AiView / Report / Settings
 ```
 
 ## 自截图（不打扰桌面）
@@ -50,133 +56,89 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
   npx electron . --no-sandbox --screenshot=/tmp/app.png
 ```
 
-`KIKUSUB_DEV_SEED` 指向 `{ "mediaPath": "...", "cues": [...] }`，
-渲染进程会把它灌进当前会话后直接进核对屏——联调与截图不必每次真跑转写。
-打包后这个入口恒为 `null`。
+`KIKUSUB_DEV_SEED` 指向 `{ "mediaPath": "...", "cues": [{ "start": 0, "end": 2, "text": "…" }] }`，
+渲染进程会把它灌进当前会话后直接进核对屏——联调与截图不必每次真跑转写。打包后这个入口恒为 `null`。
 
-## 导入、导出与最近打开（2026-11-10）
+还需要切视图时用 `KIKUSUB_DEV_EVAL`：里面的 JS 会在截图前于渲染进程执行一次，可以点
+`.sb-item` 切侧栏、点工具栏「AI 优化」进提案台，再 `await` 一会儿等数据到位。截图前会
+打印一行 `[probe]`，给出当前视图、行数与视频尺寸，便于确认截到的是哪一屏。
 
-- 转写页点「开始转写」成功后，字幕会**自动写入导出文件夹**（整片、转写页区间都算；
-  核对台的局部修正仍是核对数据，按需再导出）。转写完成的卡片上直接显示落盘路径，
-  并提供「在访达中显示 / 导出文件夹」。
-- 核对台右侧检查器底部常驻「暂存进度 / 导出」。暂存写运行数据目录的
-  `{stem}.autosave_draft.srt`（编辑后 0.9s 防抖自动写一次，不覆盖交付文件，
-  可从「恢复上次暂存」取回）；导出写设置里的导出文件夹。这样即使重开应用后
-  手动导入字幕、没有任务报告，也仍然能直接导出。
-- 「设置 → 运行环境 → 导出文件夹」可查看、打开、更改默认目录，也能恢复默认。
-  该目录只收字幕交付文件；日志、质检队列与 480p 代理仍在运行数据目录。
-- 导入页的「导出文件夹」卡片可以在访达里打开目录，或点「导入字幕…」直接从该目录
-  挑一个上次的 `.srt/.vtt` 载入核对台；转写页与核对台工具栏也有同一条入口。
-- 「最近打开」每一行右侧有独立垃圾桶按钮，只删除这一条历史记录，不动磁盘文件。
-- 侧栏底部「引擎」跟随顶部工具栏当前选中的引擎，不再固定显示第一个。
+> README 里的截图就是这样生成的：一段 32 秒的真实素材 + 真实 SRT 做种子，AI 提案用
+> `core.ai_proposal.build_proposal()` 造好后放到导出目录，界面自己回收它。
 
-## 核对台能做什么（2026-11-10 补齐）
+## 各屏能做什么
 
-- 波形按可视窗口取包络（`?from=&to=`），滚轮 / 捏合 / 滑块缩放，双指横移或 ⌥ 拖动平移；
-- **单击跳转、拖动才框选**：按下后移动超过 4px 才升级为框选，全局视图下手抖不会
-  变成「框选了好几秒」；
-- **逐帧擦洗**：顶部刻度条、播放头两侧 8px、以及上方视频进度条都可以按住拖动，
-  拖动时暂停并连续 seek 预览画面（`video.currentTime` 每 16ms 至多写一次），
-  松手回到原播放状态；MKV 未压好代理时播放头照样走；
-- **底部字幕轨道**：蓝色块表示「这一段有字幕」，颜色与底槽明确区分；拖块体整体平移、
-  拖左右两端单独改起止。双语同区间的多行是一块，一起移动、一次撤回；
-- **播放头 ↔ 字幕同步**：播放头进入某句时，底部表格自动滚到该句并选中，右侧检查器
-  同步显示；双语块内多行会整块高亮，点其中任意一行时保留你的选择不被抢回；
-- 拖出选区后可试听、**转写选区**、填入转写页；每行可**单独重转**（只替换该区间）；
-- 「聚焦」一键放大播放头附近；「跟随」是持久化偏好，**只有点按钮才会改变**，
-  缩放/平移波形、点字幕/表格/画面都不会把它关掉（专业剪辑软件也不会因为缩放
-  时间线就取消跟随播放头）。暂停时点字幕、点波形或拖完播放头，`revealPlayhead()`
-  会把播放头平移回视窗内，不需要先播放一下；
-- 质检面板逐项勾选、定位、补录、保留 / 恢复 / 删除，处理完自动推进下一条；
-- 报告页逐条明细可展开，点时间码跳回核对台，支持导出 SRT / VTT / TXT；
-- 双击 `.srt/.vtt`（或 ⌘O）导入字幕基线。
+- **导入**：拖入视频 / 音频 / 字幕；最近打开、导出文件夹、导入字幕；
+  MKV / HEVC 在后台压 480p 代理，不挡用户操作。
+- **转写**：引擎、时间区间、输出格式、结果处理（自动 / 覆盖 / 追加）；右侧参数面板与预设。
+- **核对**：视频 + 波形 + 字幕轨道 + 检查器；单击跳转、拖动框选、逐帧擦洗、字幕块整体/两端拖动、
+  三态显示、暂存与导出、⌘Z 整块回退。
+- **AI 优化台**：双栏 diff，左原文只读、右建议双击可改；采纳/拒绝、只看改动、应用整批、
+  另存 / 丢弃 / 导入提案；润色与翻译两种类型，翻译带目标语种。
+- **详情与导出**：任务报告、逐段明细、质检结果、导出 SRT / VTT / TXT。
+- **设置**：引擎与模型（下载/校验/启用）、运行环境（模型与导出目录、诊断）、日志、
+  AI 优化（Base URL / 模型 / 分块 / Key）、Agent 技能一键配置、外观与波形高度。
 
-## 首次启动（真实用户的第一屏）
+## 首次启动
 
 打包后的 `.app` 里没有模型，`~/Library/Application Support/KikuSub/models` 也可能不存在。
-首次启动时主进程先不拉起 sidecar，而是让渲染进程显示「选择模型目录」向导：
+首次启动时主进程先不拉起 sidecar，而是显示「选择模型目录」向导：
 
-1. 默认建议 `~/Library/Application Support/KikuSub/models`，也可以选外置盘/自定义目录；
+1. 默认建议 `~/Library/Application Support/KikuSub/models`，也可以选外置盘 / 自定义目录；
 2. 主进程校验目录可写并写入 `preferences.json`（`modelsDir` / `setupCompleted`）；
 3. 之后才用 `KIKUSUB_MODELS_DIR=<该目录>` 启动 sidecar，下载与安装检测都落在这里；
 4. 设置页「运行环境 → 模型目录 → 更改…」可以随时换目录，换完自动重启内核并重新握手。
 
-如果用户是从旧版本升级、默认目录里已经有模型，则跳过向导，保持原样。
-`KIKUSUB_MODELS_DIR` 环境变量仍然优先级最高；由它指定时应用内不允许再改。
-
-`KIKUSUB_PREFERENCES_PATH` 可覆盖偏好文件位置（调试/截图用）；开发模式下默认写在
-仓库根目录的 `preferences.json`（已 gitignore）。`KIKUSUB_FORCE_FIRST_RUN=1` 可强制
-重放首次启动向导（调试用，会跳过“已有模型则不再询问”的判断）。
+从旧版本升级且默认目录里已有模型时跳过向导。`KIKUSUB_MODELS_DIR` 优先级最高；
+`KIKUSUB_PREFERENCES_PATH` 可覆盖偏好文件位置（调试 / 截图用），
+`KIKUSUB_FORCE_FIRST_RUN=1` 可强制重放向导。
 
 ## 退出前清理（⌘Q）
 
-退出（⌘Q 或关闭窗口）时主进程会扫描 `outputs/`：
+退出（⌘Q 或关闭窗口）时会扫描 `outputs/` 顶层的时间区间碎字幕与 `outputs/web_proxies/*.mp4`，
+逐个勾选保留；**默认全部不勾选，不勾选即删除**。没有窗口可询问时宁可保留。删除前会先停
+sidecar，避免和正在写的代理 / 字幕抢文件。规则在 `main/files.cjs`，用
+`node --test test/files.test.cjs` 回归；译文交付物（`*.zh-Hans.srt`、`*.bilingual.srt`）
+不会被当成碎片。
 
-- `*_00m40s-00m52s*` 这类「转写选区」碎字幕（含 `.qwen` / `.part_cancelled`）；
-- `outputs/web_proxies/*.mp4` 视频代理。
+## AI Key 存储
 
-面板默认**全部不勾选**；勾选的项目保留，未勾选的直接删除。没有窗口可询问时
-（例如异常退出）宁可保留文件，不会在无人确认时删。删除前会先停掉 sidecar，
-避免和正在写的代理/字幕抢文件。没有候选文件时直接退出，不弹空面板。
+`main/aikey.cjs` 用 32 字节本机主密钥（`{dataDir}/.ai-key`，0600）做 AES-256-GCM；
+`preferences.json` 里只存 `aik1:` 密文。**不用 `safeStorage`**：ad-hoc 签名每次发版
+cdhash 都变，keychain 条目会全部失效。改这块时守住三条：0600 权限、旧 `v10` blob 要能
+识别并报 `broken`、绝不把明文写进任何文件或日志。用例在 `test/aikey.test.cjs`。
 
-## 设置 / 引擎 / 日志
+## 日志
 
-- 左下「设置」或 **⌘,**（菜单里也绑了同一条）：引擎与模型、运行环境、日志与诊断、工作流偏好；
-- 引擎卡片由 `core/engines.py` 注册表驱动：语种、用途、预计/实际占用、安装状态、
-  启用开关、一键下载与进度。顶部工具栏只显示已启用的引擎；
-- **新增引擎**：在 `core/engines.py` 加一条 `EngineSpec`，在 `core/pipeline.py`
-  注册推理对象并提供 `ensure_model(progress_cb)`。设置页与工具栏不用改。
-- 日志：`outputs/logs/kikusub.log`（sidecar，含每条 API 请求与渲染端事件）、
-  `outputs/logs/main.log`（Electron 主进程）。打包后在
-  `~/Library/Application Support/KikuSub/outputs/logs/`；
-- **日志也会清理**：sidecar 的 `RotatingFileHandler` 是 5 MB × 3；此外启动时和每 6 小时
-  按「14 天 / 整个日志目录 64 MB」删轮转备份，主进程启动时也执行同一策略。
-  设置页提供「清理旧日志」按钮（只删 `.log.N` 备份，正在写的日志保留）；
-- 设置页可直接「复制诊断信息」（版本、目录、引擎状态、最近日志）用于报障。
+- `outputs/logs/kikusub.log`（sidecar，含每条 API 请求与渲染端事件）
+- `outputs/logs/main.log`（Electron 主进程）
+- 打包后在 `~/Library/Application Support/KikuSub/outputs/logs/`
 
-## 已知缺口
-
-- 「监看画面与转录源解耦」还没移植：原 Gradio 工作台可以单独导入监看画面、
-  切换历史 480p 代理、关闭画面；桌面端目前只有自动跟随 + 代理自动切换。
-- 虚拟列表、`content-visibility` 等剩余丝滑工程（阶段 4 的另一半）。
-- 监看画面解耦仍未移植（见上）。
+日志按「14 天 / 整个日志目录 64 MB」删除轮转备份，正在写的日志永不删；sidecar 每 6 小时
+清理一次，设置页「清理旧日志」走同一个 `prune_logs()`。
 
 ## 打包成 .app
 
 ```bash
-bash tools/pack/build_sidecar.sh   # PyInstaller onedir，约 3–5 分钟，产出 737 MB
-bash tools/pack/build_app.sh       # 装配 + 自签，产出 build/pack/KikuSub.app（约 931 MB）
+bash tools/pack/build_sidecar.sh   # PyInstaller onedir，约 3–5 分钟
+bash tools/pack/build_app.sh       # 装配 + 自签，产出 build/pack/KikuSub.app
 ```
 
-产物：`repo/build/pack/KikuSub.app`，双击即可运行。
+> 改了 `core/` 或 `server/` 的 Python 代码后**必须**先重跑 `build_sidecar.sh`，
+> 否则 `.app` 里仍是旧接口，会出现「界面有按钮、点击报 Method Not Allowed / 404」。
+> `build_app.sh` 会检查 sidecar 是否比源码旧，旧了就拒绝装配。
 
-> 改了 `core/` 或 `server/` 的 Python 代码后，**必须**先重跑 `build_sidecar.sh`，否则
-> `.app` 里仍是旧接口，会出现「界面有按钮、点击报 Method Not Allowed / 404」。
-> `build_app.sh` 现在会检查 sidecar 是否比源码旧，旧了就拒绝装配并提示。
-
-**为什么不用 electron-builder**：它在当前机器上会被宿主文件策略打断在
-packaging 阶段（复制 Electron 框架时对 `default_app.asar` 报
-`Operation not permitted`，随后进程被 SIGTERM）。`build_app.sh` 是手工装配：
-复制框架 → 改名可执行文件 → 写 Info.plist → 放 main/renderer → 放 sidecar → 自签。
-每一步都可见，出问题好定位。
-
-`desktop/package.json` 里的 `build` 字段保留着，在普通机器上
-`npx electron-builder --mac dir` 应该也能用。
+`build_app.sh` 是手工装配（复制框架 → 改名可执行文件 → 写 Info.plist → 放 main/renderer
+→ 放 sidecar 与 skill → 自签）。不用 electron-builder 是因为它在本机会被宿主文件策略
+打断在 packaging 阶段；`package.json` 里的 `build` 字段保留着，普通机器上仍可用。
 
 ### 运行期目录
 
 | 用途 | 路径 |
 | --- | --- |
 | 数据 / 输出 / 代理 | `~/Library/Application Support/KikuSub/` |
-| 模型 | 首次启动时选择；默认同上 `models/`（构建脚本在本机会软链到仓库里已下载的 6.6 GB） |
-| 启动偏好 | 同上 `preferences.json`（模型目录 / 主题 / 首次设置完成） |
+| 模型 | 首次启动时选择；默认同上 `models/` |
+| 启动偏好 | 同上 `preferences.json`（模型目录 / 主题 / 首次设置 / AI Key 密文） |
 | 日志 | 同上 `outputs/logs/kikusub.log`，14 天 / 64 MB 保留策略 |
 
-模型目录的优先级：`KIKUSUB_MODELS_DIR` 环境变量 → `preferences.json` 里用户选的目录 →
-App Support `models/` → 开发期仓库 `models/`。
-
-### 打包后的实测
-
-- sidecar 从 `Contents/Resources/python/sidecar` 启动，握手 **0.31 s**（热启）
-- 首次运行约 17 s（macOS 校验 3000+ 个未签名文件），之后都是 0.3 s
-- 完整跑通：导入 MKV → 后台压制代理 → WS 通知 → 换源播放 → 4 条字幕 → 检查器
+开发模式沿用仓库目录，与 sidecar 单独启动时共享 `outputs/`、`presets.json`。

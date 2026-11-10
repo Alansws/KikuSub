@@ -4,47 +4,63 @@
 
 ## 1. 项目定位与运行方式
 
-这是一个以 **Gradio** 提供本地 Web 界面的日语影视字幕转录工具。它面向动漫、电影、Galgame、广播剧等音频场景，支持：
+这是一个 **macOS 桌面应用**形态的日语影视字幕工作台：Electron 主进程 + Svelte 5 渲染层，Python 以内置 sidecar（FastAPI）提供内核。它面向动漫、电影、Galgame、广播剧等音频场景，支持：
 
 - Anime Whisper：重视自然、连贯的日语对话转写；
 - Qwen3-ASR + CTC：转写后利用自带的 CTC 对齐头取得逐字发声时间，并针对日语分句；
 - Silero VAD 分段、可选动态响度归一化、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
-- SRT/VTT/TXT 导出、纯标点字幕清理、参数预设读写与完整任务报告。
+- 视频 + 波形核对台、质检待核队列、SRT/VTT/TXT 导出、参数预设与完整任务报告；
+- AI 提案（润色 / 翻译平行轨）与随包 Agent 技能。
 
-主入口是 `app.py`。在安装 `requirements.txt` 及系统 `ffmpeg` 后运行：
+**主入口是 `desktop/`，不是 `app.py`。** `main` 分支自 v0.9-gradio 之后只面向桌面端演进；`app.py` 与 `static/` 是旧的 Gradio 界面，仅在出现关键 bug 时修，不接新功能。
+
+开发模式（安装 `requirements.txt`、`desktop/npm install` 与系统 `ffmpeg` 后）：
 
 ```bash
-python app.py
+cd desktop && npm run build && npx electron .
 ```
 
-服务仅监听 `127.0.0.1:7860`，并在浏览器中打开。首次真正转录时才会加载（必要时下载）模型。不要在不需要模型推理的改动验证中触发下载或完整转录。
+sidecar 也可以单独启动：`source .venv/bin/activate && python -m server --port 0`，stdout 首行输出 `{"event":"ready","port":…,"token":…}`。
+
+首次真正转录时才会加载（必要时下载）模型。不要在不需要模型推理的改动验证中触发下载或完整转录；界面、波形与提案链路的验证用 `KIKUSUB_DEV_SEED`（见 `desktop/README.md`）。
 
 ## 2. 仓库结构
 
 | 路径 | 职责 |
 | --- | --- |
-| `app.py` | Gradio 页面、参数控件注册、预设交互、任务编排、文件写出和报告生成。 |
+| `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/`（导入 / 转写 / 核对 / AI 优化台 / 详情与导出 / 设置）、`lib/store.svelte.ts` 状态与动作、`lib/api.ts` 服务层客户端。 |
+| `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
 | `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢（`KIKUSUB_MODELS_DIR` / `KIKUSUB_OUTPUT_DIR` / `KIKUSUB_PRESETS_PATH` 可覆盖）；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
-| `server/` | **新服务层（FastAPI）**。`python -m server` 启动，stdout 首行输出 `{"event":"ready","port":…,"token":…}` 供 Electron 主进程握手。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。`--legacy` 时把旧 Gradio 挂到 `/legacy`。**禁止在 server/ 内 import app.py**（除 `_mount_legacy` 的显式延迟导入）。 |
+| `server/` | **服务层（FastAPI）**。`python -m server` 启动，stdout 首行输出 `{"event":"ready","port":…,"token":…}` 供 Electron 主进程握手。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。`--legacy` 时把旧 Gradio 挂到 `/legacy`。**禁止在 server/ 内 import app.py**（除 `_mount_legacy` 的显式延迟导入）。 |
+| `server/routes_ai.py` | 提案接口：`/api/ai/proposal`、`/api/ai/apply`、`/api/ai/prompt`、`/api/ai/from-srt`、`/api/ai/proposal/import`。 |
+| `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
+| `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`。前端不得自己算 digest 或另写校验。 |
+| `core/ai_client.py` | OpenAI 兼容的纯 urllib 客户端（不引 SDK），只管传输与 JSON 解析。 |
+| `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间。 |
+| `core/i18n.py` | 双语 cue 的唯一构造（`bilingual_cues()`），导出与显示都调它。 |
 | `core/transcribe.py` | 共用字幕数据结构/格式、时间解析、FFmpeg 音频抽取、Anime Whisper、Silero VAD 和启发式分句。 |
 | `core/qwen_ctc.py` | Qwen3-ASR 模型推理、CTC 对齐头、日语断句动态规划（含 P1-1 词边界成本）、字幕劈词修复、编码特征复用。 |
 | `core/audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台波形共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。partial 文件名带 pid + 随机后缀，支持取消。 |
-| `core/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同一时间只允许一个重任务，取消只能由发起它的 Gradio session 发出。 |
+| `core/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同一时间只允许一个重任务，取消只能由发起它的会话发出。AI 润色/翻译也走这里，与转写共用单槽。 |
 | `core/procutil.py` | 可取消、带超时的子进程执行器（Popen + 读线程 + terminate/kill），ffmpeg/ffprobe 统一走这里。 |
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理与后台线程 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
-| `static/` | 主题 CSS、核对台 JS、质检队列 JS/HTML、空态 HTML；`app.py` 启动时读取。JS 改动必须过 `node --check static/reviewer.js` 与 `node --check static/qa_panel.js`。 |
+| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）；改 Python 后必须先重打 sidecar。 |
+| `static/` | **legacy**：旧 Gradio 界面的主题 CSS、核对台 JS、质检队列 JS/HTML；`app.py` 启动时读取。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
-| `core/settings.py` | 应用级设置（启用的引擎、自动压制代理），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。 |
+| `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
 | `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`。 |
 | `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
 | `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
 | `outputs/` | 生成的字幕样例和运行产物。 |
-| `README.md` | 面向用户的安装、功能和调参说明；改变用户可见行为时同步更新。 |
+| `app.py` | **legacy**：旧 Gradio 页面，仅修关键 bug，不接新功能。 |
+| `README.md` / `README_EN.md` / `CONTRIBUTING.md` | 面向用户与贡献者的说明；改变用户可见行为时同步更新。 |
 
 ## 3. 补漏核对工作台设计原则
+
+> 本章前段（`review_payload`、`REVIEWER_CLIENT_JS`、`gr.Warning()`、Gradio 进度条）描述的是**旧 Gradio 界面**的契约；桌面端的对应实现与约束在 §3.4–§3.7。共用内核的规则（断句评测、并发与取消、日志、覆盖审计）对两边都成立。
 
 - **监看画面与转录源解耦**：`review_payload` 的 `src` 有四种来源——自动跟随导入的媒体、手动导入的任意本地片源（`📂 导入监看画面`）、`outputs/web_proxies` 里的历史 480p 代理（`📦` 下拉，零拷贝）、以及「已关闭」空态。手动片源路径记录在 `outputs/monitor_last.json`，供下次打开自动恢复；`prepare_review_workspace`（即 `media.change`）会清空该记忆，重新回到自动模式。`src` 为空时前端必须销毁 `window.__reviewerInstance` 与 keydown 监听，避免悬空引用。
 - 底部核对区由 `review_cues_state` 管理，和当前转写结果 `cues_state` 分离。导入 SRT 或“将本次转写设为基线”才会覆盖核对基线；“添加本次局部转写”追加去重后的条目。

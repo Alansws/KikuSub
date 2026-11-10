@@ -6,68 +6,177 @@
 
 <p align="center">听清每一句，对准每一帧。</p>
 
-本地运行的日语影视字幕转写与时间轴核对工具，界面基于 Gradio。
-
-上传视频或音频后，程序用 Silero VAD 切分语音段，交给你选择的识别引擎转写，然后在「视频 + 波形」核对台里逐句校对、补录漏句，最后导出 SRT / VTT / TXT。除首次下载模型权重外，全部推理在本机完成，媒体文件不会离开本地。
+<p align="center">
+  macOS 上的本地日语影视字幕工作台：Electron + Svelte 原生外壳，Python 内核负责识别与时间轴。导入 → 转写 → 核对 → 质检 → AI 优化 / 翻译 → 导出，一条流水线跑完。
+</p>
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/Alansws/KikuSub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Alansws/KikuSub/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
-  <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 | 3.11">
-  <img src="https://img.shields.io/badge/Gradio-4.25%2B-FF7C00?style=flat-square" alt="Gradio 4.25+">
-  <img src="https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch 2.1+">
+  <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS 12+">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-555?style=flat-square" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
   <a href="README_EN.md"><img src="https://img.shields.io/badge/Docs-English-lightgrey?style=flat-square" alt="English"></a>
 </p>
 
-![工作台主界面：转写参数、视频监看、波形时间轴与字幕精修面板](docs/screenshot-workbench.jpg)
+![核对台：视频监看、波形时间轴、字幕轨道与右侧检查器](docs/images/workbench.jpg)
 
-![核对时间轴表格与全片转写结果](docs/screenshot-timeline.jpg)
+> 截图里的片源与字幕是演示数据，界面来自当前版本。
 
 ---
 
+## 它是什么
+
+一个**只在你自己电脑上跑**的日语字幕工具。视频不出本机、模型权重本地加载，适合处理番剧、电影、日剧、Galgame 录屏和广播剧。
+
+- **转写**：Silero VAD 切分语音，交给可切换的日语识别引擎，输出带时间轴的字幕。
+- **核对**：视频与波形同屏，边看边改；拖字幕块就能改时间，双击改字，⌘Z 撤回。
+- **质检**：把「可能漏句」「误删待核」「短句可疑」合成一条待核队列，逐条试听、补录。
+- **AI 优化 / 翻译**：用你自己的模型出一份**提案**，双栏对照后整批应用；翻译进独立平行轨，可导出原文 / 译文 / 双语。
+- **导出**：SRT / VTT / TXT，写到你指定的导出文件夹。
+
+除「AI 优化 / 翻译」需要你自备模型 API 外，转写与核对全程本机推理。
+
 ## 功能
 
-**转写**
+**导入与转写**
 
-- 两个可切换的日语识别引擎，见下方对比
-- Silero VAD 语音活动检测，按停顿切段；阈值、最短语音、静音判定、合并间隔、单段最长时长均可调
-- 可选 FFmpeg `dynaudnorm` 动态响度归一化（单声道下混），用于压低 BGM、抬高低音量人声
-- 支持按时间区间转写（`00:05:00` 或 `300`），可选择是否保留原片绝对时间轴
-- 转写过程中可随时「中途打断」，已完成部分会写盘为 `*.part_cancelled.srt`
-- 清理纯标点 / 纯省略号空行，另存为 `*.clean.srt`
+- 拖入视频 / 音频 / 字幕即可导入；MKV、HEVC 这类 Chromium 放不出的格式，导入后在后台自动压一份 480p 监看代理
+- 两个可切换的日语引擎（见下表），工具栏随时切换
+- 整片转写，或只转一个时间区间（`00:05:00` 或 `300`），可选是否保留原片绝对时间轴
+- VAD 阈值、静音判定、最短语音、合并间隔、单段最长时长等参数全部可在界面调；内置 6 套预设，可另存 / 覆盖 / 删除
+- 可选 FFmpeg `dynaudnorm` 动态响度归一化，压低 BGM、抬高低音量人声
+- 转写中途可打断，已完成部分落盘为 `*.part_cancelled.srt`
+- 幻觉门控：识别出但复核为空的整段会被丢弃，可疑短句标出，逐段明细写进任务报告
 
-**核对**
+**核对台**
 
-- 视频监看与波形时间轴同屏，播放头与视频进度实时同步
-- 波形支持滚轮 / 触控板双指平移与缩放，最大 50×（最小可视窗口约 0.4 秒）
-- 框选波形区间后可试听、直接识别入轨，或把起止时间同步到顶部转写区
-- 单行编辑、删除、插入、整表保存、复制当前句
-- 最近 50 步撤销 / 重做，覆盖删除、更新、插入、清空、导入、追加
-- 自动草稿与断点：`*.autosave_draft.srt` + `*.progress.json`，重新导入时自动定位到上次校对的行
-- 外部 SRT 导入为基线，支持「本次设为基线」与「添加本次局部转写」两种合并方式
-- **质检待核队列**：转写完成后自动浮到右下角，把「可能漏句 / 误删待核 / 短句待确认」合并成一条按时间排序的清单；每条可一键试听、自动框选、补录入轨、恢复原句或删除。处理进度写入 `*.qa.json`，同一次运行内刷新页面或重新打开同一媒体后继续；**重启应用后默认清空**。入口与「有没有待核项」解耦：媒体载入后显示「质检 · 待转写」，转写完成后即使 **0 处待核**也会保留为「✅ 质检完成」，不会整个消失；Qwen 引擎只覆盖「可能漏句」，另两类会在面板里明确标为「本引擎不启用」
+![选择参数：引擎、时间区间、输出格式与结果处理](docs/images/transcribe.jpg)
 
-**其它**
+- 视频、波形、字幕表、检查器四块联动；播放头进入某句，表格自动滚到该句并选中
+- 波形按可视窗口取包络，滚轮 / 捏合缩放，双指横移或 ⌥ 拖动平移，最大可放大到零点几秒
+- 刻度条、播放头两侧、视频进度条都能按住拖动逐帧擦洗：拖动时暂停、连续 seek，松手恢复播放
+- 单击跳转、拖过 4px 才框选；框选后可试听、只转写这一段、或单句重转
+- 底部字幕轨道：同区间的双语 / 三语行聚成一块，拖块体整体平移、拖两端单独改起止，一次 ⌘Z 整块回退
+- 原文 / 译文 / 双语三态显示；双语是「一条 cue 两行」
+- 右侧检查器常驻「暂存进度 / 导出」：暂存写工作草稿（0.9s 防抖自动写），导出才是交付文件
+- 冻结最近 50 步撤销 / 重做，覆盖删除、更新、插入、清空、导入、追加
 
-- 参数预设：内置 6 套，可另存、覆盖、删除
-- 任务详报：引擎、耗时、条数、字符数及全部生效参数，可一键复制
-- 默认只监听 `127.0.0.1:7860`，单文件上限 10 GB
+**质检待核队列**
+
+- 转写完成后出现在右下角，按时间排序：`missed`（有声音没识别）、`dropped`（识别出但被复核删除）、`suspect`（保留但短或密度低）、`coverage`（主 VAD 没切到的空白间隙）
+- 每条都能一键定位、自动框选、补录；处理进度写 `*.qa.json`
+- 入口与「有没有待核项」解耦：0 处待核也会显示「✅ 质检完成」，不会整个消失
+- 引擎能力如实声明：Qwen3 只覆盖「可能漏句」，另两类明确标注「本引擎不启用」
+
+**AI 优化与翻译**
+
+![AI 优化台：左原文、右建议，逐条对照后整批应用](docs/images/ai-view.jpg)
+
+- 所有 AI 结果先落成一份 **提案文件**，软件只负责渲染 diff 与应用——软件内生成、外部 agent 生成，界面完全一样
+- **提案里没有时间戳**：时间轴由软件按条号 join 回去，「时间轴不变」是结构保证，不是提示词承诺
+- 双栏对照：左原文只读，右建议双击即改；可逐条采纳 / 拒绝，也可只看改动
+- 应用 = 整批一次历史，⌘Z 一次全退回；digest 不符（换过片或改过原文）直接拒绝，一个字节都不动字幕
+- 翻译进独立平行轨，与原文逐条对齐；条数 / 序号 / 指纹任一不符就整批拒绝
+- 导出支持原文 / 译文 / 双语三种，`*.lang.srt` 与 `*.bilingual.srt` 分开命名
+- 不想用 API？「复制提示词」把带 SRT 的提示词复制出来，粘到任意网页版模型，再把回复「粘贴结果…」解析回来——只按顺序取文本，时间轴仍用你自己的
+- 自带 Agent 技能（`~/.agents/skills/kikusub-subtitle`），在 DeepSeek Harness 里说一句「帮我把这份字幕翻译成中文」即可
+
+**设置与运行**
+
+![设置页：引擎与模型、AI 优化、Agent 技能、外观](docs/images/settings-ai.jpg)
+
+- 引擎卡片按注册表渲染：语种、用途、体积、安装状态、启用开关、一键下载
+- 运行环境、导出文件夹、模型目录可随时改；改模型目录会自动重启内核并重新握手
+- 日志与诊断：`kikusub.log` / `main.log`，14 天 / 64 MB 保留策略，可一键复制诊断信息
+- 外观跟随系统或手动切浅色 / 深色；波形高度三档预设
 
 ## 两个引擎
 
 | | Anime Whisper | Qwen3-ASR + CTC |
 | --- | --- | --- |
 | 权重来源 | [`litagin/anime-whisper`](https://huggingface.co/litagin/anime-whisper) | [`jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf`](https://huggingface.co/jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf) |
+| 体积 | 约 2.8 GB | 约 3.8 GB |
 | 句内时间轴 | 由 VAD 段边界确定，段内按字符数比例分配 | 逐字 CTC 强制对齐，40 ms 帧粒度 |
 | 断句依据 | 标点正则 + 字数 / 时长上限 | 标点、停顿、助词、不可切分规则 + 动态规划 |
-| 重复抑制 | `no_repeat_ngram_size` + `repetition_penalty` | 依赖模型本身，另有字幕级缝合 |
 | 速度 | 较快 | 较慢，每段额外做一次 CTC 前向 |
 | 适合 | 先出通稿、长对话、口语流 | 精修、对时间轴敏感的场景 |
 
 两点需要说清楚：
 
-1. CTC 对齐的时间分辨率由声学帧决定。本项目编码器帧为 80 ms，再经 2 倍上采样，因此逐字时间戳的实际粒度是 **40 ms**，不是毫秒或微秒级。字幕文件里的三位毫秒只是格式化结果。
-2. Anime Whisper 路径的句内时间是**近似值**：句边界来自 VAD，段内多条字幕按字符数比例切分。需要精确到字的起止帧时请用 Qwen3 引擎。
+1. CTC 对齐的时间分辨率由声学帧决定。本项目编码器帧为 80 ms、再经 2 倍上采样，因此逐字时间戳的实际粒度是 **40 ms**，不是毫秒级；字幕里的三位毫秒只是格式化结果。
+2. Anime Whisper 的句内时间是**近似值**：句边界来自 VAD，段内多条字幕按字符数比例切分。需要精确到字的起止帧时请用 Qwen3 引擎。
+
+## 安装
+
+### 系统要求
+
+- macOS 12 或更高，Apple Silicon（arm64）
+- `ffmpeg` 与 `ffprobe`（`brew install ffmpeg`；应用会把 Homebrew 的路径补进 PATH）
+- 磁盘：两个模型合计约 6.6 GB，另留给代理缓存与字幕输出；建议预留 15 GB
+- 内存：建议 16 GB 以上（Qwen3-ASR 权重约 3.8 GB）
+
+### 使用打包好的 .app
+
+预编译包发布在 [Releases](https://github.com/Alansws/KikuSub/releases)。下载 `KikuSub.app`
+后拖进「应用程序」即可；如果那里还没有可用版本，按下面的「打包成 .app」自己构建一个，
+产物同样是 ad-hoc 自签名的。
+
+应用是 ad-hoc 自签名的，首次打开若被 Gatekeeper 拦下，在「系统设置 → 隐私与安全性」里点「仍要打开」，或：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/KikuSub.app
+```
+
+**首次启动**会先让你选模型目录（默认 `~/Library/Application Support/KikuSub/models`），选完才启动内核。模型不会随包分发，到「设置 → 引擎与模型」里按需一键下载；下载源默认走 `hf-mirror.com`，支持断点续传。
+
+## 从源码运行
+
+### 依赖
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt        # torch / transformers / silero-vad / fastapi …
+cd desktop && npm install && cd ..     # Electron + Svelte 构建链
+```
+
+### 开发模式
+
+```bash
+cd desktop
+npm run build          # 构建渲染层
+npx electron .         # 启动（自动拉起 Python sidecar）
+```
+
+sidecar 也可以单独跑，方便调接口：
+
+```bash
+source .venv/bin/activate
+python -m server --port 0        # 首行输出 {"event":"ready","port":…,"token":…}
+```
+
+> 如果 shell 里存在 `ELECTRON_RUN_AS_NODE=1`（某些 Electron 宿主会设），启动前清掉：
+> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .`
+
+### 打包成 .app
+
+```bash
+bash tools/pack/build_sidecar.sh   # PyInstaller onedir，约 3–5 分钟
+bash tools/pack/build_app.sh       # 装配 + 自签，产出 build/pack/KikuSub.app
+```
+
+改了 `core/` 或 `server/` 的 Python 代码后必须重跑 `build_sidecar.sh`，否则 `.app` 里还是旧接口——`build_app.sh` 会检查 sidecar 是否比源码旧并拒绝装配。
+
+### 测试
+
+```bash
+source .venv/bin/activate
+pytest -q                    # Python：内核、服务层、AI 提案与译文轨
+ruff check .                 # 风格
+
+cd desktop && npm run test:main   # 主进程：退出清理、密钥存储、技能安装
+```
 
 ## 工作流程
 
@@ -76,356 +185,73 @@
    │
    ├─ ffmpeg 提取 16 kHz 单声道（可选 dynaudnorm）
    │
-   ├─ Silero VAD → 语音段 → 按停顿/最长时长合并切分
+   ├─ Silero VAD → 语音段 → 按停顿 / 最长时长合并切分
    │
-   ├─ 引擎 A：Anime Whisper          ─→ 文本 → 标点/字数分句 → 按比例分配时间
+   ├─ 引擎 A：Anime Whisper          ─→ 文本 → 标点 / 字数分句 → 按比例分配时间
    └─ 引擎 B：Qwen3-ASR + CTC Head   ─→ 文本 → 强制对齐 → 逐字起止帧 → 动态规划断句
    │
-   ├─ 写出 SRT / VTT / TXT（outputs/ 或媒体同级目录）
+   ├─ 字幕自动写入「导出文件夹」，同时进核对台
    │
-   └─ 核对台：视频 + 波形 → 校对 / 补录 / 撤销 → 导出 *.reviewed.srt
+   ├─ 核对：视频 + 波形 → 校对 / 补录 / 拖动时间 → 暂存或导出
+   │
+   ├─ 质检：待核队列 → 逐条试听 / 补录 / 保留 / 删除
+   │
+   └─ AI（可选）：提案 → 双栏对照 → 应用润色或译文 → 导出原文 / 译文 / 双语
 ```
 
-## 环境要求
+## AI 优化与翻译怎么配
 
-- Python 3.10 或 3.11
-- `ffmpeg`、`ffprobe` 在系统 PATH 中
-- `transformers >= 5.13.0`（Qwen3-ASR 原生支持自该版本起提供，4.x 会直接 ImportError）
-- 磁盘：模型权重合计约 7 GB（以 Hugging Face 页面为准），另需字幕输出空间
-- 内存：建议 16 GB 以上。Qwen3-ASR 权重约 4 GB，在 CUDA / Apple Silicon 上以 bf16 加载，CPU 上回退 fp32
-- 计算设备自动选择：Apple Silicon（MPS）→ NVIDIA（CUDA）→ CPU
+设置页「AI 优化（实验功能）」里填三样：**Base URL**、**模型名**、**API Key**。任何 OpenAI 兼容的 `chat/completions` 服务都能用，默认值是 DeepSeek。
 
-## 安装
+- **Key 不写进 `settings.json`，也不进日志**：主进程用本机主密钥做 AES-256-GCM 加密，密文放在 `preferences.json`（`aik1:` 前缀），主密钥是 `{dataDir}/.ai-key`（0600）。渲染进程只在发请求的一刻解出明文，随 `X-AI-Key` 头带一次，服务层不读不写不记。
+- 不用 `safeStorage` 是刻意选择：本项目以 DMG + ad-hoc 签名分发，每次发版 cdhash 都变，钥匙串条目的 ACL 会全部失效，用户升级后 Key 全部作废。
+- 生成走单槽任务队列，进度复用 `/ws/jobs/{id}`；结构不合规只重问一次，仍失败就整份放弃，绝不产出半份提案。
+- 改动率超过 40% 会给出提示，防止模型把原话整体改写。
+- 取消只能落在分块之间（HTTP 请求不可中断），这是已知限制。
 
-### 一键脚本
+## 运行期目录
 
-Linux / macOS：
-
-```bash
-git clone https://github.com/Alansws/KikuSub.git
-cd KikuSub
-chmod +x install.sh
-./install.sh
-source .venv/bin/activate && python app.py
-```
-
-Windows（脚本会建好环境并直接启动）：
-
-```cmd
-git clone https://github.com/Alansws/KikuSub.git
-cd KikuSub
-install.bat
-```
-
-两个脚本都会先检查 `ffmpeg`，然后创建 `.venv` 并安装 `requirements.txt`。PyTorch 由 `requirements.txt` 按默认源安装；需要指定 CUDA 版本时请用下面的手动步骤。
-
-### 手动安装
-
-```bash
-# 1. 虚拟环境
-conda create -n kikusub python=3.10 -y
-conda activate kikusub
-
-# 2. PyTorch（按平台选择其一）
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121   # NVIDIA CUDA 12.1
-pip install torch torchaudio                                                     # Apple Silicon / CPU
-
-# 3. 依赖
-pip install -r requirements.txt
-
-# 4. 启动
-python app.py
-```
-
-启动后浏览器访问 <http://127.0.0.1:7860>（脚本会自动打开）。
-
-## 模型权重
-
-模型权重不进仓库（`.gitignore` 已排除 `models/`），首次使用对应引擎时会自动下载到 `models/`。
-
-### 自动下载
-
-程序默认把 `HF_ENDPOINT` 设为 `https://hf-mirror.com`，使用 `snapshot_download` 拉取，支持断点续传。若你希望直连 Hugging Face 官方源，修改 `app.py` 顶部的这一行：
-
-```python
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-```
-
-### 手动下载
-
-网络受限或下载中断时，可用 `huggingface-cli` 指定目录：
-
-```bash
-pip install -U huggingface_hub
-
-# Anime Whisper
-huggingface-cli download litagin/anime-whisper \
-  --local-dir models/anime-whisper
-
-# Qwen3-ASR + CTC 对齐头
-huggingface-cli download jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf \
-  --local-dir models/qwen3-asr-ja-anime
-```
-
-### 目录结构
-
-```text
-models/
-├── anime-whisper/
-│   ├── config.json
-│   ├── generation_config.json
-│   ├── model.safetensors
-│   ├── preprocessor_config.json
-│   ├── tokenizer.json
-│   └── vocab.json
-└── qwen3-asr-ja-anime/
-    ├── config.json
-    ├── model.safetensors
-    ├── tokenizer_config.json
-    ├── vocab.json
-    └── ctc_aligner_jav_vocalisation_v3.pt   # CTC 逐字对齐头
-```
-
-就绪判定：Anime Whisper 检查 `model.safetensors`；Qwen3 检查 `config.json` 与上述对齐头文件。
-
-### 自定义路径
-
-已有权重放在别处时，用环境变量指过去，无需复制：
-
-```bash
-export ANIME_WHISPER_MODEL=/data/models/anime-whisper
-export QWEN3_ASR_MODEL=/data/models/qwen3-asr-ja-anime
-```
-
-## 使用
-
-1. **上传媒体**：支持 `.mp4 .mkv .mov .webm .avi .m4v .ts` 与 `.wav .mp3 .m4a .flac .ogg .aac`。
-2. **选择引擎**：日常对话、需要通稿时选 Anime Whisper；需要精确到字的时间轴时选 Qwen3-ASR。
-3. **（可选）调参**：展开「声学分段与 VAD 参数精细调优」，或从预设下拉框载入一套。每个滑块下方都标了「调大 / 调小」的实际效果。
-4. **（可选）限定区间**：在「时间片段截取」里填起止时间；也可在核对台波形上框选后点「同步时间到顶部」。勾选「时间轴与原片全局对齐」可让时间戳直接对应原片进度。
-5. **开始转写**：进度条与状态行实时更新。需要停止时点「中途打断」，已完成部分会保留。
-6. **按质检队列核对**：转写完成后右下角出现「🔎 质检 N 处待核」。点「开始逐条核对」，程序会自动跳到该段、框选波形并播放到段尾：听到台词就点「⚡ 补录并插入」，没有就点「✓ 不是台词」；短句则听一遍点「✓ 保留」或「🗑 删除此句」。处理完自动跳下一条，不需要对照报告来回滚动。也可以继续用左侧波形手动框选补录，或在右侧单行编辑区修改后「更新此行」。所有改动都可撤销。
-7. **导出**：每次点「开始转写」成功出字幕后，结果已经**自动写入导出文件夹**（整片与转写页的区间任务都一样，不需要再手动点导出）；核对台的修改可随时再导出一次覆盖/另存。桌面版可在「设置 → 运行环境 → 导出文件夹」查看、打开或更改这个目录。桌面版核对台右侧检查器底部还常驻「暂存进度 / 导出」：暂存写的是运行数据目录里的工作草稿（防丢，不覆盖交付文件），导出写的是导出文件夹；即使重开应用后手动导入字幕、没有任务报告，也能直接导出。
-
-### 快捷键
-
-| 按键 | 作用 |
+| 用途 | 路径 |
 | --- | --- |
-| `空格` | 播放 / 暂停 |
-| `←` / `→` | 前后 1 帧（按 24 fps 计，约 42 ms） |
-| `Shift + ←` / `→` | 前后 5 帧 |
-| `Cmd/Ctrl + Z` | 撤销 |
-| `Cmd/Ctrl + Shift + Z`、`Ctrl + Y` | 重做 |
+| 数据 / 输出 / 代理 | `~/Library/Application Support/KikuSub/` |
+| 模型 | 首次启动时选择；默认同上 `models/` |
+| 启动偏好 | 同上 `preferences.json`（模型目录 / 主题 / 首次设置完成 / AI Key 密文） |
+| 日志 | 同上 `outputs/logs/kikusub.log`、`main.log`；14 天 / 64 MB 保留 |
+| 导出文件夹 | 设置页可改；字幕交付文件写这里 |
 
-帧步进按固定 24 fps 换算，与源视频实际帧率无关，用作固定步长的微调。
+开发模式下输出、日志、代理都落在仓库的 `outputs/`，与 sidecar 单独启动时一致。
 
-### 波形操作
+## 常见问题
 
-- 触控板双指横滑：平移；双指垂直或捏合：无级缩放
-- 缩放条范围 1×–50×，「100% 全景」回到全片，「聚焦」以播放头为中心放大
-- 拖拽框选后出现工具条：试听选区、识别并直接入轨、同步时间到顶部
-- 播放器进度条拖动时只实时刷新时间读数与播放头，松手后才真正跳转（`fastSeek`），长视频拖拽不再卡顿
+**MKV 导入后画面黑屏 / 拖不动？**
+Chromium 解不了部分 MKV、HEVC。应用会在后台压一份 480p 代理，压完自动换源；也可以在转写页手动触发。播放头在代理没压好时照样能走。
 
-## 参数与预设
+**模型下载很慢或失败？**
+默认走 `hf-mirror.com`。想直连 Hugging Face，把 `server` 启动环境里的 `HF_ENDPOINT` 改回官方源即可；也可以先用 `huggingface-cli` 把权重下到模型目录。
 
-预设保存在根目录 `presets.json`（`版本: 1`，按引擎分 `whisper` / `qwen` 两组键）。写入是原子替换，旧版本文件缺少字段时按默认值补齐。
+**AI 生成报 401 / 一直失败？**
+先在设置页点「测试连接」。Key 只存在本机；换过机器或删过 `preferences.json` 需要重填。日志里只记 host / model / 状态码 / 耗时，不会出现 Key。
 
-### Anime Whisper 常用参数
+**应用启动后显示「内核未连接」？**
+看 `outputs/logs/kikusub.log` 末尾；常见原因是 Python 环境被删、`ffmpeg` 不在 PATH，或模型目录不可写。
 
-| 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| VAD 判定阈值 | 0.30 | 调小更灵敏，调大抗噪（0.30 是 2026-10 全片实测的最优折中：CER 22.46%、插入 80 字） |
-| 留白缓冲 | 200 ms | 段首尾外扩，防吞音 |
-| 判定停顿静音 | 150 ms | 调小切得碎，调大切得长 |
-| 最短语音 | 120 ms | 过滤爆音、捕获短叹词 |
-| 片段合并间隔 | 0.30 s | 相邻段合并的间隔上限 |
-| 单次送模最长 | 12 s | 调小更快更少幻觉 |
-| 重复抑制 n-gram | 5 | 0 为关闭 |
-| 重复惩罚 | 1.15 | 建议 1.10–1.20 |
-| 响度归一化 | 关 | 弱人声场景再开 |
-
-### Qwen3-ASR 常用参数
-
-| 参数 | 默认 | 说明 |
-| --- | --- | --- |
-| VAD 判定阈值 | 0.30 | 与 Whisper 侧同值（两引擎共用同一套 Silero VAD 与合并逻辑） |
-| 首尾留白 | 150 ms | 防句首辅音、句尾被切 |
-| 合并间隔 | 0.5 s | 相邻语音段合并 |
-| 断句停顿静音 | 0.12 s | 低于此长度的停顿不作为断句点 |
-| 单条字幕目标时长 | 4.3 s | 超过则计入切分代价 |
-| 单条最多字数 | 21 | 超出按日语语法平滑折断 |
-| 送模音频窗口 | 16 s | 建议 12–18 s |
-| CTC 逐字对齐 | 开 | 关闭后回退到按比例分句 |
-
-## 输出文件
-
-| 文件 | 生成时机 |
-| --- | --- |
-| `{名称}.srt` / `.vtt` / `.txt` | 转写完成 |
-| `{名称}.qwen.*` | 使用 Qwen3 引擎时加引擎后缀 |
-| `{名称}_{00m05s-00m08s}.*` | 限定时间区间时带区间后缀 |
-| `{名称}.part_cancelled.*` | 中途打断，保存已完成部分 |
-| `{名称}.clean.*` | 清理纯标点空行后 |
-| `{名称}.autosave_draft.srt` | 每次核对编辑后自动写盘 |
-| `{名称}.progress.json` | 记录最后校对行、时间与文本 |
-| `{名称}.reviewed.srt` | 核对台导出 |
-| `{名称}.missed.json` | 疑似漏句区间清单（有漏句时才写出） |
-| `{名称}.qa.json` | 质检待核队列与逐条处理进度（同一次运行内刷新/重开媒体恢复，重启后清空） |
-| `outputs/web_proxies/{名称}_{大小}_preview.mp4` | 手动压制的 480p 监看代理 |
-| `outputs/monitor_last.json` | 上次手动指定的监看片源，用于下次打开自动恢复 |
-| `outputs/.cache/audio/*.wav` | 16k 音频解码缓存，转写与波形共用 |
-
-默认写入 `outputs/`（桌面版为 `~/Library/Application Support/KikuSub/outputs`）；勾选「保存至媒体同级目录」时改写到媒体所在目录。桌面版可在设置里把「导出文件夹」改到任意位置，只影响字幕交付文件，日志 / 质检 / 代理仍在运行数据目录。
+**还想要原来的网页版？**
+旧版 Gradio 界面仍在仓库里（`python app.py`，监听 `127.0.0.1:7860`），对应标签 [`v0.9-gradio`](https://github.com/Alansws/KikuSub/releases/tag/v0.9-gradio)。桌面端是从那个版本长出来的，`main` 分支以桌面端为准。
 
 ## 项目结构
 
 ```text
-KikuSub/
-├── app.py                    # Gradio 界面、任务编排、核对台逻辑与前端波形脚本
-├── transcribe.py             # 数据结构与格式转换、FFmpeg 抽取、VAD 切分、Anime Whisper 流水线
-├── qwen_ctc.py               # Qwen3-ASR 推理、CTC 对齐头、日语断句动态规划、字幕缝合
-├── audio_cache.py            # 16k wav 解码缓存：转写与波形共用一次解码
-├── presets.py                # presets.json 校验、兼容读取与原子写入
-├── presets.json              # 内置参数预设
-├── requirements.txt
-├── ruff.toml                 # Lint 规则配置
-├── install.sh / install.bat  # 安装脚本
-├── .github/workflows/ci.yml  # Ruff 检查、语法编译与预设校验
-├── README.md / README_EN.md
-├── CONTRIBUTING.md
-├── LICENSE
-├── docs/                     # README 截图与 logo
-├── models/                   # 模型权重，不入库
-└── outputs/                  # 字幕与代理产物，不入库
+core/       算法内核（无 UI 依赖）：VAD、识别、断句、覆盖率、提案、翻译、设置
+server/     FastAPI 服务层：/api/*、/media/*、/ws/jobs/*，Electron 的 sidecar
+desktop/    Electron 主进程 + Svelte 5 渲染进程（核对台、AI 优化台、设置）
+tests/      pytest 回归（内核 / 服务层 / AI 链路）
+tools/      评测台、打包脚本、验收小工具
+static/     旧 Gradio 界面的 JS / CSS（v0.9-gradio 起保留）
+docs/       开发文档与历史记录
 ```
 
-## 常见问题
+架构与实现约束写在 [AGENTS.md](AGENTS.md)，AI 这条线的契约写在 [AI 优化与翻译开发文档](docs/AI优化与翻译-开发文档-2026-11.md)。
 
-**启动报 `ffmpeg: command not found`**
-装好 FFmpeg 并确保在 PATH 中：macOS `brew install ffmpeg`，Ubuntu `sudo apt install ffmpeg`，Windows `winget install Gyan.FFmpeg`。
+## 许可
 
-**模型下载卡住或失败**
-默认走 `hf-mirror.com`。若该镜像不可用，改 `app.py` 顶部的 `HF_ENDPOINT`，或用上面的 `huggingface-cli` 手动下载后放进 `models/`。
-
-**`ImportError: cannot import name 'AutoModelForMultimodalLM'`**
-`transformers` 版本过低。Qwen3-ASR 原生支持从 5.13.0 开始提供，执行 `pip install -U "transformers>=5.13.0"` 后重试。
-
-**识别结果重复复读**
-调大「重复抑制 n-gram」或「重复惩罚」，并把「单次送模最长」降到 8–12 s。
-
-**整段漏句 / 弱人声没识别到**
-调低 VAD 阈值（0.20 以下）、调大留白缓冲，并开启响度归一化；仍漏的话直接在波形上框选补录。
-转写时 VAD 判定有人声但模型无输出的片段会自动做一次增益重试，仍失败则记入 `{名称}.missed.json`，
-任务详报的【疑似漏句区间】与核对台状态行也会列出时间点，直接按时间框选补录即可。
-模型对纯静音/配乐常返回 `…`、`…。`、`♪` 而不是空串，这些同样按「无内容」处理：既不会写成字幕，
-也会进漏句清单。VAD 退出阈值有下限保护，阈值调到 0.15 以下不会退化成「整片一段」。
-漏句清单现在会记录每段的峰值与有效值：**峰值低于 0.02 的近静音段只在 `.missed.json` 里留档，
-不进任务详报、也不在核对台状态行提示**，避免拿「配乐/底噪误判」反复打扰；报告里若隐藏了条目，
-会明确写「另有 N 处近静音段未展示」。
-
-**「质检待核队列」里的三类问题分别是什么**
-报告和队列使用同一份数据，只是队列把它变成了可逐条操作的清单：
-
-- **🔍 可能漏句**：VAD 认为这里有人声，但模型两次都识别为空。听一下：有台词就「⚡ 补录并插入」；只是配乐/底噪就「✓ 不是台词」。
-- **✂️ 误删待核**：模型先识别出了文字，但时间戳复核为空，被当成脑补自动删掉了。若你确实听到声音，可「↩ 恢复原句」或「⚡ 重新识别」；确认是脑补就「✓ 确认删除」。
-- **👂 短句待确认**：字幕已经保留，只是太短/信息量低，容易是模型脑补。听一遍决定「✓ 保留」还是「🗑 删除此句」。点「保留」时若核对台缺少这句，会自动补回并刷新表格，避免“导出里有、表格里没有”。
-
-队列从转写结果自动生成并按时间排序；每条都带起止时间、时长、该段峰值与命中判据。
-处理进度会写进 `{名称}.qa.json`，同一次运行内重新打开同一媒体时恢复；新一轮转写会重新生成干净队列；重启应用后旧队列不会带入，默认是清空状态。
-
-**为什么有时「质检待核队列」是 0 条？Qwen 为什么只有「可能漏句」？**
-
-0 条是**检查完成后的正常结果**，不代表功能不存在。入口和队列内容已经解耦：
-
-- 媒体刚载入、还没转写：右下角显示「🔎 质检 · 待转写」；
-- 转写完成且有可疑片段：自动展开队列；
-- 转写完成且 0 条：入口保留为「✅ 质检完成 · 0 处待核」，点开可以看到本次检查了多少切片、三类检查各自的覆盖情况。**第一次**遇到空队列时面板会自动展开一次（之后只保留绿色浮标，避免每段短视频都弹窗）。
-
-引擎覆盖范围也不同，面板和任务详报都会明确标注：
-
-- **Anime Whisper**：三类都执行（漏句 + 时间戳复核导致的误删/短句）。
-- **Qwen3-ASR + CTC**：只执行「🔍 可能漏句」。它没有「带时间戳重解码」这一步，所以「✂️ 误删待核 / 👂 短句待确认」标为**本引擎不启用**，表示「未检查」，不是「检查过且干净」；需要这两类时请用 Anime Whisper 重转，或直接在核对台按时间听。
-
-**任务详报里的「幻觉门控 / 幻觉复核」是怎么判的**
-Anime Whisper 对三类可疑段会再用「带时间戳」模式解一次，确认它不是模型在非对白段上的臆造：
-
-- **重复复读**：去掉标点后同一 1–4 字单元连续 ≥6 次（如 `じゅるっ、じゅるっ…`）；
-- **短段复核**：时长 <1.2s 且至少 2 字（`…ッ!`、`はい` 都在此列）；
-- **低密度**：时长 ≥2s 却 <0.8 字/秒（8 秒只出 3 字），大概率是非对白段。
-
-复核结果为空或纯标点 → 该段丢弃，计入【幻觉门控】；复核仍有文本 → 保留但计入【幻觉复核】，
-建议人工核对。报告会逐段列出时间轴、命中判据、该段峰值与识别原文，可直接复制对时；
-终端不再逐段刷屏（明细只写 debug 日志）。Qwen3-ASR 路径没有这一步时间戳复核，报告会注明「该引擎不启用」。
-
-**单条字幕太长（超过 4.3 秒）**
-单句超长会被再切一刀：切点优先落在标点后、其次落在助词后（は/が/を/に/で/と/て 等），
-时间跟着文本走——Qwen 引擎用 CTC 逐字发声时间，Whisper 引擎用「字符比例 + 该段能量谷」吸附。
-不会出现「按时间对半硬切」导致的半句断词；文本切不开（如全汉字连写）时宁可保留一条长字幕。
-
-**磁盘被 `outputs/.cache/audio/` 占用**
-这是 16k 解码缓存（约 115MB/小时素材），默认上限 4GB 并按最近使用时间自动淘汰。
-想完全关闭可设环境变量 `KIKUSUB_AUDIO_CACHE=0`，代价是每次转写与每次打开核对台都重新解码。
-
-**视频黑屏或卡顿**
-浏览器对 MKV 容器和部分 HEVC 编码支持有限。点「⚡ 压制 480p 代理」生成代理；macOS 走 VideoToolbox，其它平台回退到 libx264。
-代理只需压一次，之后导入同名原片会自动秒级复用；也可以在「📦 历史 480p 代理」下拉里点选直接载入（零拷贝，不复制文件）。
-
-**监看画面想换成别的片源，或想暂时关掉**
-监看画面与转录源是解耦的，默认跟随导入的媒体自动载入，也可以完全手动控制：
-
-- 「📂 导入监看画面」：任选一个本地视频作为画面与波形来源，不影响上方转录源，也不改动字幕基线；
-- 「📦 历史 480p 代理」：直接复用 `outputs/web_proxies/` 里已压好的成片，秒开且不复制文件；
-- 「✕ 关闭监看」：清空画面与波形，字幕数据完整保留；
-- 「↺ 恢复自动」：重新跟随当前导入的媒体。
-
-手动指定过的片源会记录在 `outputs/monitor_last.json`，下次打开工作台自动恢复；
-若该文件已被移动或删除，状态行会明确提示，重新指定即可。
-
-**导入中日双语 SRT 后，画面上只显示一行字幕**
-双语 SRT 常见两种写法：一种是一条字幕里写两行文本，另一种是日语、中文各占一条、起止时间完全相同。
-两种写法现在都能完整叠加显示：同一时间区间内的多条字幕会自动聚合成多行（行序与导入时一致），不再只显示第一条。
-
-**放大波形后播放，字幕不跳转 / 播放头跑出可视范围**
-字幕显示已与下方波形的缩放视窗完全解耦，任何缩放比例下都会逐句同步。
-放大到局部时播放，视窗还会整页跟随播放头（工具栏「🧲 跟随」可开关）。
-跟随是持久偏好：缩放/平移波形不会把它取消；暂停时点字幕、点波形或拖完播放头，
-视窗也会自动把播放头带回画面，不需要先敲空格开始播放。
-
-**Apple Silicon 上部分算子报错**
-代码已设置 `PYTORCH_ENABLE_MPS_FALLBACK=1`，个别算子会回退 CPU，速度略降但可运行。
-
-**显存 / 内存不足**
-先用 Anime Whisper 跑通，或降低「送模音频窗口」。两个引擎同时加载会各自占用一份显存。
-
-## 已知限制
-
-- 一次处理一个文件，没有批量队列
-- 仅面向日语，不做翻译、不做字幕渲染与压制
-- 界面文案为中文，未做 i18n
-- 帧步进按 24 fps 换算，不读取源视频真实帧率
-- `outputs/` 与 `models/` 不做清理，长期使用需自行管理磁盘
-- 模型权重遵循各自仓库的许可证，与本项目 MIT 许可相互独立
-- **片尾主题歌 / 强伴奏人声段落是已知弱区**：对白段（片头至 42:00）字符错误率 21.7%，
-  而主题歌《Rain》（42:00 之后）受伴奏与混响干扰，同一套 VAD + ASR 无法做到低错误率。
-  实测结论是「维持现状」——跳过这段会让歌词 100% 丢失，人声分离（demucs 类）属另一个量级的工程，
-  暂不引入。需要精确歌词时建议人工校对这一段。
-
-## 致谢
-
-本项目的识别能力来自以下开源工作：
-
-- [litagin/anime-whisper](https://huggingface.co/litagin/anime-whisper)：面向日语动漫语料微调的 Whisper 模型
-- [jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf](https://huggingface.co/jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf)：Qwen3-ASR 日语微调权重与 CTC 对齐头
-- [silero-vad](https://github.com/snakers4/silero-vad)：语音活动检测
-- [Gradio](https://www.gradio.app/)：Web 界面
-- [FFmpeg](https://ffmpeg.org/)：音视频抽取与转码
-
-## 贡献
-
-Issue 与 Pull Request 都欢迎。开发环境搭建、代码约定、提 issue 需要附带哪些信息，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 许可证
-
-本仓库的代码（`app.py`、`transcribe.py`、`qwen_ctc.py`、`presets.py` 及界面脚本）以 [MIT License](LICENSE) 发布。
-
-运行时下载的模型权重不在此许可范围内，请分别查阅上述 Hugging Face 仓库的许可条款后再用于分发或商用。
+[MIT](LICENSE)。模型权重遵循各自仓库的许可；请只处理你有权使用的素材。

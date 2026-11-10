@@ -4,70 +4,179 @@
 
 <h1 align="center">KikuSub</h1>
 
-<p align="center">Hear every line. Align every frame.</p>
+<p align="center">Hear every line. Hit every frame.</p>
 
-A local, browser-based workbench for transcribing Japanese video and audio into subtitles, then fixing the timing by hand.
-
-You upload a file, the app segments speech with Silero VAD, transcribes each segment with one of two engines, and gives you a video-plus-waveform editor to review the result line by line, patch missed lines, and export SRT / VTT / TXT. Apart from the one-time model download, all inference runs on your machine — media never leaves it.
+<p align="center">
+  A local-first Japanese subtitle workbench for macOS. An Electron + Svelte shell on top of a Python core: import → transcribe → review → QA → AI polish / translate → export, in one pipeline.
+</p>
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://github.com/Alansws/KikuSub/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Alansws/KikuSub/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
-  <img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 | 3.11">
-  <img src="https://img.shields.io/badge/Gradio-4.25%2B-FF7C00?style=flat-square" alt="Gradio 4.25+">
-  <img src="https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch 2.1+">
-  <a href="README.md"><img src="https://img.shields.io/badge/Docs-简体中文-blue?style=flat-square" alt="Chinese"></a>
+  <img src="https://img.shields.io/badge/macOS-12%2B-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS 12+">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-555?style=flat-square" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+  <a href="README.md"><img src="https://img.shields.io/badge/Docs-%E4%B8%AD%E6%96%87-lightgrey?style=flat-square" alt="Chinese"></a>
 </p>
 
-![Main workbench: transcription settings, video monitor, waveform timeline and cue editor](docs/screenshot-workbench.jpg)
+![Review desk: video monitor, waveform timeline, subtitle lane and inspector](docs/images/workbench.jpg)
 
-![Review timeline table and full transcription result](docs/screenshot-timeline.jpg)
+> The source and subtitles in the screenshots are demo data; the UI is from the current build.
 
 ---
 
+## What it is
+
+A Japanese subtitle tool that runs **entirely on your own machine**. Your video never leaves the computer, model weights are loaded locally, and the whole thing is built for anime, films, J-dramas, Galgame recordings and radio plays.
+
+- **Transcribe** — Silero VAD segments the speech, then a switchable Japanese engine produces timed subtitles.
+- **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
+- **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
+- **AI polish / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. Translations live in a parallel track and export as source, target or bilingual.
+- **Export** — SRT / VTT / TXT into the export folder you choose.
+
+Everything except the optional AI features is local inference.
+
 ## Features
 
-**Transcription**
+**Import & transcribe**
 
-- Two switchable Japanese ASR engines (comparison below)
-- Silero VAD segmentation by pause; adjustable threshold, minimum speech length, silence threshold, merge gap and maximum segment length
-- Optional FFmpeg `dynaudnorm` loudness normalisation on the mono downmix, to lift quiet dialogue and tame background music
-- Transcribe a time range only (`00:05:00` or `300`), optionally keeping absolute timeline positions
-- Interrupt a running job at any point; completed lines are written to `*.part_cancelled.srt`
-- Strip punctuation-only and ellipsis-only cues into a separate `*.clean.srt`
+- Drag in video, audio or subtitles. MKV and HEVC — which Chromium cannot decode — get a 480p preview proxy built in the background.
+- Two switchable Japanese engines (see below).
+- Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
+- All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. Six built-in presets, plus save / overwrite / delete.
+- Optional FFmpeg `dynaudnorm` to push down BGM and lift quiet dialogue.
+- Cancel mid-run and keep what finished (`*.part_cancelled.srt`).
+- Hallucination gate: segments transcribed but re-checked as empty are dropped, suspicious short cues are marked, and the per-segment details go into the task report.
 
-**Review**
+**Review desk**
 
-- Video preview and waveform timeline on one screen, playhead synced to playback
-- Waveform pan and zoom via trackpad or wheel, up to 50× (smallest visible window around 0.4 s)
-- Select a region to preview it, transcribe it straight into the timeline, or push its start/end times to the transcription form
-- Edit, delete and insert single cues; save whole-table edits; copy the current line
-- Undo / redo for the last 50 review operations, covering delete, update, insert, clear, import and append
-- Autosave and resume: `*.autosave_draft.srt` plus `*.progress.json`; re-importing jumps back to the line you last edited
-- Import an external SRT as a baseline, then merge results either by replacing the baseline or by appending only new cues
-- **QA queue**: after a run, a floating dock merges "possible missed line / deleted by hallucination check / short line to confirm" into one time-ordered list. Each item can be listened to, auto-selected on the waveform, patched in, restored, or deleted; progress is saved to `*.qa.json` and survives a reload within the same app run; restarting the app starts with an empty queue. The entry point is independent of the item count: once media is loaded it shows "QA · waiting for transcription", and a finished run with **0 items** stays visible as "✅ QA complete" instead of disappearing. The Qwen engine covers only "possible missed line"; the other two checks are explicitly marked as unavailable for that engine
+![Parameters: engine, time range, output format and result handling](docs/images/transcribe.jpg)
 
-**Other**
+- Video, waveform, cue table and inspector stay in sync: when the playhead enters a cue, the table scrolls to it and selects it.
+- The waveform is fetched per visible window; scroll / pinch to zoom, two-finger pan or ⌥-drag to move. Zoom goes far enough to see a fraction of a second.
+- Ruler, playhead edges and the video progress bar are all scrubbable: playback pauses, the frame follows every 16 ms, and the previous state resumes on release.
+- Click to seek; drag past 4 px to start a selection. A selection can be auditioned, transcribed on its own, or a single cue can be re-transcribed.
+- Cue lane at the bottom: bilingual / trilingual lines sharing a time range form one block. Drag the body to shift both edges, drag an edge to retime one side — a single ⌘Z undoes the whole move.
+- Source / target / bilingual display; bilingual means two lines inside one cue.
+- The inspector always carries **Save draft / Export**: drafts autosave with a 0.9 s debounce, export writes the deliverable.
+- 50 steps of undo / redo covering delete, update, insert, clear, import and append.
 
-- Parameter presets: six built in, plus save / overwrite / delete
-- Run report with engine, elapsed time, cue and character counts, and every effective parameter; one-click copy
-- Binds to `127.0.0.1:7860` only; upload limit 10 GB
+**QA queue**
+
+- Appears bottom-right after a run, sorted by time: `missed` (speech with no text), `dropped` (text that was gated away), `suspect` (kept but short or sparse), `coverage` (gaps the main VAD never segmented).
+- Every item can be located, auto-selected and re-transcribed; progress is written to `*.qa.json`.
+- The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
+- Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
+
+**AI polish & translation**
+
+![AI view: source on the left, suggestion on the right, applied as one batch](docs/images/ai-view.jpg)
+
+- Every AI result lands as a **proposal file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
+- **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
+- Two columns: source is read-only, the suggestion is editable on double-click. Accept or reject item by item; filter to changed rows only.
+- Applying is one history entry — ⌘Z reverts the whole batch. A digest mismatch (different media or edited source) is rejected without touching a single byte.
+- Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
+- Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`).
+- No API? **Copy prompt** gives you a prompt containing the SRT; paste the model's reply back and it is parsed by order alone — indices and timestamps are discarded, your timeline is kept.
+- Ships an agent skill (`~/.agents/skills/kikusub-subtitle`) so a DeepSeek Harness session can do the same job.
+
+**Settings & runtime**
+
+![Settings: engines, AI options, agent skill, appearance](docs/images/settings-ai.jpg)
+
+- Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download.
+- Runtime, export folder and model folder can be changed anytime; changing the model folder restarts the sidecar and re-handshakes.
+- Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention, one-click copy of diagnostic info.
+- Follow the system theme or force light / dark; three waveform heights.
 
 ## The two engines
 
 | | Anime Whisper | Qwen3-ASR + CTC |
 | --- | --- | --- |
 | Weights | [`litagin/anime-whisper`](https://huggingface.co/litagin/anime-whisper) | [`jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf`](https://huggingface.co/jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf) |
-| Within-cue timing | VAD segment boundaries; split inside a segment by character count | Per-character CTC forced alignment, 40 ms frame granularity |
-| Cue splitting | Punctuation regex plus duration / length caps | Punctuation, pauses, particles, unbreakable-pair rules, dynamic programming |
-| Repetition control | `no_repeat_ngram_size` and `repetition_penalty` | Handled by the model, plus a cue-level merge pass |
-| Speed | Faster | Slower — one extra CTC forward pass per segment |
-| Best for | First-pass drafts, long dialogue, conversational flow | Fine-tuning, timing-sensitive work |
+| Size | ~2.8 GB | ~3.8 GB |
+| Timing inside a cue | VAD boundaries, proportional to character count | per-character CTC forced alignment, 40 ms frames |
+| Segmentation | punctuation rules + length / duration caps | punctuation, pauses, particles, unbreakable-rule DP |
+| Speed | faster | slower, one extra CTC pass per segment |
+| Good for | first drafts, long dialogue | fine timing, timing-sensitive work |
 
-Two points worth stating plainly:
+Two caveats:
 
-1. CTC alignment resolution is set by the acoustic frame, not by the millisecond field in the output. The encoder frame here is 80 ms and the head upsamples by 2, so per-character timestamps land on a **40 ms** grid. The three-digit milliseconds in the subtitle file are formatting, not measured precision.
-2. On the Anime Whisper path, within-cue timing is an **approximation**: cue boundaries come from VAD, and multiple cues inside one segment are split proportionally by character count. Use the Qwen3 engine when you need per-character start and end frames.
+1. CTC resolution is set by acoustic frames. This encoder uses 80 ms frames with 2× upsampling, so the real granularity is **40 ms**; the three decimal places in the SRT are just formatting.
+2. Anime Whisper's intra-cue timing is approximate: boundaries come from VAD and multiple cues inside a segment are split proportionally. Use Qwen3 when you need per-character frames.
+
+## Installation
+
+### Requirements
+
+- macOS 12 or newer, Apple Silicon (arm64)
+- `ffmpeg` and `ffprobe` (`brew install ffmpeg`; the app adds Homebrew paths to PATH)
+- Disk: ~6.6 GB for both models plus proxy cache and output; 15 GB free is a safe number
+- RAM: 16 GB recommended (Qwen3-ASR weights are ~3.8 GB)
+
+### Using the packaged .app
+
+Prebuilt bundles are published under [Releases](https://github.com/Alansws/KikuSub/releases).
+Download `KikuSub.app` and drag it into Applications; if no build is available there yet, follow
+**Packaging** below to produce one locally — it is the same ad-hoc signed bundle.
+
+The app is ad-hoc signed. If Gatekeeper blocks the first launch, allow it under System Settings → Privacy & Security, or run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/KikuSub.app
+```
+
+**First launch** asks for a model folder (default `~/Library/Application Support/KikuSub/models`) before starting the core. Models are not bundled — download them under Settings → Engines & Models. The default source is `hf-mirror.com`, with resume support.
+
+## Running from source
+
+### Dependencies
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt        # torch / transformers / silero-vad / fastapi …
+cd desktop && npm install && cd ..     # Electron + Svelte toolchain
+```
+
+### Development
+
+```bash
+cd desktop
+npm run build          # build the renderer
+npx electron .         # start (spawns the Python sidecar)
+```
+
+The sidecar can also run on its own while debugging the API:
+
+```bash
+source .venv/bin/activate
+python -m server --port 0        # first stdout line: {"event":"ready","port":…,"token":…}
+```
+
+> If your shell exports `ELECTRON_RUN_AS_NODE=1` (some Electron hosts do), clear it:
+> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .`
+
+### Packaging
+
+```bash
+bash tools/pack/build_sidecar.sh   # PyInstaller onedir, 3–5 minutes
+bash tools/pack/build_app.sh       # assemble + ad-hoc sign → build/pack/KikuSub.app
+```
+
+Whenever you change Python under `core/` or `server/`, rebuild the sidecar first — `build_app.sh` refuses to assemble if the sidecar is older than the sources.
+
+### Tests
+
+```bash
+source .venv/bin/activate
+pytest -q                    # core, server, AI proposals and translation track
+ruff check .                 # style
+
+cd desktop && npm run test:main   # main process: cleanup, key storage, skill install
+```
 
 ## Pipeline
 
@@ -76,285 +185,73 @@ media file
    │
    ├─ ffmpeg → 16 kHz mono (optional dynaudnorm)
    │
-   ├─ Silero VAD → speech regions → merge and split by pause / max length
+   ├─ Silero VAD → speech segments → merged / split by pause and max length
    │
-   ├─ Engine A: Anime Whisper          ─→ text → punctuation/length split → proportional timing
-   └─ Engine B: Qwen3-ASR + CTC head   ─→ text → forced alignment → per-char frames → DP splitting
+   ├─ Engine A: Anime Whisper          ─→ text → punctuation / length split → proportional timing
+   └─ Engine B: Qwen3-ASR + CTC head   ─→ text → forced alignment → per-char frames → DP segmentation
    │
-   ├─ write SRT / VTT / TXT (outputs/ or next to the media)
+   ├─ subtitles written to the export folder and loaded into the review desk
    │
-   └─ review workspace: video + waveform → fix / patch / undo → export *.reviewed.srt
+   ├─ review: video + waveform → fix / patch / retime → draft or export
+   │
+   ├─ QA: queue → audition / re-transcribe / keep / delete
+   │
+   └─ AI (optional): proposal → two-column diff → apply polish or translation → export source / target / bilingual
 ```
 
-## Requirements
+## Configuring AI
 
-- Python 3.10 or 3.11
-- `ffmpeg` and `ffprobe` on your PATH
-- `transformers >= 5.13.0` — native Qwen3-ASR support starts there; 4.x fails at import
-- Disk: roughly 7 GB for both sets of weights (check the Hugging Face pages for exact sizes), plus room for output
-- Memory: 16 GB or more recommended. The Qwen3-ASR weights are about 4 GB, loaded in bf16 on CUDA and Apple Silicon, fp32 on CPU
-- Device selection is automatic: Apple Silicon (MPS) → NVIDIA (CUDA) → CPU
+Under Settings → **AI options (experimental)** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek.
 
-## Installation
+- **The key never enters `settings.json` or the logs.** The main process encrypts it with a machine-local master key (AES-256-GCM) and stores the ciphertext in `preferences.json` under an `aik1:` prefix; the master key is `{dataDir}/.ai-key` with mode 0600. The renderer decrypts it only for the request and sends it once as `X-AI-Key`; the server layer never reads, writes or logs it.
+- Not using `safeStorage` is deliberate: the app ships as a DMG with ad-hoc signing, so the cdhash changes on every release and Keychain ACLs would invalidate every user's key on upgrade.
+- Generation runs in the single-slot job queue and reuses `/ws/jobs/{id}`. A malformed proposal is retried exactly once; after that the whole batch is abandoned rather than producing half a proposal.
+- A change rate above 40% raises a warning so the model cannot silently rewrite the dialogue.
+- Cancellation only lands between chunks (HTTP requests are not interruptible) — a known limitation.
 
-### Install scripts
+## Runtime locations
 
-Linux / macOS:
+| Purpose | Path |
+| --- | --- |
+| Data / output / proxies | `~/Library/Application Support/KikuSub/` |
+| Models | chosen on first launch; defaults to `models/` above |
+| Preferences | `preferences.json` there (model folder, theme, first-run flag, AI key ciphertext) |
+| Logs | `outputs/logs/kikusub.log`, `main.log`; 14-day / 64 MB retention |
+| Export folder | configurable; deliverables are written here |
 
-```bash
-git clone https://github.com/Alansws/KikuSub.git
-cd KikuSub
-chmod +x install.sh
-./install.sh
-source .venv/bin/activate && python app.py
-```
+In development, output, logs and proxies live in the repository's `outputs/`, matching a standalone sidecar run.
 
-Windows (the script creates the environment and launches the app):
+## FAQ
 
-```cmd
-git clone https://github.com/Alansws/KikuSub.git
-cd KikuSub
-install.bat
-```
+**Black screen after importing MKV?**
+Chromium cannot decode some MKV / HEVC files. A 480p proxy is built in the background and swapped in automatically; the playhead still moves while it is being made.
 
-Both scripts check for `ffmpeg`, create `.venv` and install `requirements.txt`. PyTorch is installed from the default index; use the manual steps below if you need a specific CUDA build.
+**Model download is slow or fails?**
+The default endpoint is `hf-mirror.com`. Set `HF_ENDPOINT` back to the official Hugging Face endpoint for the sidecar, or pre-download the weights with `huggingface-cli`.
 
-### Manual setup
+**AI returns 401 / keeps failing?**
+Hit **Test connection** in Settings. The key only exists on this machine — a new machine or a deleted `preferences.json` means re-entering it. Logs only record host / model / status / duration.
 
-```bash
-# 1. Environment
-conda create -n kikusub python=3.10 -y
-conda activate kikusub
+**"Core not connected" after launch?**
+Check the tail of `outputs/logs/kikusub.log`. Usual causes: a deleted Python environment, `ffmpeg` missing from PATH, or an unwritable model folder.
 
-# 2. PyTorch (pick one)
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121   # NVIDIA CUDA 12.1
-pip install torch torchaudio                                                     # Apple Silicon / CPU
+**I still want the old web UI.**
+The Gradio interface is still in the repository (`python app.py`, listens on `127.0.0.1:7860`); that is what the [`v0.9-gradio`](https://github.com/Alansws/KikuSub/releases/tag/v0.9-gradio) tag captures. The desktop app grew out of it and `main` now tracks the desktop.
 
-# 3. Dependencies
-pip install -r requirements.txt
-
-# 4. Launch
-python app.py
-```
-
-Then open <http://127.0.0.1:7860> (the app opens it for you).
-
-## Model weights
-
-Weights are not part of the repository (`.gitignore` excludes `models/`). The first time you use an engine, its weights are downloaded into `models/`.
-
-### Automatic download
-
-The app sets `HF_ENDPOINT` to `https://hf-mirror.com` and fetches with `snapshot_download`, which resumes interrupted transfers. To use the official Hugging Face endpoint instead, edit this line near the top of `app.py`:
-
-```python
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-```
-
-### Manual download
-
-If the mirror is blocked or the download keeps failing:
-
-```bash
-pip install -U huggingface_hub
-
-# Anime Whisper
-huggingface-cli download litagin/anime-whisper \
-  --local-dir models/anime-whisper
-
-# Qwen3-ASR + CTC alignment head
-huggingface-cli download jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf \
-  --local-dir models/qwen3-asr-ja-anime
-```
-
-### Expected layout
+## Repository layout
 
 ```text
-models/
-├── anime-whisper/
-│   ├── config.json
-│   ├── generation_config.json
-│   ├── model.safetensors
-│   ├── preprocessor_config.json
-│   ├── tokenizer.json
-│   └── vocab.json
-└── qwen3-asr-ja-anime/
-    ├── config.json
-    ├── model.safetensors
-    ├── tokenizer_config.json
-    ├── vocab.json
-    └── ctc_aligner_jav_vocalisation_v3.pt   # CTC alignment head
+core/       algorithm core (no UI): VAD, engines, segmentation, coverage, proposals, translation, settings
+server/     FastAPI layer: /api/*, /media/*, /ws/jobs/* — the Electron sidecar
+desktop/    Electron main process + Svelte 5 renderer (review desk, AI view, settings)
+tests/      pytest regression (core / server / AI pipeline)
+tools/      evaluation harness, packaging scripts, small acceptance tools
+static/     legacy Gradio assets (kept since v0.9-gradio)
+docs/       development documents and history
 ```
 
-Readiness checks: Anime Whisper looks for `model.safetensors`; Qwen3 looks for `config.json` and the alignment head above.
-
-### Custom paths
-
-If the weights already live elsewhere, point the app at them instead of copying:
-
-```bash
-export ANIME_WHISPER_MODEL=/data/models/anime-whisper
-export QWEN3_ASR_MODEL=/data/models/qwen3-asr-ja-anime
-```
-
-## Usage
-
-1. **Upload media.** Supported: `.mp4 .mkv .mov .webm .avi .m4v .ts` and `.wav .mp3 .m4a .flac .ogg .aac`.
-2. **Pick an engine.** Anime Whisper for dialogue-heavy first drafts; Qwen3-ASR when per-character timing matters.
-3. **Tune if needed.** Open "声学分段与 VAD 参数精细调优" or load a preset. Each slider states what happens when you raise or lower it.
-4. **Limit the range if needed.** Fill in start and end times, or select a region on the waveform and click "同步时间到顶部". Keeping "时间轴与原片全局对齐" checked makes timestamps match the original timeline.
-5. **Transcribe.** Progress and status update live. "中途打断" stops the job and keeps what has been completed.
-6. **Review and patch.** Select a region on the waveform and click "识别并直接入轨", or edit a single line on the right and click "更新此行". Every change is undoable.
-7. **Export.** "导出最终已核对 SRT" in the review panel; the raw transcription can also be downloaded or saved next to the media.
-
-The interface is currently Chinese-only; the labels above are the ones you will see.
-
-### Keyboard shortcuts
-
-| Key | Action |
-| --- | --- |
-| `Space` | Play / pause |
-| `←` / `→` | Step one frame (assumes 24 fps, about 42 ms) |
-| `Shift + ←` / `→` | Step five frames |
-| `Cmd/Ctrl + Z` | Undo |
-| `Cmd/Ctrl + Shift + Z`, `Ctrl + Y` | Redo |
-
-Frame stepping always uses 24 fps as a fixed step size, regardless of the source frame rate.
-
-### Waveform controls
-
-- Trackpad two-finger horizontal: pan; vertical or pinch: continuous zoom
-- Zoom slider 1×–50×; "100% 全景" fits the whole file, "聚焦" centres and zooms on the playhead
-- Dragging a selection reveals a toolbar: preview, transcribe into the timeline, or copy the times to the form
-- While you drag the player progress bar only the time readout and playhead update; the actual seek (`fastSeek`) fires on release, so scrubbing long files stays smooth
-
-## Parameters and presets
-
-Presets live in `presets.json` at the repository root (`版本: 1`, split into `whisper` and `qwen` key groups). Writes are atomic; missing fields in older files fall back to defaults.
-
-### Anime Whisper
-
-| Parameter | Default | Effect |
-| --- | --- | --- |
-| VAD threshold | 0.20 | Lower is more sensitive, higher rejects more noise |
-| Speech padding | 200 ms | Extends segment edges to avoid clipped onsets |
-| Silence for pause | 150 ms | Lower splits more, higher keeps longer phrases |
-| Minimum speech | 120 ms | Filters clicks, keeps short interjections |
-| Merge gap | 0.30 s | Maximum gap for merging adjacent segments |
-| Max segment length | 12 s | Shorter is faster and hallucinates less |
-| No-repeat n-gram | 5 | 0 disables |
-| Repetition penalty | 1.15 | 1.10–1.20 recommended |
-| Loudness normalisation | off | Turn on for quiet sources |
-
-### Qwen3-ASR
-
-| Parameter | Default | Effect |
-| --- | --- | --- |
-| VAD threshold | 0.28 | As above |
-| Speech padding | 150 ms | Protects initial consonants and trailing vowels |
-| Merge gap | 0.5 s | Merges adjacent speech regions |
-| Pause for split | 0.12 s | Shorter pauses are not used as break points |
-| Target cue duration | 4.3 s | Longer cues incur a splitting cost |
-| Max characters per cue | 21 | Exceeding it triggers a grammar-aware break |
-| Audio window | 16 s | 12–18 s works best |
-| CTC alignment | on | Turning it off falls back to proportional splitting |
-
-## Output files
-
-| File | When |
-| --- | --- |
-| `{name}.srt` / `.vtt` / `.txt` | Transcription finished |
-| `{name}.qwen.*` | Engine suffix added when using Qwen3 |
-| `{name}_{00m05s-00m08s}.*` | Range suffix when a time range was set |
-| `{name}.part_cancelled.*` | Job interrupted, partial result kept |
-| `{name}.clean.*` | After removing punctuation-only cues |
-| `{name}.autosave_draft.srt` | Written after every review edit |
-| `{name}.progress.json` | Last reviewed line, timestamps and text |
-| `{name}.reviewed.srt` | Exported from the review workspace |
-| `{name}.missed.json` | Suspected missed-speech spans (written only when there are any) |
-| `{name}.qa.json` | QA queue items and per-item progress (same-run resume; cleared on app restart) |
-| `outputs/web_proxies/{name}_{size}_preview.mp4` | 480p preview proxy, generated on demand |
-| `outputs/.cache/audio/*.wav` | 16k decode cache shared by transcription and the waveform |
-
-Files go to `outputs/` by default, or next to the media when "保存至媒体同级目录" is checked.
-
-## Project layout
-
-```text
-KikuSub/
-├── app.py                    # Gradio UI, job orchestration, review workspace, waveform front end
-├── transcribe.py             # Data structures, format conversion, FFmpeg extraction, VAD, Anime Whisper
-├── qwen_ctc.py               # Qwen3-ASR inference, CTC head, Japanese cue splitting, cue healing
-├── audio_cache.py            # 16k wav decode cache shared by transcription and the waveform
-├── presets.py                # presets.json validation, backward-compatible loading, atomic writes
-├── presets.json              # Built-in presets
-├── requirements.txt
-├── ruff.toml                 # Lint rule configuration
-├── install.sh / install.bat  # Setup scripts
-├── .github/workflows/ci.yml  # Ruff check, syntax compile, preset validation
-├── README.md / README_EN.md
-├── CONTRIBUTING.md
-├── LICENSE
-├── docs/                     # README screenshots and logo
-├── models/                   # Weights, not committed
-└── outputs/                  # Subtitles and proxies, not committed
-```
-
-## Troubleshooting
-
-**`ffmpeg: command not found`**
-Install FFmpeg and put it on PATH: macOS `brew install ffmpeg`, Ubuntu `sudo apt install ffmpeg`, Windows `winget install Gyan.FFmpeg`.
-
-**Model download stalls or fails**
-Downloads go through `hf-mirror.com` by default. If that mirror is unreachable, change `HF_ENDPOINT` in `app.py`, or download manually with `huggingface-cli` as shown above.
-
-**`ImportError: cannot import name 'AutoModelForMultimodalLM'`**
-`transformers` is too old. Native Qwen3-ASR support starts at 5.13.0: `pip install -U "transformers>=5.13.0"`.
-
-**Output repeats the same phrase**
-Raise the no-repeat n-gram size or the repetition penalty, and lower the maximum segment length to 8–12 s.
-
-**Whole lines are missed, or quiet speech is skipped**
-Lower the VAD threshold below 0.20, increase speech padding, and enable loudness normalisation. Anything still missing can be transcribed directly from a waveform selection.
-Segments where VAD hears speech but the model returns nothing get one automatic gain-boosted retry; if that still fails the span is listed in `{name}.missed.json`, in the task report under 【疑似漏句区间】, and in the review workspace status line — just select that time range and patch it.
-
-**`outputs/.cache/audio/` takes up disk space**
-That is the 16k decode cache (~115 MB per hour of media), capped at 4 GB with LRU eviction. Set `KIKUSUB_AUDIO_CACHE=0` to disable it entirely — at the cost of re-decoding on every transcription and every review-workspace open.
-
-**Video is black or stutters**
-Browsers handle MKV containers and some HEVC encodes poorly. Use "压制 M4 硬件加速监看代理 (480p)": VideoToolbox on macOS, libx264 elsewhere.
-
-**Errors on some ops under Apple Silicon**
-`PYTORCH_ENABLE_MPS_FALLBACK=1` is already set, so those ops fall back to CPU — slower, but it runs.
-
-**Out of memory**
-Start with Anime Whisper, or reduce the audio window. Loading both engines keeps two sets of weights resident.
-
-## Limitations
-
-- One file at a time; there is no batch queue
-- Japanese only — no translation, no subtitle rendering or muxing
-- UI text is Chinese, with no i18n layer
-- Frame stepping assumes 24 fps and does not read the source frame rate
-- `outputs/` and `models/` are never cleaned up; manage disk usage yourself
-- Model weights carry their own licences, independent of this project's MIT licence
-
-## Acknowledgements
-
-Recognition is built entirely on other people's work:
-
-- [litagin/anime-whisper](https://huggingface.co/litagin/anime-whisper) — Whisper fine-tuned on Japanese anime speech
-- [jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf](https://huggingface.co/jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf) — Japanese-tuned Qwen3-ASR weights and CTC alignment head
-- [silero-vad](https://github.com/snakers4/silero-vad) — voice activity detection
-- [Gradio](https://www.gradio.app/) — web UI
-- [FFmpeg](https://ffmpeg.org/) — audio extraction and transcoding
-
-## Contributing
-
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, code conventions, and what to include in a bug report.
+Architecture and implementation contracts live in [AGENTS.md](AGENTS.md); the AI contract is in the [AI polish & translation design doc](docs/AI优化与翻译-开发文档-2026-11.md) (Chinese).
 
 ## License
 
-The code in this repository (`app.py`, `transcribe.py`, `qwen_ctc.py`, `presets.py` and the front-end scripts) is released under the [MIT License](LICENSE).
-
-Model weights downloaded at runtime are not covered by that licence. Check the respective Hugging Face repositories before redistributing or using them commercially.
+[MIT](LICENSE). Model weights follow their own licenses. Only process material you have the right to use.
