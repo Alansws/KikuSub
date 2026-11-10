@@ -18,8 +18,10 @@ from core.paths import MODELS_DIR, OUTPUT_DIR
 from core.presets import PresetStore
 
 from .config import ServerConfig
+from .jobs import JobManager
 from .media import MediaError, MediaStore
 from .routes_cues import router as cues_router
+from .routes_jobs import router as jobs_router
 from .routes_media import router as media_router
 from .routes_presets import router as presets_router
 from .security import require_token
@@ -46,6 +48,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.state.media = MediaStore()
     app.state.sessions = SessionStore()
     app.state.presets = PresetStore()
+    app.state.jobs = JobManager(config.output_dir)
 
     # 渲染进程可能以 file:// 或 vite dev server 为 origin 发请求；真正的门是 token，
     # 这里放开 origin 只是为了不被浏览器预检拦住。
@@ -64,6 +67,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(media_router)
     app.include_router(cues_router)
     app.include_router(presets_router)
+    app.include_router(jobs_router)
 
     @app.get("/api/health")
     def health() -> dict:

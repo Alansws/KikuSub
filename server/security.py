@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import hmac
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, WebSocket, status
 
 TOKEN_QUERY_PARAM = "token"
 
 
-def _candidate_tokens(request: Request) -> list[str]:
+def _candidate_tokens(request: Request | WebSocket) -> list[str]:
     values: list[str] = []
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
@@ -29,7 +29,7 @@ def _candidate_tokens(request: Request) -> list[str]:
     return values
 
 
-def token_ok(request: Request) -> bool:
+def token_ok(request: Request | WebSocket) -> bool:
     expected = getattr(request.app.state, "token", "")
     if not expected:
         return False
