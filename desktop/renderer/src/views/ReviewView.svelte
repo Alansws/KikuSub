@@ -25,11 +25,14 @@
     app,
     applyCueTimes,
     focusRange,
+    isTranslationStale,
     openSubtitle,
     play,
     previewRange,
     seekTo,
+    setView as switchView,
     toast,
+    translationAt,
     transcribeRange,
   } from '../lib/store.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
@@ -99,6 +102,9 @@
 
   // 当前播放到的字幕。双语 SRT 的两行区间完全相同，必须一起显示。
   const captionLines = $derived.by(() => {
+    // 显式依赖：切换显示模式或译文更新时，画面字幕要立刻跟着变
+    void app.track;
+    void app.translations[app.trackLang]?.texts.length;
     const cues = app.cues;
     if (!cues.length) return [] as string[];
     const t = play.time;
@@ -120,9 +126,25 @@
     const lines: string[] = [];
     let i = hit;
     while (i >= 0 && `${cues[i].start}:${cues[i].end}` === key) i -= 1;
+    const idxs: number[] = [];
     for (let k = i + 1; k < cues.length; k += 1) {
       if (`${cues[k].start}:${cues[k].end}` !== key) break;
-      if (cues[k].text.trim()) lines.push(cues[k].text);
+      if (cues[k].text.trim()) idxs.push(k);
+    }
+
+    // 画面字幕跟着「原文 / 译文 / 双语」切换：双语是原文在上、译文在下。
+    // 译文缺失时退回原文，绝不在画面上留空行。
+    for (const k of idxs) {
+      const source = cues[k].text;
+      const target = translationAt(k);
+      if (app.track === 'target') {
+        lines.push(target || source);
+      } else if (app.track === 'both') {
+        lines.push(source);
+        if (target) lines.push(target);
+      } else {
+        lines.push(source);
+      }
     }
     return lines;
   });
@@ -151,11 +173,13 @@
     return c ? `${c.start}:${c.end}` : '';
   });
 
-  const rowStart = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN));
+  // 双语是**固定双行高**：自动测量会和虚拟滚动的绝对定位打架（开发文档 §6.3.2）
+  const rowHeight = $derived(app.track === 'both' ? ROW_H * 2 : ROW_H);
+  const rowStart = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN));
   const rowEnd = $derived(
     Math.min(
       app.cues.length,
-      rowStart + Math.ceil((viewH || 400) / ROW_H) + OVERSCAN * 2,
+      rowStart + Math.ceil((viewH || 400) / rowHeight) + OVERSCAN * 2,
     ),
   );
   const visibleCues = $derived(app.cues.slice(rowStart, rowEnd));
@@ -1223,15 +1247,15 @@
 
   function revealRow(i: number) {
     if (!rowsEl) return;
-    const top = i * ROW_H;
+    const top = i * rowHeight;
     const viewTop = rowsEl.scrollTop;
     const viewBottom = viewTop + rowsEl.clientHeight;
     // 已经在可视区中间就不动，避免播放时每句都抖一下
-    if (top >= viewTop + ROW_H * 2 && top + ROW_H <= viewBottom - ROW_H * 2) return;
+    if (top >= viewTop + rowHeight * 2 && top + rowHeight <= viewBottom - rowHeight * 2) return;
     // 用即时滚动而不是 smooth：跳转要「同步」，动画在后台窗口会被节流，
     // 让人以为表格没跟上。落点按整行对齐，避免顶部永远卡着半行。
-    const above = Math.max(1, Math.floor((rowsEl.clientHeight * 0.4) / ROW_H));
-    rowsEl.scrollTop = Math.max(0, (i - above) * ROW_H);
+    const above = Math.max(1, Math.floor((rowsEl.clientHeight * 0.4) / rowHeight));
+    rowsEl.scrollTop = Math.max(0, (i - above) * rowHeight);
   }
 
   /**
@@ -1412,6 +1436,13 @@
         </button>
         <button
           class="btn ghost"
+          onclick={() => switchView('ai')}
+          title="按全片语境修正识别错误：左原文、右 AI 建议，时间码不变"
+        >
+          <Icon name="doc" size={11} />AI 优化
+        </button>
+        <button
+          class="btn ghost"
           onclick={importSubtitleFromExport}
           disabled={busy}
           title="从导出文件夹选择上次转写的字幕，导入核对台作为基线"
@@ -1575,11 +1606,12 @@
           还没有字幕。到「转写」跑一次，或导入 SRT；质检定位也会在这里高亮。
         </div>
       {:else}
-        <div style="height:{rowStart * ROW_H}px"></div>
+        <div style="height:{rowStart * rowHeight}px"></div>
         {#each visibleCues as cue, k (rowStart + k)}
           {@const i = rowStart + k}
           <div
             class="row"
+            class:dual={app.track === 'both'}
             class:row-sel={play.selected === i}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
@@ -1593,7 +1625,20 @@
             <div class="c-t">{tcShort(cue.start)}</div>
             <div class="c-t">{tcShort(cue.end)}</div>
             <div class="c-dur">{(cue.end - cue.start).toFixed(2)}s</div>
-            <div class="c-text">{cue.text}</div>
+            <div class="c-text" class:dual={app.track === 'both'}>
+              {#if app.track === 'target'}
+                <span class="line" class:stale={isTranslationStale(i)}>
+                  {translationAt(i) || '（这条还没有译文）'}
+                </span>
+              {:else if app.track === 'both'}
+                <span class="line">{cue.text}</span>
+                <span class="line sub" class:stale={isTranslationStale(i)}>
+                  {translationAt(i)}
+                </span>
+              {:else}
+                {cue.text}
+              {/if}
+            </div>
             <div class="c-acts">
               <button
                 class="row-btn"
@@ -1619,7 +1664,7 @@
             </div>
           </div>
         {/each}
-        <div style="height:{Math.max(0, (app.cues.length - rowEnd) * ROW_H)}px"></div>
+        <div style="height:{Math.max(0, (app.cues.length - rowEnd) * rowHeight)}px"></div>
       {/if}
     </div>
   </div>
@@ -2132,6 +2177,34 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* 双语：固定两行，行高与虚拟列表的 52px 对齐 */
+  .row.dual {
+    height: 52px;
+  }
+  .c-text.dual {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    line-height: 1.3;
+  }
+  .c-text .line {
+    display: block;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .c-text .line.sub {
+    font-size: 11.5px;
+    color: var(--text-2);
+  }
+  .c-text .line.stale {
+    color: #b26a00;
+  }
+  html[data-theme='dark'] .c-text .line.stale {
+    color: #ffb340;
   }
   .c-acts {
     width: 46px;

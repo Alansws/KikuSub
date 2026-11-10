@@ -18,13 +18,16 @@ const OPEN_TAG = /_(?:from|to)_(?:(?:\d{1,})h)?\d{1,}m\d{1,}s(?=[._-]|$)/;
 // 这些是「工作稿/已导出」而不是临时碎片：即使是区间转写，也不能在退出时默认清掉。
 // .autosave_draft 是核对期暂存，用户重新打开应用后要靠它恢复进度。
 const WORKING_SUFFIX = /\.(?:autosave_draft|review_draft|reviewed|clean)$/;
+// 译文交付物：`{stem}.zh-Hans.srt` / `{stem}.bilingual.srt`。它们同样是成片，
+// 不能因为媒体名里带区间标记就在退出时被当成临时碎片删掉（开发文档 §9 R6）。
+const TRANSLATION_SUFFIX = /\.(?:[a-z]{2,3}(?:-[a-z]{2,4})?|bilingual)$/;
 
 /** 文件名本身是否是「区间转写」产物（含 .qwen / .part_cancelled / .fixed 等尾缀）。 */
 function isFragmentSubtitle(name) {
   const lower = String(name || '').toLowerCase();
   if (!SUBTITLE_EXTS.has(path.extname(lower))) return false;
   const stem = path.basename(lower, path.extname(lower));
-  if (WORKING_SUFFIX.test(stem)) return false;
+  if (WORKING_SUFFIX.test(stem) || TRANSLATION_SUFFIX.test(stem)) return false;
   return RANGE_TAG.test(name) || OPEN_TAG.test(name);
 }
 

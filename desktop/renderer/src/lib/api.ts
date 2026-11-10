@@ -97,6 +97,70 @@ export interface DraftInfo {
   saved_at: number;
 }
 
+/** AI 提案里的一条：只有序号与文本，**没有时间码**（见开发文档 D-1）。 */
+export interface AiProposalItem {
+  i: number;
+  before?: string;
+  after: string;
+  note?: string;
+}
+
+/** AI 提案（`proposal.json`）。in-app 与外部 skill 产出的是同一份结构。 */
+export interface AiProposal {
+  version: number;
+  kind: 'polish' | 'translate';
+  src_lang: string;
+  dst_lang?: string;
+  source: { path: string; count: number; digest: string };
+  model?: string;
+  entry?: string;
+  created_at?: number;
+  chunks?: number;
+  glossary?: { src: string; dst: string }[];
+  items: AiProposalItem[];
+}
+
+export type TrackMode = 'source' | 'target' | 'both';
+
+export interface TranslationTrack {
+  lang: string;
+  exists: boolean;
+  count: number;
+  texts: string[];
+  base: string[];
+  stale: number[];
+  created_at: number;
+  entry: string;
+}
+
+export interface TranslationsPayload {
+  items: TranslationTrack[];
+  count: number;
+  cue_count: number;
+}
+
+export interface AiConfig {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  chunk_cues: number;
+  translate_chunk_cues: number;
+  context_cues: number;
+  /** 密钥不归服务层管；服务端只声明"由渲染进程持有" */
+  key_held_by: string;
+}
+
+export interface AiProposalPayload {
+  path: string;
+  proposal: AiProposal;
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  digest_match: boolean;
+  source_count: number;
+  current_count: number;
+}
+
 export interface JobSnapshot {
   id: string;
   kind: string;
@@ -507,10 +571,21 @@ export const api = {
       method: 'POST',
     }),
 
-  exportCues: (format: 'SRT' | 'VTT' | 'TXT') =>
-    req<{ path: string; text: string; format: string; count: number }>('/api/cues/export', {
+  exportCues: (
+    format: 'SRT' | 'VTT' | 'TXT',
+    opts: { track?: TrackMode; lang?: string } = {},
+  ) =>
+    req<{
+      path: string;
+      text: string;
+      format: string;
+      count: number;
+      track: string;
+      lang: string;
+      skipped: number;
+    }>('/api/cues/export', {
       method: 'POST',
-      body: JSON.stringify({ format }),
+      body: JSON.stringify({ format, track: opts.track ?? 'source', lang: opts.lang ?? '' }),
     }),
 
   /** 工作草稿：核对精修期间的全量暂存，不碰导出文件夹里的交付文件。 */
@@ -572,6 +647,126 @@ export const api = {
     ),
 
   getQa: () => req<Record<string, any>>('/api/qa'),
+
+  /** 「一键复制提示词」：服务端用同一份 cues_to_srt 组好整段提示词 */
+  getAiPrompt: (kind: 'translate' | 'polish' = 'translate', lang = 'zh-Hans') => {
+    const q = new URLSearchParams({ kind, lang });
+    return req<{ prompt: string; count: number; lang: string; chars: number }>(
+      `/api/ai/prompt?${q}`,
+    );
+  },
+
+  /** 删除磁盘上的提案文件（「丢弃」用；只清界面不算丢弃） */
+  deleteAiProposal: (kind: 'polish' | 'translate' = 'polish', lang = '') => {
+    const q = new URLSearchParams({ kind });
+    if (lang) q.set('lang', lang);
+    return req<{ removed: boolean; path: string }>(`/api/ai/proposal?${q}`, { method: 'DELETE' });
+  },
+
+  /** 改某一条译文（核对台「译文 / 双语」模式下直接编辑） */
+  patchTranslation: (lang: string, index: number, text: string) =>
+    req<TranslationTrack>(`/api/translations/${encodeURIComponent(lang)}/${index}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ text }),
+    }),
+
+  /** 把粘贴回来的 SRT 解析成提案（只解析，不落盘、不改字幕） */
+  aiFromSrt: (body: { kind: 'translate' | 'polish'; lang: string; text: string }) =>
+    req<{ proposal: AiProposal; warnings: string[]; count: number }>('/api/ai/from-srt', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // ---- 译文平行轨 -----------------------------------------------------------
+  getTranslations: () => req<TranslationsPayload>('/api/translations'),
+
+  applyTranslation: (body: { lang: string; texts?: string[]; proposal?: AiProposal }) =>
+    req<TranslationTrack>('/api/translations', { method: 'POST', body: JSON.stringify(body) }),
+
+  undoTranslation: (lang: string) =>
+    req<TranslationTrack & { undone: boolean }>('/api/translations/undo', {
+      method: 'POST',
+      body: JSON.stringify({ lang }),
+    }),
+
+  deleteTranslation: (lang: string) =>
+    req<{ lang: string; removed: boolean; count: number }>(
+      `/api/translations/${encodeURIComponent(lang)}`,
+      { method: 'DELETE' },
+    ),
+
+  // ---- AI 配置与生成 -------------------------------------------------------
+  getAiConfig: () => req<AiConfig>('/api/ai/config'),
+
+  patchAiConfig: (patch: Partial<{
+    enabled: boolean;
+    base_url: string;
+    model: string;
+    chunk_cues: number;
+    translate_chunk_cues: number;
+    context_cues: number;
+  }>) => req<AiConfig>('/api/ai/config', { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  testAi: (payload: { base_url: string; model: string }, key: string) =>
+    req<{ ok: boolean; latency_ms: number; model: string; host: string }>('/api/ai/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      // 只在这一跳带上 key；它不落盘、不进日志
+      headers: { 'X-AI-Key': key },
+    }),
+
+  createAiJob: (
+    payload: {
+      kind?: 'polish' | 'translate';
+      base_url: string;
+      model: string;
+      chunk_cues: number;
+      context_cues: number;
+      lang: string;
+      dst_lang?: string;
+    },
+    key: string,
+  ) =>
+    req<JobSnapshot>('/api/ai/jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: { 'X-AI-Key': key },
+    }),
+
+  // ---- AI 提案（M1：读取 / 另存 / 应用）------------------------------------
+  getAiProposal: (kind: 'polish' | 'translate' = 'polish', lang = '') => {
+    const q = new URLSearchParams({ kind });
+    if (lang) q.set('lang', lang);
+    return req<AiProposalPayload>(`/api/ai/proposal?${q}`);
+  },
+
+  saveAiProposal: (proposal: AiProposal, kind: 'polish' | 'translate' = 'polish', lang = '') =>
+    req<{ path: string; count: number; warnings: string[] }>('/api/ai/proposal', {
+      method: 'POST',
+      body: JSON.stringify({ kind, lang, proposal }),
+    }),
+
+  importAiProposal: (path: string, kind: 'polish' | 'translate' = 'polish', lang = '') =>
+    req<{ path: string; from: string; count: number; warnings: string[] }>('/api/ai/proposal/import', {
+      method: 'POST',
+      body: JSON.stringify({ path, kind, lang }),
+    }),
+
+  applyAiProposal: (payload: {
+    kind?: 'polish' | 'translate';
+    lang?: string;
+    accept?: number[] | null;
+    edits?: Record<number, string>;
+    proposal?: AiProposal;
+  }) =>
+    req<{
+      cues: Cue[];
+      count: number;
+      can_undo: boolean;
+      can_redo: boolean;
+      changed: number;
+      warnings: string[];
+    }>('/api/ai/apply', { method: 'POST', body: JSON.stringify(payload) }),
 
   qaAction: (cmd: { id: string; action: string; status?: string; resolution?: string }) =>
     req<{

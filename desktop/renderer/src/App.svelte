@@ -10,6 +10,7 @@
   import ImportView from './views/ImportView.svelte';
   import TranscribeView from './views/TranscribeView.svelte';
   import ReviewView from './views/ReviewView.svelte';
+  import AiView from './views/AiView.svelte';
   import ReportView from './views/ReportView.svelte';
   import SettingsView from './views/SettingsView.svelte';
   import {
@@ -22,6 +23,7 @@
     play,
     redo,
     setView,
+    toast,
     toggleTheme,
     undo,
     type View,
@@ -291,6 +293,8 @@
           <TranscribeView bind:engine />
         {:else if app.view === 'review'}
           <ReviewView bind:this={review} {engine} />
+        {:else if app.view === 'ai'}
+          <AiView />
         {:else if app.view === 'report'}
           <ReportView />
         {:else if app.view === 'settings'}

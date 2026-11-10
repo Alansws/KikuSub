@@ -25,6 +25,7 @@ from . import API_VERSION
 from .config import ServerConfig
 from .jobs import JobManager
 from .media import MediaError, MediaStore
+from .routes_ai import router as ai_router
 from .routes_cues import router as cues_router
 from .routes_jobs import router as jobs_router
 from .routes_media import router as media_router
@@ -33,6 +34,7 @@ from .routes_qa import router as qa_router
 from .routes_report import router as report_router
 from .routes_session import router as session_router
 from .routes_settings import router as settings_router
+from .routes_translations import router as translations_router
 from .security import require_token
 from .sessions import SessionStore
 
@@ -175,6 +177,8 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(qa_router)
     app.include_router(session_router)
     app.include_router(settings_router)
+    app.include_router(ai_router)
+    app.include_router(translations_router)
 
     @app.get("/api/health")
     def health() -> dict:

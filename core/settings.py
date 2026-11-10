@@ -24,12 +24,25 @@ from .textio import write_text_atomic
 
 log = logging.getLogger(__name__)
 
+DEFAULT_AI_BASE_URL = "https://api.deepseek.com"
+# 分块条数的允许区间：太小会让模型丢掉上下文，太大会撞输出上限。
+CHUNK_RANGE = (20, 2000)
+CONTEXT_RANGE = (0, 30)
+
 DEFAULTS: dict = {
     "enabled_engines": list(engines.DEFAULT_ENABLED),
     "auto_proxy": True,
     "export_dir": "",
+    # ---- AI（实验功能）----
+    # 密钥**不在这里**：它由 Electron safeStorage 加密保存，每次请求按需带上，
+    # 服务层既不读取也不落盘（见开发文档 §5.2.1）。
+    "ai_enabled": False,
+    "ai_base_url": DEFAULT_AI_BASE_URL,
+    "ai_model": "deepseek-flash",
+    "ai_max_chunk_cues": 200,
+    "ai_translate_chunk_cues": 120,
+    "ai_context_cues": 5,
 }
-
 
 def _normalize(raw: dict | None) -> dict:
     data = dict(DEFAULTS)
@@ -46,6 +59,23 @@ def _normalize(raw: dict | None) -> dict:
     export = raw.get("export_dir")
     if isinstance(export, str):
         data["export_dir"] = export.strip()
+
+    if isinstance(raw.get("ai_enabled"), bool):
+        data["ai_enabled"] = raw["ai_enabled"]
+    base_url = raw.get("ai_base_url")
+    if isinstance(base_url, str) and base_url.strip():
+        data["ai_base_url"] = base_url.strip().rstrip("/")
+    model = raw.get("ai_model")
+    if isinstance(model, str) and model.strip():
+        data["ai_model"] = model.strip()
+    for key, low, high in (
+        ("ai_max_chunk_cues", *CHUNK_RANGE),
+        ("ai_translate_chunk_cues", *CHUNK_RANGE),
+        ("ai_context_cues", *CONTEXT_RANGE),
+    ):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            data[key] = max(low, min(high, value))
     return data
 
 
@@ -91,6 +121,10 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         merged["auto_proxy"] = bool(patch.get("auto_proxy"))
     if "export_dir" in patch:
         merged["export_dir"] = patch.get("export_dir") or ""
+    for key in ("ai_enabled", "ai_base_url", "ai_model",
+                "ai_max_chunk_cues", "ai_translate_chunk_cues", "ai_context_cues"):
+        if key in patch:
+            merged[key] = patch[key]
     normalized = _normalize(merged)
     try:
         write_text_atomic(target, json.dumps(normalized, ensure_ascii=False, indent=2) + "\n")

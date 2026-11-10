@@ -25,6 +25,8 @@ const {
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const aikey = require('./aikey.cjs');
+const skill = require('./skill.cjs');
 const {
   deleteCleanupCandidates,
   listCleanupCandidates,
@@ -105,6 +107,89 @@ function loadPreferences() {
   } catch {
     return {};
   }
+}
+
+// ---- Agent 技能（一键配置）-----------------------------------------------
+//
+// 把随包的 skill 目录装到用户的技能根目录，供外部 agent（如 DeepSeek Harness）读取。
+// 目标根默认 `~/.agents/skills/`——DSH 会扫的用户级根之一；KIKUSUB_SKILL_ROOT 可覆盖。
+// 注意 `~/.claude/skills/` 是 Claude Code 的根，DSH **不扫**，装那里在 `/` 菜单里看不到。
+// 目标目录由主进程决定，**不接受渲染层传入**。
+function skillSourceDir() {
+  return path.join(app.getAppPath(), 'resources', 'skill', 'kikusub-subtitle');
+}
+
+function skillTargetDir() {
+  const override = (process.env.KIKUSUB_SKILL_ROOT || '').trim();
+  return override || skill.defaultTargetDir({ home: app.getPath('home') });
+}
+
+// ---- AI 密钥（本机加密）---------------------------------------------------
+//
+// 刻意**不依赖系统钥匙串**：keychain 条目的 ACL 认的是代码签名要求，本项目以 DMG
+// 分发、ad-hoc 签名，每次发版 cdhash 都变，用户升级后就读不回旧条目——每个版本
+// 都要重填一次 Key，且没有 Developer ID 就无从修复。改成 0600 主密钥文件后，
+// 重装/升级/换 Electron 版本都不影响。实现见 desktop/main/aikey.cjs。
+const AI_KEY_FIELD = 'aiKey';
+
+function aiKeyFile() {
+  return path.join(dataDir(), '.ai-key');
+}
+
+function writePreferences(payload) {
+  const target = preferencesPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, target);
+}
+
+/** 读密钥；返回 `backend` 与 `broken`，调用方据此区分「没配」与「配了但读不出来」。 */
+function getAiKeyState() {
+  const blob = loadPreferences()[AI_KEY_FIELD];
+  if (typeof blob !== 'string' || !blob) {
+    return { key: '', backend: 'none', broken: false, legacy: false };
+  }
+
+  if (aikey.isLocalBlob(blob)) {
+    const key = aikey.decrypt(blob, aikey.readKeyFile(aiKeyFile()));
+    return { key: key || '', backend: key ? 'local' : 'none', broken: !key, legacy: false };
+  }
+
+  // 历史遗留：更早的版本用 safeStorage 存的（base64 里有 `v10` 头）。本方案读不了，
+  // 标记 broken 让用户重填一次，而不是静默当作"没配过"。
+  return { key: '', backend: 'none', broken: true, legacy: true };
+}
+
+function setAiKey(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return clearAiKey();
+  try {
+    const blob = aikey.encrypt(text, aikey.ensureKeyFile(aiKeyFile()));
+    savePreferences({ [AI_KEY_FIELD]: blob });
+    return { ok: true, backend: 'local', persistent: true };
+  } catch (err) {
+    mainLog(`[ai-key] 加密保存失败：${err && err.message ? err.message : err}`);
+    return { ok: false, reason: 'write-failed' };
+  }
+}
+
+function getAiKey() {
+  return getAiKeyState().key;
+}
+
+function clearAiKey() {
+  const prefs = loadPreferences();
+  if (AI_KEY_FIELD in prefs) {
+    delete prefs[AI_KEY_FIELD];
+    try {
+      writePreferences(prefs);
+    } catch (err) {
+      mainLog(`[ai-key] 清除失败：${err && err.message ? err.message : err}`);
+      return { ok: false };
+    }
+  }
+  return { ok: true };
 }
 
 function savePreferences(patch) {
@@ -777,6 +862,29 @@ async function pickMedia(notify = false) {
 }
 
 /** 打开导出目录里的字幕文件：默认定位到用户设置的导出文件夹，省去逐层翻目录。 */
+async function pickProposal(defaultDir) {
+  if (!win) return null;
+  let defaultPath = typeof defaultDir === 'string' && defaultDir.trim() ? defaultDir.trim() : '';
+  try {
+    if (defaultPath && !fs.existsSync(defaultPath)) defaultPath = path.dirname(defaultPath);
+  } catch {
+    defaultPath = '';
+  }
+  if (!defaultPath) defaultPath = baseDir();
+  const result = await dialog.showOpenDialog(win, {
+    title: '选择 AI 提案文件',
+    message: '选择一份 proposal.json（AI 优化台会先校验再导入）',
+    defaultPath,
+    properties: ['openFile'],
+    filters: [
+      { name: 'AI 提案', extensions: ['json'] },
+      { name: '全部文件', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+}
+
 async function pickSubtitle(defaultDir) {
   if (!win) return null;
   let defaultPath = typeof defaultDir === 'string' && defaultDir.trim() ? defaultDir.trim() : '';
@@ -854,6 +962,49 @@ ipcMain.handle('app:info', () => ({
 
 ipcMain.handle('dialog:pick-media', () => pickMedia());
 ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir) => pickSubtitle(defaultDir));
+ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultDir));
+
+// ---- AI 密钥 ----
+ipcMain.handle('ai-key:set', (_e, text) => setAiKey(text));
+ipcMain.handle('ai-key:get', () => getAiKey());
+ipcMain.handle('ai-key:clear', () => clearAiKey());
+ipcMain.handle('skill:status', () => {
+  try {
+    return { ok: true, ...skill.status({ sourceDir: skillSourceDir(), targetDir: skillTargetDir() }) };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('skill:install', (_event, paths) => {
+  try {
+    return {
+      ok: true,
+      ...skill.install({
+        sourceDir: skillSourceDir(),
+        targetDir: skillTargetDir(),
+        paths: paths && typeof paths === 'object' ? paths : {},
+      }),
+    };
+  } catch (err) {
+    mainLog(`[skill] 安装失败：${err && err.message ? err.message : err}`);
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('ai-key:status', () => {
+  const state = getAiKeyState();
+  return {
+    ok: true,
+    // 本机加密与签名身份无关，永远可用
+    available: true,
+    has: Boolean(state.key),
+    backend: state.backend,
+    persistent: state.backend === 'local',
+    legacy: state.legacy,
+    broken: state.broken,
+  };
+});
 ipcMain.handle('dialog:pick-directory', (_e, payload) =>
   pickDirectory(payload && payload.title, payload && payload.defaultPath),
 );

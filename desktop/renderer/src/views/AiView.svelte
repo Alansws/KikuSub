@@ -1,0 +1,731 @@
+<script lang="ts">
+  /**
+   * AI 优化台（M1）。
+   *
+   * 只做「读取提案 → 双栏对照 → 逐条采纳 → 应用」这一条链路，**不调用任何模型**。
+   * 提案可以由软件内生成（M2），也可以由外部 agent 写好再导入（M4）——两者在这里
+   * 长得完全一样，因为界面只认 `proposal.json` 这个契约。
+   *
+   * 左栏是核对台当前的原文，**只读**；右栏是 AI 建议，双击可改。
+   * 时间码只用来跳回核对台定位，永远不会被写回字幕（开发文档 D-1）。
+   */
+  import Icon from '../components/Icon.svelte';
+  import {
+    ai,
+    app,
+    applyAiProposal,
+    cancelAiPolish,
+    copyAiPrompt,
+    discardAiProposal,
+    focusRange,
+    importAiProposal,
+    loadAiProposal,
+    parseAiPastedSrt,
+    startAiPolish,
+    startAiTranslate,
+    saveAiProposalAs,
+    setAiEdit,
+    setAiKind,
+    setAllAiAccept,
+    setView,
+    toggleAiAccept,
+  } from '../lib/store.svelte';
+  import { tcShort } from '../lib/time';
+
+  let editing = $state(0);
+  let draft = $state('');
+
+  const rows = $derived.by(() => {
+    const map = new Map((ai.proposal?.items ?? []).map((it) => [it.i, it]));
+    return app.cues.map((cue, idx) => {
+      const i = idx + 1;
+      const item = map.get(i);
+      const after = ai.edits[i] !== undefined ? ai.edits[i] : (item?.after ?? cue.text);
+      return {
+        i,
+        start: cue.start,
+        end: cue.end,
+        before: cue.text,
+        after,
+        note: item?.note ?? '',
+        changed: after !== cue.text,
+        accepted: ai.accept[i] !== false,
+      };
+    });
+  });
+
+  const changedCount = $derived(rows.filter((r) => r.changed).length);
+  const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
+  const visible = $derived(ai.changedOnly ? rows.filter((r) => r.changed) : rows);
+
+  $effect(() => {
+    // 依赖显式列出：连接状态 / 当前媒体 / 类型 / 语种，换任意一个都重新拉一次
+    void app.connected;
+    void app.media?.id;
+    void ai.kind;
+    void ai.lang;
+    if (app.connected) void loadAiProposal();
+  });
+
+  function goto(row: { start: number; end: number }) {
+    setView('review');
+    focusRange(row.start, row.end);
+  }
+
+  function startEdit(i: number, text: string) {
+    editing = i;
+    draft = text;
+  }
+
+  function commitEdit(i: number) {
+    if (editing !== i) return;
+    setAiEdit(i, draft);
+    editing = 0;
+  }
+
+  function cancelEdit() {
+    editing = 0;
+  }
+
+  function onEditKey(e: KeyboardEvent, i: number) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      commitEdit(i);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEdit();
+    }
+  }
+
+  function focusOnMount(node: HTMLTextAreaElement) {
+    node.focus();
+    node.select();
+  }
+
+  function changeLang() {
+    ai.loadedFor = '';
+    void loadAiProposal(true);
+  }
+</script>
+
+<div class="ai">
+  <div class="head">
+    <div class="segs" role="tablist" aria-label="提案类型">
+      <button
+        role="tab"
+        aria-selected={ai.kind === 'polish'}
+        class="seg"
+        class:on={ai.kind === 'polish'}
+        onclick={() => setAiKind('polish')}>润色</button
+      >
+      <button
+        role="tab"
+        aria-selected={ai.kind === 'translate'}
+        class="seg"
+        class:on={ai.kind === 'translate'}
+        onclick={() => setAiKind('translate')}>翻译</button
+      >
+    </div>
+
+    {#if ai.kind === 'translate'}
+      <select class="lang" bind:value={ai.lang} onchange={changeLang} title="目标语种">
+        <option value="zh-Hans">简体中文</option>
+        <option value="zh-Hant">繁體中文</option>
+        <option value="en">English</option>
+      </select>
+    {/if}
+
+    {#if ai.proposal}
+      <span class="badge">
+        {ai.proposal.entry === 'skill'
+          ? '外部 agent'
+          : ai.proposal.entry === 'manual'
+            ? '手动粘贴'
+            : '本机生成'}
+      </span>
+      {#if ai.proposal.model}<span class="dim">{ai.proposal.model}</span>{/if}
+    {/if}
+
+    <div class="spacer"></div>
+
+    {#if ai.kind === 'translate'}
+      <button
+        class="btn ghost"
+        onclick={copyAiPrompt}
+        disabled={!app.cues.length}
+        title="把带原文 SRT 的翻译提示词复制到剪贴板；可粘到任意网页版模型，再把回复粘回来"
+      >
+        复制提示词
+      </button>
+      <button
+        class="btn ghost"
+        onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
+        disabled={!app.cues.length}
+        title="粘贴模型返回的 SRT，解析后照样走双栏对照"
+      >
+        粘贴结果…
+      </button>
+    {/if}
+    <button
+      class="btn ghost"
+      onclick={() => (ai.kind === 'translate' ? startAiTranslate() : startAiPolish())}
+      disabled={ai.generating || !app.cues.length}
+      title={ai.kind === 'translate' ? '把原文字幕翻译成所选语种（只生成提案）' : '用设置里的模型生成一份提案（不修改字幕）'}
+    >
+      生成提案
+    </button>
+    <button class="btn ghost" onclick={() => loadAiProposal(true)} disabled={ai.loading || ai.generating}>
+      重新加载
+    </button>
+    <button class="btn ghost" onclick={importAiProposal} title="导入一份外部生成的 proposal.json">
+      导入提案…
+    </button>
+    <button class="btn ghost" onclick={saveAiProposalAs} disabled={!ai.proposal || ai.saving}>
+      另存
+    </button>
+    <button class="btn ghost danger" onclick={discardAiProposal} disabled={!ai.proposal}>
+      丢弃
+    </button>
+    <button
+      class="btn primary"
+      onclick={applyAiProposal}
+      disabled={!ai.proposal || ai.applying || acceptedCount === 0}
+      title={ai.kind === 'translate'
+        ? '写进译文轨并把核对台切到双语（不改动原文与时间轴）'
+        : '写回核对台，⌘Z 可整批撤回'}
+    >
+      {ai.applying ? '应用中…' : '应用'}
+    </button>
+  </div>
+
+  <div class="bar">
+    <span>共 <b>{app.cues.length}</b> 条</span>
+    <span class="sep"></span>
+    <span>AI 改动 <b class="warn">{changedCount}</b> 处</span>
+    <span class="sep"></span>
+    <span>已采纳 <b>{acceptedCount}</b></span>
+    <div class="spacer"></div>
+    <label class="chk">
+      <input type="checkbox" bind:checked={ai.changedOnly} />
+      只看改动
+    </label>
+    <button class="link" onclick={() => setAllAiAccept(true)} disabled={!ai.proposal}>全选</button>
+    <button class="link" onclick={() => setAllAiAccept(false)} disabled={!ai.proposal}>全不选</button>
+  </div>
+
+  {#if ai.errors.length}
+    <div class="note err">
+      <Icon name="warn" size={11} />
+      <span>{ai.errors[0]}</span>
+    </div>
+  {:else if ai.proposal && !ai.digestMatch}
+    <div class="note err">
+      <Icon name="warn" size={11} />
+      <span>源文本已变化：这份提案是针对另一版字幕生成的，应用会被拒绝。</span>
+    </div>
+  {/if}
+
+  {#if ai.warnings.length}
+    <div class="note warn">
+      <Icon name="warn" size={11} />
+      <span>
+        {ai.warnings.slice(0, 3).join('；')}{ai.warnings.length > 3
+          ? ` …另有 ${ai.warnings.length - 3} 条提示`
+          : ''}
+      </span>
+    </div>
+  {/if}
+
+  {#if ai.pasteOpen}
+    <div class="paste">
+      <div class="paste-head">
+        把模型返回的 SRT 整段粘在下面。<b>序号和时间戳会被忽略</b>，只按顺序取文本，时间轴仍用你自己的。
+      </div>
+      <textarea
+        class="paste-box"
+        bind:value={ai.pasteText}
+        spellcheck="false"
+        placeholder={'1\n00:00:00,500 --> 00:00:01,500\n早上好\n\n2\n…'}
+      ></textarea>
+      <div class="paste-actions">
+        <button
+          class="btn primary"
+          onclick={parseAiPastedSrt}
+          disabled={ai.parsing || !ai.pasteText.trim()}
+        >
+          {ai.parsing ? '解析中…' : '解析成提案'}
+        </button>
+        <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
+        <span class="paste-hint">条数必须与当前字幕一致，否则整批拒绝</span>
+      </div>
+    </div>
+  {/if}
+
+  {#if ai.generating}
+    <div class="note busy">
+      <Icon name="wave" size={11} />
+      <span>正在生成提案：{ai.stage || '准备中'}</span>
+      <b class="pct">{ai.progress}%</b>
+      <button class="link" onclick={cancelAiPolish}>取消</button>
+    </div>
+  {/if}
+
+  {#if ai.loading}
+    <div class="empty"><div class="et">正在读取提案…</div></div>
+  {:else if !ai.proposal}
+    <div class="empty">
+      <Icon name="doc" size={22} />
+      <div class="et">{ai.kind === 'translate' ? '还没有译文提案' : '还没有可对照的提案'}</div>
+      <div class="es">
+        让 AI 生成一份（需要先在设置里配置模型），或者导入一份外部生成的
+        <code>proposal.json</code>。提案里只有文本，没有时间码。
+      </div>
+      <div class="ea">
+        <button
+          class="btn primary"
+          onclick={() => (ai.kind === 'translate' ? startAiTranslate() : startAiPolish())}
+          disabled={ai.generating || !app.cues.length}
+        >
+          生成提案
+        </button>
+        <button class="btn" onclick={importAiProposal}>导入提案…</button>
+        <button class="btn ghost" onclick={() => loadAiProposal(true)}>重新加载</button>
+      </div>
+    </div>
+  {:else if !visible.length}
+    <div class="empty">
+      <Icon name="check" size={22} />
+      <div class="et">这一栏没有内容</div>
+      <div class="es">
+        {ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}
+      </div>
+    </div>
+  {:else}
+    <div class="cols">
+      <span class="c-time">时间码</span>
+      <span class="c-side">原文（只读）</span>
+      <span class="c-side">{ai.kind === 'translate' ? 'AI 译文（双击可改）' : 'AI 建议（双击可改）'}</span>
+      <span class="c-note">理由</span>
+      <span></span>
+    </div>
+
+    <div class="list">
+      {#each visible as row (row.i)}
+        <div class="row" class:changed={row.changed} class:off={!row.accepted}>
+          <div class="c-time">
+            <button class="tc" onclick={() => goto(row)} title="回到核对台定位这一句">
+              {tcShort(row.start)}
+            </button>
+            <span class="idx">#{row.i}</span>
+          </div>
+
+          <div class="c-side left">{row.before}</div>
+
+          <div class="c-side right" ondblclick={() => startEdit(row.i, row.after)}>
+            {#if editing === row.i}
+              <textarea
+                use:focusOnMount
+                bind:value={draft}
+                onkeydown={(e) => onEditKey(e, row.i)}
+                onblur={() => commitEdit(row.i)}
+                spellcheck="false"
+              ></textarea>
+            {:else}
+              <span class="txt">{row.after}</span>
+              {#if ai.edits[row.i] !== undefined}
+                <span class="tag">已手改</span>
+              {/if}
+            {/if}
+          </div>
+
+          <div class="c-note">{row.note}</div>
+
+          <button
+            class="pin"
+            class:on={row.accepted}
+            onclick={() => toggleAiAccept(row.i)}
+            title={row.accepted ? '采纳这一条（点击排除）' : '已排除（点击采纳）'}
+          >
+            <Icon name="check" size={11} />
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .ai {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-content);
+  }
+
+  .head,
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--separator);
+  }
+
+  .head {
+    flex-wrap: wrap;
+  }
+
+  .bar {
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-2);
+    background: var(--bg-inspector);
+  }
+
+  .bar b {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bar b.warn {
+    color: #c77a00;
+  }
+
+  .sep {
+    width: 1px;
+    height: 11px;
+    background: var(--separator);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .segs {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--fill);
+  }
+
+  .seg {
+    border: 0;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .seg.on {
+    background: var(--bg-content);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+
+  .lang {
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--separator);
+    background: var(--bg-content);
+    color: var(--text);
+  }
+
+  .badge {
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .dim {
+    font-size: 11px;
+    color: var(--text-3);
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  }
+
+  .note {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    border-bottom: 1px solid var(--separator-soft);
+  }
+
+  .note.err {
+    background: rgba(255, 59, 48, 0.08);
+    color: #b3261e;
+  }
+
+  .note.warn {
+    background: rgba(255, 159, 10, 0.09);
+    color: #8a5a00;
+  }
+
+  .paste {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--separator);
+    background: var(--bg-inspector);
+  }
+
+  .paste-head {
+    font-size: 11.5px;
+    color: var(--text-2);
+    line-height: 1.6;
+  }
+
+  .paste-box {
+    width: 100%;
+    min-height: 130px;
+    max-height: 40vh;
+    resize: vertical;
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 11.5px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--separator);
+    background: var(--bg-content);
+    color: var(--text);
+    outline: none;
+  }
+
+  .paste-box:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .paste-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .paste-hint {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+
+  .note.busy {
+    background: var(--accent-soft);
+    color: var(--text);
+  }
+
+  .note.busy .pct {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .link {
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+
+  .link:disabled {
+    color: var(--text-3);
+    cursor: default;
+  }
+
+  .cols,
+  .row {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr) 78px 26px;
+    gap: 10px;
+    align-items: start;
+    padding: 6px 14px;
+  }
+
+  .cols {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    font-size: 10.5px;
+    color: var(--text-3);
+    background: var(--bg-content);
+    border-bottom: 1px solid var(--separator);
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .row {
+    border-bottom: 1px solid var(--separator-soft);
+    font-size: 12.5px;
+    line-height: 1.55;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 42px;
+  }
+
+  .row:hover {
+    background: var(--row-hover);
+  }
+
+  .row.off {
+    opacity: 0.42;
+  }
+
+  .c-time {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .tc {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    color: var(--accent);
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .idx {
+    font-size: 10px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .c-side,
+  .c-note {
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-width: 0;
+  }
+
+  .left {
+    color: var(--text-2);
+  }
+
+  .right {
+    border-radius: 5px;
+    padding: 1px 4px;
+    margin: -1px -4px;
+    cursor: text;
+    min-height: 18px;
+  }
+
+  .row.changed .right {
+    background: var(--accent-soft);
+  }
+
+  .row.changed .left {
+    color: var(--text);
+  }
+
+  .right textarea {
+    width: 100%;
+    min-height: 46px;
+    resize: vertical;
+    font: inherit;
+    line-height: inherit;
+    padding: 3px 5px;
+    border-radius: 5px;
+    border: 1px solid var(--accent);
+    background: var(--bg-content);
+    color: var(--text);
+    outline: none;
+  }
+
+  .tag {
+    margin-left: 6px;
+    font-size: 9.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--fill-strong);
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+
+  .c-note {
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+
+  .pin {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1px solid var(--separator);
+    background: transparent;
+    color: var(--text-3);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+
+  .pin.on {
+    border-color: transparent;
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 40px 24px;
+    text-align: center;
+    color: var(--text-2);
+  }
+
+  .et {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .es {
+    font-size: 11.5px;
+    line-height: 1.7;
+    max-width: 420px;
+  }
+
+  .es code {
+    font-size: 10.5px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--fill);
+  }
+
+  .ea {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+</style>

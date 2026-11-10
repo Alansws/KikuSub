@@ -30,6 +30,31 @@
   let cleaningLogs = $state(false);
   let wasConnected = false;
 
+  // ---- AI 优化（实验功能）----
+  type AiCfg = Awaited<ReturnType<typeof api.getAiConfig>>;
+  let aiCfg = $state<AiCfg | null>(null);
+  let aiKeyReady = $state(true); // 本机加密可用（正常恒为 true）
+  let aiHasKey = $state(false);
+  let aiKeyBroken = $state(false); // 有密文但解不开，需要重填
+  let aiKeyLegacy = $state(false); // 更早版本用钥匙串存的，本版本读不了
+  let aiKeyInput = $state('');
+  let aiTesting = $state(false);
+  let aiTestMsg = $state('');
+  let aiSaving = $state(false);
+
+  // ---- Agent 技能（一键配置）----
+  interface SkillInfo {
+    targetDir: string;
+    installed: boolean;
+    upToDate: boolean;
+    fileCount: number;
+    installedAt: number;
+    error?: string;
+  }
+  let skillInfo = $state<SkillInfo | null>(null);
+  let skillBusy = $state(false);
+  const aiEnabled = $derived(aiCfg?.enabled ?? false);
+
   // 内核重启（改模型目录 / 崩溃恢复）后重新拉设置，否则路径与安装状态还是旧的。
   $effect(() => {
     if (!app.connected) {
@@ -40,6 +65,8 @@
     wasConnected = true;
     void loadSettings(true);
     void loadDiag();
+    void loadAi();
+    void loadSkill();
   });
 
   const engines = $derived(settings.data?.engines ?? []);
@@ -51,6 +78,144 @@
   );
   const exportDirIsCustom = $derived(Boolean(settings.data?.settings.export_dir));
   const downloading = $derived(settings.download);
+
+  async function loadAi() {
+    try {
+      aiCfg = await api.getAiConfig();
+    } catch {
+      aiCfg = null;
+    }
+    await refreshAiKey();
+  }
+
+  async function refreshAiKey() {
+    try {
+      const st = await window.kikusub?.aiKey?.status?.();
+      aiKeyReady = st?.available !== false;
+      aiHasKey = Boolean(st?.has);
+      aiKeyBroken = Boolean(st?.broken);
+      aiKeyLegacy = Boolean(st?.legacy);
+    } catch {
+      aiKeyReady = false;
+      aiHasKey = false;
+      aiKeyBroken = false;
+      aiKeyLegacy = false;
+    }
+  }
+
+  async function loadSkill() {
+    try {
+      const res = await window.kikusub?.skill?.status?.();
+      skillInfo = res ? (res as SkillInfo) : null;
+    } catch {
+      skillInfo = null;
+    }
+  }
+
+  async function installSkill() {
+    if (skillBusy) return;
+    skillBusy = true;
+    try {
+      const res = await window.kikusub.skill.install({
+        output_dir: app.config?.output_dir || '',
+        export_dir: app.config?.export_dir || '',
+      });
+      if (!res?.ok) {
+        toast(res?.error || '技能配置失败', 'error');
+        return;
+      }
+      skillInfo = res as SkillInfo;
+      toast(`已配置到 ${res.targetDir}`);
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    } finally {
+      skillBusy = false;
+    }
+  }
+
+  async function patchAi(patch: Parameters<typeof api.patchAiConfig>[0]) {
+    try {
+      aiCfg = await api.patchAiConfig(patch);
+      return true;
+    } catch (err) {
+      toast((err as Error).message, 'error');
+      return false;
+    }
+  }
+
+  async function toggleAi() {
+    if (!aiCfg) return;
+    const next = !aiCfg.enabled;
+    if (await patchAi({ enabled: next })) {
+      toast(next ? 'AI 优化已启用' : 'AI 优化已关闭');
+    }
+  }
+
+  async function saveAiEndpoint() {
+    if (!aiCfg || aiSaving) return;
+    aiSaving = true;
+    try {
+      const ok = await patchAi({
+        base_url: aiCfg.base_url.trim(),
+        model: aiCfg.model.trim(),
+        chunk_cues: Number(aiCfg.chunk_cues) || 200,
+        translate_chunk_cues: Number(aiCfg.translate_chunk_cues) || 120,
+        context_cues: Number(aiCfg.context_cues) || 0,
+      });
+      if (ok) toast('AI 配置已保存');
+    } finally {
+      aiSaving = false;
+    }
+  }
+
+  async function saveAiKey() {
+    const text = aiKeyInput.trim();
+    if (!text) return;
+    try {
+      const res = await window.kikusub.aiKey.set(text);
+      if (!res?.ok) {
+        toast('保存失败：应用数据目录不可写', 'error');
+        return;
+      }
+      aiKeyBroken = false;
+      aiKeyInput = '';
+      await refreshAiKey();
+      toast('API Key 已加密保存');
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  async function clearAiKey() {
+    try {
+      await window.kikusub.aiKey.clear();
+      await refreshAiKey();
+      aiKeyBroken = false;
+      aiTestMsg = '';
+      toast('已清除 API Key');
+    } catch (err) {
+      toast((err as Error).message, 'error');
+    }
+  }
+
+  async function testAi() {
+    if (!aiCfg || aiTesting) return;
+    aiTesting = true;
+    aiTestMsg = '';
+    try {
+      const key = await window.kikusub.aiKey.get();
+      if (!key) {
+        aiTestMsg = '还没有保存 API Key';
+        return;
+      }
+      const res = await api.testAi({ base_url: aiCfg.base_url, model: aiCfg.model }, key);
+      aiTestMsg = `连接正常 · ${res.latency_ms}ms · ${res.host}`;
+    } catch (err) {
+      aiTestMsg = `连接失败：${(err as Error).message}`;
+    } finally {
+      aiTesting = false;
+    }
+  }
 
   async function loadDiag() {
     diagLoading = true;
@@ -509,6 +674,140 @@
     {/if}
   </section>
 
+  <!-- AI 优化（实验功能） -->
+  <section class="sec">
+    <div class="sec-head">
+      <div>
+        <div class="sec-title">AI 优化（实验功能）</div>
+        <div class="sec-desc">
+          用你自己的模型按全片语境修正识别错误。结果只生成<b>提案</b>，在 AI 优化台里逐条对照，
+          确认后才写进核对台。
+        </div>
+      </div>
+    </div>
+
+    {#if aiCfg}
+      <div class="pref">
+        <div>
+          <b>启用 AI 优化</b>
+          <span>关闭后「AI 优化台」仍可查看/导入已有提案，只是不能再生成。</span>
+        </div>
+        <button
+          class="switch"
+          class:on={aiEnabled}
+          role="switch"
+          aria-checked={aiEnabled}
+          onclick={toggleAi}
+        >
+          <span class="knob"></span>
+        </button>
+      </div>
+
+      <div class="ai-form">
+        <label>
+          <span>Base URL</span>
+          <input bind:value={aiCfg.base_url} spellcheck="false" placeholder="https://api.deepseek.com" />
+        </label>
+        <label>
+          <span>模型</span>
+          <input bind:value={aiCfg.model} spellcheck="false" placeholder="deepseek-flash" />
+        </label>
+        <div class="ai-grid3">
+          <label>
+            <span>每块条数</span>
+            <input type="number" min="20" max="2000" bind:value={aiCfg.chunk_cues} />
+          </label>
+          <label>
+            <span>翻译每块条数</span>
+            <input type="number" min="20" max="2000" bind:value={aiCfg.translate_chunk_cues} />
+          </label>
+          <label>
+            <span>上下文条数</span>
+            <input type="number" min="0" max="30" bind:value={aiCfg.context_cues} />
+          </label>
+          <div class="ai-actions">
+            <button class="btn" onclick={saveAiEndpoint} disabled={aiSaving}>保存</button>
+            <button class="btn ghost" onclick={testAi} disabled={aiTesting || !aiHasKey}>
+              {aiTesting ? '测试中…' : '测试连接'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ai-key">
+        <label>
+          <span>API Key</span>
+          <input
+            type="password"
+            bind:value={aiKeyInput}
+            spellcheck="false"
+            autocomplete="off"
+            placeholder={aiHasKey ? '已保存（输入新值可替换）' : 'sk-…'}
+          />
+        </label>
+        <div class="ai-actions">
+          <button class="btn" onclick={saveAiKey} disabled={!aiKeyInput.trim() || !aiKeyReady}>
+            保存 Key
+          </button>
+          <button class="btn ghost" onclick={clearAiKey} disabled={!aiHasKey}>清除</button>
+          <span class="status" class:ok={aiHasKey} class:missing={!aiHasKey}>
+            {aiHasKey ? '已配置' : '未配置'}
+          </span>
+        </div>
+      </div>
+
+      {#if aiKeyBroken}
+        <div class="notes warn">
+          检测到已保存的密钥解不开（主密钥文件丢了或密文被改过）{aiKeyLegacy ? '，它来自更早的钥匙串版本' : ''}。
+          请在上面的输入框重新填一次。
+        </div>
+      {/if}
+      {#if !aiKeyReady}
+        <div class="notes warn">应用数据目录不可写，密钥无法保存；请检查磁盘权限。</div>
+      {/if}
+      {#if aiTestMsg}
+        <div class="notes">{aiTestMsg}</div>
+      {/if}
+      <div class="notes">
+        Key 用本机密钥（AES-256-GCM，主密钥文件权限 600）加密后存在应用数据目录，不写进
+        settings.json，也不会出现在日志里；只在发起请求的那一刻解出来，随请求头带上一次。
+        <b>不依赖系统钥匙串，升级/重装应用都不会丢。</b>所有调用都会把字幕文本发给上面填的服务地址。
+      </div>
+
+      <div class="skill-box">
+        <div class="skill-head">
+          <b>Agent 技能</b>
+          <span class="muted">让外部 agent（DeepSeek Harness 等）自己读字幕、产出提案</span>
+        </div>
+        <div class="skill-row">
+          <span class="mono skill-path">{skillInfo?.targetDir || '—'}</span>
+          <span
+            class="status"
+            class:ok={Boolean(skillInfo?.installed && skillInfo?.upToDate)}
+            class:missing={!skillInfo?.installed || !skillInfo?.upToDate}
+          >
+            {skillInfo?.installed
+              ? skillInfo.upToDate
+                ? '已配置'
+                : '需更新'
+              : '未配置'}
+          </span>
+          <button class="btn" onclick={installSkill} disabled={skillBusy}>
+            {skillBusy ? '配置中…' : '一键配置'}
+          </button>
+          <button class="btn ghost" onclick={loadSkill} disabled={skillBusy}>刷新</button>
+        </div>
+        <div class="notes">
+          配置后，在 agent 里说「帮我把 KikuSub 这份字幕润色一遍 / 翻译成中文」，它会按技能说明读
+          SRT、算源指纹、写出提案 JSON；你回到「AI 优化台 → 重新加载」即可逐条对照后应用。
+          <b>技能不直接改字幕</b>，也不写入任何密钥。
+        </div>
+      </div>
+    {:else}
+      <div class="notes">AI 配置读取失败，内核可能还没连上。</div>
+    {/if}
+  </section>
+
   <!-- 工作流 -->
   <section class="sec">
     <div class="sec-head">
@@ -738,6 +1037,13 @@
     color: #ffb340;
   }
 
+  .notes.warn {
+    color: #b26a00;
+  }
+  html[data-theme='dark'] .notes.warn {
+    color: #ffb340;
+  }
+
   .notes {
     margin-top: 7px;
     font-size: 11px;
@@ -915,6 +1221,98 @@
   }
   .tail summary:hover {
     color: var(--text-2);
+  }
+
+  .skill-box {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--separator-soft);
+  }
+  .skill-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .skill-head .muted {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .skill-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .skill-path {
+    flex: 1;
+    min-width: 220px;
+    font-size: 10.5px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ai-form,
+  .ai-key {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 12px 0;
+    border-top: 1px solid var(--separator-soft);
+  }
+  .ai-form label,
+  .ai-key label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+  .ai-form label > span,
+  .ai-key label > span {
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+  .ai-form input,
+  .ai-key input {
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 9px;
+    border-radius: 7px;
+    border: 1px solid var(--separator);
+    background: var(--bg-content);
+    color: var(--text);
+    outline: none;
+    min-width: 0;
+  }
+  .ai-form input:focus,
+  .ai-key input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .ai-grid3 {
+    display: flex;
+    align-items: flex-end;
+    gap: 9px;
+    flex-wrap: wrap;
+  }
+  .ai-grid3 label {
+    max-width: 130px;
+  }
+  .ai-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ai-key {
+    flex-direction: row;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .ai-key label {
+    max-width: 360px;
   }
 
   .pref {

@@ -37,6 +37,21 @@ contextBridge.exposeInMainWorld('kikusub', {
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),
   // 默认打开导出文件夹，只让用户挑字幕；设置页用 pickDirectory 选导出目录
   pickSubtitle: (defaultDir) => ipcRenderer.invoke('dialog:pick-subtitle', defaultDir),
+  pickProposal: (defaultDir) => ipcRenderer.invoke('dialog:pick-proposal', defaultDir),
+
+  // Agent 技能：把随包 skill 装到 ~/.agents/skills/（DSH 扫描的用户级根）
+  skill: {
+    status: () => ipcRenderer.invoke('skill:status'),
+    install: (paths) => ipcRenderer.invoke('skill:install', paths),
+  },
+
+  // AI 密钥：加解密都在主进程，渲染进程只在发起请求那一刻取用
+  aiKey: {
+    set: (text) => ipcRenderer.invoke('ai-key:set', text),
+    get: () => ipcRenderer.invoke('ai-key:get'),
+    clear: () => ipcRenderer.invoke('ai-key:clear'),
+    status: () => ipcRenderer.invoke('ai-key:status'),
+  },
   pickDirectory: (payload) => ipcRenderer.invoke('dialog:pick-directory', payload),
 
   // 剪贴板：file:// 页面里 navigator.clipboard 不一定可用，走主进程更稳

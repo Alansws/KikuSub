@@ -27,6 +27,10 @@ test('fragment subtitle classifier', () => {
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.autosave_draft.srt'), false);
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.reviewed.srt'), false);
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.clean.srt'), false);
+  // 译文交付物也不是碎片：只导译文 / 双语，两种后缀
+  assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.zh-Hans.srt'), false);
+  assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.bilingual.srt'), false);
+  assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.en.vtt'), false);
   assert.equal(isFragmentSubtitle('2026-11-10.txt'), false);
 });
 

@@ -179,6 +179,88 @@ python app.py
 - 设置页「清理旧日志」走 `POST /api/diagnostics/log/clean`，是同一份 `prune_logs()`；
   不要为了“清空”去 truncate 活动日志（会破坏 handler 的 inode/offset）。
 
+## 3.7 AI 提案与 AI 优化台（2026-11 M1，后续里程碑会扩展）
+
+- **时间码由结构保证，不靠提示词**：提案里只有 `{i, text}`，**没有时间戳**。应用时
+  `start/end` 一律取自当前 `review_cues`，提案里的任何时间字段都不参与。任何把时间码塞进
+  模型载荷、或从提案读时间码的实现都算破坏契约（见 `docs/AI优化与翻译-开发文档-2026-11.md` D-1）。
+- **唯一实现**：`core/ai_proposal.py` 负责 digest、结构校验与 `apply_polish()`。
+  前端**不得**自己算 digest，也**不得**另写一份校验；`/api/ai/apply` 与将来的生成任务
+  必须调同一个 `validate_proposal()`。
+- **应用 = 整批一次历史**：走一次 `Session.replace_review()`，`⌘Z` 一次全退回。
+  **禁止**逐条改（27 处改动压 27 次栈会让人没法用）。
+- **失败不动字幕**：digest 不符 → 409，结构不符 → 422，`session.review_cues` 一个字节都不改。
+- **文件位置**：`{output_dir}/{stem}.ai-polish.json`、`{stem}.{lang}.ai-translate.json`。
+  外部 agent 带来的提案走 `POST /api/ai/proposal/import`（校验通过才落到标准位置），
+  原生对话框是 `window.kikusub.pickProposal()` —— 不要复用 `pickSubtitle`（只认 srt/vtt）。
+- **`AiView` 只认提案**，不关心是 in-app 还是外部 skill 生成的：这是"一个提案层、两个入口"的
+  全部意义（D-2）。改界面时不要为某个来源开分支。
+- 验收脚本：`python tools/make_fake_proposal.py <srt>` 造一份假提案；
+  用例在 `tests/test_ai_proposal.py` / `tests/test_server_ai.py`。
+- 译文**不写进** `review_cues.text`（D-3），它将来是平行轨；`/api/ai/apply` 只处理
+  `kind=polish`，翻译提案会被 422 拒绝。
+
+### 3.7.1 调用模型（2026-11 M2）
+
+- 客户端在 `core/ai_client.py`：**纯 urllib，不引 openai SDK**（sidecar 是打包产物，
+  少一个依赖少一份体积）。`chat_json()` 只管传输与 JSON 解析，分块在 `core/ai_polish.py`。
+- **密钥只走请求头 `X-AI-Key`**：渲染进程从 `window.kikusub.aiKey.get()`（主进程解出
+  明文）取出来，随请求发一次。服务层**不读不写不记**；`settings.json` 里没有也不要加
+  `ai_api_key` 字段。日志只允许 host / model / 状态码 / 耗时。
+- **密钥存储不要用 `safeStorage`**（2026-11-11 定稿，见开发文档 §11.4）：keychain 条目的
+  ACL 认的是代码签名要求，而本项目以 DMG 分发、ad-hoc 签名，**每次发版 cdhash 都变，
+  用户升级后 Key 全部失效**，且没有 Developer ID 无从修复。现在用
+  `desktop/main/aikey.cjs`：32 字节主密钥存 `{dataDir}/.ai-key`（0600），
+  `preferences.json` 里只放 `aik1:` 密文。
+  改这块时守住三条：**0600 权限**、**旧 `v10` blob 要能识别并报 `broken`**、
+  **绝不把明文写进任何文件或日志**。用例：`node --test desktop/test/aikey.test.cjs`。
+- 只有将来改用 **Developer ID 签名 + 公证** 发布时，才值得切回 `safeStorage`；
+  切之前先读开发文档 §11.4 的三方案对比。
+- 生成走 `JobManager.start_ai_polish()`（与转写共用单槽），进度复用 `/ws/jobs/{id}`。
+  `ai_client` 里带 key 的 `AiConfig` **只能作为线程参数**，绝不能塞进 `JobRecord`。
+- 结构不合规（缺条 / 非 JSON）只**重问一次**（附 `STRICT_HINT`）；仍失败就整份放弃，
+  绝不产出"半份提案"。改动率超 40% 会出现在 `warnings` 里，界面据此提示。
+- 取消只能落在**分块之间**（urllib 阻塞不可中断），这是已知限制，不要假装能秒停。
+
+### 3.7.2 译文平行轨（2026-11 M3）
+
+- 译文**永远不写进** `review_cues.text`（D-3）。它存在 `Session.translations[lang]`，
+  与 `review_cues` **逐条对齐**，并带一份 `base`（生成时的原文快照）用来算过期。
+- 写轨只有两条路：`POST /api/translations`（应用一整版）与草稿恢复。两者都**只动轨**，
+  不进 `review_cues` 的撤销栈；译文有自己的 `translation_undo[lang]`（上限 20 版）。
+- 条数必须相等、`i` 必须连续、digest 必须匹配；**不通过就整批拒绝**，
+  绝不落一份对不齐的轨（`test_server_translations.py`）。
+- 双语 = **一条 cue 两行**（D-4），构造只有一份实现：`core/i18n.bilingual_cues()`。
+  导出与显示都调它，禁止各写一遍。
+- 三态导出：`POST /api/cues/export` 的 `track`（`source|target|both`）+ `lang`；
+  文件名后缀 `.lang` / `.bilingual`。**新增后缀必须同步 `desktop/main/files.cjs`
+  的 `TRANSLATION_SUFFIX`**，否则退出清理会把交付物当碎片默认删除。
+- 核对台三态与双语行高：`ReviewView` 的行高是 `$derived(app.track === 'both' ? ROW_H*2 : ROW_H)`，
+  **固定双行高**；禁止改用自动测量（会和虚拟滚动的绝对定位打架）。
+- 暂存必须连译文一起写（`{stem}.autosave_draft.i18n.json`）；恢复时条数不符的轨直接丢弃。
+### 3.7.3 Agent 技能（2026-11 M4）
+
+- 技能包在 `desktop/resources/skill/kikusub-subtitle/`，装到 `~/.agents/skills/`（DSH 会扫描的
+  用户级技能根）。`KIKUSUB_SKILL_ROOT` 可覆盖根目录，测试用它。
+- **不要把目标根改回 `~/.claude/skills/`**：那是 Claude Code 的根，DSH 的 `skill-filesystem`
+  只扫 `.dsh/skills` / `.agents/skills`（项目级）与 `~/.dsh/skills` / `~/.agents/skills`（用户级）。
+  装错根的表现是目录都在、`SKILL.md` 也合法，但 `/` 菜单里没有这个技能。根目录的唯一实现是
+  `desktop/main/skill.cjs` 的 `defaultTargetDir()`，`main.cjs` 只负责传 home。
+- `SKILL.md` 里读 `references/paths.json` 优先用宿主给的技能目录，兜底只列 `.agents` / `.dsh`
+  两处；不要再往文档和代码里加 `~/.claude`（本项目不面向 Claude Code）。
+- **技能不碰字幕文件**：只读 SRT、写 `{output_dir}/{stem}.ai-polish.json` 或
+  `{stem}.{lang}.ai-translate.json`。任何让 agent 直接改 SRT 的做法都是回退。
+- `references/digest.md` 里有一个固定自测向量，`desktop/test/skill.test.cjs` 会校验它——
+  改算法就同时改文档和用例，否则测试红。
+- 安装器 `desktop/main/skill.cjs` 只用 fs（不引 electron），因此能被 `node --test` 覆盖；
+  安装是"先删再拷"，`references/paths.json` 由渲染层传入的真实目录覆盖写入。
+- 目标目录由**主进程**决定，不接受渲染层传进来的路径。
+
+- **手动粘贴通道（2026-11 补充）**：`GET /api/ai/prompt` 组提示词（里面**带** SRT 与时间戳，
+  为的是让模型逐条对齐），`POST /api/ai/from-srt` 解析回复时**只按顺序取文本，
+  序号与时间戳全部丢弃**，时间轴仍用我们自己的 cue。条数不符整批拒绝（422）。
+  改这块时不要把解析结果里的时间戳写回字幕——那会直接破坏 D-1。
+
 ## 4. 转录任务详报面板（禁止退回 Textbox）
 
 - 「📊 全片转录原始结果、表格与任务详报」下的「转录任务报告」**必须**保持为 `gr.HTML` + `render_report_panel()`（`app.py` 中 `build_transcription_report` 之后），**不要改回 `gr.Textbox`**：Gradio 6 的 Textbox 会按内容自动增高并在 `overflow:hidden` / `overflow:scroll` 之间切换，长报告反复更新后会把文本框卡在裁切状态、无法上下滑动。

@@ -120,6 +120,12 @@ cat > "$APP/Contents/Resources/app/package.json" <<'JSON'
   "main": "main/main.cjs"
 }
 JSON
+# 随包的 Agent 技能（设置页「一键配置」从这里复制到 ~/.agents/skills/）
+if [ -d "desktop/resources/skill" ]; then
+  cp -R desktop/resources "$APP/Contents/Resources/app/resources"
+else
+  echo "⚠️ 缺少 desktop/resources/skill，一键配置按钮会不可用" >&2
+fi
 cp desktop/build/icon.icns "$APP/Contents/Resources/icon.icns"
 cp presets.json "$APP/Contents/Resources/python-presets.json" 2>/dev/null || true
 
@@ -141,6 +147,8 @@ else
 fi
 
 echo "== 7/7 自签 =="
+# 用 ad-hoc 签名即可：AI 密钥走本机加密（见 desktop/main/aikey.cjs），**不依赖钥匙串**，
+# 所以"每次重打包 cdhash 变化"没有副作用。换成固定证书只在需要钥匙串/公证时才值得。
 codesign --force --deep --sign - "$APP" 2>&1 | tail -3 || echo "（自签失败，本机运行通常也能启动）"
 
 # 重新打包后 Finder/LaunchServices 仍可能缓存旧图标；touch + 重新注册能强制刷新。

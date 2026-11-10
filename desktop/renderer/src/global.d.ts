@@ -54,6 +54,45 @@ declare global {
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
       pickMedia(): Promise<string | null>;
       pickSubtitle(defaultDir?: string): Promise<string | null>;
+      pickProposal(defaultDir?: string): Promise<string | null>;
+      skill: {
+        status(): Promise<{
+          ok: boolean;
+          error?: string;
+          name: string;
+          targetDir: string;
+          installed: boolean;
+          upToDate: boolean;
+          fileCount: number;
+          installedAt: number;
+        }>;
+        install(paths: { output_dir: string; export_dir: string }): Promise<{
+          ok: boolean;
+          error?: string;
+          targetDir: string;
+          installed: boolean;
+          upToDate: boolean;
+          fileCount: number;
+        }>;
+      };
+      aiKey: {
+        set(text: string): Promise<{ ok: boolean; reason?: string }>;
+        get(): Promise<string>;
+        clear(): Promise<{ ok: boolean }>;
+        status(): Promise<{
+          ok: boolean;
+          /** 本机加密永远可用；保留字段是为了未来兼容 */
+          available: boolean;
+          has: boolean;
+          /** local = 已落盘加密；none = 未配置 */
+          backend: 'local' | 'none';
+          persistent: boolean;
+          /** 有密文但解不开（主密钥丢了/文件被改）→ 需要重填 */
+          broken?: boolean;
+          /** 更早版本用 safeStorage 存的密文（本方案读不了） */
+          legacy?: boolean;
+        }>;
+      };
       pickDirectory(payload: { title?: string; defaultPath?: string }): Promise<string | null>;
       writeClipboard(text: string): Promise<boolean>;
       revealInFinder(target: string): Promise<void>;

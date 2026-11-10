@@ -5,13 +5,22 @@
     deleteCue,
     exportCues,
     focusRange,
+    loadTranslations,
     play,
     previewRange,
     refreshDraftInfo,
     restoreDraft,
     reviewDraft,
     saveDraft,
+    isTranslationStale,
+    setTrackLang,
+    setTrackMode,
+    staleTranslationCount,
+    translationAt,
+    undoTranslation,
     updateCue,
+    updateTranslation,
+    type TrackMode,
   } from '../lib/store.svelte';
   import { tc } from '../lib/time';
 
@@ -19,14 +28,26 @@
   const quality = $derived(app.report?.quality ?? null);
 
   let draft = $state('');
+  let draftTr = $state('');
   let editingIndex = $state(-1);
+  /** 同步键：换了选中行 / 语种 / 显示模式 / 换了一版译文，才重新灌编辑框 */
+  let syncKey = $state('');
   let exportFormat = $state<'SRT' | 'VTT' | 'TXT'>('SRT');
+  let exportTrack = $state<'source' | 'target' | 'both'>('source');
   let exporting = $state(false);
+
+  const trackLangs = $derived(Object.keys(app.translations).sort());
+  const hasTrack = $derived(Boolean(app.translations[app.trackLang]));
+  const staleCount = $derived(staleTranslationCount());
+  const exportNeedsTrack = $derived(exportTrack !== 'source');
 
   /** 进入核对屏 / 换片时刷新工作草稿状态（是否存在、多少条、最后写入时间）。 */
   $effect(() => {
     void app.media?.id;
-    if (app.connected && app.media) void refreshDraftInfo();
+    if (app.connected && app.media) {
+      void refreshDraftInfo();
+      void loadTranslations();
+    }
   });
 
   const draftLabel = $derived.by(() => {
@@ -46,27 +67,45 @@
     if (exporting) return;
     exporting = true;
     try {
-      await exportCues(exportFormat);
+      // 译文/双语导出必须带语种；没有对应轨时按钮本来就是禁用的
+      await exportCues(exportFormat, {
+        track: exportTrack as TrackMode,
+        lang: exportTrack === 'source' ? '' : app.trackLang,
+      });
     } finally {
       exporting = false;
     }
   }
 
-  // 选中行变化时把文本灌进编辑框（不覆盖正在输入的内容）
+  // 选中行 / 语种 / 模式 / 译文版本变化时，把文本灌进编辑框。
+  // 不用 `editingIndex` 单判：切到译文模式时同一行也要换内容。
   $effect(() => {
     const idx = play.selected;
     const c = app.cues[idx];
     if (!c) return;
-    if (idx !== editingIndex) {
-      draft = c.text;
-      editingIndex = idx;
-    }
+    const version = app.translations[app.trackLang]?.created_at ?? 0;
+    const key = `${idx}:${app.track}:${app.trackLang}:${version}`;
+    if (key === syncKey) return;
+    syncKey = key;
+    editingIndex = idx;
+    draft = c.text;
+    draftTr = translationAt(idx);
   });
 
+  /** 只提交当前显示模式里真正可见的那几个框。 */
   function commit() {
     if (!cue) return;
-    if (draft === cue.text) return;
-    updateCue(play.selected, { text: draft });
+    if (app.track === 'source') {
+      if (draft !== cue.text) updateCue(play.selected, { text: draft });
+      return;
+    }
+    if (app.track === 'target') {
+      if (draftTr !== translationAt(play.selected)) updateTranslation(play.selected, draftTr);
+      return;
+    }
+    // 双语：两个框都能改，各自独立提交
+    if (draft !== cue.text) updateCue(play.selected, { text: draft });
+    if (draftTr !== translationAt(play.selected)) updateTranslation(play.selected, draftTr);
   }
 
   function remove() {
@@ -78,6 +117,49 @@
 
 <aside class="inspector" class:hidden={!app.inspectorOpen}>
   <div>
+    <div class="ins-h">显示</div>
+    <div class="track-row">
+      <div class="seg">
+        <button class:on={app.track === 'source'} onclick={() => setTrackMode('source')}>原文</button>
+        <button
+          class:on={app.track === 'target'}
+          disabled={!hasTrack}
+          title={hasTrack ? '只显示译文' : '还没有译文'}
+          onclick={() => setTrackMode('target')}>译文</button
+        >
+        <button
+          class:on={app.track === 'both'}
+          disabled={!hasTrack}
+          title={hasTrack ? '原文 + 译文上下两行' : '还没有译文'}
+          onclick={() => setTrackMode('both')}>双语</button
+        >
+      </div>
+      <select
+        class="lang-sel"
+        value={app.trackLang}
+        title="译文语种"
+        onchange={(e) => setTrackLang(e.currentTarget.value)}
+      >
+        {#each trackLangs as lang (lang)}
+          <option value={lang}>{lang}</option>
+        {/each}
+        {#if !trackLangs.length}
+          <option value={app.trackLang}>{app.trackLang}</option>
+        {/if}
+      </select>
+    </div>
+    {#if hasTrack}
+      <div class="track-meta">
+        <span>{app.translations[app.trackLang]?.count ?? 0} 条</span>
+        {#if staleCount > 0}
+          <span class="warn">{staleCount} 条待更新</span>
+        {:else}
+          <span class="ok">全部同步</span>
+        {/if}
+        <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
+      </div>
+    {/if}
+
     <div class="ins-h">
       当前条目
       <span class="muted">#{play.selected + 1}</span>
@@ -94,19 +176,65 @@
         </div>
         <div class="kv">
           <span class="k">字符</span>
-          <span class="v">{cue.text.length} 字</span>
+          <span class="v">
+            {cue.text.length} 字{app.track === 'source' ? '' : ` · 译文 ${translationAt(play.selected).length} 字`}
+          </span>
         </div>
         <div style="height:8px"></div>
-        <textarea
-          class="cue-text"
-          bind:value={draft}
-          onblur={commit}
-          onkeydown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
-          }}
-          spellcheck="false"
-          rows="2"
-        ></textarea>
+
+        {#if app.track === 'source'}
+          <textarea
+            class="cue-text"
+            bind:value={draft}
+            onblur={commit}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+            }}
+            spellcheck="false"
+            rows="2"
+          ></textarea>
+        {:else if app.track === 'target'}
+          <div class="edit-label">译文 · {app.trackLang}</div>
+          <textarea
+            class="cue-text"
+            bind:value={draftTr}
+            onblur={commit}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+            }}
+            spellcheck="false"
+            rows="2"
+          ></textarea>
+          {#if isTranslationStale(play.selected)}
+            <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
+          {/if}
+        {:else}
+          <div class="edit-label">原文</div>
+          <textarea
+            class="cue-text"
+            bind:value={draft}
+            onblur={commit}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+            }}
+            spellcheck="false"
+            rows="2"
+          ></textarea>
+          <div class="edit-label">译文 · {app.trackLang}</div>
+          <textarea
+            class="cue-text"
+            bind:value={draftTr}
+            onblur={commit}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+            }}
+            spellcheck="false"
+            rows="2"
+          ></textarea>
+          {#if isTranslationStale(play.selected)}
+            <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
+          {/if}
+        {/if}
         <div class="btn-row">
           <button class="btn" onclick={() => previewRange(cue.start, cue.end)}>
             <Icon name="play" size={11} />试听
@@ -114,7 +242,13 @@
           <button class="btn ghost" onclick={() => focusRange(cue.start, cue.end)} title="在波形上聚焦放大这一句">
             <Icon name="search" size={11} />聚焦
           </button>
-          <button class="btn primary" onclick={commit} disabled={draft === cue.text}>
+          <button
+            class="btn primary"
+            onclick={commit}
+            disabled={app.track === 'source'
+              ? draft === cue.text
+              : draft === cue.text && draftTr === translationAt(play.selected)}
+          >
             更新此行
           </button>
         </div>
@@ -211,6 +345,16 @@
       </button>
       <select
         class="sd-fmt"
+        bind:value={exportTrack}
+        disabled={exporting}
+        title="导出内容：原文 / 仅译文 / 双语（一条两行）"
+      >
+        <option value="source">原文</option>
+        <option value="target" disabled={!hasTrack}>译文</option>
+        <option value="both" disabled={!hasTrack}>双语</option>
+      </select>
+      <select
+        class="sd-fmt"
         bind:value={exportFormat}
         disabled={exporting}
         title="导出格式"
@@ -222,7 +366,7 @@
       <button
         class="btn primary sd-export"
         onclick={doExport}
-        disabled={!app.cues.length || exporting}
+        disabled={!app.cues.length || exporting || (exportNeedsTrack && !hasTrack)}
         title={app.config?.export_dir
           ? `把核对台当前时间轴导出到 ${app.config.export_dir}`
           : '把核对台当前时间轴导出到导出文件夹'}
@@ -270,6 +414,88 @@
     transition: width var(--dur) var(--ease), flex-basis var(--dur) var(--ease),
       padding var(--dur) var(--ease), opacity 140ms var(--ease);
   }
+  .edit-label {
+    margin: 2px 0 3px;
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+
+  .edit-hint {
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: #b26a00;
+  }
+
+  html[data-theme='dark'] .edit-hint {
+    color: #ffb340;
+  }
+
+  .track-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 6px;
+  }
+  .seg {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 7px;
+    background: var(--fill);
+  }
+  .seg button {
+    border: 0;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .seg button.on {
+    background: var(--bg-content);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  .seg button:disabled {
+    color: var(--text-3);
+    cursor: default;
+  }
+  .lang-sel {
+    margin-left: auto;
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 5px;
+    border-radius: 6px;
+    border: 1px solid var(--separator);
+    background: var(--bg-content);
+    color: var(--text);
+  }
+  .track-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px;
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+  .track-meta .ok {
+    color: #1c7c36;
+  }
+  .track-meta .warn {
+    color: #b26a00;
+  }
+  .track-meta .link {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 10.5px;
+    cursor: pointer;
+    padding: 0;
+  }
+
   .inspector.hidden {
     width: 0;
     flex-basis: 0;

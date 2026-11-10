@@ -63,6 +63,8 @@ models/
 outputs/
 settings.json
 preferences.json
+# AI 密钥的本机主密钥（0600，开发模式落在仓库根）
+.ai-key
 *.part_cancelled.srt
 *.autosave_draft.srt
 *.progress.json

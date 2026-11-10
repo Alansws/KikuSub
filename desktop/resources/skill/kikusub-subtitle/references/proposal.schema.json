@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KikuSub AI 提案",
+  "type": "object",
+  "required": [
+    "version",
+    "kind",
+    "src_lang",
+    "source",
+    "items"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "polish",
+        "translate"
+      ]
+    },
+    "src_lang": {
+      "type": "string",
+      "examples": [
+        "ja"
+      ]
+    },
+    "dst_lang": {
+      "type": "string",
+      "examples": [
+        "zh-Hans",
+        "zh-Hant",
+        "en",
+        "ko"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "count",
+        "digest"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "model": {
+      "type": "string"
+    },
+    "entry": {
+      "type": "string",
+      "examples": [
+        "skill",
+        "in-app",
+        "manual"
+      ]
+    },
+    "created_at": {
+      "type": "number"
+    },
+    "chunks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "glossary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "src",
+          "dst"
+        ],
+        "properties": {
+          "src": {
+            "type": "string"
+          },
+          "dst": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "description": "必须与 source.count 等长；i 从 1 连续到 n；不得出现任何时间字段",
+      "items": {
+        "type": "object",
+        "required": [
+          "i",
+          "after"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "i": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "before": {
+            "type": "string"
+          },
+          "after": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 24
+          }
+        }
+      }
+    }
+  }
+}

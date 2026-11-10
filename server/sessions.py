@@ -26,6 +26,54 @@ def _copy(cues: list[SubtitleCue]) -> list[SubtitleCue]:
     return [SubtitleCue(start=c.start, end=c.end, text=c.text) for c in cues]
 
 
+# 每个语种独立保留多少步"上一次的译文"。译文不走 review_cues 的撤销栈（D-3），
+# 否则改一句原文会把整条时间轴的撤销历史搅乱。
+TRACK_UNDO_LIMIT = 20
+
+
+@dataclass
+class TranslationTrack:
+    """一个语种的译文轨：与 review_cues **逐条对齐**。
+
+    ``base`` 是生成时的原文快照，用来算"哪几条译文已经过期"（`core.i18n.stale_indices`）。
+    结构变更（增删条）会让后面全部变 stale——这是如实反映，不是缺陷。
+    """
+
+    lang: str
+    texts: list[str]
+    base: list[str]
+    created_at: float = field(default_factory=time.time)
+    entry: str = "in-app"
+
+    def copy(self) -> "TranslationTrack":
+        return TranslationTrack(
+            lang=self.lang,
+            texts=list(self.texts),
+            base=list(self.base),
+            created_at=self.created_at,
+            entry=self.entry,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "lang": self.lang,
+            "texts": list(self.texts),
+            "base": list(self.base),
+            "created_at": self.created_at,
+            "entry": self.entry,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TranslationTrack":
+        return cls(
+            lang=str(data.get("lang") or ""),
+            texts=[str(t or "") for t in (data.get("texts") or [])],
+            base=[str(t or "") for t in (data.get("base") or [])],
+            created_at=float(data.get("created_at") or time.time()),
+            entry=str(data.get("entry") or "in-app"),
+        )
+
+
 @dataclass
 class Session:
     id: str
@@ -39,6 +87,10 @@ class Session:
     updated_at: float = field(default_factory=time.time)
     # 转写任务在 worker 线程里回写结果，请求线程同时在读；一把会话锁避免
     # 「列表一半是旧结果一半是新结果」这种撕裂。
+    # 译文平行轨：lang -> track。**绝不写进 review_cues.text**（D-3）。
+    translations: dict[str, TranslationTrack] = field(default_factory=dict)
+    # 每个语种自己的撤回栈（只存整轨快照，足够覆盖"应用了一版译文"这种批量操作）
+    translation_undo: dict[str, list[TranslationTrack]] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     # -- 历史 ---------------------------------------------------------------
@@ -96,6 +148,61 @@ class Session:
     def clear_review(self) -> None:
         self._push_history()
         self.review_cues = []
+
+    # -- 译文轨 -------------------------------------------------------------
+
+    def set_translation(self, track: TranslationTrack) -> None:
+        """整轨替换，并保留上一版供撤销。"""
+        with self.lock:
+            previous = self.translations.get(track.lang)
+            if previous is not None:
+                stack = self.translation_undo.setdefault(track.lang, [])
+                stack.append(previous.copy())
+                if len(stack) > TRACK_UNDO_LIMIT:
+                    stack.pop(0)
+            self.translations[track.lang] = track
+            self.updated_at = time.time()
+
+    def undo_translation(self, lang: str) -> bool:
+        with self.lock:
+            stack = self.translation_undo.get(lang) or []
+            if not stack:
+                return False
+            self.translations[lang] = stack.pop()
+            if not stack:
+                self.translation_undo.pop(lang, None)
+            self.updated_at = time.time()
+            return True
+
+    def patch_translation(self, lang: str, index: int, text: str) -> bool:
+        """改某一条译文（不动原文、不动时间轴），并留一步撤销。"""
+        with self.lock:
+            track = self.translations.get(lang)
+            if track is None or not 0 <= index < len(track.texts):
+                return False
+            stack = self.translation_undo.setdefault(lang, [])
+            stack.append(track.copy())
+            if len(stack) > TRACK_UNDO_LIMIT:
+                stack.pop(0)
+            track.texts[index] = str(text or "")
+            self.updated_at = time.time()
+            return True
+
+    def drop_translation(self, lang: str) -> bool:
+        with self.lock:
+            if self.translations.pop(lang, None) is None:
+                return False
+            self.translation_undo.pop(lang, None)
+            self.updated_at = time.time()
+            return True
+
+    def stale_translation(self, lang: str) -> list[int]:
+        from core.i18n import stale_indices
+
+        track = self.translations.get(lang)
+        if track is None:
+            return []
+        return stale_indices(self.review_cues, track.base)
 
 
 class SessionStore:

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from pathlib import Path
 
@@ -13,12 +15,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core import settings as settings_store
+from core.i18n import bilingual_cues, target_cues
 from core.subtitles import SubtitleCue, cues_to_srt, cues_to_txt, cues_to_vtt, srt_to_cues
 from core.textio import write_text_atomic
 
 from .deps import get_session
+
+log = logging.getLogger(__name__)
 from .security import require_token
-from .sessions import Session
+from .sessions import Session, TranslationTrack
 
 router = APIRouter(tags=["cues"], dependencies=[Depends(require_token)])
 
@@ -49,6 +54,9 @@ class InsertRequest(BaseModel):
 class ExportRequest(BaseModel):
     format: str = "SRT"
     save_beside: bool = False
+    # source = 只导原文（默认，行为与历史一致）；target = 只导译文；both = 双语（一条两行）
+    track: str = "source"
+    lang: str = ""
 
 
 class ImportPathRequest(BaseModel):
@@ -104,6 +112,12 @@ def _draft_path(request: Request, session: Session) -> Path:
     return Path(request.app.state.config.output_dir) / f"{stem}.autosave_draft.srt"
 
 
+def _draft_i18n_path(request: Request, session: Session) -> Path:
+    """译文轨的暂存文件：与 SRT 草稿同名，独立一份，避免破坏 SRT 的通用性。"""
+    stem = _draft_stem(_media_stem(request, session))
+    return Path(request.app.state.config.output_dir) / f"{stem}.autosave_draft.i18n.json"
+
+
 def _draft_info(path: Path) -> dict:
     if not path.exists():
         return {"exists": False, "path": str(path), "count": 0, "saved_at": 0.0}
@@ -117,7 +131,18 @@ def _draft_info(path: Path) -> dict:
 
 @router.get("/api/cues")
 def list_cues(session: Session = Depends(get_session)) -> dict:
-    return _snapshot(session)
+    """核对台快照 + 译文轨摘要（只给条数/过期下标，全量文本走 /api/translations）。"""
+    data = _snapshot(session)
+    data["translations"] = {
+        lang: {
+            "count": len(track.texts),
+            "stale": session.stale_translation(lang),
+            "created_at": track.created_at,
+            "entry": track.entry,
+        }
+        for lang, track in session.translations.items()
+    }
+    return data
 
 
 @router.post("/api/cues")
@@ -201,6 +226,15 @@ def save_draft(request: Request, session: Session = Depends(get_session)) -> dic
         raise HTTPException(status_code=409, detail="当前没有可暂存的字幕")
     path = _draft_path(request, session)
     write_text_atomic(path, cues_to_srt(session.review_cues))
+
+    # 译文轨一起存：否则重开应用后译文全丢（开发文档 §6.5）
+    i18n_path = _draft_i18n_path(request, session)
+    tracks = {lang: track.to_dict() for lang, track in session.translations.items()}
+    write_text_atomic(
+        i18n_path,
+        json.dumps({"version": 1, "tracks": tracks}, ensure_ascii=False, indent=2) + "\n",
+    )
+
     return {
         "exists": True,
         "path": str(path),
@@ -222,7 +256,41 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
     if not cues:
         raise HTTPException(status_code=422, detail="暂存草稿里没有解析出字幕")
     session.replace_review(cues)
-    return {**_snapshot(session), "source": str(path)}
+
+    # 换了整张表，任何条数对不上的旧轨都已经无法对齐，先丢掉（不留一份错位的轨）
+    for lang in list(session.translations):
+        if len(session.translations[lang].texts) != len(cues):
+            session.drop_translation(lang)
+            log.info("恢复草稿时丢弃错位的译文轨 | lang=%s", lang)
+
+    # 译文轨跟着恢复；文件不存在/损坏就跳过（不允许挡住字幕恢复）
+    restored_langs: list[str] = []
+    i18n_path = _draft_i18n_path(request, session)
+    if i18n_path.exists():
+        try:
+            payload = json.loads(i18n_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            payload = {}
+        tracks = payload.get("tracks") if isinstance(payload, dict) else None
+        if isinstance(tracks, dict):
+            for lang, raw in tracks.items():
+                if not isinstance(raw, dict):
+                    continue
+                raw.setdefault("lang", lang)
+                track = TranslationTrack.from_dict(raw)
+                if len(track.texts) == len(cues):
+                    session.translations[track.lang] = track
+                    restored_langs.append(track.lang)
+                else:
+                    # 条数对不上就丢弃，宁可让用户重翻，也不给一份错位的轨
+                    log.warning(
+                        "暂存译文轨条数不符，已忽略 | lang=%s | %d vs %d",
+                        lang,
+                        len(track.texts),
+                        len(cues),
+                    )
+
+    return {**_snapshot(session), "source": str(path), "translations": sorted(restored_langs)}
 
 
 @router.patch("/api/cues/{index}")
@@ -292,7 +360,31 @@ def export_cues(
         raise HTTPException(status_code=409, detail="当前没有可导出的字幕")
 
     render, ext = exporter
-    text = render(session.review_cues)
+
+    track = (payload.track or "source").strip().lower()
+    if track not in ("source", "target", "both"):
+        raise HTTPException(status_code=422, detail=f"不支持的 track：{payload.track}")
+
+    cues = session.review_cues
+    suffix = ""
+    skipped = 0
+    lang = (payload.lang or "").strip()
+    if track != "source":
+        if not lang:
+            raise HTTPException(status_code=422, detail="导出译文时必须指定语种")
+        translation = session.translations.get(lang)
+        if translation is None:
+            raise HTTPException(status_code=409, detail=f"还没有 {lang} 的译文可用")
+        if track == "target":
+            cues, skipped = target_cues(cues, translation.texts)
+            suffix = f".{lang}"
+        else:
+            cues = bilingual_cues(cues, translation.texts)
+            suffix = ".bilingual"
+        if not cues:
+            raise HTTPException(status_code=409, detail="译文全是空的，没有可导出的内容")
+
+    text = render(cues)
 
     stem = _media_stem(request, session) or "subtitles"
     current = settings_store.load_settings(
@@ -303,6 +395,14 @@ def export_cues(
         Path(request.app.state.config.output_dir),
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{stem}{ext}"
+    out_path = out_dir / f"{stem}{suffix}{ext}"
     out_path.write_text(text, encoding="utf-8")
-    return {"path": str(out_path), "text": text, "format": fmt, "count": len(session.review_cues)}
+    return {
+        "path": str(out_path),
+        "text": text,
+        "format": fmt,
+        "count": len(cues),
+        "track": track,
+        "lang": lang,
+        "skipped": skipped,
+    }

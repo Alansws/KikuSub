@@ -163,6 +163,165 @@ class JobManager:
         self._spawn(self._run_download, job, engine_key)
         return job
 
+    # -- AI 生成（润色 / 翻译）----------------------------------------------
+
+    def start_ai_polish(
+        self,
+        *,
+        session,
+        config,
+        chunk_cues: int,
+        context_cues: int,
+        lang: str,
+        source_path: str,
+        out_path: Path,
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """生成一份润色提案。
+
+        与转写共用单槽：真跑起来也是长时间把机器占住，而且会读写同一个会话。
+        ``config`` 里带着 api_key，**只作为线程参数存在**，绝不进 JobRecord。
+        """
+        job = self._launch("ai-polish", "AI 润色", session_id, loop)
+        self._spawn(
+            self._run_ai_generation,
+            job,
+            session,
+            config,
+            {
+                "kind": "polish",
+                "lang": lang,
+                "chunk_cues": chunk_cues,
+                "context_cues": context_cues,
+                "source_path": source_path,
+            },
+            out_path,
+        )
+        return job
+
+    def start_ai_translate(
+        self,
+        *,
+        session,
+        config,
+        dst_lang: str,
+        chunk_cues: int,
+        context_cues: int,
+        source_path: str,
+        out_path: Path,
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """生成一份翻译提案（只产提案，落轨由 /api/translations 负责）。"""
+        job = self._launch("ai-translate", "AI 翻译", session_id, loop)
+        self._spawn(
+            self._run_ai_generation,
+            job,
+            session,
+            config,
+            {
+                "kind": "translate",
+                "dst_lang": dst_lang,
+                "chunk_cues": chunk_cues,
+                "context_cues": context_cues,
+                "source_path": source_path,
+            },
+            out_path,
+        )
+        return job
+
+    def _run_ai_generation(
+        self,
+        job: JobRecord,
+        session,
+        config,
+        params: dict,
+        out_path: Path,
+    ) -> None:
+        from core import ai_client, ai_polish, ai_proposal, ai_translate
+        from core.textio import write_text_atomic
+
+        kind = str(params.get("kind") or "polish")
+        job.status = "running"
+        job.started_at = time.time()
+        self._emit(job, {"type": "start", "job": job.snapshot()})
+        texts = [cue.text for cue in getattr(session, "review_cues", []) or []]
+        def progress(ratio: float, stage: str) -> None:
+            self._progress(job, ratio, stage)
+
+        # 单槽必须占到最后一步（含写盘）才释放：中途放开会让新任务踩进同一个会话。
+        try:
+            if kind == "translate":
+                proposal, warnings, _glossary = ai_translate.run_translate(
+                    texts,
+                    config,
+                    dst_lang=str(params.get("dst_lang") or ""),
+                    chunk_cues=int(params.get("chunk_cues") or 120),
+                    context_cues=int(params.get("context_cues") or 0),
+                    source_path=str(params.get("source_path") or ""),
+                    cancel=job.token,
+                    on_progress=progress,
+                )
+            else:
+                proposal, warnings = ai_polish.run_polish(
+                    texts,
+                    config,
+                    chunk_cues=int(params.get("chunk_cues") or 200),
+                    context_cues=int(params.get("context_cues") or 0),
+                    lang=str(params.get("lang") or "ja"),
+                    model=config.model,
+                    entry="in-app",
+                    source_path=str(params.get("source_path") or ""),
+                    cancel=job.token,
+                    on_progress=progress,
+                )
+
+            changed = sum(1 for item in proposal["items"] if item["after"] != item["before"])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(out_path, ai_proposal.dump_proposal(proposal))
+
+            job.status = "done"
+            job.ratio = 1.0
+            job.percent = 100
+            job.stage = "提案已生成"
+            job.result = {
+                "proposal_path": str(out_path),
+                "kind": kind,
+                "count": len(texts),
+                "changed": changed,
+                "chunks": int(proposal.get("chunks") or 1),
+                "warnings": list(warnings or [])[:5],
+                "pending_apply": True,
+            }
+            if kind == "translate":
+                job.result["dst_lang"] = str(proposal.get("dst_lang") or "")
+                job.result["glossary"] = len(proposal.get("glossary") or [])
+            job.finished_at = time.time()
+            self._emit(job, {"type": "done", "job": job.snapshot()})
+            log.info(
+                "AI %s 完成 | job=%s | %d 条 | 改动 %d 处 | 输出=%s",
+                kind,
+                job.id,
+                len(texts),
+                changed,
+                out_path.name,
+            )
+        except (ai_polish.AiPolishCancelled, ai_client.AiCancelled):
+            job.status = "cancelled"
+            job.error = "任务已取消"
+            job.finished_at = time.time()
+            self._emit(job, {"type": "cancelled", "message": job.error, "job": job.snapshot()})
+            log.info("AI 任务已取消 | job=%s", job.id)
+        except Exception as exc:  # noqa: BLE001 - 任务失败要变成可读状态，不能抛穿线程
+            job.status = "error"
+            job.error = str(exc) or exc.__class__.__name__
+            job.finished_at = time.time()
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+            log.warning("AI 任务失败 | job=%s | %s", job.id, job.error)
+        finally:
+            self._registry.finish(job.token)
+
     def _run_download(self, job: JobRecord, engine_key: str) -> None:
         from core import engines
 
