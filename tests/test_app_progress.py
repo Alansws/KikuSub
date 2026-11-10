@@ -7,13 +7,14 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
+from helpers import patch_output_dir  # noqa: E402
 from core.transcribe import SubtitleCue  # noqa: E402
 
 
 def test_progress_rejects_other_media_with_same_stem(tmp_path, monkeypatch):
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
-    monkeypatch.setattr(app, "OUTPUT_DIR", output_dir)
+    patch_output_dir(monkeypatch, output_dir)
 
     dir_a = tmp_path / "a"
     dir_b = tmp_path / "b"
@@ -39,7 +40,7 @@ def test_progress_rejects_other_media_with_same_stem(tmp_path, monkeypatch):
 def test_legacy_progress_without_path_still_loads(tmp_path, monkeypatch):
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
-    monkeypatch.setattr(app, "OUTPUT_DIR", output_dir)
+    patch_output_dir(monkeypatch, output_dir)
     legacy = output_dir / "EP01.progress.json"
     legacy.write_text('{"last_reviewed_idx": 3}', encoding="utf-8")
     data = app._load_review_progress(media_file=str(tmp_path / "EP01.mkv"))

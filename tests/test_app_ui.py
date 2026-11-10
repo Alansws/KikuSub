@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
+from helpers import patch_output_dir  # noqa: E402
 from core.transcribe import SubtitleCue  # noqa: E402
 
 
@@ -75,7 +76,7 @@ def test_transcribe_media_streams_card_without_native_progress(tmp_path, monkeyp
     """整条转写 generator 只 yield 顶部卡片，不调用原生 progress()。"""
     media = tmp_path / "episode.mkv"
     media.write_bytes(b"x")
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(app, "ENGINE", _FakeEngine())
     monkeypatch.setattr(app, "resolve_engine", lambda _name: app.ENGINE)
 

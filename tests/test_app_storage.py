@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
+from helpers import patch_output_dir  # noqa: E402
 
 
 @pytest.fixture()
@@ -22,7 +23,7 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "PEAKS_CACHE_DIR", peaks_dir)
     monkeypatch.setattr(app, "PROXIES_DIR", proxy_dir)
     monkeypatch.setattr(app, "LOG_DIR", log_dir)
-    monkeypatch.setattr(app, "OUTPUT_DIR", output_dir)
+    patch_output_dir(monkeypatch, output_dir)
     app.JOB_REGISTRY.reset()
     monkeypatch.setattr(app, "_PROXY_JOB_ACTIVE", False)
     return audio_dir, peaks_dir, proxy_dir, log_dir, output_dir

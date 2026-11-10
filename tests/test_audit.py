@@ -9,6 +9,9 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
+from core import audit, report  # noqa: E402
+from core import cues as cue_utils  # noqa: E402
+from helpers import patch_output_dir  # noqa: E402
 from core.transcribe import SubtitleCue  # noqa: E402
 
 
@@ -31,7 +34,7 @@ def _fixture():
             {"start": 3.0, "end": 4.14, "dur": 1.14, "text": "ぐぬっ…!", "rule": "low-density", "verdict": "dropped", "peak": 0.4},
         ],
     }
-    return app.build_audit_items(missed, stats, cues), cues
+    return audit.build_audit_items(missed, stats, cues), cues
 
 
 def test_build_audit_items_merges_three_kinds_by_time_and_skips_silence():
@@ -55,13 +58,13 @@ def test_hidden_missed_count_matches_report_contract():
         {"start": 1.0, "end": 2.0, "dur": 1.0, "peak": 0.5},
         {"start": 3.0, "end": 4.0, "dur": 1.0, "peak": 0.001},
     ]
-    assert len(app._visible_missed_spans(spans)) == 1
-    assert app._missed_hidden_count(spans) == 1
+    assert len(report._visible_missed_spans(spans)) == 1
+    assert report._missed_hidden_count(spans) == 1
 
 
 def test_payload_merges_status_including_legacy_string():
     items, _ = _fixture()
-    payload = json.loads(app.make_audit_payload(
+    payload = json.loads(audit.make_audit_payload(
         "demo.mp4", items, {items[0]["id"]: "done"}, latest_cue_count=3
     ))
     assert payload["items"][0]["status"] == "done"
@@ -72,7 +75,7 @@ def test_payload_merges_status_including_legacy_string():
 
 
 def test_empty_payload_is_renderable():
-    payload = json.loads(app.empty_audit_payload())
+    payload = json.loads(audit.empty_audit_payload())
     assert payload["items"] == []
     assert payload["counts"]["total"] == 0
     # 空队列是 idle，不是「功能不存在」：前端必须据此保留入口。
@@ -82,17 +85,17 @@ def test_empty_payload_is_renderable():
 
 
 def test_engine_coverage_marks_qwen_unsupported_checks():
-    assert app._audit_coverage("whisper") == {
+    assert audit._audit_coverage("whisper") == {
         "missed": True, "dropped": True, "suspect": True,
     }
-    assert app._audit_coverage("qwen") == {
+    assert audit._audit_coverage("qwen") == {
         "missed": True, "dropped": False, "suspect": False,
     }
 
 
 def test_payload_marks_engine_phase_and_scan_range():
     items, cues = _fixture()
-    payload = json.loads(app.make_audit_payload(
+    payload = json.loads(audit.make_audit_payload(
         "demo.mp4",
         items,
         {},
@@ -111,16 +114,16 @@ def test_payload_marks_engine_phase_and_scan_range():
 
 def test_engine_metadata_survives_payload_round_trip(tmp_path, monkeypatch):
     """落盘后再读回，phase/engine/coverage 不能丢，否则入口又会变回 idle。"""
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload(
+    payload = audit.make_audit_payload(
         "demo.mp4", [], {}, 0, engine="whisper", phase="done",
         scanned={"segments": 20, "cues": 0}, transcribed_at=99.0,
     )
-    app.write_audit_payload(str(media), payload)
+    audit.write_audit_payload(str(media), payload)
 
-    loaded = json.loads(app.load_audit_payload(str(media)))
+    loaded = json.loads(audit.load_audit_payload(str(media)))
     assert loaded["phase"] == "done"
     assert loaded["engine"] == "whisper"
     assert loaded["coverage"]["dropped"] is True
@@ -131,7 +134,7 @@ def test_engine_metadata_survives_payload_round_trip(tmp_path, monkeypatch):
 
 def test_prepare_review_workspace_keeps_entry_for_loaded_media(tmp_path, monkeypatch):
     """媒体已载入、还没转写时，qa_payload 必须是 idle+media，前端才能显示常驻入口。"""
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     media = tmp_path / "demo.mkv"
     media.write_bytes(b"x")
     monkeypatch.setattr(
@@ -148,11 +151,11 @@ def test_prepare_review_workspace_keeps_entry_for_loaded_media(tmp_path, monkeyp
 
 
 def test_qa_actions_mark_restore_delete_and_focus(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     items, cues = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload(
+    payload = audit.make_audit_payload(
         "demo.mp4", items, {}, len(cues),
         engine="whisper", phase="done", scanned={"segments": 4}, transcribed_at=42.0,
     )
@@ -202,26 +205,26 @@ def test_qa_actions_mark_restore_delete_and_focus(tmp_path, monkeypatch):
 
 
 def test_qa_action_on_missing_item_keeps_state(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     items, cues = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload("demo.mp4", items, {}, len(cues))
+    payload = audit.make_audit_payload("demo.mp4", items, {}, len(cues))
     out = app.qa_apply_action(
         json.dumps({"action": "mark", "id": "missing:000:000"}), cues, str(media), payload
     )
-    assert out[0] == app._cues_to_dicts(cues)
+    assert out[0] == cue_utils._cues_to_dicts(cues)
     assert out[6] == payload
     assert "失效" in out[3]
 
 
 def test_keep_suspect_reinserts_missing_cue_and_syncs_table(tmp_path, monkeypatch):
     """“保留”不能只是改个状态：核对台缺这句时必须补回并刷新表格。"""
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     items, cues = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload("demo.mp4", items, {}, len(cues))
+    payload = audit.make_audit_payload("demo.mp4", items, {}, len(cues))
     suspect = items[0]
     assert suspect["kind"] == "suspect"
     # 模拟“先设基线、之后重转/删改”：baseline 里恰好没有这句
@@ -243,11 +246,11 @@ def test_keep_suspect_reinserts_missing_cue_and_syncs_table(tmp_path, monkeypatc
 
 
 def test_keep_suspect_is_idempotent_when_baseline_already_has_cue(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     items, cues = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload("demo.mp4", items, {}, len(cues))
+    payload = audit.make_audit_payload("demo.mp4", items, {}, len(cues))
     out = app.qa_apply_action(
         json.dumps({"action": "mark", "id": items[0]["id"], "status": "done", "resolution": "kept"}),
         cues,
@@ -262,11 +265,11 @@ def test_keep_suspect_is_idempotent_when_baseline_already_has_cue(tmp_path, monk
 
 def test_keep_suspect_does_not_duplicate_manually_edited_cue(tmp_path, monkeypatch):
     """用户改过文字但时间没变时，保留不能把旧文本再插一遍。"""
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     items, _ = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload("demo.mp4", items, {}, 1)
+    payload = audit.make_audit_payload("demo.mp4", items, {}, 1)
     edited = [SubtitleCue(1.0, 1.5, "ねぇ、聞いて")]
     out = app.qa_apply_action(
         json.dumps({"action": "mark", "id": items[0]["id"], "status": "done", "resolution": "kept"}),
@@ -279,22 +282,22 @@ def test_keep_suspect_does_not_duplicate_manually_edited_cue(tmp_path, monkeypat
 
 def test_qa_queue_is_empty_after_restart(tmp_path, monkeypatch):
     """质检队列允许同进程刷新恢复，但重启应用后必须默认清空。"""
-    monkeypatch.setattr(app, "OUTPUT_DIR", tmp_path)
+    patch_output_dir(monkeypatch, tmp_path)
     items, _ = _fixture()
     media = tmp_path / "demo.mp4"
     media.write_bytes(b"x")
-    payload = app.make_audit_payload(
+    payload = audit.make_audit_payload(
         "demo.mp4", items, {items[0]["id"]: {"status": "done", "resolution": "kept"}}, 3
     )
-    app.write_audit_payload(str(media), payload)
+    audit.write_audit_payload(str(media), payload)
 
-    same_run = json.loads(app.load_audit_payload(str(media)))
+    same_run = json.loads(audit.load_audit_payload(str(media)))
     assert same_run["items"][0]["status"] == "done"
-    assert same_run["session"] == app.AUDIT_SESSION_ID
+    assert same_run["session"] == audit.AUDIT_SESSION_ID
 
     # 模拟进程重启：会话 ID 变了，旧 .qa.json 不再带入
-    monkeypatch.setattr(app, "AUDIT_SESSION_ID", "new-process-session")
-    restarted = json.loads(app.load_audit_payload(str(media)))
+    monkeypatch.setattr(audit, "AUDIT_SESSION_ID", "new-process-session")
+    restarted = json.loads(audit.load_audit_payload(str(media)))
     assert restarted["items"] == []
     assert restarted["counts"]["total"] == 0
     assert restarted["session"] == "new-process-session"

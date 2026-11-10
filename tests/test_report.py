@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
+from core import report as core_report  # noqa: E402
 from core.transcribe import WhisperVadConfig  # noqa: E402
 
 
@@ -26,7 +27,7 @@ def _report(**overrides) -> str:
         config=WhisperVadConfig(),
     )
     params.update(overrides)
-    return app.build_transcription_report(**params)
+    return core_report.build_transcription_report(**params)
 
 
 _SPANS = [
@@ -79,7 +80,7 @@ def test_report_caps_long_hallucination_lists():
         segment_stats={"hallucination_drops": 60, "suspect_cues": 60, "hallucination_spans": spans},
         align_stats={},
     )
-    over = 60 - app.HALLUCINATION_SPAN_LIMIT
+    over = 60 - core_report.HALLUCINATION_SPAN_LIMIT
     assert text.count(f"另有 {over} 段未列出") == 2
 
 
