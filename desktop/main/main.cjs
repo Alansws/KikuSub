@@ -98,25 +98,30 @@ function startSidecar() {
   const args = IS_DEV ? ['-m', 'server', '--port', '0'] : ['--port', '0'];
   const cwd = IS_DEV ? REPO_ROOT : path.join(process.resourcesPath, 'python');
 
-  const base = ensureDataDirs();
+  // 开发模式沿用仓库目录（和 `python app.py` 共用同一份 outputs/presets，
+  // 三个入口看到的是同一套数据）；打包后才切到 Application Support。
+  const base = IS_DEV ? REPO_ROOT : ensureDataDirs();
   const models = modelsDir();
   const modelReady = ['anime-whisper', 'qwen3-asr-ja-anime'].some((name) =>
     fs.existsSync(path.join(models, name)),
   );
+
+  const env = { ...process.env, PYTHONUNBUFFERED: '1' };
+  if (!IS_DEV) {
+    Object.assign(env, {
+      KIKUSUB_MODELS_DIR: models,
+      KIKUSUB_OUTPUT_DIR: path.join(base, 'outputs'),
+      KIKUSUB_PRESETS_PATH: path.join(base, 'presets.json'),
+      KIKUSUB_STATIC_DIR: path.join(base, 'static'),
+    });
+  }
 
   console.log('[sidecar] 启动', exe, args.join(' '));
   console.log('[sidecar] 数据目录', base);
   console.log('[sidecar] 模型目录', models, modelReady ? '(已就绪)' : '(⚠️ 未找到模型，首次转写会下载)');
   const child = spawn(exe, args, {
     cwd,
-    env: {
-      ...process.env,
-      PYTHONUNBUFFERED: '1',
-      KIKUSUB_MODELS_DIR: models,
-      KIKUSUB_OUTPUT_DIR: path.join(base, 'outputs'),
-      KIKUSUB_PRESETS_PATH: path.join(base, 'presets.json'),
-      KIKUSUB_STATIC_DIR: IS_DEV ? path.join(REPO_ROOT, 'static') : path.join(base, 'static'),
-    },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
