@@ -24,6 +24,11 @@ CORE_MODULES = [
     "core.audio_cache",
     "core.transcribe",
     "core.qwen_ctc",
+    "core.report",
+    "core.audit",
+    "core.cues",
+    "core.textio",
+    "core.pipeline",
 ]
 
 

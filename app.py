@@ -97,9 +97,7 @@ from core.transcribe import (
     cues_to_txt,
     cues_to_vtt,
     detect_device,
-    format_duration,
     format_srt_timestamp,
-    format_time_tag,
     parse_time_str,
     remove_ellipsis_only_cues,
     srt_to_cues,
@@ -115,17 +113,14 @@ from core.cues import (
     review_cues_to_table,
 )
 from core.textio import write_text_atomic
+from core import pipeline
 from core.procutil import CommandCancelled, CommandTimeout, run_command, tail, terminate_process
 from core.report import (
     _visible_missed_spans,
-    _missed_hidden_count,
-    write_missed_report,
     load_missed_spans,
-    build_transcription_report,
 )
 from core.audit import (
     _audit_match_cues,
-    build_audit_items,
     _audit_ensure_item_cues,
     empty_audit_payload,
     make_audit_payload,
@@ -982,22 +977,10 @@ def transcribe_media(
         yield (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "❌ 终止时间点必须大于起始时间点。")
         return
 
-    slice_tag = ""
-    time_slice_desc = "全片完整转录"
-    if start_s is not None and end_s is not None:
-        slice_tag = f"_{format_time_tag(start_s)}-{format_time_tag(end_s)}"
-        time_slice_desc = f"{format_time_tag(start_s)} 至 {format_time_tag(end_s)} ({end_s - start_s:.1f} 秒)"
-    elif start_s is not None:
-        slice_tag = f"_from_{format_time_tag(start_s)}"
-        time_slice_desc = f"从 {format_time_tag(start_s)} 开始至片尾"
-    elif end_s is not None:
-        slice_tag = f"_to_{format_time_tag(end_s)}"
-        time_slice_desc = f"从 00m00s 开始至 {format_time_tag(end_s)}"
-
-    time_offset = (start_s or 0.0) if keep_absolute_timeline else 0.0
+    # 切片文案、引擎解析、任务编排全部在 core.pipeline 里，这里只负责
+    # Gradio 的那一层：并发占槽、进度卡片、九元组 yield。
     engine = resolve_engine(engine_name)
     is_qwen = engine is QWEN
-
     session = _session_hash(request)
     try:
         job = JOB_REGISTRY.start(session, label=f"{engine_name} · {media_path.name}")
@@ -1025,175 +1008,41 @@ def transcribe_media(
 
     def cb(ratio, message):
         # 注意：这里在 worker 线程里执行，不能碰 gr.Progress（它绑定请求上下文）。
-        # 只把进度塞进队列，由 generator 线程统一更新原生进度条。
+        # 只把进度塞进队列，由 generator 线程统一更新进度卡片。
         q.put(("progress", ratio, message))
 
     def worker():
         try:
-            start_timestamp = time.perf_counter()
-            ngram = 5
-            penalty = 1.15
-            use_alignment = True
-
+            common = {
+                "media_path": media_path,
+                "engine_key": ENGINE_A_TO_KEY[engine_name],
+                "output_format": output_format,
+                "save_beside": bool(save_beside),
+                "start_s": start_s,
+                "end_s": end_s,
+                "keep_absolute_timeline": bool(keep_absolute_timeline),
+            }
             if is_qwen:
-                config = QwenCtcConfig(**config_kwargs("qwen", values))
-                use_alignment = bool(passthrough_kwargs("qwen", values).get("use_alignment", True))
                 if not engine.ready:
                     cb(0.01, f"正在载入 {engine_name}…")
-                cues = engine.transcribe_file(
-                    media_path,
-                    progress_cb=cb,
-                    use_alignment=use_alignment,
-                    config=config,
-                    cancel_event=job,
-                    start_time_s=start_s,
-                    end_time_s=end_s,
-                    time_offset=time_offset,
+                req = pipeline.TranscribeRequest(
+                    **common,
+                    qwen_config=QwenCtcConfig(**config_kwargs("qwen", values)),
+                    use_alignment=bool(passthrough_kwargs("qwen", values).get("use_alignment", True)),
                 )
-                stats_note = ""
             else:
-                config = build_whisper_config(**config_kwargs("whisper", values))
                 gen = passthrough_kwargs("whisper", values)
-                ngram = int(gen.get("no_repeat_ngram_size", 5))
-                penalty = float(gen.get("repetition_penalty", 1.15))
-                cues = ENGINE.transcribe_file(
-                    media_path,
-                    config=config,
-                    no_repeat_ngram_size=ngram,
-                    repetition_penalty=penalty,
-                    progress_cb=cb,
-                    cancel_event=job,
-                    start_time_s=start_s,
-                    end_time_s=end_s,
-                    time_offset=time_offset,
+                req = pipeline.TranscribeRequest(
+                    **common,
+                    whisper_config=build_whisper_config(**config_kwargs("whisper", values)),
+                    no_repeat_ngram_size=int(gen.get("no_repeat_ngram_size", 5)),
+                    repetition_penalty=float(gen.get("repetition_penalty", 1.15)),
                 )
-                stats_note = f"\n\n`{ENGINE.last_stats.describe()}`"
 
-            elapsed_time = time.perf_counter() - start_timestamp
-            is_interrupted = bool(engine.last_interrupted) or job.is_set()
-            missed_spans = list(getattr(engine, "last_missed_spans", []) or [])
-            segment_stats = dict(getattr(engine, "last_segment_stats", {}) or {})
-            align_stats = dict(getattr(engine, "last_align_stats", {}) or {})
-
-            if not cues:
-                if is_interrupted:
-                    raise RuntimeError("转录已取消，尚未生成有效字幕。")
-                raise RuntimeError("未检测到有效语音。请尝试调低 VAD 阈值（如 0.20）或开启「动态响度归一化」后再试。")
-
-            text, ext = render_subtitles(cues, output_format)
-            tag = output_suffix(engine_name)
-            interrupted_tag = ".part_cancelled" if is_interrupted else ""
-            out_filename = f"{media_path.stem}{slice_tag}{tag}{interrupted_tag}{ext}"
-
-            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            out_path = OUTPUT_DIR / out_filename
-            write_text_atomic(out_path, text)
-
-            if save_beside:
-                beside = media_path.with_name(out_filename)
-                try:
-                    beside.parent.mkdir(parents=True, exist_ok=True)
-                    write_text_atomic(beside, text)
-                    out_path = beside
-                except OSError:
-                    pass
-
-            char_count = sum(len(c.text) for c in cues)
-            write_missed_report(media_path, slice_tag, "qwen" if is_qwen else "whisper", missed_spans)
-            report_text = build_transcription_report(
-                media_name=media_path.name,
-                out_filename=out_filename,
-                out_path=str(out_path),
-                engine_name=engine_name,
-                output_format=output_format,
-                elapsed_time=elapsed_time,
-                cue_count=len(cues),
-                char_count=char_count,
-                is_qwen=is_qwen,
-                config=config,
-                is_interrupted=is_interrupted,
-                time_slice_desc=time_slice_desc,
-                ngram=ngram,
-                penalty=penalty,
-                use_alignment=use_alignment,
-                missed_spans=missed_spans,
-                segment_stats=segment_stats,
-                align_stats=align_stats,
+            result = pipeline.run_transcription(
+                req, on_progress=cb, cancel_event=job, output_dir=OUTPUT_DIR, engine=engine
             )
-
-            preview_lines = [f"[{c.start:7.2f} → {c.end:7.2f}] {c.text}" for c in cues[:100]]
-            preview = "\n".join(preview_lines)
-            if len(cues) > 100:
-                preview += f"\n\n… 共 {len(cues)} 条字幕（已展示前 100 条）"
-            preview += stats_note
-
-            table_data = cues_to_table(cues)
-            if is_interrupted:
-                status_summary = (
-                    f"⚠️ **转录已中途打断** ｜ 已抢救保存前 `{len(cues)}` 条字幕 ｜ "
-                    f"耗时：`{format_duration(elapsed_time)}`"
-                )
-                final_progress = f"⚠️ 转写打断！已抢救保存前 {len(cues)} 条字幕。"
-            else:
-                status_summary = (
-                    f"✅ **转写完成** ｜ 耗时：`{format_duration(elapsed_time)}` ｜ "
-                    f"条数：`{len(cues)}` 条 ｜ 字符数：`{char_count}` 字"
-                )
-                final_progress = f"✅ 转录完成！共生成 {len(cues)} 条字幕（耗时 {format_duration(elapsed_time)}）"
-
-            # 质检待核队列：把报告里的三类静态清单变成可逐条试听/补录的队列。
-            # 新一轮转写重置状态（旧状态只对旧结果有意义），落盘后刷新页面也能恢复。
-            audit_items = build_audit_items(missed_spans, segment_stats, cues)
-            # 队列为空也是「检查完成」的正结果：phase=done + scanned 让前端能说
-            # 「已检查 N 段，0 处待核」，而不是把整个入口藏起来。
-            segment_total = int((align_stats or {}).get("segments") or 0)
-            if not segment_total:
-                segment_total = int(getattr(getattr(engine, "last_stats", None), "segments", 0) or 0)
-            scanned = {
-                "segments": segment_total,
-                "cues": len(cues),
-                "missed": len(_visible_missed_spans(missed_spans)),
-                "hidden_missed": _missed_hidden_count(missed_spans),
-            }
-            if not is_qwen:
-                scanned["dropped"] = int(segment_stats.get("hallucination_drops", 0) or 0)
-                scanned["suspect"] = int(segment_stats.get("suspect_cues", 0) or 0)
-            audit_payload = make_audit_payload(
-                media_path.name,
-                audit_items,
-                {},
-                len(cues),
-                _missed_hidden_count(missed_spans),
-                engine="qwen" if is_qwen else "whisper",
-                phase="done",
-                scanned=scanned,
-                transcribed_at=time.time(),
-            )
-            write_audit_payload(media_path, audit_payload)
-            pending_qa = sum(1 for item in audit_items if item.get("status") == "pending")
-            if pending_qa and not is_interrupted:
-                final_progress += f" ｜ 🔎 质检：{pending_qa} 处待你试听确认（右下角浮标）"
-            elif not is_interrupted:
-                final_progress += " ｜ ✅ 质检：本次 0 处待核（入口仍在右下角）"
-            if is_interrupted:
-                final_progress += " ｜ ⚠️ 本次为打断结果，队列只覆盖已保存的字幕"
-
-            log.info(
-                "转写完成 | job=%s | cues=%s | chars=%s | elapsed=%.2fs | interrupted=%s | out=%s | qa=%s",
-                job.short_id(),
-                len(cues),
-                char_count,
-                elapsed_time,
-                is_interrupted,
-                out_path.name,
-                pending_qa,
-            )
-            state_cues = [{"start": c.start, "end": c.end, "text": c.text} for c in cues]
-            q.put(("done", (
-                table_data, preview, str(out_path), str(out_path), state_cues,
-                status_summary, render_report_panel(report_text), final_progress,
-                audit_payload,
-            )))
+            q.put(("done", result))
         except Exception as exc:
             log.exception(
                 "转写失败 | job=%s | session=%s | media=%s | engine=%s",
@@ -1247,21 +1096,18 @@ def transcribe_media(
                     gr.update(),
                 )
             elif tag == "done":
-                (
-                    table_data, preview, p1, p2, state_cues, status_summary,
-                    report_text, final_progress, audit_payload,
-                ) = item[1]
+                result = item[1]
                 finished_normally = True
                 yield (
-                    table_data,
-                    preview,
-                    p1,
-                    p2,
-                    state_cues,
-                    status_summary,
-                    report_text,
-                    final_progress,
-                    audit_payload,
+                    result.table,
+                    result.preview,
+                    str(result.out_path),
+                    str(result.out_path),
+                    [{"start": c.start, "end": c.end, "text": c.text} for c in result.cues],
+                    result.status_summary,
+                    render_report_panel(result.report_text),
+                    result.final_progress,
+                    result.audit_payload,
                 )
                 break
             elif tag == "error":
