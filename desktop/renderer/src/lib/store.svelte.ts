@@ -34,7 +34,6 @@ export interface AppConfig {
   formats: string[];
   engines: EngineInfo[];
   settings?: AppSettings;
-  legacy_ui: boolean;
 }
 
 export const app = $state({

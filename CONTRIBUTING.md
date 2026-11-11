@@ -54,7 +54,8 @@ python -m server --port 0
 | `server/` | FastAPI 服务层：`/api/*`、`/media/*`、`/ws/jobs/*`；路由按领域拆在 `routes_*.py` |
 | `core/` | 算法内核（无 UI 依赖）：VAD、引擎、断句、覆盖率、提案、翻译、设置、日志 |
 | `core/ai_proposal.py` | 提案契约：digest、结构校验、`apply_polish()`。**前端不得自己算 digest 或另写校验** |
-| `app.py` / `static/` | 旧 Gradio 界面（`v0.9-gradio` 起保留），除修关键 bug 外不再演进 |
+
+旧 Gradio 界面（`app.py` / `static/`）已移出仓库，归档在标签 `v0.9-gradio` 与本机 `~/Downloads/kikusub_gardio`；本仓库只维护桌面端。
 
 更细的约束（哪些实现绝对不能改、为什么）写在 [AGENTS.md](AGENTS.md) 与 [AI 优化与翻译开发文档](docs/AI优化与翻译-开发文档-2026-11.md)。
 

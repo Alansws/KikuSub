@@ -1,12 +1,11 @@
 """FastAPI 应用装配。
 
-职责边界：这里只做「把路由拼起来 + 错误翻译 + 按需挂载旧界面」，不含任何业务逻辑。
+职责边界：这里只做「把路由拼起来 + 错误翻译」，不含任何业务逻辑。
 业务逻辑要么在 `core/`，要么在 `server/routes_*.py`。
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 import threading
 import time
@@ -214,30 +213,9 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
                 )
             ],
             "settings": current,
-            "legacy_ui": bool(config.legacy),
         }
 
-    if config.legacy:
-        _mount_legacy(app)
-
     return app
-
-
-def _mount_legacy(app: FastAPI) -> None:
-    """把旧 Gradio 界面挂到 `/legacy`。
-
-    阶段 2–6 期间它是完整功能的回退通道；阶段 7 删除 Gradio 依赖后一并移除。
-    导入 `app` 模块会构建整个 Blocks（约 3–5 s），所以只在显式开启时做。
-    """
-    import gradio as gr
-
-    legacy = importlib.import_module("app")
-    demo = getattr(legacy, "demo", None)
-    if demo is None:
-        log.warning("旧界面没有 demo 对象，跳过 /legacy 挂载")
-        return
-    gr.mount_gradio_app(app, demo, path="/legacy")
-    log.info("旧 Gradio 界面已挂载到 /legacy")
 
 
 def media_paths_for_import(raw: str) -> Path:

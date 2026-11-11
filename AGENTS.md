@@ -12,7 +12,7 @@
 - 视频 + 波形核对台、质检待核队列、SRT/VTT/TXT 导出、参数预设与完整任务报告；
 - AI 提案（润色 / 翻译平行轨）与随包 Agent 技能。
 
-**主入口是 `desktop/`，不是 `app.py`。** `main` 分支自 v0.9-gradio 之后只面向桌面端演进；`app.py` 与 `static/` 是旧的 Gradio 界面，仅在出现关键 bug 时修，不接新功能。
+**主入口是 `desktop/`。** `app.py` 与 `static/` 已从仓库移除；旧 Gradio 界面归档在 Git 标签 `v0.9-gradio` 与本地独立目录 `~/Downloads/kikusub_gardio`，不再随本仓库演进。
 
 开发模式（安装 `requirements.txt`、`desktop/npm install` 与系统 `ffmpeg` 后）：
 
@@ -31,7 +31,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/`（导入 / 转写 / 核对 / AI 优化台 / 详情与导出 / 设置）、`lib/store.svelte.ts` 状态与动作、`lib/api.ts` 服务层客户端。 |
 | `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
 | `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢（`KIKUSUB_MODELS_DIR` / `KIKUSUB_OUTPUT_DIR` / `KIKUSUB_PRESETS_PATH` 可覆盖）；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
-| `server/` | **服务层（FastAPI）**。`python -m server` 启动，stdout 首行输出 `{"event":"ready","port":…,"token":…}` 供 Electron 主进程握手。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。`--legacy` 时把旧 Gradio 挂到 `/legacy`。**禁止在 server/ 内 import app.py**（除 `_mount_legacy` 的显式延迟导入）。 |
+| `server/` | **服务层（FastAPI）**。`python -m server` 启动，stdout 首行输出 `{"event":"ready","port":…,"token":…}` 供 Electron 主进程握手。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
 | `server/routes_ai.py` | 提案接口：`/api/ai/proposal`、`/api/ai/apply`、`/api/ai/prompt`、`/api/ai/from-srt`、`/api/ai/proposal/import`。 |
 | `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
 | `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`。前端不得自己算 digest 或另写校验。 |
@@ -47,7 +47,6 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
 | `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）；改 Python 后必须先重打 sidecar。 |
-| `static/` | **legacy**：旧 Gradio 界面的主题 CSS、核对台 JS、质检队列 JS/HTML；`app.py` 启动时读取。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
 | `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
@@ -55,29 +54,16 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
 | `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
 | `outputs/` | 生成的字幕样例和运行产物。 |
-| `app.py` | **legacy**：旧 Gradio 页面，仅修关键 bug，不接新功能。 |
 | `README.md` / `README_EN.md` / `CONTRIBUTING.md` | 面向用户与贡献者的说明；改变用户可见行为时同步更新。 |
 
-## 3. 补漏核对工作台设计原则
+## 3. 核对工作台与内核设计原则
 
-> 本章前段（`review_payload`、`REVIEWER_CLIENT_JS`、`gr.Warning()`、Gradio 进度条）描述的是**旧 Gradio 界面**的契约；桌面端的对应实现与约束在 §3.4–§3.7。共用内核的规则（断句评测、并发与取消、日志、覆盖审计）对两边都成立。
+> 旧 Gradio 界面（`app.py` / `static/`）已从仓库移除，源码归档在 Git 标签 `v0.9-gradio` 与本地独立目录 `~/Downloads/kikusub_gardio`。本章只保留当前桌面端 + 共用内核仍然有效的约束；桌面端核对台从 §3.4 开始。
 
-- **监看画面与转录源解耦**：`review_payload` 的 `src` 有四种来源——自动跟随导入的媒体、手动导入的任意本地片源（`📂 导入监看画面`）、`outputs/web_proxies` 里的历史 480p 代理（`📦` 下拉，零拷贝）、以及「已关闭」空态。手动片源路径记录在 `outputs/monitor_last.json`，供下次打开自动恢复；`prepare_review_workspace`（即 `media.change`）会清空该记忆，重新回到自动模式。`src` 为空时前端必须销毁 `window.__reviewerInstance` 与 keydown 监听，避免悬空引用。
-- 底部核对区由 `review_cues_state` 管理，和当前转写结果 `cues_state` 分离。导入 SRT 或“将本次转写设为基线”才会覆盖核对基线；“添加本次局部转写”追加去重后的条目。
-- 视频播放器拖动进度条、播放时，底部音频轨道必须有高亮时间播放线（时间游标）实时同步跟随。
-- **字幕叠加层两条硬约束**（改 `REVIEWER_CLIENT_JS` 时必须保持）：
-  1. **多行聚合**：画面字幕由 `rebuildCaptionIndex()` 按 `(start, end)` 归并成「字幕块」，同区间的多条字幕（中日双语 SRT 的日/中两行）合并为多行渲染，行序沿用导入顺序。禁止退回 `cues.find(...)` 单条查找，否则双语只显示一行。`_unique_sorted_cues()` 的排序也因此保留原始下标做末位 tiebreak。
-  2. **与视窗解耦**：`updateCaption()` 必须在 `updatePlayhead()` 中位于「播放头是否在可视区」的 early-return **之前**，任何缩放比例、光标位置、进度条拖动状态下都要更新，否则放大波形后播放会出现「字幕卡住不跳句」。
-- 放大波形后播放时，视窗按「整页平移」跟随播放头（`ensurePlayheadVisible()`，落点约在窗口左侧 15%），工具栏 `#rw-follow-toggle` 可开关。**跟随是持久偏好，只能由按钮改变**：缩放/平移波形、点字幕、点表格都不得把它悄悄关掉；暂停状态下跳转（点字幕/点波形/拖播放头松手）也必须把播放头带回视窗，不能要求用户先播放一下（`revealPlayhead()`）。
-- 触控板缩放（捏合）与双指横移操作需精准平滑支持，允许将局部波形横向大幅放大（如放大至数秒区间），方便精细框选。
-- 框选范围后，提供一键将该时间段同步到上方“时间片段截取”输入框（`slice-start`, `slice-end`），且能够联动更新上方的状态或者直接触发局部转录。
-- 重新导入 SRT 时，必须彻底更新 `review_cues_state` 以及前端表格和波形展示，杜绝旧基线残留。
-- **全链路撤回/重做体系 (Undo/Redo)**：由 `undo_stack_state` 与 `redo_stack_state` 管理，支持任意删除、单行更新、插入、清空、导入或追加操作后的无损撤回。前端通过 `Cmd+Z` (Mac) 或 `Ctrl+Z` (Windows/Linux) 及界面按钮触发撤回，`Cmd+Shift+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` 触发重做。
-- **高健壮性与防崩溃规范**：核对区所有操作函数在面对用户误操作（如空白时间、非法格式、越界行号）时，一律采用 `gr.Warning()` 友好提示并返回 `fallback` 保护当前已有字幕状态，严禁抛出未经处理的 `gr.Error()` 导致界面状态丢失；所有 Gradio 事件处理函数返回值的数量必须与 `outputs` 声明的组件列表严格一一对应。
 - **断句改动必须有数字（2026-11）**：改 `qwen_ctc._break_costs` / `partition_cues` / VAD 参数前后，必须用 `python tools/eval/score_srt.py --reference ... --hypothesis ... --from ... --to ...` 跑同一区间，同时看 CER、`particle_start_cues`、`aux_start_cues`、最长条与 >4.3s 条数。禁止只凭个别样例“看起来更好”就改词边界；减少劈词与块均准确率之间存在已知取舍。
-- **并发与取消（2026-11 加固）**：转写/局部转写必须通过 `jobs.JobRegistry` 单槽占用，**禁止**再引入模块级 `CANCEL_EVENT`。取消令牌必须归属于发起它的 Gradio session（`gr.Request.session_hash`）；别的窗口点「打断」只能收到“本会话没有任务”的提示，绝不能误伤正在跑的任务。客户端断开（GeneratorExit）只发取消信号，槽位由真正停止工作的 worker 在 `finally` 中释放，避免“界面已返回、模型还在跑”时被新任务覆盖。所有 `subprocess` 外部命令必须走 `procutil.run_command`（超时/取消/terminate），代理成片先写 `*.part.mp4` 再原子 rename。
-- **压制进度只允许一个数据源**：`manual_transcode_proxy_generator` 是流式生成器，**禁止**再给它加 `progress=gr.Progress()` 或调用 `progress()`，`.click()` 也必须保持 `show_progress="hidden"`。Gradio 原生追踪器会被渲染进 `proxy_status` 容器，其文案还受「每 10% 一档（milestone）+ 两次换文案至少间隔 5 秒 + 文案 1 秒后自动清空」三重限制（见 `gradio/templates/frontend/assets/statustracker-*.js`），与卡片按 0.3s 刷新的真实百分比完全错拍，界面就会在「原生浮层」和「卡片」两种形态之间反复横跳（曾表现为 19% ↔ 33% 交替）。卡片样式统一走 `.ppc-*` 类并使用 `<div>/<b>/<em>`，不要用 `<span>` 内联样式——`.proxy-status-box span { ... !important }` 会把配色和字号全部覆盖掉。进度值还必须取单调最大值（`max_out_s`），并在时长探测失败时走 `pct=None` 的不确定进度态，绝不凭空造百分比。
-- **全片转写进度也只允许一个数据源**：`transcribe_media` 的 `.then()` **必须**保持 `show_progress="hidden"`，并且**禁止**再调用 `progress()`。`show_progress="full"` 会把原生追踪器画进每一个 output 组件，于是「📊 全片转录原始结果、表格与任务详报」区域及以下会同时出现多条进度条，与顶部卡片错拍闪烁。进度只由 `_render_transcribe_progress_card()` 渲染进「3 输出与执行」的 `transcribe_progress`，样式走 `.tpc-*` 类（`<div>/<b>`），百分比同样取单调最大值。
+- **并发与取消（2026-11 加固）**：转写/局部转写必须通过 `jobs.JobRegistry` 单槽占用，**禁止**再引入模块级 `CANCEL_EVENT`。取消令牌必须归属于发起任务的会话；别的窗口点「打断」只能收到“本会话没有任务”的提示，绝不能误伤正在跑的任务。客户端断开只发取消信号，槽位由真正停止工作的 worker 在 `finally` 中释放，避免“界面已返回、模型还在跑”时被新任务覆盖。所有 `subprocess` 外部命令必须走 `procutil.run_command`（超时/取消/terminate），代理成片先写 `*.part.mp4` 再原子 rename。
+- **覆盖审计（2026-11 新增）**：主 VAD 的漏检（VAD 没切到、Whisper 根本没收到）不会产生 `missed` 记录，所以 `core/coverage.py` 必须保持一条**只读旁路**：按字幕切空白间隙 → 20ms/40ms RMS 包络 → 每个间隙取最长候选 → 局部峰值归一化后跑一次 Silero 只取概率 → `last_coverage_spans` 交给 `build_audit_items(coverage_spans=...)`。它**不回写**字幕、不改主 VAD 参数、不改 `load_wav_mono` 的电平；`find_coverage_spans()` 失败必须吞掉，不能影响转写。质检对用户只暴露两个组：`coverage` → `miss`（漏检，默认置顶），`missed/dropped/suspect` → `low`（低置信，默认折叠）；`_audit_coverage()` 仍然只表达引擎能力，不要把 `coverage` 塞进去。默认参数（8s 空白 / 1.5s 候选 / 65 分位 / 局部 VAD 均值 0.20）是在 2026-11-10 的 14 分钟样本上调的；改阈值前先用同一段音频跑 `find_coverage_spans()` 看召回与条数。
+- **补录区间必须夹在空白边界内（2026-11 修复）**：`QaPanel.fill()` / `ReviewView` 的 `padEnd:0.3` 会把覆盖项尾部的下一句开头也切进来；`transcribeRange()` 现在接受 `clampStart/clampEnd`，调用方必须传 `item.gap_start/gap_end`。`server/jobs.py` 的 `replace_range` 也不能再按「cue.start < 区间尾就删」处理：只删除重叠 ≥50% 或中点落入区间的 cue，边缘被切到 0.2s 的邻句必须保留。回归用例在 `tests/test_server_jobs_range.py`。
 
 ### 3.4 桌面版核对台（`desktop/renderer/src/views/ReviewView.svelte`）
 
@@ -277,7 +263,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   序号与时间戳全部丢弃**，时间轴仍用我们自己的 cue。条数不符整批拒绝（422）。
   改这块时不要把解析结果里的时间戳写回字幕——那会直接破坏 D-1。
 
-## 4. 转录任务详报面板（禁止退回 Textbox）
+## 4. 转录任务详报面板（Gradio 版，已归档）
+
+> 本节描述的是已移出仓库的 `app.py` 界面；桌面端对应实现见 `desktop/renderer/src/views/` 与 `server/routes_report.py`。以下内容仅作历史参考。
 
 - 「📊 全片转录原始结果、表格与任务详报」下的「转录任务报告」**必须**保持为 `gr.HTML` + `render_report_panel()`（`app.py` 中 `build_transcription_report` 之后），**不要改回 `gr.Textbox`**：Gradio 6 的 Textbox 会按内容自动增高并在 `overflow:hidden` / `overflow:scroll` 之间切换，长报告反复更新后会把文本框卡在裁切状态、无法上下滑动。
 - 滚动能力由面板自带的 `.report-body { max-height: min(58vh, 520px); overflow-y: auto }` 提供，任何改版都不得移除该容器或改成依赖组件自身高度的方案。
@@ -286,7 +274,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 该折叠面板默认 `open=True`（用户要求首屏即可看到转写结果与详报）。
 - 【幻觉门控】/【幻觉复核】的逐段明细必须留在报告里（用户明确要求"不要在终端刷屏、要能复制"）：数据源是 `AnimeWhisperEngine.last_segment_stats["hallucination_spans"]`（字段 `start/end/dur/text/rule/verdict/peak`，`verdict` 取 `dropped|suspect`），由 `app._hallucination_rows()` 渲染，明细最多列 `HALLUCINATION_SPAN_LIMIT` 条。`transcribe.py` 里这两类段的日志只允许 `log.debug`，不要再升回 `log.info`。
 
-## 5. 质检待核队列（2026-11）
+## 5. 质检待核队列（Gradio 版，已归档）
+
+> 本节描述的 `static/qa_panel.*` 已随旧界面移出仓库；桌面端对应实现见 `desktop/renderer/src/components/QaPanel.svelte`。以下内容仅作历史参考（其中覆盖审计与补录边界的通用约束已上移到 §3）。
 
 报告里的三类清单只是归档；用户实际逐条核对用的是 `static/qa_panel.html` + `static/qa_panel.js` 的浮动队列。改这块时必须保持以下契约：
 

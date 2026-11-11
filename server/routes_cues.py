@@ -83,7 +83,7 @@ def _validate(start: float, end: float) -> None:
         raise HTTPException(status_code=422, detail="结束时间必须大于起始时间")
 
 
-# 与 app.py 的校对断点使用同一套后缀清理规则：草稿/复核版再存一次仍然回到主干名。
+# 与桌面端暂存/复核版约定使用同一套后缀清理规则：草稿/复核版再存一次仍然回到主干名。
 _DRAFT_SUFFIX_RE = re.compile(r"(\.autosave_draft|\.reviewed|\.clean|\.part_cancelled)$")
 
 

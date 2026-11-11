@@ -41,7 +41,6 @@ rm -rf "$OUT/dist/$NAME"
   --name "$NAME" \
   --paths . \
   --collect-data silero_vad \
-  --exclude-module gradio \
   --exclude-module fastapi \
   --exclude-module uvicorn \
   --exclude-module starlette \

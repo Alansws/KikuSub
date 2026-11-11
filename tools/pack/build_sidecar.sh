@@ -40,7 +40,6 @@ rm -rf "$OUT/dist/$NAME"
   --hidden-import uvicorn.protocols.http.auto \
   --hidden-import uvicorn.protocols.websockets.auto \
   --hidden-import uvicorn.lifespan.on \
-  --exclude-module gradio \
   --exclude-module matplotlib \
   --exclude-module tkinter \
   --distpath "$OUT/dist" \

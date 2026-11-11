@@ -236,7 +236,7 @@ Chromium 解不了部分 MKV、HEVC。应用会在后台压一份 480p 代理，
 看 `outputs/logs/kikusub.log` 末尾；常见原因是 Python 环境被删、`ffmpeg` 不在 PATH，或模型目录不可写。
 
 **还想要原来的网页版？**
-旧版 Gradio 界面仍在仓库里（`python app.py`，监听 `127.0.0.1:7860`），对应标签 [`v0.9-gradio`](https://github.com/Alansws/KikuSub/releases/tag/v0.9-gradio)。桌面端是从那个版本长出来的，`main` 分支以桌面端为准。
+旧版 Gradio 界面已从主仓库移出，源码归档在 Git 标签 [`v0.9-gradio`](https://github.com/Alansws/KikuSub/releases/tag/v0.9-gradio)；本机另有一份可直接运行的独立副本（含模型与 Python 环境）在 `~/Downloads/kikusub_gardio`。主仓库 `app/macos` 分支只维护桌面端。
 
 ## 项目结构
 
@@ -246,7 +246,6 @@ server/     FastAPI 服务层：/api/*、/media/*、/ws/jobs/*，Electron 的 si
 desktop/    Electron 主进程 + Svelte 5 渲染进程（核对台、AI 优化台、设置）
 tests/      pytest 回归（内核 / 服务层 / AI 链路）
 tools/      评测台、打包脚本、验收小工具
-static/     旧 Gradio 界面的 JS / CSS（v0.9-gradio 起保留）
 docs/       开发文档与历史记录
 ```
 

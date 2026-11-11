@@ -29,7 +29,6 @@ TOKEN = "test-token-abc"
 def client(tmp_path: Path) -> TestClient:
     config = ServerConfig(
         token=TOKEN,
-        legacy=False,
         output_dir=tmp_path,
         settings_path=tmp_path / "settings.json",
     )
@@ -303,7 +302,6 @@ def test_handshake_prints_port_and_token() -> None:
         assert payload["event"] == "ready"
         assert isinstance(payload["port"], int) and payload["port"] > 0
         assert len(payload["token"]) >= 20
-        assert payload["legacy"] is False
     finally:
         proc.terminate()
         proc.wait(timeout=15)

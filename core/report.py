@@ -1,10 +1,10 @@
 """转写任务详报的纯文本生成（无 UI 依赖）。
 
-从 `app.py` 原样搬出：这些函数只吃数据、吐字符串，与 Gradio 无关，
-所以服务层与旧界面可以共用同一份实现，避免两边文案与口径漂移。
+从 `app.py` 原样搬出：这些函数只吃数据、吐字符串，与 UI 无关，
+所以服务层与桌面端共用同一份实现，避免两边文案与口径漂移。
 
 对外主入口：`build_transcription_report()` 返回可直接展示的纯文本报告；
-HTML 渲染仍在界面层（`app.render_report_panel` / 未来的前端组件）。
+HTML / 界面渲染在桌面端组件里（旧 Gradio 版已归档）。
 """
 
 from __future__ import annotations

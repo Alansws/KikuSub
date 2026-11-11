@@ -7,7 +7,6 @@ huggingface_hub>=0.23.0
 silero-vad>=5.1.0
 soundfile>=0.12.1
 numpy>=1.24.0,<3
-gradio>=6.0.0,<7
 accelerate>=0.28.0
 safetensors>=0.4.0
 # uvicorn 服务 WebSocket 需要实现；缺了它 /ws/jobs 会直接连不上

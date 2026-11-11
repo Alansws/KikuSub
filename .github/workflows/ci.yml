@@ -33,7 +33,7 @@ jobs:
         run: ruff check .
 
       - name: Compile sources
-        run: python -m compileall -q app.py core
+        run: python -m compileall -q core server
 
       - name: Validate presets.json
         run: |

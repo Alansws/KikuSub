@@ -23,8 +23,6 @@ class ServerConfig:
     # 0 表示交给 OS 分配；测试里也可以指定固定端口
     port: int = 0
     token: str = field(default_factory=new_token)
-    # 是否把旧 Gradio 界面挂到 /legacy。阶段 7 之后关掉并删除依赖。
-    legacy: bool = False
     output_dir: Path = OUTPUT_DIR
     # 应用设置（启用的引擎 / 自动代理）。测试里指向 tmp_path，避免污染仓库。
     settings_path: Path = SETTINGS_PATH

@@ -1,4 +1,4 @@
-"""sidecar 入口：`python -m server [--port 0] [--legacy]`
+"""sidecar 入口：`python -m server [--port 0]`
 
 握手协议（Electron 主进程读 stdout 首行）：
 
@@ -51,11 +51,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m server", description="KikuSub 本地服务")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认只监听回环）")
     parser.add_argument("--port", type=int, default=0, help="端口；0 表示交给 OS 分配")
-    parser.add_argument(
-        "--legacy",
-        action="store_true",
-        help="把旧 Gradio 界面挂到 /legacy（阶段 2–6 的回退通道，会多花 3–5 s 启动时间）",
-    )
     parser.add_argument("--token", default="", help="指定访问 token；不传则随机生成")
     parser.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug"])
     return parser
@@ -68,7 +63,6 @@ def main(argv: list[str] | None = None) -> int:
         host=args.host,
         port=args.port,
         token=args.token or new_token(),
-        legacy=args.legacy,
     )
 
     # 日志必须最先落地：之后任何启动失败（模型目录、ffmpeg、端口）都要能在
@@ -120,7 +114,6 @@ def main(argv: list[str] | None = None) -> int:
                 "token": config.token,
                 "pid": os.getpid(),
                 "version": API_VERSION,
-                "legacy": config.legacy,
             },
             ensure_ascii=False,
         ),

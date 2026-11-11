@@ -1,7 +1,7 @@
 """质检待核队列的数据层：把转写统计变成可逐条处理的 item，并落盘恢复状态。
 
 从 `app.py` 原样搬出。只负责生成 / 读写 JSON payload，不含任何渲染或交互——
-`qa_apply_action` 因为有 Gradio 提示语仍留在 `app.py`，等阶段 5 再迁。
+动作语义在 `core/qa.py`，服务层（`server/routes_qa.py`）负责把它们接到 HTTP 上。
 """
 
 from __future__ import annotations

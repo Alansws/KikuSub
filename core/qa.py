@@ -1,8 +1,7 @@
 """质检队列的动作语义（无 UI 依赖）。
 
-从 `app.py` 的 `qa_apply_action` 原样搬出并去掉 Gradio：`gr.Warning(...)` 改成结果里的
-`warning` 字段，`gr.update()` 的四个编辑框改成 `focus` 结构，撤回栈交给调用方维护
-（旧界面用 `gr.State`，服务层用 `Session`）。
+从 `app.py` 的 `qa_apply_action` 原样搬出并去掉 UI 提示：`gr.Warning(...)` 改成结果里的
+`warning` 字段，编辑框更新改成 `focus` 结构，撤回栈交给调用方维护（服务层用 `Session`）。
 
 **行为约束（改之前先读 AGENTS.md §5）**：
 

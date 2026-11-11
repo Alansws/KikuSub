@@ -414,7 +414,6 @@ export const api = {
       formats: string[];
       engines: EngineInfo[];
       settings?: AppSettings;
-      legacy_ui: boolean;
     }>('/api/config'),
 
   // ---- 媒体 ----

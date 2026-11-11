@@ -132,7 +132,7 @@ def main() -> int:
         os.unlink(media)
 
     _section("9. 确认 core 可独立冷启动")
-    # 全新解释器里只 import core，不碰 app.py；这是打包后 sidecar 的真实启动路径。
+    # 全新解释器里只 import core，不碰任何 UI 层；这是打包后 sidecar 的真实启动路径。
     code = (
         "import sys;"
         "import core.transcribe, core.qwen_ctc, core.jobs, core.presets, core.audio_cache;"

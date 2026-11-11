@@ -236,7 +236,7 @@ Hit **Test connection** in Settings. The key only exists on this machine — a n
 Check the tail of `outputs/logs/kikusub.log`. Usual causes: a deleted Python environment, `ffmpeg` missing from PATH, or an unwritable model folder.
 
 **I still want the old web UI.**
-The Gradio interface is still in the repository (`python app.py`, listens on `127.0.0.1:7860`); that is what the [`v0.9-gradio`](https://github.com/Alansws/KikuSub/releases/tag/v0.9-gradio) tag captures. The desktop app grew out of it and `main` now tracks the desktop.
+The Gradio interface has been removed from the main repository; its source is archived under the [`v0.9-gradio`](https://github.com/Alansws/KikuSub/releases/tag/v0.9-gradio) tag. A runnable standalone copy (models and Python environment included) lives at `~/Downloads/kikusub_gardio` on this machine. The `app/macos` branch now tracks the desktop app only.
 
 ## Repository layout
 
@@ -246,7 +246,6 @@ server/     FastAPI layer: /api/*, /media/*, /ws/jobs/* — the Electron sidecar
 desktop/    Electron main process + Svelte 5 renderer (review desk, AI view, settings)
 tests/      pytest regression (core / server / AI pipeline)
 tools/      evaluation harness, packaging scripts, small acceptance tools
-static/     legacy Gradio assets (kept since v0.9-gradio)
 docs/       development documents and history
 ```
 

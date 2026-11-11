@@ -392,7 +392,7 @@ function startSidecar() {
   const args = IS_DEV ? ['-m', 'server', '--port', '0'] : ['--port', '0'];
   const cwd = IS_DEV ? REPO_ROOT : path.join(process.resourcesPath, 'python');
 
-  // 开发模式沿用仓库目录（和 `python app.py` 共用同一份 outputs/presets，
+  // 开发模式沿用仓库目录（与 sidecar、CLI 共用同一份 outputs/presets，
   // 三个入口看到的是同一套数据）；打包后才切到 Application Support。
   const base = IS_DEV ? REPO_ROOT : ensureDataDirs();
   let models = modelsDir();

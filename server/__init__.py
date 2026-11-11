@@ -6,8 +6,8 @@
   写到 stdout 首行，Electron 主进程读取后注入渲染进程。
 - 所有 `/api/*` 请求校验 token，防止本机其他进程调用；`/media/*` 因为是 `<video src>`
   直接请求（浏览器发不了自定义头），改走 `?token=` 查询参数。
-- 这里**不 import app.py**：Gradio 旧界面通过 `mount_legacy()` 按需挂载到 `/legacy`，
-  新界面走 `/api`，两者共用 `core/` 内核。
+- 这里**不 import 任何 UI**：桌面端渲染层只通过 `/api` 与 `/media` 访问，
+  旧 Gradio 界面已从本仓库移除（归档于 `v0.9-gradio` 标签与本地独立目录）。
 """
 
 from __future__ import annotations

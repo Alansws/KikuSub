@@ -23,7 +23,6 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 def client(tmp_path: Path) -> TestClient:
     config = ServerConfig(
         token=TOKEN,
-        legacy=False,
         output_dir=tmp_path,
         settings_path=tmp_path / "settings.json",
     )

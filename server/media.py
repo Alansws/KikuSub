@@ -18,7 +18,7 @@ from core import audio_cache, proxy
 from core.paths import OUTPUT_DIR
 from core.procutil import CommandCancelled, CommandTimeout, run_command
 
-# 与 app.py 的 SUPPORTED 保持一致；这里只做快速失败，真正的解码能力由 ffmpeg 决定。
+# 与 core.paths / desktop 导入入口保持一致；这里只做快速失败，真正的解码能力由 ffmpeg 决定。
 MEDIA_SUFFIXES = {
     ".mkv", ".mp4", ".mov", ".m4v", ".webm", ".avi", ".ts", ".flv",
     ".wmv", ".mpg", ".mpeg", ".ogv",
