@@ -34,8 +34,9 @@ def read_session(request: Request, session: Session = Depends(get_session)) -> d
         "media": media,
         "cue_count": len(session.review_cues),
         "latest_cue_count": len(session.latest_cues),
-        "can_undo": bool(session.undo_stack),
-        "can_redo": bool(session.redo_stack),
+        "review_source": dict(session.review_source),
+        "can_undo": session.can_undo,
+        "can_redo": session.can_redo,
     }
 
 

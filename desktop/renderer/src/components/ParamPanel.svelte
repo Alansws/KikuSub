@@ -19,8 +19,7 @@
 
 <div class="panel">
   <div class="head">
-    <span>可调参数</span>
-    <span class="hint">调小更灵敏、更容易切碎；调大更稳健、更容易吞掉短音</span>
+    <span title="调小更灵敏、更容易切碎；调大更稳健、更容易吞掉短音">可调参数</span>
     <button class="btn ghost small" onclick={() => resetParams(engine)}>
       <Icon name="undo" size={11} />恢复默认
     </button>
@@ -91,7 +90,7 @@
   }
   .head .hint {
     font-weight: 400;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     flex: 1;
     min-width: 0;
@@ -101,12 +100,12 @@
   }
   .small {
     height: 22px;
-    font-size: 11.5px;
+    font-size: 12px;
     padding: 0 8px;
   }
 
   .group-title {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-3);
     margin-bottom: 6px;
@@ -141,7 +140,7 @@
     border: 0;
     width: 32px;
     height: 19px;
-    border-radius: 10px;
+    border-radius: 8px;
     background: var(--fill-strong);
     padding: 2px;
     flex: 0 0 32px;
@@ -177,7 +176,7 @@
   }
   .value {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
   }

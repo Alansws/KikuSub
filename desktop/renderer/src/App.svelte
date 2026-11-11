@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Icon from './components/Icon.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Toolbar from './components/Toolbar.svelte';
@@ -12,18 +13,27 @@
   import ReviewView from './views/ReviewView.svelte';
   import AiView from './views/AiView.svelte';
   import ReportView from './views/ReportView.svelte';
+  import PromptView from './views/PromptView.svelte';
+  import ExportView from './views/ExportView.svelte';
   import SettingsView from './views/SettingsView.svelte';
   import {
     app,
     applyDevSeed,
     boot,
     cancelJob,
+    closeFind,
+    findState,
+    markQuitting,
     markSidecarDown,
+    openFind,
     openMedia,
     play,
+    restoreLastSession,
+    qa,
     redo,
     setView,
     toast,
+    toggleQaPanel,
     toggleTheme,
     undo,
     type View,
@@ -36,6 +46,21 @@
     api_focus: () => void;
   } | undefined = $state();
   let dragging = $state(false);
+  /** 紧凑模式（≤900px CSS 视口）：检查器变成抽屉，内容区拿回整宽。 */
+  let compact = $state(false);
+  /**
+   * 首屏不播页面转场：冷启动时淡入一次会像「页面晚了一拍」，切页才播。
+   * 故意不用 $state：它只在 {#key app.view} 重建 DOM 时读取，
+   * 变成响应式反而会把 class 补到已经存在的首屏元素上，等于又播了一次。
+   */
+  let viewsAnimate = false;
+
+  $effect(() => {
+    const id = requestAnimationFrame(() => {
+      viewsAnimate = true;
+    });
+    return () => cancelAnimationFrame(id);
+  });
 
   // 首次启动向导 / 退出前清理。两者都由主进程先问状态，不依赖 sidecar。
   let setup = $state<{
@@ -83,6 +108,11 @@
       quitFiles = [];
       quitBusy = false;
     });
+    // 主进程开始退出：收掉启动遮罩，别再让用户对着「正在启动转写内核」等 sidecar 收尾
+    const offQuitting = window.kikusub?.onQuitting?.(() => {
+      quitFiles = [];
+      markQuitting();
+    });
     // 事件可能在 App 挂载前就发出（启动瞬间按 ⌘Q），补问一次
     window.kikusub
       ?.getQuitPrompt?.()
@@ -93,6 +123,7 @@
     return () => {
       offPrompt?.();
       offCancelled?.();
+      offQuitting?.();
     };
   });
 
@@ -119,7 +150,14 @@
         if (!alive) return;
         lastPort = payload.port;
         const seed = await window.kikusub.getDevSeed?.().catch(() => null);
-        if (alive && seed) applyDevSeed(seed);
+        if (!alive) return;
+        if (seed) {
+          await applyDevSeed(seed);
+        } else {
+          // 冷启动自动接上上次的视频、草稿/导入字幕与播放头。
+          // 有种子（开发截图）或双击文件启动（openMedia 已绑定）时不会走到这里。
+          await restoreLastSession();
+        }
       } finally {
         booting = false;
       }
@@ -162,6 +200,32 @@
     await window.kikusub.cancelQuit?.();
   }
 
+  // ---------------- 紧凑模式（≤900px） ----------------
+  // 页面缩放会让 CSS 视口变小，媒体查询自动生效；这里只做两件 CSS 做不到的事：
+  // 1) 进入紧凑模式时先把抽屉收起一次，200% 下先看到画面而不是被检查器盖住；
+  // 2) 回到宽屏时恢复「上一次宽屏的开关」，不永久改写用户的桌面偏好。
+  $effect(() => {
+    const mq = window.matchMedia('(max-width: 900px)');
+    let wideOpen = untrack(() => app.inspectorOpen);
+    compact = mq.matches;
+    app.compact = mq.matches;
+    if (mq.matches) app.inspectorOpen = false;
+
+    const onChange = () => {
+      if (mq.matches) {
+        // 进紧凑模式前记下宽屏值，回到宽屏原样还回去
+        wideOpen = untrack(() => app.inspectorOpen);
+        app.inspectorOpen = false;
+      } else {
+        app.inspectorOpen = wideOpen;
+      }
+      compact = mq.matches;
+      app.compact = mq.matches;
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  });
+
   // ---------------- 菜单 ----------------
   $effect(() => {
     return window.kikusub.onMenu((ev) => {
@@ -192,6 +256,12 @@
           break;
         case 'settings':
           setView('settings');
+          break;
+        case 'export':
+          setView('export');
+          break;
+        case 'find':
+          openFind();
           break;
       }
     });
@@ -227,9 +297,38 @@
       return;
     }
 
+    // ⌘F 查找替换：菜单里也绑了同一条，但输入框聚焦时菜单快捷键可能被吃掉。
+    // 不在核对屏时先切到核对屏，查找栏才有意义。
+    if (mod && (e.key === 'f' || e.code === 'KeyF')) {
+      e.preventDefault();
+      openFind();
+      return;
+    }
+
     if (e.key === 'Escape' && quitFiles.length) {
       e.preventDefault();
       void cancelQuit();
+      return;
+    }
+
+    // 质检面板是浮层：Esc 先收起它，再轮到查找栏 / 抽屉。
+    if (e.key === 'Escape' && qa.open) {
+      e.preventDefault();
+      void toggleQaPanel(false);
+      return;
+    }
+
+    // 查找栏打开时 Esc 关闭它（输入框自己的 onkeydown 也会处理，这里兜住焦点不在输入框的情况）
+    if (e.key === 'Escape' && app.view === 'review' && findState.open) {
+      e.preventDefault();
+      closeFind();
+      return;
+    }
+
+    // 紧凑模式：抽屉打开时 Esc 先收抽屉，和工具栏的开关是同一个动作
+    if (e.key === 'Escape' && compact && app.inspectorOpen) {
+      e.preventDefault();
+      app.inspectorOpen = false;
       return;
     }
 
@@ -239,6 +338,24 @@
       (target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
         target.isContentEditable);
+    // 文本框里保留原生的逐字撤销；滑杆 / 复选框 / 下拉没有原生撤销，
+    // 焦点停在字号滑杆上按 ⌘Z 也要能撤回导出设置（用户报过这里没反应）。
+    const textEntry =
+      target &&
+      (target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        (target.tagName === 'INPUT' &&
+          ['text', 'search', 'email', 'number', 'password', 'url'].includes(
+            (target as HTMLInputElement).type,
+          )));
+    if (mod && (e.key === 'z' || e.key === 'Z')) {
+      if (!textEntry) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      }
+      return;
+    }
     if (typing) return;
 
     if (e.code === 'Space') {
@@ -287,6 +404,8 @@
 
     <div class="workspace">
       <section class="content">
+        {#key app.view}
+        <div class="view-enter" class:animated={viewsAnimate}>
         {#if app.view === 'import'}
           <ImportView />
         {:else if app.view === 'transcribe'}
@@ -295,25 +414,41 @@
           <ReviewView bind:this={review} {engine} />
         {:else if app.view === 'ai'}
           <AiView />
+        {:else if app.view === 'prompts'}
+          <PromptView />
+        {:else if app.view === 'export'}
+          <ExportView />
         {:else if app.view === 'report'}
           <ReportView />
         {:else if app.view === 'settings'}
           <SettingsView />
         {/if}
+        </div>
+        {/key}
       </section>
 
       {#if app.view === 'review'}
+        {#if compact && app.inspectorOpen}
+          <!-- 紧凑模式下检查器是抽屉：点空白处收起，Esc 同样关闭 -->
+          <button
+            class="ins-scrim"
+            aria-label="关闭检查器"
+            onclick={() => (app.inspectorOpen = false)}
+          ></button>
+        {/if}
         <Inspector />
       {/if}
 
       <QaPanel />
     </div>
 
-    <StatusBar />
+    <StatusBar {engine} />
   </div>
 </div>
 
-{#if setupLoading}
+{#if app.quitting}
+  <!-- 退出流程里什么都不显示：窗口马上就会被主进程收起 -->
+{:else if setupLoading}
   <div class="overlay">
     <div class="overlay-card">
       <div class="spinner"></div>
@@ -337,17 +472,17 @@
   </div>
 {/if}
 
-{#if !setupLoading && !setup?.firstRun && !app.connected && !app.connecting}
+{#if !app.quitting && !setupLoading && !setup?.firstRun && !app.connected && !app.connecting}
   <div class="overlay">
     <div class="overlay-card error">
       <Icon name="warn" size={18} />
       <div>内核未连接</div>
-      <div class="hint">侧栏底部会显示重连状态；连续失败请查看终端日志。</div>
+      <div class="hint">状态栏会显示重连状态；持续失败请到「设置 → 日志与诊断」复制日志反馈。</div>
     </div>
   </div>
 {/if}
 
-{#if quitFiles.length}
+{#if !app.quitting && quitFiles.length}
   <QuitPrompt files={quitFiles} busy={quitBusy} onconfirm={confirmQuit} oncancel={cancelQuit} />
 {/if}
 
@@ -391,7 +526,7 @@
   }
   .hint {
     color: var(--text-3);
-    font-size: 11.5px;
+    font-size: 12px;
     max-width: 260px;
     text-align: center;
   }
@@ -426,7 +561,44 @@
     pointer-events: none;
   }
 
+  .view-enter {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* 只有切页才播；首屏（冷启动）不播，避免「页面晚了一拍」 */
+  .view-enter.animated {
+    animation: viewIn var(--dur-page) var(--ease) both;
+  }
+  /* 紧凑模式的抽屉遮罩：只盖住工作区，不挡工具栏（工具栏仍是拖窗与切换入口） */
+  .ins-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 19;
+    border: 0;
+    padding: 0;
+    background: rgba(13, 20, 36, 0.22);
+    cursor: default;
+    animation: scrimIn 120ms var(--ease) both;
+  }
+  @keyframes scrimIn {
+    from {
+      opacity: 0;
+    }
+  }  @keyframes viewIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
   .toast {
+    animation: toastIn 180ms var(--ease) both;
     position: fixed;
     left: 50%;
     bottom: 44px;
@@ -435,11 +607,21 @@
     color: #fff;
     font-size: 12.5px;
     padding: 8px 14px;
-    border-radius: 9px;
+    border-radius: 8px;
     box-shadow: var(--shadow-pop);
     z-index: 250;
     max-width: 70vw;
     text-align: center;
+  }
+  @keyframes toastIn {
+    from {
+      opacity: 0;
+      transform: translate(-50%, 6px);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
   }
   .toast.warn {
     background: rgba(120, 74, 0, 0.96);

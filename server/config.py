@@ -26,6 +26,8 @@ class ServerConfig:
     output_dir: Path = OUTPUT_DIR
     # 应用设置（启用的引擎 / 自动代理）。测试里指向 tmp_path，避免污染仓库。
     settings_path: Path = SETTINGS_PATH
+    # TTS 克隆模型的权重目录；测试里指向 tmp_path，避免误读真实模型。
+    tts_model_dir: Path | None = None
     # 允许的媒体根目录。桌面端导入的是任意本地文件，这里默认放开；
     # 保留字段是为了将来做「只允许拖进窗口的文件」收紧策略。
     media_roots: tuple[Path, ...] = ()

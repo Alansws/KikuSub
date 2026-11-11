@@ -14,8 +14,12 @@ export interface MediaInfo {
   duration: number;
   video_codec: string;
   audio_codec: string;
+  video_width: number;
+  video_height: number;
+  video_bitrate: number;
   has_video: boolean;
   needs_proxy: boolean;
+  proxy_reason: string;
   proxy_ready: boolean;
 }
 
@@ -44,6 +48,8 @@ export interface AppSettings {
   auto_proxy: boolean;
   /** 字幕默认导出目录；空字符串表示沿用应用输出目录。 */
   export_dir: string;
+  /** 成片导出目录；空字符串表示跟随 export_dir。 */
+  video_export_dir: string;
 }
 
 export interface SettingsPayload {
@@ -52,9 +58,14 @@ export interface SettingsPayload {
   paths: {
     output_dir: string;
     export_dir: string;
+    video_export_dir: string;
     models_dir: string;
     presets_path: string;
     settings_path: string;
+    proxy_dir: string;
+    tts_cache_dir: string;
+    voices_dir: string;
+    tts_model_dir: string;
     log_path: string;
     log_dir: string;
   };
@@ -67,6 +78,131 @@ export interface SettingsPayload {
     device: string;
   };
   ffmpeg: { path: string; version: string; ok: boolean };
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  builtin: boolean;
+  updated_at: number;
+}
+
+export interface PromptLibrary {
+  version: number;
+  selected: string;
+  templates: PromptTemplate[];
+  path: string;
+}
+
+export interface ExportSourceInfo {
+  width: number;
+  height: number;
+  duration: number;
+  video_bitrate: number;
+  audio_bitrate: number;
+  video_codec: string;
+  audio_codec: string;
+  has_video: boolean;
+  has_audio: boolean;
+  size: number;
+  container: string;
+}
+
+export interface ExportPlan {
+  mode: 'burn' | 'soft' | 'copy';
+  track: 'source' | 'target' | 'both';
+  lang: string;
+  width: number;
+  height: number;
+  video_bitrate: number;
+  audio_bitrate: number;
+  duration: number;
+  estimated_bytes: number;
+  estimated_seconds: number;
+  container: string;
+  suffix: string;
+  warnings: string[];
+  source: ExportSourceInfo;
+  style?: SubtitleStylePayload;
+}
+
+/** 烧录硬字幕的样式（只对 mode='burn' 生效）。 */
+export interface SubtitleStylePayload {
+  preset: string;
+  font: string;
+  weight: 'regular' | 'medium' | 'bold';
+  size: number;
+  outline: number;
+  shadow: boolean;
+  position: 'bottom' | 'top';
+  margin: number;
+  fill: string;
+  outline_color: string;
+}
+
+export interface ExportStylePreset {
+  key: string;
+  label: string;
+  hint: string;
+  style: SubtitleStylePayload;
+}
+
+export interface ExportFontOption {
+  key: string;
+  label: string;
+  hint: string;
+  available: boolean;
+  weights: { key: string; label: string }[];
+}
+
+export interface ExportStyleOptions {
+  presets: ExportStylePreset[];
+  fonts: ExportFontOption[];
+  default: SubtitleStylePayload;
+  weights: { key: string; label: string }[];
+  ranges: {
+    size: [number, number];
+    outline: [number, number];
+    margin: [number, number];
+  };
+  fonts_ok: boolean;
+  font_error: string;
+}
+
+export interface ExportJobPayload {
+  media_id: string;
+  mode: 'burn' | 'soft' | 'copy';
+  track: 'source' | 'target' | 'both';
+  lang?: string;
+  resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
+  preset: 'small' | 'balanced' | 'high' | 'ultra';
+  export_srt?: boolean;
+  out_dir?: string;
+  style?: SubtitleStylePayload;
+}
+
+export interface ExportResult {
+  path: string;
+  name: string;
+  size: number;
+  elapsed: number;
+  width: number;
+  height: number;
+  video_bitrate: number;
+  audio_bitrate: number;
+  duration: number;
+  mode: string;
+  track: string;
+  lang: string;
+  resolution: string;
+  actual_resolution: string;
+  preset: string;
+  container: string;
+  subtitle_count: number;
+  skipped: number;
+  srt_path?: string;
 }
 
 export interface ParamSpec {
@@ -87,6 +223,135 @@ export interface Cue {
   start: number;
   end: number;
   text: string;
+}
+
+/** 当前核对表的来源。kind=transcription 才能引用该次转写的报告与质检。 */
+export interface ReviewSource {
+  kind: 'transcription' | 'import' | 'draft' | string;
+  name?: string;
+  path?: string;
+  job_id?: string;
+  at?: number;
+  apply?: string;
+}
+
+/** 服务端返回的字幕快照。`undo_label` / `redo_label` 用于按钮提示与历史列表。 */
+export interface CueSnapshot {
+  cues: Cue[];
+  count: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  undo_label?: string;
+  redo_label?: string;
+  /** 下一步撤回/重做那一步的服务端记录时间（与导出设置的本地历史比先后）。 */
+  undo_at?: number;
+  redo_at?: number;
+  /** 当前字幕来自本次转写、导入文件还是恢复的草稿。 */
+  review_source?: ReviewSource | null;
+}
+
+/** 历史时间线上的一步。past=可点回去；current=当前状态；undone=可重做。 */
+export interface CueHistoryItem {
+  id: number;
+  label: string;
+  at: number;
+  state: 'past' | 'current' | 'undone';
+  cue_count: number;
+}
+
+export interface CueHistory {
+  items: CueHistoryItem[];
+  cursor: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  undo_label: string;
+  redo_label: string;
+  undo_at: number;
+  redo_at: number;
+}
+
+/** 一个可用音色：系统 say 音色或克隆音色（kind 区分）。 */
+export interface TtsVoiceInfo {
+  id: string;
+  name: string;
+  engine: 'mac_say' | 'omnivoice' | string;
+  kind: 'system' | 'clone' | string;
+  locale: string;
+  sample: string;
+  duration: number;
+  ref_text: string;
+  created_at: number;
+  source: Record<string, unknown>;
+}
+
+/** 兼容旧命名（Inspector/store 都从 TtsVoiceInfo 走）。 */
+export type TtsVoice = TtsVoiceInfo;
+
+export interface TtsDownloadStatus {
+  status: 'idle' | 'running' | 'done' | 'error' | string;
+  percent: number;
+  stage: string;
+  error: string;
+  bytes: number;
+  total: number;
+  installed: boolean;
+  missing?: string[];
+  model_dir: string;
+  repo: string;
+}
+
+export interface TtsModelVerify {
+  installed: boolean;
+  missing: string[];
+  model_dir: string;
+  repo: string;
+  bytes: number;
+  package_installed?: boolean;
+}
+
+export interface TtsEngineInfo {
+  key: string;
+  label: string;
+  repo: string;
+  model_dir: string;
+  approx_label: string;
+  min_ram_gb: number;
+  downloadable: boolean;
+  package_installed: boolean;
+  installed: boolean;
+  loaded: boolean;
+  device: string;
+  steps: number;
+  error: string;
+  max_chars: number;
+  download: TtsDownloadStatus;
+}
+
+export interface TtsVoicesPayload {
+  available: boolean;
+  platform: string;
+  max_chars: number;
+  say_max_chars: number;
+  default: string;
+  default_name: string;
+  /** 克隆音色资产目录（outputs/voices）。 */
+  voices_dir: string;
+  system: TtsVoiceInfo[];
+  custom: TtsVoiceInfo[];
+  voices: TtsVoiceInfo[];
+  speeds: number[];
+  engine: TtsEngineInfo;
+  say: { available: boolean; default: string; platform: string };
+}
+
+export interface TtsResult {
+  filename: string;
+  voice_id: string;
+  voice_name: string;
+  engine: string;
+  cached: boolean;
+  duration: number;
+  elapsed: number;
 }
 
 /** 核对工作草稿（临时全量保存）的落盘状态。 */
@@ -206,10 +471,17 @@ export interface ReportSection {
 }
 
 export interface ReportData {
+  /** 报告对应的转写任务；与 review_source.job_id 比对，避免拿旧报告配新字幕。 */
+  job_id?: string;
+  media_id?: string;
+  out_filename?: string;
+  out_path?: string;
   overview: { label: string; value: string }[];
   params: { label: string; value: string }[];
   quality: {
     headline: string;
+    coverage?: number;
+    low_confidence?: number;
     missed: number;
     hidden_missed: number;
     dropped: number;
@@ -339,6 +611,19 @@ export function mediaUrl(mediaId: string, proxy = false) {
   return `${BASE}/media/${mediaId}?${q}`;
 }
 
+/** 最近打开列表的封面：后端按需生成、按路径+mtime 缓存。 */
+export function mediaThumbUrl(path: string, version = '') {
+  const q = new URLSearchParams({ token: TOKEN, path });
+  if (version) q.set('v', version);
+  return `${BASE}/api/media/thumb?${q}`;
+}
+
+/** TTS 音频地址：`<audio>` 同样发不了 Authorization 头，走 `?token=`。 */
+export function ttsAudioUrl(filename: string) {
+  const q = new URLSearchParams({ token: TOKEN });
+  return `${BASE}/media/tts/${encodeURIComponent(filename)}?${q}`;
+}
+
 class ApiError extends Error {
   constructor(
     message: string,
@@ -410,6 +695,7 @@ export const api = {
       models_dir: string;
       output_dir: string;
       export_dir: string;
+      video_export_dir?: string;
       settings_path?: string;
       formats: string[];
       engines: EngineInfo[];
@@ -532,42 +818,49 @@ export const api = {
   },
 
   // ---- 字幕 ----
-  getCues: () =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean }>('/api/cues'),
+  getCues: () => req<CueSnapshot>('/api/cues'),
 
   /** 按路径导入 SRT / VTT，整表替换核对基线。 */
   importCues: (path: string) =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean; source: string }>(
-      '/api/cues/import',
-      { method: 'POST', body: JSON.stringify({ path }) },
-    ),
-
-  replaceCues: (cues: Cue[]) =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean }>('/api/cues', {
+    req<CueSnapshot & { source: string }>('/api/cues/import', {
       method: 'POST',
-      body: JSON.stringify({ cues }),
+      body: JSON.stringify({ path }),
+    }),
+
+  /** 整表替换；`label` 会作为这一步历史在撤销列表里显示。 */
+  replaceCues: (cues: Cue[], label?: string) =>
+    req<CueSnapshot>('/api/cues', {
+      method: 'POST',
+      body: JSON.stringify({ cues, label: label ?? '' }),
     }),
 
   patchCue: (index: number, patch: Partial<Cue>) =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean }>(
-      `/api/cues/${index}`,
-      { method: 'PATCH', body: JSON.stringify(patch) },
-    ),
-
-  deleteCue: (index: number) =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean }>(
-      `/api/cues/${index}`,
-      { method: 'DELETE' },
-    ),
-
-  undo: () =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean }>('/api/cues/undo', {
-      method: 'POST',
+    req<CueSnapshot>(`/api/cues/${index}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
     }),
 
-  redo: () =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean }>('/api/cues/redo', {
+  deleteCue: (index: number) =>
+    req<CueSnapshot>(`/api/cues/${index}`, { method: 'DELETE' }),
+
+  /** 在指定下标插入一条（右键「添加字幕」/空字幕补录）。 */
+  insertCue: (index: number, cue: Cue) =>
+    req<CueSnapshot>(`/api/cues/${index}/insert`, {
       method: 'POST',
+      body: JSON.stringify({ index, ...cue }),
+    }),
+
+  undo: () => req<CueSnapshot & { undone?: string }>('/api/cues/undo', { method: 'POST' }),
+
+  redo: () => req<CueSnapshot & { redone?: string }>('/api/cues/redo', { method: 'POST' }),
+
+  /** 20 步可回溯历史。 */
+  getCueHistory: () => req<CueHistory>('/api/cues/history'),
+
+  jumpCueHistory: (index: number) =>
+    req<CueSnapshot & { label: string; index: number }>('/api/cues/history/jump', {
+      method: 'POST',
+      body: JSON.stringify({ index }),
     }),
 
   exportCues: (
@@ -593,10 +886,7 @@ export const api = {
   saveDraft: () => req<DraftInfo>('/api/cues/draft', { method: 'POST' }),
 
   restoreDraft: () =>
-    req<{ cues: Cue[]; count: number; can_undo: boolean; can_redo: boolean; source: string }>(
-      '/api/cues/draft/restore',
-      { method: 'POST' },
-    ),
+    req<CueSnapshot & { source: string }>('/api/cues/draft/restore', { method: 'POST' }),
 
   // ---- 报告 / 质检 ----
   // ---- 设置 / 引擎 / 诊断 ----
@@ -606,6 +896,7 @@ export const api = {
     enabled_engines?: string[];
     auto_proxy?: boolean;
     export_dir?: string;
+    video_export_dir?: string;
   }) =>
     req<SettingsPayload>('/api/settings', {
       method: 'PATCH',
@@ -625,6 +916,7 @@ export const api = {
       engines: EngineInfo[];
       log_path: string;
       log_exists: boolean;
+      log_bytes: number;
       log_tail: string;
       recent_problems: string[];
     }>(`/api/diagnostics?lines=${lines}`),
@@ -640,6 +932,107 @@ export const api = {
       { method: 'POST' },
     ),
 
+  /** 清空全部日志（轮转活动日志 + 删除所有备份），设置页用。 */
+  clearAllLogs: () =>
+    req<{
+      removed: number;
+      freed: number;
+      total_bytes: number;
+      kept: number;
+      log_dir: string;
+      rotated: number;
+    }>('/api/diagnostics/log/clear', { method: 'POST' }),
+
+  // ---- 提示词模板 ----
+  getPrompts: () => req<PromptLibrary>('/api/prompts'),
+
+  createPrompt: (body: { name: string; description?: string; content: string }) =>
+    req<PromptLibrary & { created: string }>('/api/prompts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updatePrompt: (
+    id: string,
+    body: { name?: string; description?: string; content?: string },
+  ) =>
+    req<PromptLibrary>(`/api/prompts/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  selectPrompt: (id: string) =>
+    req<PromptLibrary>(`/api/prompts/${encodeURIComponent(id)}/select`, { method: 'POST' }),
+
+  deletePrompt: (id: string) =>
+    req<PromptLibrary>(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  resetPrompt: (id: string) =>
+    req<PromptLibrary>(`/api/prompts/${encodeURIComponent(id)}/reset`, { method: 'POST' }),
+
+  // ---- 成片导出 ----
+  exportOptions: () =>
+    req<{
+      modes: { key: string; label: string; hint: string }[];
+      presets: { key: string; label: string; factor: number; crf: number; hint: string }[];
+      resolutions: { key: string; label: string }[];
+    }>('/api/export/options'),
+
+  exportStyles: () => req<ExportStyleOptions>('/api/export/styles'),
+
+  /** 样式预览是 PNG，不能走 req()（它按 JSON 解析）。 */
+  exportStylePreview: async (
+    body: {
+      media_id?: string;
+      at?: number;
+      text?: string;
+      width?: number;
+      height?: number;
+      zoom?: boolean;
+      track?: 'source' | 'target' | 'both';
+      lang?: string;
+      style: SubtitleStylePayload;
+    },
+    signal?: AbortSignal,
+  ): Promise<Blob> => {
+    const resp = await fetch(`${BASE}/api/export/style-preview`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        'X-Kikusub-Session': SID,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!resp.ok) {
+      let detail = `${resp.status} ${resp.statusText}`;
+      try {
+        const data = await resp.json();
+        if (data && typeof data.detail === 'string') detail = data.detail;
+      } catch {
+        /* 非 JSON 错误体 */
+      }
+      logEvent(
+        resp.status >= 500 ? 'error' : 'warn',
+        'api-failed',
+        `POST /api/export/style-preview -> ${resp.status}`,
+        detail,
+      );
+      throw new ApiError(detail, resp.status);
+    }
+    return resp.blob();
+  },
+
+  exportPlan: (body: ExportJobPayload) =>
+    req<{ plan: ExportPlan; out_dir: string; fonts_ok: boolean }>('/api/export/plan', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  createExport: (body: ExportJobPayload) =>
+    req<JobSnapshot>('/api/export', { method: 'POST', body: JSON.stringify(body) }),
+
   getReport: (jobId?: string) =>
     req<ReportData & { job_id: string; media_id: string; out_filename: string; out_path: string }>(
       `/api/report${jobId ? `?job_id=${jobId}` : ''}`,
@@ -648,11 +1041,21 @@ export const api = {
   getQa: () => req<Record<string, any>>('/api/qa'),
 
   /** 「一键复制提示词」：服务端用同一份 cues_to_srt 组好整段提示词 */
-  getAiPrompt: (kind: 'translate' | 'polish' = 'translate', lang = 'zh-Hans') => {
+  getAiPrompt: (
+    kind: 'translate' | 'polish' = 'translate',
+    lang = 'zh-Hans',
+    templateId = '',
+  ) => {
     const q = new URLSearchParams({ kind, lang });
-    return req<{ prompt: string; count: number; lang: string; chars: number }>(
-      `/api/ai/prompt?${q}`,
-    );
+    if (templateId) q.set('template_id', templateId);
+    return req<{
+      prompt: string;
+      count: number;
+      lang: string;
+      chars: number;
+      template_id: string;
+      template_name: string;
+    }>(`/api/ai/prompt?${q}`);
   },
 
   /** 删除磁盘上的提案文件（「丢弃」用；只清界面不算丢弃） */
@@ -693,6 +1096,60 @@ export const api = {
       `/api/translations/${encodeURIComponent(lang)}`,
       { method: 'DELETE' },
     ),
+
+  // ---- 本机 TTS（系统 say / OmniVoice 克隆）--------------------------------
+  ttsVoices: () => req<TtsVoicesPayload>('/api/tts/voices'),
+
+  ttsStatus: () => req<TtsEngineInfo>('/api/tts/status'),
+
+  synthesizeTts: (body: { text: string; voice_id?: string; speed?: number }) =>
+    req<TtsResult>('/api/tts/synthesize', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 从视频指定区间切一句参考音频，建立克隆音色。 */
+  extractTtsVoice: (body: {
+    media_id?: string;
+    path?: string;
+    start: number;
+    end: number;
+    name: string;
+    text?: string;
+    pad?: number;
+  }) =>
+    req<TtsVoiceInfo>('/api/tts/voices/extract-from-media', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  uploadTtsVoice: (body: { path: string; name: string; ref_text?: string }) =>
+    req<TtsVoiceInfo>('/api/tts/voices/upload', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  renameTtsVoice: (voiceId: string, name: string) =>
+    req<TtsVoiceInfo>(`/api/tts/voices/${encodeURIComponent(voiceId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
+  updateTtsRefText: (voiceId: string, refText: string) =>
+    req<TtsVoiceInfo>(`/api/tts/voices/${encodeURIComponent(voiceId)}/ref-text`, {
+      method: 'PUT',
+      body: JSON.stringify({ ref_text: refText }),
+    }),
+
+  deleteTtsVoice: (voiceId: string) =>
+    req<{ ok: boolean }>(`/api/tts/voices/${encodeURIComponent(voiceId)}`, {
+      method: 'DELETE',
+    }),
+
+  downloadTtsModel: () =>
+    req<TtsDownloadStatus>('/api/tts/model/download', { method: 'POST' }),
+
+  ttsModelStatus: () => req<TtsDownloadStatus>('/api/tts/model/status'),
+
+  /** 只读校验 OmniVoice 权重，不弹下载、不占任务槽。 */
+  verifyTtsModel: () => req<TtsModelVerify>('/api/tts/model/verify'),
 
   // ---- AI 配置与生成 -------------------------------------------------------
   getAiConfig: () => req<AiConfig>('/api/ai/config'),
@@ -777,6 +1234,7 @@ export const api = {
       cues: Cue[];
       can_undo: boolean;
       can_redo: boolean;
+      review_source?: ReviewSource | null;
       qa: Record<string, any>;
     }>('/api/qa/action', { method: 'POST', body: JSON.stringify(cmd) }),
 };

@@ -153,6 +153,52 @@ def test_clean_logs_endpoint_prunes_backups(client: TestClient, tmp_path: Path) 
     assert active.exists()
 
 
+def test_clear_logs_endpoint_removes_recent_backups(client: TestClient, tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(parents=True)
+    active = log_dir / "kikusub.log"
+    active.write_text("active", encoding="utf-8")
+    fresh_backup = log_dir / "kikusub.log.1"
+    fresh_backup.write_text("recent backup", encoding="utf-8")
+
+    resp = client.post("/api/diagnostics/log/clear", headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["removed"] >= 1
+    assert payload["freed"] >= len("recent backup")
+    assert not fresh_backup.exists()
+    assert active.exists()
+
+
+def test_clear_logs_rotates_active_handler(tmp_path: Path) -> None:
+    import logging
+    import logging.handlers
+
+    from core.logging_setup import clear_logs, setup_logging
+
+    log_dir = tmp_path / "logs"
+    setup_logging(log_dir, force=True, level=logging.INFO)
+    logging.getLogger("kikusub.test-clear").info("before clear")
+    active = log_dir / "kikusub.log"
+    assert active.stat().st_size > 0
+
+    result = clear_logs(log_dir)
+    assert result["rotated"] >= 1
+    assert active.stat().st_size == 0
+    assert not list(log_dir.glob("kikusub.log.*"))
+
+    # 清空后还能继续写，handler 的流没有被破坏
+    logging.getLogger("kikusub.test-clear").info("after clear")
+    assert "after clear" in active.read_text(encoding="utf-8")
+    for handler in list(logging.getLogger().handlers):
+        if getattr(handler, "_kikusub_handler", False):
+            logging.getLogger().removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+
 def test_export_dir_defaults_to_output_dir_and_can_be_changed(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -172,6 +218,28 @@ def test_export_dir_defaults_to_output_dir_and_can_be_changed(
 
     config = client.get("/api/config", headers=AUTH).json()
     assert config["export_dir"] == str(target.resolve())
+
+
+def test_video_export_dir_defaults_to_export_dir_and_can_be_changed(
+    client: TestClient, tmp_path: Path
+) -> None:
+    data = client.get("/api/settings", headers=AUTH).json()
+    assert data["settings"]["video_export_dir"] == ""
+    assert data["paths"]["video_export_dir"] == str(tmp_path)
+    assert data["paths"]["proxy_dir"] == str(tmp_path / "web_proxies")
+    assert data["paths"]["tts_cache_dir"] == str(tmp_path / "tts_cache")
+
+    target = tmp_path / "成片"
+    resp = client.patch(
+        "/api/settings", headers=AUTH, json={"video_export_dir": str(target)}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["video_export_dir"] == str(target.resolve())
+    assert resp.json()["paths"]["video_export_dir"] == str(target.resolve())
+    assert target.is_dir()
+
+    config = client.get("/api/config", headers=AUTH).json()
+    assert config["video_export_dir"] == str(target.resolve())
 
 
 def test_export_dir_rejects_relative_and_file_paths(client: TestClient, tmp_path: Path) -> None:

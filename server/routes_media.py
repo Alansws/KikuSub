@@ -7,13 +7,16 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .media import MediaError, MediaInfo, MediaStore
+from core.thumbnails import ThumbnailError, thumbnail_for
+
+from .media import MEDIA_SUFFIXES, MediaError, MediaInfo, MediaStore
 from .security import require_token, token_ok
 
 router = APIRouter(tags=["media"])
@@ -51,6 +54,34 @@ def import_media(payload: ImportRequest, request: Request) -> dict:
 def list_media(request: Request) -> dict:
     store = _store(request)
     return {"items": [store.describe(info.id) for info in store.list()]}
+
+
+@router.get("/api/media/thumb", dependencies=[Depends(require_token)])
+def get_media_thumb(
+    request: Request,
+    path: str = Query(min_length=1, description="本地视频绝对路径"),
+    width: int = Query(default=480, ge=160, le=960),
+) -> FileResponse:
+    """最近打开列表的封面。
+
+    按需生成并缓存到 `{output_dir}/thumbnails/`。只解开头 30 秒，FFmpeg 的
+    ``thumbnail`` 滤镜会挑一张非黑场的代表帧；失败时返回 404，前端退回胶片图标。
+    """
+    source = Path(path).expanduser()
+    if not source.is_absolute():
+        raise HTTPException(status_code=422, detail="缩略图路径必须是绝对路径")
+    if source.suffix.lower() not in MEDIA_SUFFIXES:
+        raise HTTPException(status_code=404, detail="不是支持的媒体文件")
+    output_dir = Path(getattr(request.app.state.config, "output_dir", "."))
+    try:
+        thumb = thumbnail_for(source, output_dir / "thumbnails", width=width)
+    except ThumbnailError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        thumb,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.get("/api/media/{media_id}", dependencies=[Depends(require_token)])
@@ -112,6 +143,85 @@ _LOD_BINS = {
 }
 
 
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$", re.IGNORECASE)
+
+
+def _parse_range(header: str, size: int) -> tuple[int, int] | None:
+    """解析单段 Range；返回 `(start, end)`，无效返回 None。
+
+    Chromium 的 `<video>` 只发单段 Range；多段请求直接按第一段处理，避免把
+    一个 3 GB 的 MKV 整段重新下载。``bytes=-500``（后缀范围）也要支持。
+    """
+    match = _RANGE_RE.match((header or "").strip())
+    if not match:
+        return None
+    raw_start, raw_end = match.groups()
+    if not raw_start and not raw_end:
+        return None
+    if not raw_start:
+        suffix = int(raw_end)
+        if suffix <= 0:
+            return None
+        start = max(0, size - suffix)
+        return start, size - 1
+    start = int(raw_start)
+    end = int(raw_end) if raw_end else size - 1
+    if start >= size or end < start:
+        return None
+    return start, min(end, size - 1)
+
+
+def _media_response(path: Path, request: Request):
+    """带 Range 的媒体响应。
+
+    Starlette 0.38 的 ``FileResponse`` 还没有 Range 支持（0.39 才加），
+    直接返回 200 + 整文件会让 `<video>` 拖进度条时重新下载整段。这里自己
+    处理单段 Range：206 + `Content-Range`，只读请求的那一段。
+    """
+    total = path.stat().st_size
+    range_header = request.headers.get("range", "")
+    parsed = _parse_range(range_header, total) if range_header else None
+    if range_header and parsed is None:
+        return Response(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{total}", "Accept-Ranges": "bytes"},
+        )
+    if parsed is None:
+        return FileResponse(
+            path,
+            media_type=_guess_media_type(path),
+            filename=path.name,
+            headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
+        )
+
+    start, end = parsed
+    length = end - start + 1
+    chunk_size = 256 * 1024
+
+    def iter_range():
+        with open(path, "rb") as handle:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(chunk_size, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    return StreamingResponse(
+        iter_range(),
+        status_code=206,
+        media_type=_guess_media_type(path),
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{total}",
+            "Content-Length": str(length),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
 @router.get("/media/{media_id}")
 def stream_media(media_id: str, request: Request, proxy: int = 0):
     """媒体流（支持 Range）。
@@ -135,12 +245,7 @@ def stream_media(media_id: str, request: Request, proxy: int = 0):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="代理尚未生成")
         path = found
 
-    return FileResponse(
-        path,
-        media_type=_guess_media_type(path),
-        filename=path.name,
-        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
-    )
+    return _media_response(path, request)
 
 
 def _guess_media_type(path: Path) -> str:

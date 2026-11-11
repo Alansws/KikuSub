@@ -33,7 +33,10 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
 - **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
 - **AI polish / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. Translations live in a parallel track and export as source, target or bilingual.
-- **Export** — SRT / VTT / TXT into the export folder you choose.
+- **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
+- **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
+- **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality all go into the history; ⌘Z undoes whichever domain (subtitles or export settings) changed most recently, and the history panel lists both groups.
+- **Subtitle styles** — burned-in subtitles come with fansub-style presets (standard, heavy outline, rounded anime, movie serif, Japanese broadcast, light) plus per-field control over font, weight, size, outline, shadow and position. The preview renders with the real video frame and offers full-frame and font close-up views.
 
 Everything except the optional AI features is local inference.
 
@@ -58,9 +61,14 @@ Everything except the optional AI features is local inference.
 - Ruler, playhead edges and the video progress bar are all scrubbable: playback pauses, the frame follows every 16 ms, and the previous state resumes on release.
 - Click to seek; drag past 4 px to start a selection. A selection can be auditioned, transcribed on its own, or a single cue can be re-transcribed.
 - Cue lane at the bottom: bilingual / trilingual lines sharing a time range form one block. Drag the body to shift both edges, drag an edge to retime one side — a single ⌘Z undoes the whole move.
-- Source / target / bilingual display; bilingual means two lines inside one cue.
+- Source / target / bilingual display; bilingual shows the source line above the target line.
 - The inspector always carries **Save draft / Export**: drafts autosave with a 0.9 s debounce, export writes the deliverable.
-- 50 steps of undo / redo covering delete, update, insert, clear, import and append.
+- Importing another subtitle (or restoring a draft) switches the inspector to the current source and cue count; stale QA overview and transcription params are hidden, and the QA queue pauses so old items cannot delete cues from the new table.
+- **20-step rewindable history** next to undo / redo: every entry names the operation, and clicking one jumps straight back (later steps can still be redone); covers delete, update, insert, clear, import, append and batch replace.
+- **TTS comparison** in the current-cue card: the macOS Japanese voice works instantly with zero VRAM, and Settings can switch the default to a cloned voice. Upload a reference clip (defaults to the last upload folder / current video folder; multi-select creates one voice per clip), use **Extract from current line**, or right-click any cue → **New voice from this line…** to cut a 3–10 s reference. Saved voices stay in the voice library, where you can audition, set a default, rename, edit the reference transcript and delete them. OmniVoice is zero-shot, runs on the Apple GPU, downloads on demand and unloads after 5 idle minutes.
+- **⌘F find & replace** in the cue table: search the source text, jump between hits, replace one or replace all (a batch replace is a single history step).
+- **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
+- Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
 **QA queue**
 
@@ -78,7 +86,8 @@ Everything except the optional AI features is local inference.
 - Two columns: source is read-only, the suggestion is editable on double-click. Accept or reject item by item; filter to changed rows only.
 - Applying is one history entry — ⌘Z reverts the whole batch. A digest mismatch (different media or edited source) is rejected without touching a single byte.
 - Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
-- Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`).
+- Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`). Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
+- **Video export**: hard subs use a Pillow sprite + ffmpeg overlay (no libass needed); soft subs are toggleable in MP4; "copy only" skips re-encoding entirely.
 - No API? **Copy prompt** gives you a prompt containing the SRT; paste the model's reply back and it is parsed by order alone — indices and timestamps are discarded, your timeline is kept.
 - Ships an agent skill (`~/.agents/skills/kikusub-subtitle`) so a DeepSeek Harness session can do the same job.
 
@@ -87,8 +96,8 @@ Everything except the optional AI features is local inference.
 ![Settings: engines, AI options, agent skill, appearance](docs/images/settings-ai.jpg)
 
 - Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download.
-- Runtime, export folder and model folder can be changed anytime; changing the model folder restarts the sidecar and re-handshakes.
-- Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention, one-click copy of diagnostic info.
+- Runtime lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
+- Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
 - Follow the system theme or force light / dark; three waveform heights.
 
 ## The two engines
@@ -113,8 +122,8 @@ Two caveats:
 
 - macOS 12 or newer, Apple Silicon (arm64)
 - `ffmpeg` and `ffprobe` (`brew install ffmpeg`; the app adds Homebrew paths to PATH)
-- Disk: ~6.6 GB for both models plus proxy cache and output; 15 GB free is a safe number
-- RAM: 16 GB recommended (Qwen3-ASR weights are ~3.8 GB)
+- Disk: ~6.6 GB for both transcription models plus proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
+- RAM: 16 GB recommended (Qwen3-ASR weights are ~3.8 GB); the cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
 
 ### Using the packaged .app
 
@@ -128,7 +137,9 @@ The app is ad-hoc signed. If Gatekeeper blocks the first launch, allow it under 
 xattr -dr com.apple.quarantine /Applications/KikuSub.app
 ```
 
-**First launch** asks for a model folder (default `~/Library/Application Support/KikuSub/models`) before starting the core. Models are not bundled — download them under Settings → Engines & Models. The default source is `hf-mirror.com`, with resume support.
+**First launch** has two steps: pick a model folder (default `~/Library/Application Support/KikuSub/models`), then choose which models to download — Anime Whisper (recommended), Qwen3-ASR, and the optional **OmniVoice voice cloning**. **Set up selected** downloads them in order; **Not now** skips and leaves the same choices under Settings → Engines & Models. Models are not bundled; the default source is `hf-mirror.com` with resume support.
+
+The default TTS voice is still the macOS system voice (Kyoko etc.); you can switch the default to a cloned voice under Settings → TTS. OmniVoice only loads when a cloned voice is actually used.
 
 ## Running from source
 

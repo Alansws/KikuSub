@@ -54,6 +54,8 @@ declare global {
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
       pickMedia(): Promise<string | null>;
       pickSubtitle(defaultDir?: string): Promise<string | null>;
+      /** TTS 克隆音色的参考音频（wav/mp3/…），返回绝对路径。 */
+      pickAudio(defaultDir?: string): Promise<string[]>;
       pickProposal(defaultDir?: string): Promise<string | null>;
       skill: {
         status(): Promise<{
@@ -95,6 +97,7 @@ declare global {
       };
       pickDirectory(payload: { title?: string; defaultPath?: string }): Promise<string | null>;
       writeClipboard(text: string): Promise<boolean>;
+      clearMainLog(): Promise<{ removed: number; freed: number }>;
       revealInFinder(target: string): Promise<void>;
       openPath(target: string): Promise<string>;
       setTitle(title: string): void;
@@ -118,3 +121,9 @@ declare global {
 }
 
 export {};
+
+/** Vite 静态资源：图标等图片 */
+declare module '*.png' {
+  const src: string;
+  export default src;
+}

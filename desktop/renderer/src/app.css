@@ -1,83 +1,162 @@
 /* ============================================================
-   设计令牌 —— 与静态高保真稿同一套值
+   设计令牌 —— D「青空」(Clear Sky)
    注意：真实应用里没有「假窗口」。窗口边框、红绿灯、阴影都由 macOS 提供，
    所以 body 是透明的，侧栏的 vibrancy 才能透出桌面。
+
+   语义只有五档：surface（canvas/paper/raise）、hairline（line/line2）、
+   text（ink/ink2/ink3）、focus（accent 系）、danger/warn/success 状态。
+   旧变量名保留为别名，组件不用一次性全改。
    ============================================================ */
 
 :root {
-  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --dur: 200ms;
+  --dur-fast: 120ms;
+  --dur-panel: 220ms;
+  --dur-page: 220ms;
 
-  --accent: #007aff;
-  --accent-hover: #0a6fd8;
-  --accent-soft: rgba(0, 122, 255, 0.1);
-  --accent-ring: rgba(0, 122, 255, 0.35);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+    'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --bg-content: #ffffff;
-  --bg-inspector: #fbfbfd;
-  --bg-toolbar: rgba(255, 255, 255, 0.84);
-  --bg-status: rgba(250, 250, 251, 0.92);
-  --bg-sidebar: rgba(246, 246, 248, 0.55);
+  /* 字阶：UI 角色 ≤6 种，字幕正文单独一条（见设计规划 §5.2） */
+  --fs-display: 22px;
+  --lh-display: 30px;
+  --fs-heading: 15px;
+  --lh-heading: 22px;
+  --fs-body: 14px;
+  --lh-body: 22px;
+  --fs-ui: 13px;
+  --lh-ui: 18px;
+  --fs-label: 12px;
+  --lh-label: 16px;
+  --fs-mono: 12.5px;
+  --lh-mono: 18px;
 
-  --text: #1d1d1f;
-  --text-2: #6e6e73;
-  --text-3: #98989d;
-  --separator: rgba(0, 0, 0, 0.09);
-  --separator-soft: rgba(0, 0, 0, 0.055);
+  /* 间距：4 的倍数 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
 
-  --fill: rgba(0, 0, 0, 0.045);
-  --fill-strong: rgba(0, 0, 0, 0.075);
-  --row-hover: rgba(0, 0, 0, 0.028);
+  /* 圆角：控件 / 卡片 / 面板 */
+  --rad-control: 4px;
+  --rad-card: 8px;
+  --rad-panel: 12px;
 
-  --shadow-pop: 0 8px 26px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.1);
-  --caption-bg: rgba(0, 0, 0, 0.62);
-  --wave: #7b8a99;
+  /* 控件高度 */
+  --ctl-h: 28px;
+  --ctl-h-lg: 32px;
+  --ctl-h-xl: 36px;
+
+  /* —— D「青空」浅色（来自上传图的浅天蓝 / 薰衣草 / 樱粉 / 深靛） —— */
+  --canvas: #edf3fb;
+  --paper: #f9fbfe;
+  --raise: #ffffff;
+  --ink: #1b2740;
+  --ink-2: #5a6780;
+  --ink-3: #68758a;
+  --line: rgba(27, 39, 64, 0.12);
+  --line-2: rgba(27, 39, 64, 0.06);
+
+  --accent: #4f6bff;
+  --accent-hover: #3d57e6;
+  --accent-soft: rgba(79, 107, 255, 0.08);
+  --accent-ring: rgba(79, 107, 255, 0.35);
+  --accent-line: rgba(79, 107, 255, 0.35);
+  --danger: #b3261e;
+  --warn: #9a6400;
+  --success: #2e7d5b;
+
+  /* 内容区本身是 paper；--bg-content 留给卡片/输入/浮层（raise） */
+  --bg-content: var(--raise);
+  --bg-inspector: var(--paper);
+  --bg-toolbar: rgba(249, 251, 254, 0.86);
+  --bg-status: rgba(249, 251, 254, 0.92);
+  /* 侧栏叠在 macOS vibrancy 上：留一点透，但颜色仍由青空画布决定 */
+  --bg-sidebar: rgba(237, 243, 251, 0.72);
+
+  --text: var(--ink);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+  --separator: var(--line);
+  --separator-soft: var(--line-2);
+
+  --fill: rgba(27, 39, 64, 0.045);
+  --fill-strong: rgba(27, 39, 64, 0.08);
+  --row-hover: rgba(27, 39, 64, 0.03);
+
+  --shadow-pop: 0 10px 30px rgba(27, 39, 64, 0.14), 0 1px 3px rgba(27, 39, 64, 0.1);
+  --shadow-video: 0 22px 50px rgba(30, 42, 69, 0.16);
+  --caption-bg: rgba(13, 20, 36, 0.62);
+  --wave: #a3adbe;
 
   /* 波形底部字幕轨道。灰条时代和底色的对比只有 4%，几乎看不见；
      这里改用品牌蓝的分层透明度：底槽 → 有字幕 → 悬停 → 当前句。 */
-  --cue-lane: rgba(0, 0, 0, 0.055);
-  --cue-wash: rgba(0, 122, 255, 0.035);
-  --cue-block: rgba(0, 122, 255, 0.36);
-  --cue-block-hover: rgba(0, 122, 255, 0.46);
-  --cue-block-active: rgba(0, 122, 255, 0.82);
-  --cue-edge: rgba(0, 122, 255, 0.9);
+  /* 轨道块只在「当前块」用 accent；其余是中性墨，避免一条蓝块带抢戏 */
+  --cue-lane: rgba(27, 39, 64, 0.05);
+  --cue-wash: rgba(27, 39, 64, 0.03);
+  --cue-block: rgba(27, 39, 64, 0.14);
+  --cue-block-hover: rgba(27, 39, 64, 0.24);
+  --cue-block-active: rgba(79, 107, 255, 0.82);
+  --cue-edge: rgba(79, 107, 255, 0.9);
 }
 
 html[data-theme='dark'] {
-  --accent: #0a84ff;
-  --accent-hover: #3b9bff;
-  --accent-soft: rgba(10, 132, 255, 0.16);
-  --accent-ring: rgba(10, 132, 255, 0.45);
+  --canvas: #0a0c10;
+  --paper: #111419;
+  --raise: #181c23;
+  --ink: #ecf1fa;
+  --ink-2: #a9b4c6;
+  --ink-3: #8591a5;
+  --line: rgba(236, 241, 250, 0.13);
+  --line-2: rgba(236, 241, 250, 0.07);
 
-  --bg-content: #1e1e1e;
-  --bg-inspector: #232325;
-  --bg-toolbar: rgba(30, 30, 30, 0.86);
-  --bg-status: rgba(28, 28, 30, 0.94);
+  --accent: #7d93ff;
+  --accent-hover: #94a6ff;
+  --accent-soft: rgba(125, 147, 255, 0.16);
+  --accent-ring: rgba(125, 147, 255, 0.42);
+  --accent-line: rgba(125, 147, 255, 0.42);
+  --danger: #e6675a;
+  --warn: #d9a441;
+  --success: #6fbf8b;
+
+  /* 内容区本身是 paper；--bg-content 留给卡片/输入/浮层（raise） */
+  --bg-content: var(--raise);
+  --bg-inspector: var(--paper);
+  --bg-toolbar: rgba(17, 20, 25, 0.86);
+  --bg-status: rgba(17, 20, 25, 0.94);
   /* 侧栏叠在 macOS 原生 vibrancy 上。原生材质的明暗由系统外观决定，
-     应用内切到深色时它可能仍是浅色；0.5 的透明度会被透成灰白，看起来像
-     「整列没切过去」。这里提高到 0.92：既压住浅色底，又保留一点毛玻璃。 */
-  --bg-sidebar: rgba(30, 30, 32, 0.92);
+     应用内切到深色时它可能仍是浅色；0.92 既压住浅色底，又保留一点毛玻璃。 */
+  --bg-sidebar: rgba(10, 12, 16, 0.92);
 
-  --text: #f5f5f7;
-  --text-2: #a1a1a6;
-  --text-3: #7c7c81;
-  --separator: rgba(255, 255, 255, 0.11);
-  --separator-soft: rgba(255, 255, 255, 0.07);
+  --text: var(--ink);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+  --separator: var(--line);
+  --separator-soft: var(--line-2);
 
-  --fill: rgba(255, 255, 255, 0.07);
-  --fill-strong: rgba(255, 255, 255, 0.12);
-  --row-hover: rgba(255, 255, 255, 0.045);
+  --fill: rgba(236, 241, 250, 0.06);
+  --fill-strong: rgba(236, 241, 250, 0.11);
+  --row-hover: rgba(236, 241, 250, 0.04);
 
-  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
-  --caption-bg: rgba(0, 0, 0, 0.66);
-  --wave: #9aabbd;
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-video: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --caption-bg: rgba(4, 6, 10, 0.66);
+  --wave: #8f9db5;
 
-  --cue-lane: rgba(255, 255, 255, 0.075);
-  --cue-wash: rgba(10, 132, 255, 0.06);
-  --cue-block: rgba(10, 132, 255, 0.42);
-  --cue-block-hover: rgba(10, 132, 255, 0.6);
-  --cue-block-active: rgba(10, 132, 255, 0.88);
-  --cue-edge: rgba(90, 170, 255, 0.95);
+  --cue-lane: rgba(236, 241, 250, 0.06);
+  --cue-wash: rgba(236, 241, 250, 0.035);
+  --cue-block: rgba(236, 241, 250, 0.12);
+  --cue-block-hover: rgba(236, 241, 250, 0.2);
+  --cue-block-active: rgba(125, 147, 255, 0.88);
+  --cue-edge: rgba(160, 178, 255, 0.95);
 }
 
 * {
@@ -93,8 +172,7 @@ body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
-    'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.38;
   color: var(--text);
@@ -116,13 +194,13 @@ body {
 
 .sidebar {
   position: relative;
-  width: 224px;
-  flex: 0 0 224px;
+  width: 236px;
+  flex: 0 0 236px;
   background: var(--bg-sidebar);
   backdrop-filter: saturate(180%) blur(24px);
   -webkit-backdrop-filter: saturate(180%) blur(24px);
   border-right: 1px solid var(--separator);
-  padding: 46px 10px 10px;
+  padding: 46px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -145,7 +223,7 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-content);
+  background: var(--paper);
 }
 
 .workspace {
@@ -167,23 +245,25 @@ body {
 
 .btn {
   appearance: none;
-  border: 0;
-  height: 26px;
+  border: 1px solid var(--line);
+  height: var(--ctl-h);
   padding: 0 11px;
-  border-radius: 6px;
+  border-radius: var(--rad-control);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   display: inline-flex;
   align-items: center;
   gap: 5px;
   cursor: default;
-  background: var(--fill);
+  background: var(--raise);
   color: var(--text);
-  transition: background var(--dur) var(--ease), transform 120ms var(--ease);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    transform var(--dur-fast) var(--ease);
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
-  background: var(--fill-strong);
+  background: var(--fill);
+  border-color: var(--accent-line);
 }
 .btn:active:not(:disabled) {
   transform: scale(0.985);
@@ -191,37 +271,54 @@ body {
 .btn:disabled {
   opacity: 0.45;
 }
+/* 禁用态不要留一层淡 accent：主操作要么是实心蓝，要么明确退成灰 */
+.btn.primary:disabled {
+  background: var(--fill);
+  border-color: transparent;
+  color: var(--text-3);
+  box-shadow: none;
+  opacity: 1;
+}
+.btn.ghost:disabled {
+  color: var(--text-3);
+}
 .btn.primary {
   background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
   font-weight: 500;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 1px 2px rgba(27, 39, 64, 0.18);
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 .btn.ghost {
   background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
 }
 .btn.ghost:hover:not(:disabled) {
   background: var(--fill);
+  border-color: transparent;
+  color: var(--text);
 }
 .btn.icon {
-  width: 26px;
+  width: var(--ctl-h);
   padding: 0;
   justify-content: center;
 }
 .btn.danger {
-  color: #ff453a;
+  color: var(--danger);
 }
 
 .seg {
   display: inline-flex;
   padding: 2px;
   background: var(--fill);
-  border-radius: 7px;
+  border-radius: 4px;
   gap: 2px;
-  height: 24px;
+  height: var(--ctl-h);
 }
 .seg button {
   appearance: none;
@@ -229,10 +326,10 @@ body {
   background: transparent;
   color: var(--text-2);
   font: inherit;
-  font-size: 12px;
-  padding: 0 9px;
-  height: 20px;
-  border-radius: 5px;
+  font-size: 12.5px;
+  padding: 0 10px;
+  height: 22px;
+  border-radius: var(--rad-control);
   cursor: default;
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
   white-space: nowrap;
@@ -241,24 +338,24 @@ body {
   color: var(--text);
 }
 .seg button.on {
-  background: var(--bg-content);
+  background: var(--raise);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
   font-weight: 500;
 }
 html[data-theme='dark'] .seg button.on {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(236, 241, 250, 0.14);
 }
 
 .field {
-  height: 26px;
-  border-radius: 6px;
+  height: var(--ctl-h-lg);
+  border-radius: var(--rad-control);
   border: 1px solid var(--separator);
-  background: var(--bg-content);
+  background: var(--raise);
   display: flex;
   align-items: center;
   padding: 0 9px;
-  font-size: 12.5px;
+  font-size: var(--fs-ui);
   color: var(--text);
   gap: 6px;
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
@@ -288,7 +385,8 @@ html[data-theme='dark'] .seg button.on {
   align-items: baseline;
   gap: 10px;
   padding: 3px 0;
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 18px; /* 12.5/18：整行 24px，和 4px 的间距网格对齐 */
 }
 .kv .k {
   color: var(--text-2);
@@ -304,26 +402,26 @@ html[data-theme='dark'] .seg button.on {
 }
 .kv .v.mono {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 12px;
   letter-spacing: -0.02em;
 }
 
 .card {
-  background: var(--bg-content);
+  background: var(--raise);
   border: 1px solid var(--separator-soft);
-  border-radius: 10px;
-  padding: 11px 12px;
+  border-radius: var(--rad-card);
+  padding: 14px 16px;
 }
 html[data-theme='dark'] .card {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--raise);
 }
 
 .ins-h {
-  font-size: 11px;
+  font-size: var(--fs-label);
   font-weight: 600;
-  color: var(--text-3);
+  color: var(--text-2);
   letter-spacing: 0.02em;
-  margin-bottom: 7px;
+  margin-bottom: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -338,11 +436,11 @@ html[data-theme='dark'] .card {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 11px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--rad-control);
   background: var(--fill);
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
@@ -351,41 +449,43 @@ html[data-theme='dark'] .card {
   font-weight: 600;
 }
 .chip.warn {
-  background: rgba(255, 159, 10, 0.14);
-  color: #b26a00;
+  background: rgba(154, 100, 0, 0.1);
+  color: var(--warn);
 }
 .chip.warn b {
-  color: #b26a00;
+  color: var(--warn);
 }
 .chip.ok {
-  background: rgba(48, 209, 88, 0.14);
-  color: #1c8b3c;
+  background: rgba(46, 125, 91, 0.1);
+  color: var(--success);
 }
 .chip.ok b {
-  color: #1c8b3c;
+  color: var(--success);
 }
 html[data-theme='dark'] .chip.warn,
 html[data-theme='dark'] .chip.warn b {
-  color: #ffb340;
+  color: var(--warn);
+  background: rgba(217, 164, 65, 0.14);
 }
 html[data-theme='dark'] .chip.ok,
 html[data-theme='dark'] .chip.ok b {
-  color: #4ade80;
+  color: var(--success);
+  background: rgba(111, 191, 139, 0.14);
 }
 
 .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #30d158;
+  background: var(--success);
   display: inline-block;
   margin-right: 5px;
   vertical-align: 1px;
-  box-shadow: 0 0 0 2px rgba(48, 209, 88, 0.18);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 18%, transparent);
 }
 .dot.off {
-  background: #ff9f0a;
-  box-shadow: 0 0 0 2px rgba(255, 159, 10, 0.18);
+  background: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
 }
 
 /* ---------- 滚动条（overlay 风格） ---------- */
@@ -398,18 +498,72 @@ html[data-theme='dark'] .chip.ok b {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 5px;
+  background: rgba(27, 39, 64, 0.18);
+  border-radius: 4px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(27, 39, 64, 0.3);
   background-clip: content-box;
 }
 html[data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(236, 241, 250, 0.2);
   background-clip: content-box;
+}
+
+/* 原生 range / checkbox / radio 也走品牌 accent，别让系统蓝混进来 */
+input[type='range'],
+input[type='checkbox'],
+input[type='radio'],
+progress {
+  accent-color: var(--accent);
+}
+
+/* 键盘焦点必须看得见（鼠标点击不显示） */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* ============================================================
+   紧凑模式 —— 只加媒体查询，不改 ≥900px 的桌面结构。
+
+   触发条件不是「窗口多小」，而是「CSS 视口多小」：应用没有缩放菜单，
+   200% 页面缩放（无障碍 / 极端缩放验收）会让 1360 窗口变成 680×419。
+   侧栏收成 56px 图标轨、检查器改成右侧抽屉（见 Inspector.svelte 与 App.svelte），
+   内容区因此重新拿回整个宽度。
+   ============================================================ */
+@media (max-width: 900px) {
+  .sidebar {
+    width: 56px;
+    flex: 0 0 56px;
+    padding: 46px 8px 10px;
+  }
+  .sidebar .sb-brand {
+    justify-content: center;
+    gap: 0;
+    padding: 4px 0 12px;
+  }
+  .sidebar .brand-name,
+  .sidebar .brand-sub,
+  .sidebar .sb-label,
+  .sidebar .sb-count {
+    display: none;
+  }
+  .sidebar .sb-item {
+    justify-content: center;
+    padding: 0;
+    gap: 0;
+  }
+  /* 只留 16px 图标；标签与计数不参与布局，title / 无障碍名仍在 */
+  .sidebar .sb-item > span:not(.ico) {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

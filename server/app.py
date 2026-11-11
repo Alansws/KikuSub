@@ -19,6 +19,8 @@ from fastapi.responses import JSONResponse
 
 from core.paths import MODELS_DIR
 from core.presets import PresetStore
+from core.procutil import reset_shutdown, terminate_all_processes
+from core.tts import TTSManager
 
 from . import API_VERSION
 from .config import ServerConfig
@@ -26,14 +28,17 @@ from .jobs import JobManager
 from .media import MediaError, MediaStore
 from .routes_ai import router as ai_router
 from .routes_cues import router as cues_router
+from .routes_export import router as export_router
 from .routes_jobs import router as jobs_router
 from .routes_media import router as media_router
 from .routes_presets import router as presets_router
+from .routes_prompts import router as prompts_router
 from .routes_qa import router as qa_router
 from .routes_report import router as report_router
 from .routes_session import router as session_router
 from .routes_settings import router as settings_router
 from .routes_translations import router as translations_router
+from .routes_tts import router as tts_router
 from .security import require_token
 from .sessions import SessionStore
 
@@ -62,8 +67,26 @@ def _warmup(app: FastAPI) -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # 每个新 app（含测试里的 TestClient）都从「允许 spawn」开始。
+    reset_shutdown()
     threading.Thread(target=_warmup, args=(app,), daemon=True, name="kikusub-warmup").start()
-    yield
+    try:
+        yield
+    finally:
+        # 退出收尾：先让任务拿到取消信号，再杀掉仍在跑的 ffmpeg。
+        # 顺序不能反：反了会让 worker 在清理之后又 spawn 一个子进程。
+        try:
+            app.state.jobs.cancel_all(reason="应用正在退出，任务已取消")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            app.state.tts.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            terminate_all_processes(2.0)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def create_app(config: ServerConfig | None = None) -> FastAPI:
@@ -86,7 +109,11 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.state.media = MediaStore(output_dir=config.output_dir)
     app.state.sessions = SessionStore()
     app.state.presets = PresetStore()
-    app.state.jobs = JobManager(config.output_dir)
+    # TTS 的引擎是懒加载的：这里只建管理器，不 import torch、不占显存。
+    app.state.tts = TTSManager(config.output_dir, model_dir=config.tts_model_dir)
+    app.state.jobs = JobManager(
+        config.output_dir, on_heavy_job=app.state.tts.release
+    )
 
     # 渲染进程可能以 file:// 或 vite dev server 为 origin 发请求；真正的门是 token，
     # 这里放开 origin 只是为了不被浏览器预检拦住。
@@ -170,7 +197,9 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     app.include_router(media_router)
     app.include_router(cues_router)
+    app.include_router(export_router)
     app.include_router(presets_router)
+    app.include_router(prompts_router)
     app.include_router(jobs_router)
     app.include_router(report_router)
     app.include_router(qa_router)
@@ -178,6 +207,8 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(ai_router)
     app.include_router(translations_router)
+    # 本机 TTS 的音频流走 /media/tts/*（?token= 鉴权），必须在 media 路由之后也不冲突
+    app.include_router(tts_router)
 
     @app.get("/api/health")
     def health() -> dict:
@@ -202,6 +233,9 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             # 字幕实际落盘目录（设置页可改）；output_dir 仍存放日志/质检/代理。
             "export_dir": str(
                 settings_store.resolve_export_dir(current, Path(config.output_dir))
+            ),
+            "video_export_dir": str(
+                settings_store.resolve_video_export_dir(current, Path(config.output_dir))
             ),
             "settings_path": str(config.settings_path),
             "formats": ["SRT", "VTT", "TXT"],

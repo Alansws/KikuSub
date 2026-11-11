@@ -40,6 +40,11 @@ rm -rf "$OUT/dist/$NAME"
   --hidden-import uvicorn.protocols.http.auto \
   --hidden-import uvicorn.protocols.websockets.auto \
   --hidden-import uvicorn.lifespan.on \
+  --hidden-import PIL.Image \
+  --hidden-import PIL.ImageDraw \
+  --hidden-import PIL.ImageFont \
+  --hidden-import omnivoice \
+  --hidden-import omnivoice.models.omnivoice \
   --exclude-module matplotlib \
   --exclude-module tkinter \
   --distpath "$OUT/dist" \

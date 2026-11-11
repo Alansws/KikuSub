@@ -12,17 +12,31 @@ import {
   type AiProposal,
   type AppSettings,
   type Cue,
+  type CueHistoryItem,
+  type CueSnapshot,
   type EngineInfo,
+  type ExportJobPayload,
+  type ExportPlan,
+  type ExportResult,
+  type ExportStyleOptions,
   type JobSnapshot,
   type MediaInfo,
   type ParamSpec,
+  type PromptLibrary,
+  type PromptTemplate,
   type ReportData,
+  type ReviewSource,
   type SettingsPayload,
+  type SubtitleStylePayload,
   type TrackMode,
   type TranslationTrack,
+  type TtsDownloadStatus,
+  type TtsEngineInfo,
+  type TtsVoiceInfo,
+  ttsAudioUrl,
 } from './api';
 
-export type View = 'import' | 'transcribe' | 'review' | 'ai' | 'report' | 'settings';
+export type View = 'import' | 'transcribe' | 'review' | 'ai' | 'prompts' | 'export' | 'report' | 'settings';
 
 export interface AppConfig {
   version: string;
@@ -30,6 +44,7 @@ export interface AppConfig {
   models_dir: string;
   output_dir: string;
   export_dir: string;
+  video_export_dir?: string;
   settings_path?: string;
   formats: string[];
   engines: EngineInfo[];
@@ -41,11 +56,15 @@ export const app = $state({
   connected: false,
   connecting: true,
   sidecarPid: 0,
+  /** 主进程已开始退出：此后的内核断开是收尾，不是崩溃重启。 */
+  quitting: false,
 
   // 界面
   view: 'import' as View,
   theme: 'light' as 'light' | 'dark',
   inspectorOpen: true,
+  /** 紧凑模式（≤900px CSS 视口）：检查器是抽屉，切页/换片时默认收起。 */
+  compact: false,
   /** 当前识别引擎；工具栏切换时同步，核对台局部重转与质检补录都读它。 */
   engine: 'whisper',
   /** 质检「补录」正在等哪一条：局部转写完成后自动把它标为 filled。 */
@@ -56,8 +75,19 @@ export const app = $state({
   settings: null as AppSettings | null,
   media: null as MediaInfo | null,
   cues: [] as Cue[],
+  /**
+   * 当前核对表的来源。`import` / `draft` 时右侧检查器不能再用最近一次转写的
+   * 质检与参数——那份报告对应的是另一版字幕。
+   */
+  reviewSource: null as ReviewSource | null,
   canUndo: false,
   canRedo: false,
+  /** 下一步 ⌘Z / ⇧⌘Z 会做什么（服务端历史标签，用于按钮提示）。 */
+  undoLabel: '',
+  redoLabel: '',
+  /** 服务端「下一步撤销/重做」那一步的记录时间；与导出设置的本地历史比先后。 */
+  undoAt: 0,
+  redoAt: 0,
   /** 核对台显示哪条轨：原文 / 译文 / 双语（双语 = 每行两行文字） */
   track: ((typeof localStorage !== 'undefined' && localStorage.getItem('kikusub.track')) ||
     'source') as TrackMode,
@@ -73,7 +103,7 @@ export const app = $state({
 
   // 任务
   job: null as JobSnapshot | null,
-  jobKind: '' as '' | 'transcribe' | 'proxy',
+  jobKind: '' as '' | 'transcribe' | 'proxy' | 'export',
   /** 本次转写的意图：整片还是某个区间，决定完成后的落点与提示。 */
   jobMeta: null as null | {
     scope: 'full' | 'range';
@@ -106,6 +136,13 @@ export const play = $state({
   stopAt: 0,
   /** 跳转后是否立即播放（试听）。由核对屏消费后复位。 */
   playAfterSeek: false,
+  /**
+   * 「强制把某条字幕滚进视窗」的序号。转写选区完成后新句可能就在原下标上，
+   * 只改 selected 会被 lastRevealed 的去重挡掉，必须靠这个非零变化强制同步。
+   */
+  selectNonce: 0,
+  /** 请求右侧检查器把光标放进「当前条目」文本框（右键新建空字幕用）。 */
+  editNonce: 0,
 });
 
 /** 跳到某个时间点。所有「定位」入口都走这里，视频与播放头才不会各走各的。 */
@@ -129,6 +166,585 @@ export function previewRange(start: number, end: number) {
   seekTo(start + 0.02, { stopAt: end, play: true });
 }
 
+/** 把服务端返回的字幕快照统一写回状态（含撤销/重做按钮的说明）。 */
+function applyCueSnapshot(data: CueSnapshot) {
+  app.cues = data.cues;
+  app.canUndo = data.can_undo;
+  app.canRedo = data.can_redo;
+  // 来源与字幕一起回滚：导入字幕 / 撤销 / 历史跳转都会带新的来源。
+  if (data.review_source !== undefined) app.reviewSource = data.review_source;
+  // 不是每个接口都返回标签（例如旧版 QA 响应）：缺省时保留上一次的值，
+  // 不要用空串把工具栏提示抹掉。
+  if (data.undo_label !== undefined) app.undoLabel = data.undo_label;
+  if (data.redo_label !== undefined) app.redoLabel = data.redo_label;
+  if (data.undo_at !== undefined) app.undoAt = data.undo_at;
+  if (data.redo_at !== undefined) app.redoAt = data.redo_at;
+  if (cueHistory.open) void loadCueHistory();
+}
+
+/**
+ * 定位到某一条字幕，并强制表格滚过去。
+ *
+ * 只设 `play.selected` 不够：`lastRevealed` 会认为「还是这一句」而跳过滚动，
+ * 局部转写完成后正是这种情况（新句落在同一个下标上）。
+ */
+export function jumpToCue(index: number, opts: { seek?: boolean } = {}) {
+  const cue = app.cues[index];
+  if (!cue) return;
+  play.selected = index;
+  if (opts.seek !== false) seekTo(cue.start + 0.02);
+  play.selectNonce += 1;
+}
+
+/** 20 步可回溯历史列表（工具栏下拉用）。 */
+export const cueHistory = $state({
+  open: false,
+  items: [] as CueHistoryItem[],
+  cursor: -1,
+  loading: false,
+  error: '',
+});
+
+export async function loadCueHistory() {
+  if (!app.connected) return;
+  cueHistory.loading = true;
+  cueHistory.error = '';
+  try {
+    const data = await api.getCueHistory();
+    cueHistory.items = data.items;
+    cueHistory.cursor = data.cursor;
+    app.canUndo = data.can_undo;
+    app.canRedo = data.can_redo;
+    app.undoLabel = data.undo_label;
+    app.redoLabel = data.redo_label;
+    app.undoAt = data.undo_at;
+    app.redoAt = data.redo_at;
+  } catch (err) {
+    cueHistory.error = (err as Error).message;
+  } finally {
+    cueHistory.loading = false;
+  }
+}
+
+export async function toggleCueHistory(open?: boolean) {
+  const next = open ?? !cueHistory.open;
+  cueHistory.open = next;
+  if (next) await loadCueHistory();
+}
+
+/** 点历史里的任意一步，直接回到那个状态。 */
+export async function jumpCueHistory(index: number) {
+  try {
+    const data = await api.jumpCueHistory(index);
+    applyCueSnapshot(data);
+    // 历史里可能从「导入字幕」跳回「转写结果」：质检队列的可用性跟着来源变。
+    await refreshQa();
+    scheduleDraftSave();
+    if (play.selected >= app.cues.length) {
+      play.selected = Math.max(0, app.cues.length - 1);
+    }
+    // 时间线里条数可能变了：强制表格滚到当前选中行，别让它停在旧位置
+    play.selectNonce += 1;
+    toast(`已回到：${data.label}`);
+  } catch (err) {
+    toast((err as Error).message, 'error');
+  }
+}
+
+/**
+ * 查找与替换的界面状态。匹配计算放在 ReviewView（它要按原文渲染高亮），
+ * 批量替换放这里（一次整表提交，只压一步历史）。
+ */
+export const findState = $state({
+  open: false,
+  query: '',
+  replacement: '',
+  caseSensitive: false,
+  /** 当前匹配在 matches 数组里的位置 */
+  pos: 0,
+  /** 每按一次 ⌘F 自增：已经打开时也能把焦点拉回查找框 */
+  focusNonce: 0,
+});
+
+export function openFind() {
+  if (app.view !== 'review') setView('review');
+  findState.open = true;
+  findState.focusNonce += 1;
+}
+
+export function closeFind() {
+  findState.open = false;
+  findState.pos = 0;
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 一键替换全部匹配（只作用于原文）。整表提交一次 → 历史里只有一步。
+ * 返回替换了多少处。
+ */
+export async function replaceAllInCues(
+  query: string,
+  replacement: string,
+  caseSensitive: boolean,
+): Promise<number> {
+  if (!query) return 0;
+  const pattern = new RegExp(escapeRegExp(query), caseSensitive ? 'g' : 'gi');
+  let total = 0;
+  const next = app.cues.map((cue) => {
+    const text = cue.text.replace(pattern, () => {
+      total += 1;
+      return replacement;
+    });
+    return { start: cue.start, end: cue.end, text };
+  });
+  if (!total) return 0;
+  try {
+    const data = await api.replaceCues(next, `查找替换（${total} 处）`);
+    applyCueSnapshot(data);
+    scheduleDraftSave();
+    return total;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return 0;
+  }
+}
+
+/**
+ * 只替换某一条里的**当前**匹配。
+ *
+ * `at` 是 ReviewView 算出来的匹配起点；没有它时退回替换该条的第一处。
+ * 一条字幕里出现两次同样的词时，按位置替换才不会总是改第一处。
+ */
+export async function replaceInCue(
+  index: number,
+  query: string,
+  replacement: string,
+  caseSensitive: boolean,
+  at = -1,
+): Promise<boolean> {
+  const cue = app.cues[index];
+  if (!cue || !query) return false;
+  let text: string;
+  if (at >= 0 && at + query.length <= cue.text.length) {
+    const hitText = cue.text.slice(at, at + query.length);
+    if (caseSensitive ? hitText !== query : hitText.toLowerCase() !== query.toLowerCase()) {
+      return false;
+    }
+    text = cue.text.slice(0, at) + replacement + cue.text.slice(at + query.length);
+  } else {
+    const pattern = new RegExp(escapeRegExp(query), caseSensitive ? '' : 'i');
+    if (!pattern.test(cue.text)) return false;
+    // 用函数替换：替换文本里的 $& / $1 不能被当成正则替换模式
+    text = cue.text.replace(pattern, () => replacement);
+  }
+  try {
+    const data = await api.patchCue(index, { text });
+    applyCueSnapshot(data);
+    scheduleDraftSave();
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
+  }
+}
+
+/**
+ * 在时间轴某处插入一条 0.8 秒空字幕，并直接把光标放进右侧文本框。
+ * 用于气声 / 模型识别为空 / 只想手打一个「啊」的场景。
+ */
+export async function insertCueAt(center: number): Promise<number> {
+  if (!app.media) {
+    toast('请先导入媒体', 'warn');
+    return -1;
+  }
+  const duration = app.media.duration || 0;
+  const LENGTH = 0.8;
+  let start = Math.max(0, center - LENGTH / 2);
+  let end = start + LENGTH;
+  if (duration > 0 && end > duration) {
+    end = duration;
+    start = Math.max(0, end - LENGTH);
+  }
+  start = Math.round(start * 1000) / 1000;
+  end = Math.round(end * 1000) / 1000;
+  if (end - start < 0.05) {
+    toast('这里太靠近片尾，放不下 0.8 秒字幕', 'warn');
+    return -1;
+  }
+  let index = app.cues.findIndex((cue) => cue.start > start);
+  if (index < 0) index = app.cues.length;
+  try {
+    const data = await api.insertCue(index, { start, end, text: '' });
+    applyCueSnapshot(data);
+    scheduleDraftSave();
+    // 空字幕一定是日文原文；切回原文模式，并确保右侧检查器可见，
+    // 否则 editNonce 找不到 textarea，用户还得自己再点开一次。
+    app.inspectorOpen = true;
+    setTrackMode('source');
+    play.selected = index;
+    seekTo(start + 0.02);
+    play.selectNonce += 1;
+    play.editNonce += 1;
+    toast('已插入 0.8 秒空字幕，直接输入文本即可');
+    return index;
+  } catch (err) {
+    toast(`插入字幕失败：${(err as Error).message}`, 'error');
+    return -1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 本机 TTS：系统 say（零显存兜底）+ OmniVoice 零样本克隆
+// ---------------------------------------------------------------------------
+
+const clampSpeed = (value: number) =>
+  Number.isFinite(value) ? Math.max(0.5, Math.min(2.0, Math.round(value * 10) / 10)) : 1.0;
+
+/** 旧版本按 say 的 100–260 语速存 ttsRate，这里迁移成倍速。 */
+function initialTtsSpeed(): number {
+  const saved = Number(localStorage.getItem('kikusub.ttsSpeed') || 0);
+  if (saved) return clampSpeed(saved);
+  const legacyRate = Number(localStorage.getItem('kikusub.ttsRate') || 0);
+  if (legacyRate) return clampSpeed(legacyRate / 175);
+  return 1.0;
+}
+
+/** 旧版本存的是 say 音色名，迁移成 `system:<name>`。 */
+function initialTtsVoiceId(): string {
+  const saved = localStorage.getItem('kikusub.ttsVoiceId') || '';
+  if (saved) return saved;
+  const legacy = localStorage.getItem('kikusub.ttsVoice') || '';
+  return legacy ? `system:${legacy}` : '';
+}
+
+/** 默认朗读偏好：系统语音（零显存）或克隆音色。 */
+function initialTtsDefaultKind(): 'system' | 'clone' {
+  return localStorage.getItem('kikusub.ttsDefaultKind') === 'clone' ? 'clone' : 'system';
+}
+
+function initialTtsDefaultVoiceId(): string {
+  return localStorage.getItem('kikusub.ttsDefaultVoiceId') || '';
+}
+
+export const tts = $state({
+  loaded: false,
+  available: false,
+  system: [] as TtsVoiceInfo[],
+  custom: [] as TtsVoiceInfo[],
+  voiceId: initialTtsVoiceId(),
+  speed: initialTtsSpeed(),
+  /** 设置页的默认朗读偏好；空字符串表示跟随当前选中的音色。 */
+  defaultKind: initialTtsDefaultKind(),
+  defaultVoiceId: initialTtsDefaultVoiceId(),
+  /** 克隆音色资产目录（outputs/voices），音色库的「在访达中打开」。 */
+  voicesDir: '',
+  engine: null as TtsEngineInfo | null,
+  download: null as TtsDownloadStatus | null,
+  loading: false,
+  playing: false,
+  /** 正在朗读 / 生成的是哪一条字幕 */
+  index: -1,
+  filename: '',
+  error: '',
+});
+
+let ttsAudio: HTMLAudioElement | null = null;
+/** 防止「点了 A，又点 B」时 A 的慢请求回来把 B 的播放顶掉。 */
+let ttsSeq = 0;
+let ttsPollTimer: ReturnType<typeof setInterval> | null = null;
+
+function ttsAudioEl(): HTMLAudioElement {
+  if (!ttsAudio) {
+    ttsAudio = new Audio();
+    ttsAudio.preload = 'auto';
+    ttsAudio.onended = () => {
+      tts.playing = false;
+    };
+    ttsAudio.onerror = () => {
+      tts.playing = false;
+      tts.error = '音频播放失败';
+    };
+  }
+  return ttsAudio;
+}
+
+export function stopTts() {
+  ttsSeq += 1;
+  if (ttsAudio) {
+    ttsAudio.pause();
+    try {
+      ttsAudio.currentTime = 0;
+    } catch {
+      /* 还没 loadedmetadata 时忽略 */
+    }
+  }
+  tts.playing = false;
+  tts.loading = false;
+}
+
+/** 当前选中的音色（找不到时返回 null，界面据此提示「音色已失效」）。 */
+export function ttsVoice(): TtsVoiceInfo | null {
+  return (
+    tts.custom.find((voice) => voice.id === tts.voiceId) ||
+    tts.system.find((voice) => voice.id === tts.voiceId) ||
+    null
+  );
+}
+
+/** 克隆模型是否真的可用（依赖装了 + 权重下了）。 */
+export function cloneEngineReady(): boolean {
+  return Boolean(tts.engine?.installed && tts.engine?.package_installed);
+}
+
+export async function loadTtsVoices() {
+  if (!app.connected) return;
+  try {
+    const data = await api.ttsVoices();
+    tts.available = data.available;
+    tts.system = data.system;
+    tts.custom = data.custom;
+    tts.engine = data.engine;
+    tts.download = data.engine.download;
+    tts.voicesDir = data.voices_dir || '';
+    const known = [...data.system, ...data.custom].some((voice) => voice.id === tts.voiceId);
+    if (!known) {
+      // 默认偏好是克隆音色时，优先用用户保存的默认音色；没有就取最近一个。
+      // 克隆音色还不存在就老实退回系统语音，不能让 TTS 变成“没有音色”。
+      const preferred =
+        tts.defaultKind === 'clone'
+          ? data.custom.find((voice) => voice.id === tts.defaultVoiceId)?.id ||
+            data.custom[0]?.id ||
+            ''
+          : '';
+      tts.voiceId =
+        preferred || data.default || data.system[0]?.id || data.custom[0]?.id || '';
+    }
+    localStorage.setItem('kikusub.ttsVoiceId', tts.voiceId);
+    tts.loaded = true;
+  } catch {
+    tts.available = false;
+    tts.loaded = true;
+  }
+}
+
+export function setTtsVoiceId(voiceId: string) {
+  tts.voiceId = voiceId;
+  localStorage.setItem('kikusub.ttsVoiceId', voiceId);
+  stopTts();
+}
+
+/**
+ * 设置页切换默认朗读偏好。
+ *
+ * 切换后立刻把当前音色也换过去，否则用户会看到「默认设为克隆音色」但
+ * TTS 面板仍选着 Kyoko，以为设置没生效。没有克隆音色时保留偏好，
+ * 等用户建好音色后下次启动自动生效。
+ */
+export function setTtsDefaultKind(kind: 'system' | 'clone') {
+  tts.defaultKind = kind === 'clone' ? 'clone' : 'system';
+  localStorage.setItem('kikusub.ttsDefaultKind', tts.defaultKind);
+  if (tts.defaultKind === 'clone') {
+    const target =
+      tts.custom.find((voice) => voice.id === tts.defaultVoiceId) || tts.custom[0];
+    if (target) setTtsVoiceId(target.id);
+    else stopTts();
+  } else {
+    const target = tts.system[0];
+    if (target) setTtsVoiceId(target.id);
+  }
+}
+
+/** 把某个克隆音色设为默认（音色库里的「设为默认」）。 */
+export function setTtsDefaultVoiceId(voiceId: string) {
+  if (!voiceId) {
+    tts.defaultVoiceId = '';
+    localStorage.removeItem('kikusub.ttsDefaultVoiceId');
+    return;
+  }
+  const voice = tts.custom.find((item) => item.id === voiceId);
+  if (!voice) return;
+  tts.defaultKind = 'clone';
+  tts.defaultVoiceId = voice.id;
+  localStorage.setItem('kikusub.ttsDefaultKind', 'clone');
+  localStorage.setItem('kikusub.ttsDefaultVoiceId', voice.id);
+  setTtsVoiceId(voice.id);
+}
+
+export function setTtsSpeed(speed: number) {
+  tts.speed = clampSpeed(speed);
+  localStorage.setItem('kikusub.ttsSpeed', String(tts.speed));
+  stopTts();
+}
+
+/** 朗读某一条字幕。再点一次同一条 = 停止。 */
+export async function speakCue(index: number) {
+  const cue = app.cues[index];
+  if (!cue) return;
+  if (tts.playing && tts.index === index) {
+    stopTts();
+    return;
+  }
+  await speakText(cue.text, index);
+}
+
+/** 音色管理里的「试听」：优先读当前句，没有字幕时用固定样例。 */
+export async function previewTtsVoice() {
+  if (tts.playing && tts.index === -1) {
+    stopTts();
+    return;
+  }
+  const selected = app.cues[play.selected];
+  const sample = selected?.text?.trim() || 'こんにちは。これは音色のテストです。';
+  await speakText(sample, -1);
+}
+
+async function speakText(rawText: string, index: number) {
+  const text = (rawText || '').trim();
+  if (!text) {
+    toast('这句没有文本，先输入日文再朗读', 'warn');
+    return;
+  }
+  const voice = ttsVoice();
+  if (!voice) {
+    toast('还没有可用音色，请先选择系统音色或新建克隆音色', 'warn');
+    return;
+  }
+  if (voice.kind === 'clone' && !cloneEngineReady()) {
+    toast('克隆模型还没就绪：先点「下载克隆模型」，或改用系统语音', 'warn');
+    return;
+  }
+  const audio = ttsAudioEl();
+  stopTts();
+  const seq = ++ttsSeq;
+  tts.loading = true;
+  tts.index = index;
+  tts.error = '';
+  try {
+    const result = await api.synthesizeTts({
+      text,
+      voice_id: voice.id,
+      speed: tts.speed,
+    });
+    if (seq !== ttsSeq) return;
+    tts.filename = result.filename;
+    audio.src = ttsAudioUrl(result.filename);
+    await audio.play();
+    if (seq !== ttsSeq) {
+      audio.pause();
+      return;
+    }
+    tts.playing = true;
+  } catch (err) {
+    if (seq === ttsSeq) {
+      tts.error = (err as Error).message;
+      toast(`TTS 失败：${(err as Error).message}`, 'error');
+    }
+  } finally {
+    if (seq === ttsSeq) tts.loading = false;
+  }
+}
+
+/** 下载 OmniVoice 权重（约 3.3GB），期间轮询进度并刷新音色列表。 */
+export async function downloadTtsModel() {
+  try {
+    tts.download = await api.downloadTtsModel();
+  } catch (err) {
+    toast(`启动下载失败：${(err as Error).message}`, 'error');
+    return;
+  }
+  if (ttsPollTimer) clearInterval(ttsPollTimer);
+  ttsPollTimer = setInterval(async () => {
+    try {
+      const status = await api.ttsModelStatus();
+      tts.download = status;
+      if (status.status === 'done' || status.status === 'error') {
+        if (ttsPollTimer) clearInterval(ttsPollTimer);
+        ttsPollTimer = null;
+        if (status.status === 'done') {
+          toast('克隆模型已就绪，可以试听日文效果了', 'info');
+        } else {
+          toast(`模型下载失败：${status.error || '未知错误'}`, 'error');
+        }
+        await loadTtsVoices();
+      }
+    } catch {
+      /* 轮询失败下一轮再试 */
+    }
+  }, 1500);
+}
+
+export async function uploadTtsVoice(name: string, path: string, refText = '') {
+  const voice = await api.uploadTtsVoice({ path, name, ref_text: refText });
+  await loadTtsVoices();
+  setTtsVoiceId(voice.id);
+  toast(`已保存音色「${voice.name}」`, 'info');
+  return voice;
+}
+
+/**
+ * 一次上传多段参考音频：每段独立存成一个音色（OmniVoice 的克隆单位就是
+ * 一段 3–10 秒的参考音频，不能把多段拼成同一个 embedding）。
+ */
+export async function uploadTtsVoices(
+  paths: string[],
+  onProgress?: (done: number, total: number, name: string) => void,
+) {
+  const created: TtsVoiceInfo[] = [];
+  try {
+    for (let i = 0; i < paths.length; i += 1) {
+      const path = paths[i];
+      const name = path.split('/').pop()?.replace(/\.[^.]+$/, '') || '新音色';
+      onProgress?.(i, paths.length, name);
+      created.push(await api.uploadTtsVoice({ path, name }));
+      onProgress?.(i + 1, paths.length, name);
+    }
+  } finally {
+    // 中途失败也要把已经建好的音色刷出来，不能让界面上看不到它们。
+    await loadTtsVoices();
+    if (created.length) setTtsVoiceId(created[created.length - 1].id);
+  }
+  return created;
+}
+
+/** 从某句字幕在视频里的区间切出声线，建立克隆音色。 */
+export async function extractTtsVoiceFromCue(index: number, name: string, refText = '') {
+  const cue = app.cues[index];
+  if (!cue) throw new Error('这句字幕不存在');
+  if (!app.media) throw new Error('还没有导入视频，无法切片');
+  const voice = await api.extractTtsVoice({
+    media_id: app.media.id,
+    start: cue.start,
+    end: cue.end,
+    name,
+    text: (refText || cue.text).trim(),
+  });
+  await loadTtsVoices();
+  setTtsVoiceId(voice.id);
+  toast(`已从这句提取音色「${voice.name}」`, 'info');
+  return voice;
+}
+
+export async function renameTtsVoice(voiceId: string, name: string) {
+  const voice = await api.renameTtsVoice(voiceId, name);
+  await loadTtsVoices();
+  setTtsVoiceId(voice.id);
+  return voice;
+}
+
+export async function updateTtsRefText(voiceId: string, refText: string) {
+  const voice = await api.updateTtsRefText(voiceId, refText);
+  await loadTtsVoices();
+  return voice;
+}
+
+export async function deleteTtsVoice(voiceId: string) {
+  await api.deleteTtsVoice(voiceId);
+  await loadTtsVoices();
+}
+
 /** 调参状态：schema 来自 /api/params，values 按引擎分开存并落 localStorage。 */
 export const tuning = $state({
   schema: null as { key: string; groups: { group: string; params: ParamSpec[] }[]; defaults: Record<string, number | boolean> }[] | null,
@@ -150,6 +766,131 @@ export const settings = $state({
     stage: string;
     status: 'running' | 'done' | 'error';
   },
+});
+
+/** 提示词模板库（AI 优化台与「提示词库」共用）。 */
+export const prompts = $state({
+  items: [] as PromptTemplate[],
+  selected: '',
+  path: '',
+  loading: false,
+  error: '',
+});
+
+/** 烧录样式：字段与 core/video_export.py 的 SubtitleStyle 一一对应。 */
+const DEFAULT_EXPORT_STYLE: SubtitleStylePayload = {
+  preset: 'fansub',
+  font: 'pingfang',
+  weight: 'bold',
+  size: 1,
+  outline: 1,
+  shadow: true,
+  position: 'bottom',
+  margin: 4.5,
+  fill: '#FFFFFF',
+  outline_color: '#000000',
+};
+
+const EXPORT_STYLE_KEY = 'kikusub.exportStyle';
+const EXPORT_PREVIEW_TEXT_KEY = 'kikusub.exportPreviewText';
+
+function readSavedExportStyle(): { style: SubtitleStylePayload; saved: boolean } {
+  if (typeof localStorage === 'undefined') {
+    return { style: { ...DEFAULT_EXPORT_STYLE }, saved: false };
+  }
+  try {
+    const raw = JSON.parse(localStorage.getItem(EXPORT_STYLE_KEY) || 'null');
+    if (raw && typeof raw === 'object') {
+      return { style: { ...DEFAULT_EXPORT_STYLE, ...raw }, saved: true };
+    }
+  } catch {
+    /* 坏数据忽略，回默认 */
+  }
+  return { style: { ...DEFAULT_EXPORT_STYLE }, saved: false };
+}
+
+const initialExportStyle = readSavedExportStyle();
+const initialPreviewText =
+  (typeof localStorage !== 'undefined' && localStorage.getItem(EXPORT_PREVIEW_TEXT_KEY)) || '';
+
+/** 成片导出面板状态。 */
+export const exporter = $state({
+  options: null as null | {
+    modes: { key: string; label: string; hint: string }[];
+    presets: { key: string; label: string; factor: number; crf: number; hint: string }[];
+    resolutions: { key: string; label: string }[];
+  },
+  mode: 'burn' as 'burn' | 'soft' | 'copy',
+  track: 'source' as 'source' | 'target' | 'both',
+  lang: 'zh-Hans',
+  resolution: '1080p' as 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p',
+  preset: 'balanced' as 'small' | 'balanced' | 'high' | 'ultra',
+  outDir: '',
+  exportSrt: true,
+  /** 烧录样式（仅 mode='burn' 生效）。 */
+  style: initialExportStyle.style,
+  styles: null as ExportStyleOptions | null,
+  stylesLoaded: false,
+  styleError: '',
+  previewText: initialPreviewText,
+  /** 预览模式：false=整帧，true=字幕区域特写（看得清字重/描边）。 */
+  previewZoom: false,
+  stylePreviewUrl: '',
+  stylePreviewBusy: false,
+  stylePreviewError: '',
+  plan: null as ExportPlan | null,
+  planLoading: false,
+  planError: '',
+  running: false,
+  progress: 0,
+  speed: '',
+  stage: '',
+  outS: 0,
+  result: null as ExportResult | null,
+  error: '',
+  jobId: '',
+  optionsLoaded: false,
+});
+
+/**
+ * 「导出设置」的本地撤销历史。
+ *
+ * 字幕编辑的历史在服务端 `Session.history`；导出面板的字号 / 描边 / 预设只存在
+ * 本机（`localStorage`），服务端看不见，所以必须另有一份。两者都带时间戳，
+ * 全局 ⌘Z 撤回的是**最近一次**操作，而不是永远先撤字幕（见 nextUndo/nextRedo）。
+ *
+ * 与字幕历史一样是「起始状态 + 每一步操作后的完整快照」：界面要能列出
+ * 「这一步调了什么」并点任意一步跳回去，双栈没有中间态可展示。
+ */
+export type ExportUiState = {
+  mode: 'burn' | 'soft' | 'copy';
+  track: 'source' | 'target' | 'both';
+  lang: string;
+  resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
+  preset: 'small' | 'balanced' | 'high' | 'ultra';
+  exportSrt: boolean;
+  outDir: string;
+  style: SubtitleStylePayload;
+};
+
+export interface ExportUiStep {
+  /** 动作类型；连续拖动同一根滑杆会合并成一步。 */
+  kind: string;
+  label: string;
+  at: number;
+  state: ExportUiState;
+}
+
+/** 与字幕历史保持一致：20 步操作（另加一条起始状态）。 */
+const UI_HISTORY_LIMIT = 20;
+/** 同一根滑杆 / 颜色盘连续输入多久算「一次调整」。 */
+const UI_COALESCE_SECONDS = 1.2;
+
+export const uiHistory = $state({
+  steps: [] as ExportUiStep[],
+  cursor: -1,
+  coalesceKind: '',
+  coalesceAt: 0,
 });
 
 /** 质检队列（浮标面板用）。 */
@@ -219,6 +960,9 @@ export async function boot(port: number, token: string) {
       settings: app.config.settings,
     });
     await loadTuning();
+    void loadPrompts();
+    void loadExportOptions();
+    void loadExportStyles();
     // 设备探测在 sidecar 的后台预热线程里；先让界面出来，再补一次配置
     scheduleDeviceRefresh();
     // 恢复上次外观（main.ts 在挂载前已同步应用过一次，这里只补齐状态）
@@ -264,7 +1008,23 @@ export async function refreshConfig() {
   }
 }
 
+/**
+ * 主进程开始退出（⌘Q / 关窗）。
+ *
+ * 退出时必须杀掉 sidecar，随后到来的 `sidecar:down` 不是“内核崩溃”。没有这个标记，
+ * 界面会弹「正在启动转写内核…」遮罩、清空会话并提示自动重启——退出反而像卡死了。
+ */
+export function markQuitting() {
+  app.quitting = true;
+}
+
 export function markSidecarDown() {
+  if (app.quitting) {
+    // 用户已经要退出了：不显示重启遮罩，不清会话，也不弹“内核已断开”toast。
+    app.connected = false;
+    app.connecting = false;
+    return;
+  }
   const wasConnected = app.connected;
   app.connected = false;
   // 已连上过 → 显示“正在重启”，等下一次 ready；从未连上 → 直接显示“内核未连接”，
@@ -275,8 +1035,18 @@ export function markSidecarDown() {
   const hadSession = Boolean(app.media || app.cues.length);
   app.media = null;
   app.cues = [];
+  app.reviewSource = null;
   app.canUndo = false;
   app.canRedo = false;
+  app.undoLabel = '';
+  app.redoLabel = '';
+  cueHistory.items = [];
+  cueHistory.cursor = -1;
+  cueHistory.open = false;
+  findState.open = false;
+  findState.query = '';
+  findState.replacement = '';
+  stopTts();
   app.report = null;
   app.lastSavedPath = '';
   app.lastExportPath = '';
@@ -284,6 +1054,16 @@ export function markSidecarDown() {
   app.jobMeta = null;
   app.jobKind = '';
   app.qaFillId = '';
+  // 导出任务跟着 sidecar 一起没了：不能让进度条永远停在某个百分比。
+  if (exporter.running) {
+    exporter.error = '内核已重启，导出已中断';
+    exporter.stage = '导出已中断';
+  }
+  exporter.running = false;
+  exporter.jobId = '';
+  exporter.progress = 0;
+  exporter.outS = 0;
+  exporter.speed = '';
   play.time = 0;
   play.playing = false;
   play.selected = 0;
@@ -327,7 +1107,8 @@ export function toggleTheme() {
 export function setView(view: View) {
   app.view = view;
   // 检查器只属于「核对」屏（已确认的设计决定）
-  app.inspectorOpen = view === 'review';
+  // 紧凑模式里检查器是抽屉：切到核对屏不主动盖住画面，由用户点开关打开
+  app.inspectorOpen = view === 'review' && !app.compact;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +1121,19 @@ export function setView(view: View) {
  * 必须在渲染进程里做——会话是 cookie 认的，主进程发的请求是另一个会话。
  * 打包后 `getDevSeed()` 恒为 null，这段不会执行。
  */
-export async function applyDevSeed(seed: { mediaPath: string; cues?: Cue[] }) {
+export async function applyDevSeed(seed: {
+  mediaPath: string;
+  cues?: Cue[];
+  /** 仅开发截图用：导入一版字幕，验证「换字幕后右侧信息跟着换」。 */
+  subtitlePath?: string;
+  /** 仅开发截图用：灌一份假报告，验证旧报告不会配到新字幕上。 */
+  report?: ReportData | null;
+  /** 仅开发截图用：直接灌一份质检 payload，避免为了看面板真跑一次转写。 */
+  qa?: Record<string, any> | null;
+  /** 仅开发截图用：灌了质检 payload 后是否自动打开面板（默认打开）。 */
+  qaOpen?: boolean;
+  reviewSource?: ReviewSource | null;
+}) {
   if (!seed?.mediaPath) return;
   try {
     // 走真实的 openMedia 路径（含代理压制任务），这样截图/联调覆盖的是产品代码本身
@@ -348,6 +1141,17 @@ export async function applyDevSeed(seed: { mediaPath: string; cues?: Cue[] }) {
     if (seed.cues?.length) {
       await api.replaceCues(seed.cues);
       await refreshCues();
+    }
+    if (seed.report) app.report = seed.report;
+    if (seed.subtitlePath) {
+      // 走真实导入链路：服务端会把 review_source 改成 import，并暂停质检队列。
+      await openSubtitle(seed.subtitlePath);
+    } else if (seed.reviewSource) {
+      app.reviewSource = seed.reviewSource;
+    }
+    if (seed.qa) {
+      qa.payload = seed.qa;
+      qa.open = seed.qaOpen !== false;
     }
     setView('review');
   } catch (err) {
@@ -357,10 +1161,98 @@ export async function applyDevSeed(seed: { mediaPath: string; cues?: Cue[] }) {
 
 const SUBTITLE_EXTS = ['.srt', '.vtt'];
 
+// 上次会话：只存路径与小整数，不复制媒体/字幕；重启后按真实链路重新导入。
+const LAST_MEDIA_KEY = 'kikusub.lastMedia';
+const LAST_POSITION_KEY = 'kikusub.lastPosition';
+const LAST_SUBTITLE_KEY = 'kikusub.lastSubtitle';
+
+function rememberLastMedia(path: string) {
+  try {
+    localStorage.setItem(LAST_MEDIA_KEY, path);
+  } catch {
+    /* 隐私模式 / 存储满：不影响本次使用 */
+  }
+}
+
+function rememberLastSubtitle(path: string, mediaPath: string) {
+  try {
+    localStorage.setItem(LAST_SUBTITLE_KEY, JSON.stringify({ path, mediaPath }));
+  } catch {
+    /* 同上 */
+  }
+}
+
+function savedLastSubtitle(): { path: string; mediaPath: string } | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LAST_SUBTITLE_KEY) || 'null');
+    if (raw && typeof raw.path === 'string') {
+      return { path: raw.path, mediaPath: String(raw.mediaPath || '') };
+    }
+  } catch {
+    /* 旧格式 / 手改坏：忽略即可 */
+  }
+  return null;
+}
+
+/** 记住当前播放头（按媒体路径区分；换片后不会把上一部的时间带过来）。 */
+export function rememberPlayhead(time: number) {
+  const media = app.media;
+  if (!media || !Number.isFinite(time)) return;
+  try {
+    localStorage.setItem(
+      LAST_POSITION_KEY,
+      JSON.stringify({ path: media.path, time: Math.max(0, time) }),
+    );
+  } catch {
+    /* 同上 */
+  }
+}
+
+function savedPlayhead(mediaPath: string): number {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LAST_POSITION_KEY) || 'null');
+    if (raw && raw.path === mediaPath && Number.isFinite(Number(raw.time))) {
+      return Number(raw.time);
+    }
+  } catch {
+    /* 忽略损坏的记录 */
+  }
+  return 0;
+}
+
 /** 内核未就绪时双击/拖入的媒体：握手完成后自动补导入，不丢用户的操作。 */
 let pendingMediaPath = '';
 
-export async function openMedia(path: string) {
+/**
+ * 启动时恢复上一次的视频 / 字幕 / 播放头。
+ *
+ * 不把字幕快照塞进 localStorage：重新走 `openMedia` → `restoreDraft` /
+ * `openSubtitle` 的真实链路，服务端的来源、质检解耦与 ⌘Z 才能保持一致。
+ */
+export async function restoreLastSession() {
+  if (!app.connected || app.media) return;
+  let path = '';
+  try {
+    path = localStorage.getItem(LAST_MEDIA_KEY) || '';
+  } catch {
+    return;
+  }
+  if (!path) return;
+  await openMedia(path, { restoreDraft: true });
+  if (!app.media) {
+    // 文件被移动/删除：清掉记录，避免每次启动都弹一次导入失败。
+    try {
+      localStorage.removeItem(LAST_MEDIA_KEY);
+    } catch {
+      /* 忽略 */
+    }
+  }
+}
+
+export async function openMedia(
+  path: string,
+  opts: { restoreDraft?: boolean } = {},
+) {
   if (!app.connected) {
     pendingMediaPath = path;
     toast('正在启动内核，完成后会自动导入这个文件…');
@@ -381,14 +1273,20 @@ export async function openMedia(path: string) {
     const info = await api.importMedia(path);
     app.media = info;
     await api.bindSession(info.id);
+    resetExportPanel();
+    // 换片后旧的导出设置快照已经对不上新片，别让 ⌘Z 把上一部的字号抬回来
+    resetExportUiHistory();
+    exporter.outDir = defaultVideoExportDir();
     app.view = 'review';
-    app.inspectorOpen = true;
+    app.inspectorOpen = !app.compact;
     app.report = null;
     app.lastSavedPath = '';
     app.lastExportPath = '';
     app.job = null;
     app.jobMeta = null;
     app.qaFillId = '';
+    // 新片的新会话还没产生字幕来源；refreshCues 会用服务端快照覆盖。
+    app.reviewSource = null;
     await refreshCues();
     await refreshQa();
     await refreshDraftInfo();
@@ -396,11 +1294,36 @@ export async function openMedia(path: string) {
     play.time = 0;
     play.selected = 0;
     play.focus = null;
+    rememberLastMedia(info.path);
 
     // 历史结果直接接上：有字幕就进核对，没有就停在转写
     if (!app.cues.length) {
       app.view = 'transcribe';
       app.inspectorOpen = false;
+    }
+
+    if (opts.restoreDraft) {
+      // 草稿优先（它包含核对期的编辑）；草稿坏了/不存在再退回上次手动导入的字幕。
+      if (reviewDraft.exists) await restoreDraft();
+      if (!app.cues.length) {
+        const saved = savedLastSubtitle();
+        if (saved && saved.mediaPath === info.path) {
+          await openSubtitle(saved.path, { remember: false, silent: true });
+          if (!app.cues.length) {
+            // 文件被移动/删除：清掉记录，别让每次启动都弹一次导入失败。
+            try {
+              localStorage.removeItem(LAST_SUBTITLE_KEY);
+            } catch {
+              /* 忽略 */
+            }
+          }
+        }
+      }
+      const position = savedPlayhead(info.path);
+      if (position > 0.2 && (!info.duration || position < info.duration - 0.2)) {
+        seekTo(position);
+      }
+      if (app.cues.length) setView('review');
     }
 
     logEvent('info', 'media-import', `${info.name} | ${info.duration.toFixed(2)}s | ${info.video_codec}/${info.audio_codec}`, {
@@ -423,7 +1346,10 @@ export async function openMedia(path: string) {
 }
 
 /** 导入字幕：只换核对基线，不动当前媒体与画面。 */
-export async function openSubtitle(path: string) {
+export async function openSubtitle(
+  path: string,
+  opts: { remember?: boolean; silent?: boolean } = {},
+) {
   // 导入是“换基线”，不是一次编辑：取消还在排队的自动暂存，避免立刻覆盖旧草稿，
   // 让用户仍有机会从「恢复上次暂存」取回导入前的内容。
   clearTimeout(draftTimer);
@@ -432,17 +1358,20 @@ export async function openSubtitle(path: string) {
   try {
     logEvent('info', 'subtitle-import', path);
     const res = await api.importCues(path);
-    app.cues = res.cues;
-    app.canUndo = res.can_undo;
-    app.canRedo = res.can_redo;
+    applyCueSnapshot(res);
     setView('review');
-    app.inspectorOpen = true;
     play.selected = 0;
     play.time = 0;
     play.focus = null;
     // 只读草稿状态，方便用户发现上一次的暂存；不要自动覆盖它。
     await refreshDraftInfo();
-    toast(`已导入字幕 ${res.count} 条（可按 ⌘Z 撤回）`);
+    // 导入会换掉整张表：媒体同名的质检队列已经对不上，刷新成「已暂停」空态，
+    // 状态栏的待核数字也不能再显示上一版的条数。
+    await refreshQa();
+    if (opts.remember !== false) {
+      rememberLastSubtitle(path, app.media?.path || '');
+    }
+    if (!opts.silent) toast(`已导入字幕 ${res.count} 条（可按 ⌘Z 撤回）`);
   } catch (err) {
     toast(`导入字幕失败：${(err as Error).message}`, 'error');
   } finally {
@@ -450,13 +1379,651 @@ export async function openSubtitle(path: string) {
   }
 }
 
-async function startProxyJob(mediaId: string) {
+/** 从设置里的导出文件夹挑一个字幕导入核对台（换基线，不动当前媒体）。 */
+export async function importSubtitleFromExport() {
+  const dir = app.config?.export_dir || app.config?.output_dir || '';
+  if (!dir) {
+    toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
+    return;
+  }
+  const file = await window.kikusub.pickSubtitle(dir);
+  if (file) await openSubtitle(file);
+}
+
+/**
+ * 压制 480p 监看代理。
+ *
+ * 除了导入时自动触发，核对台也提供手动入口：高码率 H.264 在原格式里能播，
+ * 但拖动会卡，自动判定难免遗漏；用户应该能自己决定要不要压。
+ */
+export async function startProxyJob(mediaId?: string, notify = true) {
+  const id = mediaId || app.media?.id || '';
+  if (!id) {
+    if (notify) toast('请先导入媒体', 'warn');
+    return false;
+  }
+  if (app.job && (app.job.status === 'running' || app.job.status === 'queued')) {
+    if (notify) toast('已有任务在运行，等它结束或先打断', 'warn');
+    return false;
+  }
   try {
-    const job = await api.createProxyJob(mediaId);
-    toast('正在后台压制 480p 监看代理…');
+    const job = await api.createProxyJob(id);
+    if (notify) toast('正在后台压制 480p 监看代理…');
     watchJob(job, 'proxy');
+    return true;
+  } catch (err) {
+    if (notify) toast(`压制代理失败：${(err as Error).message}`, 'error');
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 成片导出
+// ---------------------------------------------------------------------------
+
+let exportPlanTimer: number | undefined;
+let exportPlanSeq = 0;
+
+export function defaultVideoExportDir(): string {
+  return app.config?.video_export_dir || app.config?.export_dir || app.config?.output_dir || '';
+}
+
+export async function loadExportOptions(force = false) {
+  if (!app.connected) return;
+  if (exporter.optionsLoaded && !force) return;
+  try {
+    exporter.options = await api.exportOptions();
+    exporter.optionsLoaded = true;
+  } catch (err) {
+    exporter.planError = (err as Error).message;
+  }
+}
+
+/** 样式预设与可用字体（字体是否可用必须由后端探测）。 */
+export async function loadExportStyles(force = false) {
+  if (!app.connected) return;
+  if (exporter.stylesLoaded && !force) return;
+  try {
+    const data = await api.exportStyles();
+    exporter.styles = data;
+    exporter.stylesLoaded = true;
+    exporter.styleError = '';
+    if (!initialExportStyle.saved && data.default) {
+      exporter.style = { ...data.default };
+    }
+    const font = data.fonts.find((item) => item.key === exporter.style.font);
+    if (!font?.available) {
+      const fallback = data.fonts.find((item) => item.available);
+      if (fallback) exporter.style.font = fallback.key;
+    }
+  } catch (err) {
+    exporter.styleError = (err as Error).message;
+  }
+}
+
+export function saveExportStyle() {
+  try {
+    localStorage.setItem(EXPORT_STYLE_KEY, JSON.stringify(exporter.style));
+    localStorage.setItem(EXPORT_PREVIEW_TEXT_KEY, exporter.previewText.slice(0, 120));
   } catch {
-    // 已有任务在跑时 409，属正常：代理不是关键路径
+    /* 存储不可用时只影响记忆，不影响导出 */
+  }
+}
+
+export function applyExportStylePreset(key: string) {
+  const preset = exporter.styles?.presets.find((item) => item.key === key);
+  if (!preset) return;
+  editExportUi(
+    'style.preset',
+    (from, to) => `套用样式「${exportStylePresetLabel(to.style.preset)}」`,
+    () => {
+      exporter.style = { ...preset.style };
+      saveExportStyle();
+      scheduleStylePreview(0);
+    },
+  );
+}
+
+/** 手动微调任意样式字段；不再等同于任何预设。 */
+export function updateExportStyle(patch: Partial<SubtitleStylePayload>) {
+  const keys = Object.keys(patch) as (keyof SubtitleStylePayload)[];
+  editExportUi(
+    keys.length === 1 ? `style.${keys[0]}` : 'style.multi',
+    (from, to) => describeStyleChange(from.style, to.style, keys),
+    () => {
+      exporter.style = { ...exporter.style, ...patch, preset: patch.preset ?? 'custom' };
+      saveExportStyle();
+      scheduleStylePreview();
+    },
+  );
+}
+
+/** 恢复出厂样式（预设优先，缺省回后端给的 default）。 */
+export function resetExportStyle() {
+  const fallback = exporter.styles?.default;
+  const preset = exporter.styles?.presets?.find(
+    (item) => item.key === (fallback?.preset ?? 'fansub'),
+  );
+  if (!preset && !fallback) return;
+  editExportUi(
+    'style.reset',
+    () => '恢复默认样式',
+    () => {
+      exporter.style = { ...(preset ? preset.style : fallback!) };
+      saveExportStyle();
+      scheduleStylePreview(0);
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 导出设置的本地撤销历史
+// ---------------------------------------------------------------------------
+
+function currentExportUiState(): ExportUiState {
+  return {
+    mode: exporter.mode,
+    track: exporter.track,
+    lang: exporter.lang,
+    resolution: exporter.resolution,
+    preset: exporter.preset,
+    exportSrt: exporter.exportSrt,
+    outDir: exporter.outDir,
+    style: { ...exporter.style },
+  };
+}
+
+function exportUiStatesEqual(a: ExportUiState, b: ExportUiState): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** 恢复一份快照。只写状态，不再压历史（撤销/跳转本身不是编辑）。 */
+function applyExportUiState(state: ExportUiState) {
+  exporter.mode = state.mode;
+  exporter.track = state.track;
+  exporter.lang = state.lang;
+  exporter.resolution = state.resolution;
+  exporter.preset = state.preset;
+  exporter.exportSrt = state.exportSrt;
+  exporter.outDir = state.outDir;
+  exporter.style = { ...state.style };
+  uiHistory.coalesceKind = '';
+  uiHistory.coalesceAt = 0;
+  saveExportStyle();
+  scheduleStylePreview(0);
+}
+
+/** 第一次改动前把当时的样子记成「起始状态」，⌘Z 才能退回调整前。 */
+function ensureExportUiBaseline() {
+  if (uiHistory.steps.length) return;
+  uiHistory.steps = [
+    {
+      kind: 'baseline',
+      label: '起始状态',
+      at: Date.now() / 1000,
+      state: currentExportUiState(),
+    },
+  ];
+  uiHistory.cursor = 0;
+}
+
+/**
+ * 执行一次导出设置改动并压入历史。
+ *
+ * `labeler(from, to)` 用改动前后的完整快照生成「这一步做了什么」。同一根滑杆的
+ * 连续 `input` 事件会在 1.2 秒内合并成一步，否则拖一次字号会塞进二三十条历史。
+ */
+function editExportUi(
+  kind: string,
+  labeler: (from: ExportUiState, to: ExportUiState) => string,
+  mutate: () => void,
+) {
+  ensureExportUiBaseline();
+  const before = currentExportUiState();
+  mutate();
+  const after = currentExportUiState();
+  // 没有实际变化（例如重复点同一个预设）不压历史
+  if (exportUiStatesEqual(before, after)) return;
+
+  const now = Date.now() / 1000;
+  // 从历史中间调整：截断后面的分支，与普通编辑器语义一致
+  if (uiHistory.cursor < uiHistory.steps.length - 1) {
+    uiHistory.steps.splice(uiHistory.cursor + 1);
+  }
+  const top = uiHistory.steps[uiHistory.cursor];
+  const merge =
+    uiHistory.cursor > 0 &&
+    top &&
+    top.kind === kind &&
+    uiHistory.coalesceKind === kind &&
+    now - uiHistory.coalesceAt <= UI_COALESCE_SECONDS;
+  if (merge) {
+    // 合并到这次拖动开始前的那一步：说明也按「起点 → 终点」重算
+    const base = uiHistory.steps[uiHistory.cursor - 1].state;
+    uiHistory.steps[uiHistory.cursor] = {
+      kind,
+      label: labeler(base, after),
+      at: now,
+      state: after,
+    };
+  } else {
+    uiHistory.steps.push({ kind, label: labeler(before, after), at: now, state: after });
+    uiHistory.cursor = uiHistory.steps.length - 1;
+  }
+  uiHistory.coalesceKind = kind;
+  uiHistory.coalesceAt = now;
+
+  const overflow = uiHistory.steps.length - (UI_HISTORY_LIMIT + 1);
+  if (overflow > 0) {
+    uiHistory.steps.splice(0, overflow);
+    uiHistory.cursor -= overflow;
+  }
+}
+
+export function canUndoUi(): boolean {
+  return uiHistory.cursor > 0;
+}
+
+export function canRedoUi(): boolean {
+  return uiHistory.cursor >= 0 && uiHistory.cursor < uiHistory.steps.length - 1;
+}
+
+export function uiUndoLabel(): string {
+  return canUndoUi() ? uiHistory.steps[uiHistory.cursor].label : '';
+}
+
+export function uiRedoLabel(): string {
+  return canRedoUi() ? uiHistory.steps[uiHistory.cursor + 1].label : '';
+}
+
+/** 丢掉本地历史：换片时旧快照已经没有意义（样式仍在 localStorage 里）。 */
+export function resetExportUiHistory() {
+  uiHistory.steps = [];
+  uiHistory.cursor = -1;
+  uiHistory.coalesceKind = '';
+  uiHistory.coalesceAt = 0;
+}
+
+function moveExportUiCursor(index: number) {
+  uiHistory.cursor = index;
+  applyExportUiState(uiHistory.steps[index].state);
+}
+
+/** 撤回一步导出设置；没有可撤回的返回 false。 */
+export function undoExportUi(): boolean {
+  if (!canUndoUi()) return false;
+  const label = uiUndoLabel();
+  moveExportUiCursor(uiHistory.cursor - 1);
+  toast(`已撤销：${label}`);
+  return true;
+}
+
+export function redoExportUi(): boolean {
+  if (!canRedoUi()) return false;
+  const label = uiRedoLabel();
+  moveExportUiCursor(uiHistory.cursor + 1);
+  toast(`已重做：${label}`);
+  return true;
+}
+
+/** 点历史里的任意一步，直接回到当时的导出设置。 */
+export function jumpExportUiHistory(index: number) {
+  if (index < 0 || index >= uiHistory.steps.length) return;
+  const step = uiHistory.steps[index];
+  moveExportUiCursor(index);
+  toast(`已回到：${step.label}`);
+}
+
+// ---- 导出交付参数（全部走历史，界面不得直接改 exporter.xxx） ----------------
+
+export function setExportMode(mode: ExportUiState['mode']) {
+  editExportUi(
+    'mode',
+    (from, to) => `导出形式 ${exportModeLabel(from.mode)} → ${exportModeLabel(to.mode)}`,
+    () => {
+      exporter.mode = mode;
+    },
+  );
+}
+
+export function setExportTrack(track: ExportUiState['track']) {
+  editExportUi(
+    'track',
+    (from, to) => `字幕轨 ${exportTrackLabel(from.track)} → ${exportTrackLabel(to.track)}`,
+    () => {
+      exporter.track = track;
+    },
+  );
+}
+
+export function setExportLang(lang: string) {
+  editExportUi(
+    'lang',
+    (from, to) => `译文语种 ${from.lang} → ${to.lang}`,
+    () => {
+      exporter.lang = lang;
+    },
+  );
+}
+
+export function setExportResolution(resolution: ExportUiState['resolution']) {
+  editExportUi(
+    'resolution',
+    (from, to) => `分辨率 ${exportResolutionLabel(from.resolution)} → ${exportResolutionLabel(to.resolution)}`,
+    () => {
+      exporter.resolution = resolution;
+    },
+  );
+}
+
+export function setExportQuality(preset: ExportUiState['preset']) {
+  editExportUi(
+    'quality',
+    (from, to) => `码率档位 ${exportQualityLabel(from.preset)} → ${exportQualityLabel(to.preset)}`,
+    () => {
+      exporter.preset = preset;
+    },
+  );
+}
+
+export function setExportSrt(enabled: boolean) {
+  editExportUi(
+    'exportSrt',
+    (from, to) => `同时导出 SRT ${from.exportSrt ? '开' : '关'} → ${to.exportSrt ? '开' : '关'}`,
+    () => {
+      exporter.exportSrt = enabled;
+    },
+  );
+}
+
+export function setExportOutDir(path: string) {
+  editExportUi(
+    'outDir',
+    (from, to) => `导出位置 ${shortPath(from.outDir)} → ${shortPath(to.outDir)}`,
+    () => {
+      exporter.outDir = path;
+    },
+  );
+}
+
+function shortPath(path: string): string {
+  if (!path) return '—';
+  const parts = path.split('/').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path;
+}
+
+function exportModeLabel(mode: string): string {
+  return ({ burn: '烧录硬字幕', soft: '软字幕 MP4', copy: '仅封装' } as Record<string, string>)[mode] ?? mode;
+}
+
+function exportTrackLabel(track: string): string {
+  return ({ source: '原文', target: '译文', both: '双语' } as Record<string, string>)[track] ?? track;
+}
+
+function exportResolutionLabel(resolution: string): string {
+  return resolution === 'source' ? '原始' : resolution;
+}
+
+function exportQualityLabel(preset: string): string {
+  return (
+    exporter.options?.presets.find((item) => item.key === preset)?.label ??
+    ({ small: '小', balanced: '甜点', high: '高', ultra: '极高' } as Record<string, string>)[preset] ??
+    preset
+  );
+}
+
+function exportStylePresetLabel(preset: string): string {
+  return (
+    exporter.styles?.presets.find((item) => item.key === preset)?.label ?? preset
+  );
+}
+
+function styleFontLabel(font: string): string {
+  return exporter.styles?.fonts.find((item) => item.key === font)?.label ?? font;
+}
+
+function styleWeightLabel(weight: string): string {
+  return (
+    exporter.styles?.weights.find((item) => item.key === weight)?.label ??
+    ({ regular: '常规', medium: '中等', bold: '粗体' } as Record<string, string>)[weight] ??
+    weight
+  );
+}
+
+function stylePositionLabel(position: string): string {
+  return position === 'top' ? '顶部' : '底部';
+}
+
+/** 一次改动可能同时动多个字段（恢复默认 / 套预设），逐个翻成可读文字。 */
+function describeStyleChange(
+  from: SubtitleStylePayload,
+  to: SubtitleStylePayload,
+  keys: (keyof SubtitleStylePayload)[],
+): string {
+  const parts: string[] = [];
+  for (const key of keys) {
+    if (sameStyleValue(from[key], to[key])) continue;
+    switch (key) {
+      case 'font':
+        parts.push(`字体 ${styleFontLabel(from.font)} → ${styleFontLabel(to.font)}`);
+        break;
+      case 'weight':
+        parts.push(`字重 ${styleWeightLabel(from.weight)} → ${styleWeightLabel(to.weight)}`);
+        break;
+      case 'size':
+        parts.push(`字号 ${Math.round(from.size * 100)}% → ${Math.round(to.size * 100)}%`);
+        break;
+      case 'outline':
+        parts.push(`描边 ${Math.round(from.outline * 100)}% → ${Math.round(to.outline * 100)}%`);
+        break;
+      case 'margin':
+        parts.push(`边距 ${from.margin.toFixed(1)}% → ${to.margin.toFixed(1)}%`);
+        break;
+      case 'shadow':
+        parts.push(`阴影 ${from.shadow ? '开' : '关'} → ${to.shadow ? '开' : '关'}`);
+        break;
+      case 'position':
+        parts.push(`位置 ${stylePositionLabel(from.position)} → ${stylePositionLabel(to.position)}`);
+        break;
+      case 'fill':
+        parts.push(`文字色 ${from.fill} → ${to.fill}`);
+        break;
+      case 'outline_color':
+        parts.push(`描边色 ${from.outline_color} → ${to.outline_color}`);
+        break;
+      case 'preset':
+        parts.push('自定义样式');
+        break;
+    }
+  }
+  return parts.length ? parts.join('、') : '调整字幕样式';
+}
+
+function sameStyleValue(a: unknown, b: unknown): boolean {
+  if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 0.0005;
+  return a === b;
+}
+
+let stylePreviewTimer: number | undefined;
+let stylePreviewSeq = 0;
+let stylePreviewAbort: AbortController | null = null;
+
+export function scheduleStylePreview(delay = 260) {
+  clearTimeout(stylePreviewTimer);
+  stylePreviewTimer = window.setTimeout(() => {
+    void refreshStylePreview();
+  }, delay);
+}
+
+export async function refreshStylePreview() {
+  if (!app.connected || exporter.mode !== 'burn') return;
+  const seq = ++stylePreviewSeq;
+  stylePreviewAbort?.abort();
+  const controller = new AbortController();
+  stylePreviewAbort = controller;
+  exporter.stylePreviewBusy = true;
+  exporter.stylePreviewError = '';
+  try {
+    const blob = await api.exportStylePreview(
+      {
+        media_id: app.media?.id || '',
+        text: exporter.previewText,
+        width: 1280,
+        height: 720,
+        zoom: exporter.previewZoom,
+        track: exporter.track,
+        lang: exporter.track === 'source' ? '' : exporter.lang,
+        style: exporter.style,
+      },
+      controller.signal,
+    );
+    if (seq !== stylePreviewSeq) return;
+    const url = URL.createObjectURL(blob);
+    if (exporter.stylePreviewUrl) URL.revokeObjectURL(exporter.stylePreviewUrl);
+    exporter.stylePreviewUrl = url;
+  } catch (err) {
+    if (seq !== stylePreviewSeq) return;
+    if ((err as Error).name === 'AbortError') return;
+    exporter.stylePreviewError = (err as Error).message;
+  } finally {
+    if (seq === stylePreviewSeq) exporter.stylePreviewBusy = false;
+  }
+}
+
+export function setPreviewText(text: string) {
+  exporter.previewText = text.slice(0, 120);
+  saveExportStyle();
+  scheduleStylePreview(320);
+}
+
+export function setPreviewZoom(zoom: boolean) {
+  if (exporter.previewZoom === zoom) return;
+  exporter.previewZoom = zoom;
+  scheduleStylePreview(0);
+}
+
+export function scheduleExportPlan(delay = 220) {
+  clearTimeout(exportPlanTimer);
+  exportPlanTimer = window.setTimeout(() => {
+    void refreshExportPlan();
+  }, delay);
+}
+
+export async function refreshExportPlan() {
+  if (!app.connected || !app.media) return;
+  const seq = ++exportPlanSeq;
+  exporter.planLoading = true;
+  exporter.planError = '';
+  try {
+    const res = await api.exportPlan({
+      media_id: app.media.id,
+      mode: exporter.mode,
+      track: exporter.track,
+      lang: exporter.track === 'source' ? '' : exporter.lang,
+      resolution: exporter.resolution,
+      preset: exporter.preset,
+      export_srt: exporter.exportSrt,
+      out_dir: exporter.outDir,
+      style: exporter.style,
+    });
+    if (seq !== exportPlanSeq) return;
+    exporter.plan = res.plan;
+    if (!exporter.outDir) exporter.outDir = res.out_dir;
+  } catch (err) {
+    if (seq !== exportPlanSeq) return;
+    exporter.plan = null;
+    exporter.planError = (err as Error).message;
+  } finally {
+    if (seq === exportPlanSeq) exporter.planLoading = false;
+  }
+}
+
+export function resetExportPanel(options: { record?: boolean; keepOutDir?: boolean } = {}) {
+  const previousOutDir = exporter.outDir;
+  const restore = () => {
+    clearTimeout(exportPlanTimer);
+    exporter.plan = null;
+    exporter.result = null;
+    exporter.error = '';
+    exporter.progress = 0;
+    exporter.stage = '';
+    exporter.outS = 0;
+    exporter.speed = '';
+    exporter.running = false;
+    exporter.jobId = '';
+    exporter.outDir = options.keepOutDir ? previousOutDir : '';
+    exporter.track = 'source';
+    exporter.mode = 'burn';
+    exporter.resolution = '1080p';
+    exporter.preset = 'balanced';
+    exporter.exportSrt = true;
+    exporter.style = { ...DEFAULT_EXPORT_STYLE };
+    exporter.previewText = '';
+    exporter.previewZoom = false;
+    exporter.stylePreviewError = '';
+    if (exporter.stylePreviewUrl) URL.revokeObjectURL(exporter.stylePreviewUrl);
+    exporter.stylePreviewUrl = '';
+    scheduleStylePreview(0);
+  };
+  if (!options.record) {
+    restore();
+    return;
+  }
+  // 「再导一份」会清掉面板上的全部设置：这本身也该能撤回
+  editExportUi('panel.reset', () => '重置导出设置', restore);
+}
+
+export async function startExport() {
+  if (!app.media) {
+    toast('请先导入媒体', 'warn');
+    return;
+  }
+  if (exporter.running) return;
+  if (!app.cues.length) {
+    toast('当前没有字幕可导出', 'warn');
+    return;
+  }
+  if (exporter.track !== 'source' && !app.translations[exporter.lang]?.texts.length) {
+    toast(`还没有 ${exporter.lang} 译文；先在 AI 优化台生成并应用`, 'warn');
+    return;
+  }
+  exporter.running = true;
+  exporter.error = '';
+  exporter.result = null;
+  exporter.progress = 0;
+  exporter.outS = 0;
+  exporter.speed = '';
+  exporter.stage = '正在创建导出任务…';
+  try {
+    const job = await api.createExport({
+      media_id: app.media.id,
+      mode: exporter.mode,
+      track: exporter.track,
+      lang: exporter.track === 'source' ? '' : exporter.lang,
+      resolution: exporter.resolution,
+      preset: exporter.preset,
+      export_srt: exporter.exportSrt,
+      out_dir: exporter.outDir,
+      style: exporter.style,
+    });
+    exporter.jobId = job.id;
+    watchJob(job, 'export');
+  } catch (err) {
+    exporter.running = false;
+    exporter.error = (err as Error).message;
+    toast(`导出失败：${(err as Error).message}`, 'error');
+  }
+}
+
+export async function cancelExport() {
+  if (!exporter.jobId) return;
+  if (exporter.stage === '正在停止导出…') return;
+  try {
+    await api.cancelJob(exporter.jobId);
+    exporter.stage = '正在停止导出…';
+    toast('已发送取消指令，正在停止 ffmpeg', 'warn');
+  } catch (err) {
+    toast((err as Error).message, 'error');
   }
 }
 
@@ -475,36 +2042,103 @@ export async function refreshMedia() {
 
 export async function refreshCues() {
   try {
-    const data = await api.getCues();
-    app.cues = data.cues;
-    app.canUndo = data.can_undo;
-    app.canRedo = data.can_redo;
+    applyCueSnapshot(await api.getCues());
   } catch {
     /* 会话未绑定媒体时忽略 */
   }
 }
 
+/**
+ * 全局下一步「撤销」：字幕编辑（服务端历史）与导出设置（本地历史）共用 ⌘Z。
+ *
+ * 两个历史各自记录时间戳，取**更近**的那一边；没有可撤回的操作返回空。
+ * 这样用户刚拖完字号就按 ⌘Z 会撤回字号，而不是去撤一句几分钟前改过的字幕。
+ */
+export function nextUndo(): { domain: 'cue' | 'export' | ''; label: string } {
+  const uiReady = canUndoUi();
+  const cueReady = app.canUndo;
+  const uiAt = uiReady ? uiHistory.steps[uiHistory.cursor].at : 0;
+  const cueAt = cueReady ? app.undoAt : 0;
+  if (uiReady && (!cueReady || uiAt >= cueAt)) {
+    return { domain: 'export', label: uiUndoLabel() };
+  }
+  if (cueReady) return { domain: 'cue', label: app.undoLabel || '上一步' };
+  return { domain: '', label: '' };
+}
+
+/** 全局下一步「重做」，与 nextUndo 同一套先后规则。 */
+export function nextRedo(): { domain: 'cue' | 'export' | ''; label: string } {
+  const uiReady = canRedoUi();
+  const cueReady = app.canRedo;
+  const uiAt = uiReady ? uiHistory.steps[uiHistory.cursor + 1].at : 0;
+  const cueAt = cueReady ? app.redoAt : 0;
+  if (uiReady && (!cueReady || uiAt >= cueAt)) {
+    return { domain: 'export', label: uiRedoLabel() };
+  }
+  if (cueReady) return { domain: 'cue', label: app.redoLabel || '下一步' };
+  return { domain: '', label: '' };
+}
+
+/**
+ * 菜单快捷键（main 进程的「编辑 → 撤回」）与渲染层 `App.svelte` 的 ⌘Z 兜底
+ * 可能对同一次按键各触发一次。60ms 内只认第一次，避免一次 ⌘Z 退回两步；
+ * macOS 的按键重复最快约 83ms，正常连按不会被吃掉。
+ */
+let lastUndoInvoke = 0;
+let lastRedoInvoke = 0;
+const UNDO_DEDUPE_SECONDS = 0.06;
+
 export async function undo() {
+  const now = Date.now() / 1000;
+  if (now - lastUndoInvoke < UNDO_DEDUPE_SECONDS) return;
+  lastUndoInvoke = now;
+  const target = nextUndo();
+  if (target.domain === 'export') {
+    undoExportUi();
+    return;
+  }
+  if (target.domain !== 'cue') {
+    toast('没有可撤销的操作', 'warn');
+    return;
+  }
   try {
     const data = await api.undo();
-    app.cues = data.cues;
-    app.canUndo = data.can_undo;
-    app.canRedo = data.can_redo;
+    applyCueSnapshot(data);
+    await refreshQa();
+    if (play.selected >= app.cues.length) {
+      play.selected = Math.max(0, app.cues.length - 1);
+    }
+    play.selectNonce += 1;
     scheduleDraftSave();
-    toast('已撤回');
+    toast(data.undone ? `已撤回：${data.undone}` : '已撤回');
   } catch (err) {
     toast((err as Error).message, 'warn');
   }
 }
 
 export async function redo() {
+  const now = Date.now() / 1000;
+  if (now - lastRedoInvoke < UNDO_DEDUPE_SECONDS) return;
+  lastRedoInvoke = now;
+  const target = nextRedo();
+  if (target.domain === 'export') {
+    redoExportUi();
+    return;
+  }
+  if (target.domain !== 'cue') {
+    toast('没有可重做的操作', 'warn');
+    return;
+  }
   try {
     const data = await api.redo();
-    app.cues = data.cues;
-    app.canUndo = data.can_undo;
-    app.canRedo = data.can_redo;
+    applyCueSnapshot(data);
+    await refreshQa();
+    if (play.selected >= app.cues.length) {
+      play.selected = Math.max(0, app.cues.length - 1);
+    }
+    play.selectNonce += 1;
     scheduleDraftSave();
-    toast('已重做');
+    toast(data.redone ? `已重做：${data.redone}` : '已重做');
   } catch (err) {
     toast((err as Error).message, 'warn');
   }
@@ -512,10 +2146,7 @@ export async function redo() {
 
 export async function updateCue(index: number, patch: Partial<Cue>) {
   try {
-    const data = await api.patchCue(index, patch);
-    app.cues = data.cues;
-    app.canUndo = data.can_undo;
-    app.canRedo = data.can_redo;
+    applyCueSnapshot(await api.patchCue(index, patch));
     scheduleDraftSave();
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -525,10 +2156,7 @@ export async function updateCue(index: number, patch: Partial<Cue>) {
 
 export async function deleteCue(index: number) {
   try {
-    const data = await api.deleteCue(index);
-    app.cues = data.cues;
-    app.canUndo = data.can_undo;
-    app.canRedo = data.can_redo;
+    applyCueSnapshot(await api.deleteCue(index));
     scheduleDraftSave();
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -553,10 +2181,8 @@ export async function applyCueTimes(changes: { index: number; start: number; end
         target.end = ch.end;
       }
     }
-    const data = await api.replaceCues(next);
-    app.cues = data.cues;
-    app.canUndo = data.can_undo;
-    app.canRedo = data.can_redo;
+    const data = await api.replaceCues(next, `调整 ${changes.length} 条字幕时间`);
+    applyCueSnapshot(data);
     scheduleDraftSave();
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -656,16 +2282,14 @@ export async function restoreDraft() {
   reviewDraft.restoring = true;
   try {
     const res = await api.restoreDraft();
-    app.cues = res.cues;
-    app.canUndo = res.can_undo;
-    app.canRedo = res.can_redo;
+    applyCueSnapshot(res);
     setView('review');
-    app.inspectorOpen = true;
     if (play.selected >= app.cues.length) {
       play.selected = Math.max(0, app.cues.length - 1);
     }
     play.focus = null;
     await refreshDraftInfo();
+    await refreshQa();
     toast(`已恢复暂存草稿：${res.count} 条（⌘Z 可撤回）`);
   } catch (err) {
     toast(`恢复暂存失败：${(err as Error).message}`, 'error');
@@ -884,7 +2508,7 @@ export async function cancelJob() {
   }
 }
 
-function watchJob(initial: JobSnapshot, kind: 'transcribe' | 'proxy') {
+function watchJob(initial: JobSnapshot, kind: 'transcribe' | 'proxy' | 'export') {
   app.job = initial;
   app.jobKind = kind;
 
@@ -898,6 +2522,31 @@ function watchJob(initial: JobSnapshot, kind: 'transcribe' | 'proxy') {
           percent: ev.job_percent ?? Math.round((ev.ratio ?? 0) * 100),
           stage: ev.stage || app.job.stage,
         };
+      }
+      if (kind === 'export') {
+        const pct = ev.job_percent ?? ev.percent ?? Math.round((ev.ratio ?? 0) * 100);
+        if (typeof pct === 'number') exporter.progress = Math.max(exporter.progress, pct);
+        if (ev.stage) exporter.stage = ev.stage;
+        if (typeof ev.out_s === 'number') exporter.outS = ev.out_s;
+        if (ev.speed) exporter.speed = String(ev.speed);
+        if (ev.type === 'done') {
+          exporter.running = false;
+          exporter.progress = 100;
+          exporter.result = (ev.job?.result ?? null) as ExportResult | null;
+          exporter.error = '';
+          toast(
+            `成片已导出：${exporter.result?.name ?? ''}${exporter.result?.srt_path ? '（含 SRT）' : ''}`,
+          );
+        }
+        if (ev.type === 'error') {
+          exporter.running = false;
+          exporter.error = ev.message || '导出失败';
+        }
+        if (ev.type === 'cancelled') {
+          exporter.running = false;
+          exporter.error = '';
+          exporter.stage = '已取消';
+        }
       }
       if (ev.type === 'done') {
         await onJobDone(ev.job!, kind);
@@ -927,7 +2576,15 @@ function watchJob(initial: JobSnapshot, kind: 'transcribe' | 'proxy') {
   );
 }
 
-async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy') {
+async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'export') {
+  if (kind === 'export') {
+    exporter.running = false;
+    exporter.progress = 100;
+    exporter.stage = '成片已导出';
+    exporter.result = (job.result ?? null) as ExportResult | null;
+    exporter.error = '';
+    return;
+  }
   if (kind === 'proxy') {
     // 刷新 media.proxy_ready —— 核对屏的 <video src> 由它派生，
     // 一变就会自动切到代理流，用户不用手动重开
@@ -944,12 +2601,21 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy') {
   scheduleDraftSave(0);
 
   if (meta?.scope === 'range') {
-    // 局部转写：停在核对屏原处，把播放头放回选区起点，让用户立刻试听结果
+    // 局部转写：停在核对屏原处，把播放头放到**这次新转出的第一句**上。
+    //
+    // 以前这里调 focusRange(meta.start, meta.end)：一是会把波形猛地放大（用户
+    // 明确不希望「转写选区」改变聚焦状态），二是 meta.start 带了 padding，
+    // 播放头落在新句之前，cueIndex=-1，底部表格与右侧检查器都不会同步。
+    // 现在服务端返回 target_index，直接选中并强制滚动。
     const added = Number(job.result?.added ?? 0);
     const removed = Number(job.result?.removed ?? 0);
     const total = app.cues.length;
-    seekTo(Math.max(0, meta.start), { play: false });
-    focusRange(meta.start, meta.end);
+    const target = Number(job.result?.target_index ?? -1);
+    if (Number.isInteger(target) && target >= 0 && target < app.cues.length) {
+      jumpToCue(target);
+    } else {
+      seekTo(Math.max(0, meta.start), { play: false });
+    }
     // 转写页的区间任务也是一次正式转写：报告要切到这次结果，才能与质检
     // 队列对得上。只有核对台的单句/选区修正才保留旧报告。
     if (meta.apply !== 'replace_range') {
@@ -1148,9 +2814,8 @@ export async function qaAction(cmd: {
     if (res.warning) toast(res.warning, 'warn');
     else if (res.message) toast(res.message);
     if (res.cues_changed) {
-      app.cues = res.cues;
-      app.canUndo = res.can_undo;
-      app.canRedo = res.can_redo;
+      // QA 响应带 cues 但不带 count；补一个，避免在两个快照形状之间做类型断言
+      applyCueSnapshot({ ...res, count: res.cues.length });
       scheduleDraftSave();
     }
     if (res.focus) {
@@ -1247,6 +2912,128 @@ export async function deleteTranslation(lang = app.trackLang) {
     toast(`已删除 ${lang} 译文`);
   } catch (err) {
     toast((err as Error).message, 'error');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 提示词模板
+// ---------------------------------------------------------------------------
+
+let promptsLoaded = false;
+
+function applyPromptLibrary(lib: PromptLibrary) {
+  prompts.items = lib.templates ?? [];
+  prompts.selected = lib.selected || prompts.items[0]?.id || '';
+  prompts.path = lib.path || '';
+  prompts.error = '';
+}
+
+export async function loadPrompts(force = false) {
+  if (!app.connected) return;
+  if (promptsLoaded && !force && prompts.items.length) return;
+  prompts.loading = true;
+  try {
+    applyPromptLibrary(await api.getPrompts());
+    promptsLoaded = true;
+  } catch (err) {
+    prompts.error = (err as Error).message;
+  } finally {
+    prompts.loading = false;
+  }
+}
+
+export function selectedPromptTemplate(): PromptTemplate | null {
+  return prompts.items.find((item) => item.id === prompts.selected) ?? prompts.items[0] ?? null;
+}
+
+export async function selectPromptTemplate(id: string) {
+  if (!id || id === prompts.selected) return;
+  try {
+    applyPromptLibrary(await api.selectPrompt(id));
+    toast(`已切换到「${selectedPromptTemplate()?.name ?? id}」`);
+  } catch (err) {
+    toast((err as Error).message, 'error');
+  }
+}
+
+export async function savePromptTemplate(
+  id: string,
+  patch: { name?: string; description?: string; content?: string },
+) {
+  try {
+    applyPromptLibrary(await api.updatePrompt(id, patch));
+    promptsLoaded = true;
+    toast('提示词模板已保存');
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
+  }
+}
+
+export async function createPromptTemplate(
+  name: string,
+  content: string,
+  description = '',
+) {
+  try {
+    const lib = await api.createPrompt({ name, content, description });
+    applyPromptLibrary(lib);
+    promptsLoaded = true;
+    toast('已新建提示词模板');
+    return lib.created;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return '';
+  }
+}
+
+export async function resetPromptTemplate(id: string) {
+  try {
+    applyPromptLibrary(await api.resetPrompt(id));
+    toast('已恢复内置模板');
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
+  }
+}
+
+export async function deletePromptTemplate(id: string) {
+  try {
+    applyPromptLibrary(await api.deletePrompt(id));
+    toast('模板已删除');
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
+  }
+}
+
+/** 把某个模板 + 当前字幕渲染成完整提示词并复制。 */
+export async function copyPromptTemplate(id?: string) {
+  if (!app.cues.length) {
+    toast('当前没有可翻译的字幕', 'warn');
+    return false;
+  }
+  const templateId = id || prompts.selected;
+  try {
+    // 这是翻译提示词；复制后 AI 优化台应停在「翻译」，粘贴面板才会直接露出来。
+    ai.kind = 'translate';
+    const res = await api.getAiPrompt('translate', ai.lang, templateId);
+    if (window.kikusub?.writeClipboard) {
+      await window.kikusub.writeClipboard(res.prompt);
+    } else if (navigator.clipboard) {
+      await navigator.clipboard.writeText(res.prompt);
+    }
+    toast(
+      `已复制「${res.template_name}」：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`,
+    );
+    ai.pasteOpen = true;
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
   }
 }
 
@@ -1368,9 +3155,7 @@ export async function applyAiProposal() {
     for (const [k, v] of Object.entries(ai.edits)) edits[Number(k)] = v;
 
     const res = await api.applyAiProposal({ kind: ai.kind, lang: ai.lang, accept, edits });
-    app.cues = res.cues;
-    app.canUndo = res.can_undo;
-    app.canRedo = res.can_redo;
+    applyCueSnapshot(res);
 
     if (res.changed) {
       scheduleDraftSave();
@@ -1394,22 +3179,7 @@ export async function applyAiProposal() {
  * 把回复粘回来 → 解析成提案 → 同一套 diff。
  */
 export async function copyAiPrompt() {
-  if (!app.cues.length) {
-    toast('当前没有可翻译的字幕', 'warn');
-    return;
-  }
-  try {
-    const res = await api.getAiPrompt('translate', ai.lang);
-    if (window.kikusub?.writeClipboard) {
-      await window.kikusub.writeClipboard(res.prompt);
-    } else if (navigator.clipboard) {
-      await navigator.clipboard.writeText(res.prompt);
-    }
-    toast(`提示词已复制：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`);
-    ai.pasteOpen = true;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  }
+  await copyPromptTemplate();
 }
 
 /**
@@ -1672,6 +3442,7 @@ export async function updateSettings(patch: {
   enabled_engines?: string[];
   auto_proxy?: boolean;
   export_dir?: string;
+  video_export_dir?: string;
 }) {
   try {
     const data = await api.patchSettings(patch);

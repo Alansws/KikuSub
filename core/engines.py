@@ -64,7 +64,7 @@ ENGINES: tuple[EngineSpec, ...] = (
         key="qwen",
         label="Qwen3-ASR + CTC",
         short_label="Qwen3",
-        description="Qwen3-ASR 日语微调权重 + CTC 对齐头，先识别文本再用逐字发声时间做动态规划断句。",
+        description="Qwen3-ASR 日语微调权重 + CTC 对齐头，先识别文本，再用逐字发声时间对齐断句。",
         languages=("日语",),
         purpose="逐字对齐 · 精准时间轴",
         hf_repo="jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf",
@@ -72,7 +72,7 @@ ENGINES: tuple[EngineSpec, ...] = (
         env_var="QWEN3_ASR_MODEL",
         approx_bytes=int(3.8 * GiB),
         min_ram_gb=16.0,
-        notes="需要 transformers >= 5.13；内存建议 16 GB 以上。只覆盖“可能漏句”检查。",
+        notes="内存建议 16 GB 以上；只覆盖“可能漏句”检查。",
         required_files=("config.json", "ctc_aligner_jav_vocalisation_v3.pt"),
     ),
 )

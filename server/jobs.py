@@ -63,6 +63,38 @@ def merge_replace_range(review_cues, fresh, start_s: float, end_s: float | None)
     return _unique_sorted_cues([*kept, *fresh])
 
 
+def first_cue_in_range(cues, start_s: float, end_s: float | None) -> int | None:
+    """时间轴里第一条与区间真正重叠的字幕（0 基）。
+
+    区间起点带 padding，可能落在新句之前；如果前端只按 ``start_s`` 跳转，
+    ``play.time`` 不在任何 cue 里，表格与检查器就不会同步。
+    """
+    limit = end_s if end_s is not None else float("inf")
+    for index, cue in enumerate(cues):
+        if float(cue.end) > start_s and float(cue.start) < limit:
+            return index
+    return None
+
+
+def target_cue_index(merged, fresh, start_s: float, end_s: float | None) -> int | None:
+    """这次局部转写完成后，核对台应该选中的那一条在合并时间轴里的下标。
+
+    优先认 ``fresh``（这次模型真正转出来的）里的第一条：区间边缘可能留着上一句
+    的尾巴，直接扫 ``merged`` 会选中邻句，而不是用户期待的新句。
+    """
+    fresh_hit = first_cue_in_range(fresh, start_s, end_s)
+    if fresh_hit is not None:
+        wanted = fresh[fresh_hit]
+        for index, cue in enumerate(merged):
+            if (
+                cue.start == wanted.start
+                and cue.end == wanted.end
+                and cue.text == wanted.text
+            ):
+                return index
+    return first_cue_in_range(merged, start_s, end_s)
+
+
 class JobNotFound(KeyError):
     pass
 
@@ -111,7 +143,7 @@ class JobRecord:
 
 
 class JobManager:
-    def __init__(self, output_dir: Path | None = None, runner=None) -> None:
+    def __init__(self, output_dir: Path | None = None, runner=None, on_heavy_job=None) -> None:
         self._lock = threading.RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._registry = JobRegistry()
@@ -119,6 +151,9 @@ class JobManager:
         # 可注入的编排入口：默认走 core.pipeline（**延迟导入**——它会把 torch 拉进来，
         # 而服务层启动时不该付这 7 秒），测试里换成替身。
         self._runner = runner
+        # 重任务开跑前让路：TTS 的克隆模型和 ASR 抢同一块统一内存，转写/导出前
+        # 必须先卸载。这里用回调而不是直接 import core.tts，避免服务层耦合。
+        self._on_heavy_job = on_heavy_job
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -162,6 +197,106 @@ class JobManager:
         job = self._launch("download", engine_key, session_id, loop)
         self._spawn(self._run_download, job, engine_key)
         return job
+
+    # -- 成片导出 ------------------------------------------------------------
+
+    def start_export(
+        self,
+        *,
+        media_path: Path,
+        info,
+        options,
+        cues,
+        translation_texts: list[str] | None,
+        out_dir: Path,
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """导出带字幕的成片。与转写共用单槽：编码会吃满 CPU/GPU。"""
+        job = self._launch("export", Path(media_path).name, session_id, loop)
+        self._spawn(
+            self._run_export,
+            job,
+            Path(media_path),
+            info,
+            options,
+            list(cues),
+            list(translation_texts or []),
+            Path(out_dir),
+        )
+        return job
+
+    def _run_export(
+        self,
+        job: JobRecord,
+        media_path: Path,
+        info,
+        options,
+        cues,
+        translation_texts: list[str],
+        out_dir: Path,
+    ) -> None:
+        from core import video_export
+
+        job.status = "running"
+        job.started_at = time.time()
+        self._emit(job, {"type": "start", "job": job.snapshot()})
+        try:
+            def on_progress(ratio: float, stage: str, extra: dict) -> None:
+                ratio = max(job.ratio, max(0.0, min(1.0, float(ratio))))
+                job.ratio = ratio
+                job.percent = int(ratio * 100)
+                job.stage = str(stage or job.stage)
+                payload = {
+                    "type": "progress",
+                    "ratio": round(ratio, 4),
+                    "percent": job.percent,
+                    "stage": job.stage,
+                    "job_percent": job.percent,
+                }
+                if extra.get("out_s") is not None:
+                    payload["out_s"] = round(float(extra["out_s"]), 2)
+                if extra.get("speed"):
+                    payload["speed"] = str(extra["speed"])
+                self._emit(job, payload)
+
+            result = video_export.run_export(
+                media_path,
+                cues,
+                info,
+                options,
+                out_dir,
+                translation_texts=translation_texts,
+                on_progress=on_progress,
+                cancel_event=job.token,
+            )
+            job.status = "done"
+            job.ratio = 1.0
+            job.percent = 100
+            job.stage = "成片已导出"
+            job.result = result
+            job.finished_at = time.time()
+            self._emit(job, {"type": "done", "job": job.snapshot()})
+            log.info(
+                "成片导出完成 | job=%s | %s | %.1f MB | %.1fs",
+                job.id,
+                result.get("name"),
+                float(result.get("size") or 0) / 1024**2,
+                float(result.get("elapsed") or 0),
+            )
+        except CommandCancelled:
+            job.status = "cancelled"
+            job.error = "任务已取消"
+            job.finished_at = time.time()
+            self._emit(job, {"type": "cancelled", "message": job.error, "job": job.snapshot()})
+        except Exception as exc:  # noqa: BLE001
+            job.status = "error"
+            job.error = str(exc) or exc.__class__.__name__
+            job.finished_at = time.time()
+            log.warning("成片导出失败 | job=%s | %s", job.id, job.error)
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+        finally:
+            self._registry.finish(job.token)
 
     # -- AI 生成（润色 / 翻译）----------------------------------------------
 
@@ -415,6 +550,12 @@ class JobManager:
         session_id: str,
         loop: asyncio.AbstractEventLoop | None,
     ) -> JobRecord:
+        # 先释放 TTS 再占单槽：即使后面 JobBusy 失败，提前卸载也不会有副作用。
+        if self._on_heavy_job is not None and kind in {"transcribe", "proxy", "export"}:
+            try:
+                self._on_heavy_job(f"{kind} 启动")
+            except Exception:  # noqa: BLE001 —— 释放失败不能挡住真正的任务
+                log.warning("释放 TTS 模型失败", exc_info=True)
         try:
             token = self._registry.start(session_id or "api", label=label)
         except JobBusy as exc:
@@ -503,7 +644,7 @@ class JobManager:
             # 会话是服务端唯一真源：任务跑完必须把字幕写回去，否则前端
             # `/api/cues` 永远是空的（表现为「转写完成但核对台没有字幕」）。
             if session is not None:
-                job.result.update(self._apply_cues(session, request, result.cues, apply))
+                job.result.update(self._apply_cues(session, request, result.cues, apply, job))
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info(
@@ -532,7 +673,7 @@ class JobManager:
             # 槽位由真正停止工作的 worker 释放（与旧实现同一套语义）
             self._registry.finish(job.token)
 
-    def _apply_cues(self, session, request, cues, apply: str) -> dict:
+    def _apply_cues(self, session, request, cues, apply: str, job=None) -> dict:
         """把一次转写的结果合并进会话。返回给前端的状态摘要。
 
         三种语义（对应转写页的「结果处理」与核对台的局部重转）：
@@ -541,6 +682,9 @@ class JobManager:
         - `append`：与现有时间轴合并去重，用于「局部转写后添加」；
         - `replace_range`：只替换该区间内的旧字幕，其余原样保留——单句/选区重转
           走这条，用户不会因为重转一句而丢掉整张表。
+
+        `review_source` 只在整片/追加这类「产生新一版转写」时改写；单句/选区
+        修正保留原来的来源，右侧报告才能继续对应整片那次任务。
         """
         from core.cues import _unique_sorted_cues
 
@@ -556,14 +700,40 @@ class JobManager:
                 merged = merge_replace_range(session.review_cues, fresh, start_s, end_s)
             else:
                 merged = fresh
-            session.replace_review(merged)
+            if apply == "replace_range" and start_s is not None:
+                limit = end_s if end_s is not None else float("inf")
+                label = f"局部转写 {start_s:.1f}s–{limit:.1f}s" if end_s is not None else f"局部转写 {start_s:.1f}s 起"
+            elif apply == "append":
+                label = f"追加转写（{len(fresh)} 条）"
+            else:
+                label = f"整片转写（{len(merged)} 条）"
+            source = None
+            if apply != "replace_range" and job is not None:
+                job_result = getattr(job, "result", None) or {}
+                source = {
+                    "kind": "transcription",
+                    "name": Path(str(job_result.get("out_filename") or "")).name,
+                    "path": str(job_result.get("out_path") or ""),
+                    "job_id": job.id,
+                    "at": time.time(),
+                    "apply": apply,
+                }
+            session.replace_review(merged, label=label, source=source)
             session.updated_at = time.time()
+            # 前端据此把底部表格 / 右侧检查器直接定位到**这次新转出的第一句**。
+            # 只给时间区间不够：padding 会让区间起点落在新句之前，play.time 不在
+            # 任何 cue 里，cueIndex 为 -1，界面就不会同步（用户报过这个 bug）。
+            target_index = None
+            if apply == "replace_range" and start_s is not None:
+                target_index = target_cue_index(merged, fresh, start_s, end_s)
             return {
                 "applied": apply,
                 "cue_count": len(merged),
                 "added": max(0, len(merged) - before),
                 # 被本区间替换掉的旧条数：前端据此区分「新增」与「更新」
                 "removed": max(0, before + len(fresh) - len(merged)),
+                # 这次应在核对台选中的第一条新字幕（0 基）；无结果时 None
+                "target_index": target_index,
             }
 
     def _progress(self, job: JobRecord, ratio: float, stage: str) -> None:
@@ -585,6 +755,25 @@ class JobManager:
         job.status = "cancelling"
         self._emit(job, {"type": "cancelling", "message": "已发送取消指令"})
         return True
+
+    def cancel_all(self, reason: str = "应用正在退出") -> int:
+        """退出/父进程消失时向所有在跑的任务发取消信号。
+
+        真正的进程终止由 ``core.procutil.terminate_all_processes()`` 完成：
+        这里只把令牌置位，让 worker 线程走了 ``terminate`` 分支，把
+        ``.part.mp4`` 清掉，不留下半成品。
+        """
+        count = 0
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in jobs:
+            if job.token is None or job.finished_at:
+                continue
+            job.token.cancel()
+            job.status = "cancelling"
+            count += 1
+            self._emit(job, {"type": "cancelling", "message": reason})
+        return count
 
     # -- 查询 / 订阅 --------------------------------------------------------
 

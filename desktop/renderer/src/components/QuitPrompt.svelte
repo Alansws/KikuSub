@@ -133,7 +133,7 @@
     flex-direction: column;
     background: var(--bg-content);
     border: 1px solid var(--separator);
-    border-radius: 13px;
+    border-radius: 12px;
     box-shadow: var(--shadow-pop);
     padding: 18px 20px 16px;
   }
@@ -157,13 +157,13 @@
   }
   .total {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
   .desc {
     margin: 10px 0 12px;
-    font-size: 11.5px;
+    font-size: 12px;
     line-height: 1.55;
     color: var(--text-2);
   }
@@ -180,7 +180,7 @@
   }
   .count {
     margin-left: auto;
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
@@ -195,7 +195,7 @@
     top: 0;
     background: var(--bg-content);
     padding: 8px 2px 4px;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-3);
     letter-spacing: 0.02em;
@@ -206,8 +206,8 @@
     align-items: center;
     gap: 9px;
     padding: 5px 6px;
-    border-radius: 6px;
-    font-size: 11.5px;
+    border-radius: 4px;
+    font-size: 12px;
     color: var(--text);
   }
   .item:hover {
@@ -225,12 +225,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 10.5px;
+    font-size: 12px;
     user-select: text;
   }
   .size {
     flex: 0 0 auto;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
@@ -255,7 +255,7 @@
   }
   .tiny {
     height: 20px;
-    font-size: 10.5px;
+    font-size: 12px;
     padding: 0 7px;
   }
 </style>

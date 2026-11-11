@@ -124,6 +124,28 @@ def srt_to_cues(srt_text: str) -> list[SubtitleCue]:
     return cues
 
 
+def split_multiline_cues(cues: list[SubtitleCue]) -> tuple[list[SubtitleCue], int]:
+    """把「一条 cue 多行」拆成「每个非空行一条」，时间轴完全相同。
+
+    用于导入**旧版双语交付文件**：旧导出把原文/译文塞进同一条 cue（两行），
+    ``srt_to_cues()`` 读回来是一段带 ``\\n`` 的文本，核对台会把它挤成一行。
+    拆开后每条都是单行，与官方双语 SRT（同时间轴日/中两条）的表现一致。
+
+    返回 ``(cues, 被拆分的条数)``；单行 cue 原样保留（含首尾空白的清理）。
+    """
+    out: list[SubtitleCue] = []
+    exploded = 0
+    for cue in cues:
+        lines = [line.strip() for line in str(cue.text or "").splitlines()]
+        lines = [line for line in lines if line]
+        if len(lines) <= 1:
+            out.append(SubtitleCue(cue.start, cue.end, lines[0] if lines else ""))
+            continue
+        exploded += 1
+        out.extend(SubtitleCue(cue.start, cue.end, line) for line in lines)
+    return out, exploded
+
+
 def format_srt_timestamp(seconds: float) -> str:
     """秒 → SRT 时间戳。
 

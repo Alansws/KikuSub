@@ -1,6 +1,6 @@
 """应用级设置（JSON 落盘，原子写）。
 
-只放「跨会话需要记住、且后端要知道」的偏好；纯界面状态（主题、波形高度）
+只放「跨会话需要记住、且后端要知道」的偏好；纯界面状态（主题、波形高度、TTS 默认偏好）
 留在渲染进程的 localStorage。这样服务层不用关心 UI 细节。
 
 当前字段：
@@ -10,6 +10,8 @@
 - `export_dir`：字幕默认导出目录。空字符串表示沿用 `OUTPUT_DIR`
   （打包后是 `~/Library/Application Support/KikuSub/outputs`），保证老用户升级后
   还能在原来的地方找到已经转写的字幕。
+- `video_export_dir`：成片导出目录。空字符串表示跟随 `export_dir`；成片通常很大，
+  所以允许单独放到另一块磁盘。
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ DEFAULTS: dict = {
     "enabled_engines": list(engines.DEFAULT_ENABLED),
     "auto_proxy": True,
     "export_dir": "",
+    "video_export_dir": "",
     # ---- AI（实验功能）----
     # 密钥**不在这里**：它由桌面端 `desktop/main/aikey.cjs` 用本机主密钥做 AES-256-GCM
     # 加密后存在 `preferences.json` 的 `aik1:` 密文里（主密钥 `{dataDir}/.ai-key`，0600），
@@ -61,6 +64,9 @@ def _normalize(raw: dict | None) -> dict:
     export = raw.get("export_dir")
     if isinstance(export, str):
         data["export_dir"] = export.strip()
+    video_export = raw.get("video_export_dir")
+    if isinstance(video_export, str):
+        data["video_export_dir"] = video_export.strip()
 
     if isinstance(raw.get("ai_enabled"), bool):
         data["ai_enabled"] = raw["ai_enabled"]
@@ -100,6 +106,20 @@ def resolve_export_dir(data: dict | None = None, fallback: Path | None = None) -
     return Path(fallback or OUTPUT_DIR).expanduser().resolve()
 
 
+def resolve_video_export_dir(data: dict | None = None, fallback: Path | None = None) -> Path:
+    """成片目录：优先 `video_export_dir`，空值回退到 `export_dir`，再回退到输出目录。"""
+    current = data or {}
+    raw = str(current.get("video_export_dir") or "").strip()
+    if raw:
+        try:
+            candidate = Path(raw).expanduser()
+            if candidate.is_absolute():
+                return candidate.resolve()
+        except OSError:
+            pass
+    return resolve_export_dir(current, fallback)
+
+
 def load_settings(path: Path | None = None) -> dict:
     target = Path(path or SETTINGS_PATH)
     if not target.exists():
@@ -123,6 +143,8 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         merged["auto_proxy"] = bool(patch.get("auto_proxy"))
     if "export_dir" in patch:
         merged["export_dir"] = patch.get("export_dir") or ""
+    if "video_export_dir" in patch:
+        merged["video_export_dir"] = patch.get("video_export_dir") or ""
     for key in ("ai_enabled", "ai_base_url", "ai_model",
                 "ai_max_chunk_cues", "ai_translate_chunk_cues", "ai_context_cues"):
         if key in patch:
@@ -134,10 +156,11 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         log.exception("设置文件写入失败 | %s", target)
         raise
     log.info(
-        "设置已更新 | enabled_engines=%s | auto_proxy=%s | export_dir=%s | path=%s",
+        "设置已更新 | enabled_engines=%s | auto_proxy=%s | export_dir=%s | video_export_dir=%s | path=%s",
         ",".join(normalized["enabled_engines"]) or "(无)",
         normalized["auto_proxy"],
         normalized["export_dir"] or "(默认输出目录)",
+        normalized["video_export_dir"] or "(跟随字幕导出目录)",
         target,
     )
     return normalized

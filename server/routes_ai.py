@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from core import ai_client
 from core import ai_proposal as proposals
 from core import ai_translate
+from core import prompts as prompt_store
 from core import settings as settings_store
 from core.subtitles import cues_to_srt
 from core.textio import write_text_atomic
@@ -286,11 +287,13 @@ def get_manual_prompt(
     request: Request,
     kind: str = "translate",
     lang: str = "zh-Hans",
+    template_id: str = "",
     session: Session = Depends(get_session),
 ) -> dict:
-    """「一键复制提示词」：把当前字幕整成 SRT 塞进模板，供用户粘到任意聊天窗。
+    """「一键复制提示词」：把当前字幕整成 SRT 塞进所选模板，供用户粘到任意聊天窗。
 
-    M3 只对翻译开放；润色的提示词与解析见后续里程碑。
+    模板来自 ``prompts.json``（设置页可编辑、AI 优化台可切换）；没有选择时用
+    当前选中的模板。M3 只对翻译开放；润色的提示词与解析见后续里程碑。
     """
     kind, lang = _normalize(kind, lang)
     if kind != "translate":
@@ -299,8 +302,23 @@ def get_manual_prompt(
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕")
     srt = cues_to_srt(cues)
-    prompt = ai_translate.build_manual_prompt(srt, lang)
-    return {"prompt": prompt, "count": len(cues), "lang": lang, "chars": len(prompt)}
+    settings_path = _settings_path(request)
+    prompt, template = prompt_store.render_prompt(
+        srt,
+        ai_translate.lang_name(lang),
+        template_id=template_id or None,
+        settings_path=settings_path,
+    )
+    if template is None:
+        raise HTTPException(status_code=500, detail="提示词库为空")
+    return {
+        "prompt": prompt,
+        "count": len(cues),
+        "lang": lang,
+        "chars": len(prompt),
+        "template_id": template["id"],
+        "template_name": template["name"],
+    }
 
 
 @router.post("/api/ai/from-srt")
@@ -486,6 +504,6 @@ def apply_proposal(
 
     # 空应用 / 无实际改动：不压历史，让 can_undo 保持原样（文档 §4.2.2 第 5 步）
     if changed:
-        session.replace_review(new_cues)
+        session.replace_review(new_cues, label=f"应用 AI 提案（{changed} 处）")
 
     return {**_snapshot(session), "changed": changed, "warnings": check.warnings}

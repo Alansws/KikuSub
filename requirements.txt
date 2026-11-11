@@ -12,3 +12,10 @@ safetensors>=0.4.0
 # uvicorn 服务 WebSocket 需要实现；缺了它 /ws/jobs 会直接连不上
 # （FastAPI 的 TestClient 走 ASGI 直连，测不出这个缺失）
 websockets>=12
+
+# 成片导出把字幕渲染成透明 PNG 精灵（不依赖 ffmpeg 的 libass/freetype）
+Pillow>=10
+
+# 本地零样本克隆 TTS（Apache-2.0，日语 + Apple Silicon MPS）。
+# 权重不随包分发：首次在界面点「下载克隆模型」下到 models/omnivoice（约 3.3GB）。
+omnivoice>=0.2.1,<0.3

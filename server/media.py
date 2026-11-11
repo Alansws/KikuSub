@@ -28,6 +28,9 @@ MEDIA_SUFFIXES = {
 # Chromium 能直接解的视频容器；其余走代理（阶段 4 接上自动压制）。
 WEB_SAFE_SUFFIXES = {".mp4", ".m4v", ".webm"}
 WEB_SAFE_CODECS = {"h264", "vp8", "vp9", "av1"}
+# 高于这个码率即使容器/编码都能播，拖动也会很卡（典型蓝光 H.264 原盘）。
+# 它不是「能不能播」的判断，而是「要不要建议压一份监看代理」的阈值；界面仍可手动压制。
+HIGH_BITRATE_BPS = 25_000_000
 
 FFPROBE_TIMEOUT_S = 30.0
 
@@ -45,6 +48,9 @@ class MediaInfo:
     duration: float = 0.0
     video_codec: str = ""
     audio_codec: str = ""
+    video_width: int = 0
+    video_height: int = 0
+    video_bitrate: int = 0
     has_video: bool = False
     # 是否已经存在压好的 480p 监看代理。由 MediaStore 在探测时刷新。
     proxy_ready: bool = False
@@ -54,13 +60,22 @@ class MediaInfo:
         return self.path.suffix.lower()
 
     @property
-    def needs_proxy(self) -> bool:
-        """Chromium 大概率解不出来的情况，前端据此提示「正在压制代理」。"""
+    def proxy_reason(self) -> str:
+        """为什么建议代理：container / codec / bitrate；空串表示能直接播。"""
         if not self.has_video:
-            return False
+            return ""
         if self.suffix not in WEB_SAFE_SUFFIXES:
-            return True
-        return bool(self.video_codec) and self.video_codec not in WEB_SAFE_CODECS
+            return "container"
+        if self.video_codec and self.video_codec not in WEB_SAFE_CODECS:
+            return "codec"
+        if self.video_bitrate >= HIGH_BITRATE_BPS:
+            return "bitrate"
+        return ""
+
+    @property
+    def needs_proxy(self) -> bool:
+        """Chromium 直接播可能黑屏或拖动卡顿；前端据此提示/自动压制代理。"""
+        return bool(self.proxy_reason)
 
     def to_dict(self) -> dict:
         return {
@@ -71,8 +86,12 @@ class MediaInfo:
             "duration": self.duration,
             "video_codec": self.video_codec,
             "audio_codec": self.audio_codec,
+            "video_width": self.video_width,
+            "video_height": self.video_height,
+            "video_bitrate": self.video_bitrate,
             "has_video": self.has_video,
             "needs_proxy": self.needs_proxy,
+            "proxy_reason": self.proxy_reason,
             "proxy_ready": self.proxy_ready,
         }
 
@@ -88,7 +107,7 @@ def _ffprobe_json(path: Path) -> dict:
         proc = run_command(
             [
                 "ffprobe", "-v", "error",
-                "-show_entries", "format=duration:stream=codec_type,codec_name",
+                "-show_entries", "format=duration,bit_rate:stream=codec_type,codec_name,width,height,bit_rate",
                 "-of", "json", str(path),
             ],
             timeout=FFPROBE_TIMEOUT_S,
@@ -167,11 +186,25 @@ class MediaStore:
         for stream in data.get("streams") or []:
             kind = stream.get("codec_type")
             codec = str(stream.get("codec_name") or "")
-            if kind == "video" and not info.video_codec:
+            if kind == "video" and not info.has_video:
                 info.video_codec = codec
                 info.has_video = True
+                try:
+                    info.video_width = int(stream.get("width") or 0)
+                    info.video_height = int(stream.get("height") or 0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    info.video_bitrate = int(stream.get("bit_rate") or 0)
+                except (TypeError, ValueError):
+                    info.video_bitrate = 0
             elif kind == "audio" and not info.audio_codec:
                 info.audio_codec = codec
+        if info.video_bitrate <= 0:
+            try:
+                info.video_bitrate = int(fmt.get("bit_rate") or 0)
+            except (TypeError, ValueError):
+                info.video_bitrate = 0
 
     # -- 查询 ---------------------------------------------------------------
 

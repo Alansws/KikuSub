@@ -16,8 +16,11 @@ from dataclasses import dataclass, field
 
 from core.subtitles import SubtitleCue
 
-# 撤销栈上限：100 步足够覆盖一次核对里的连续操作，再大只是占内存。
-UNDO_LIMIT = 100
+# 可回溯历史：最多保留 20 步**操作**（另加一条「起始状态」）。
+# 用户明确要求历史列表能看 20 步；撤销/重做、点击任意一步跳转都共用这份时间线。
+HISTORY_LIMIT = 20
+# 兼容旧名字：曾经叫 UNDO_LIMIT，语义相同。
+UNDO_LIMIT = HISTORY_LIMIT
 # 会话空闲多久回收（秒）。桌面端通常只有一个会话，这里防的是频繁开关窗口。
 SESSION_TTL_S = 12 * 3600
 
@@ -75,6 +78,23 @@ class TranslationTrack:
 
 
 @dataclass
+class HistoryState:
+    """时间线上的一个状态：字幕快照 + 来源 + 产生它的操作说明。
+
+    标签挂在「操作产生后的状态」上：撤回时返回的就是这个标签，历史列表里
+    用户看到的是「这一步做了什么」。``at`` 用于界面显示时间。
+
+    ``source`` 必须和字幕一起回滚：导入一份别的字幕后再 ⌘Z，右侧检查器要
+    恢复成「这次转写」，而不是继续把当前表当导入文件。
+    """
+
+    cues: list[SubtitleCue]
+    label: str
+    at: float = field(default_factory=time.time)
+    source: dict = field(default_factory=dict)
+
+
+@dataclass
 class Session:
     id: str
     media_id: str | None = None
@@ -82,8 +102,15 @@ class Session:
     latest_cues: list[SubtitleCue] = field(default_factory=list)
     # 核对基线（可编辑，所有 cue 增删改都作用在它上面）
     review_cues: list[SubtitleCue] = field(default_factory=list)
-    undo_stack: list[list[SubtitleCue]] = field(default_factory=list)
-    redo_stack: list[list[SubtitleCue]] = field(default_factory=list)
+    # 当前核对表的来源：{kind, name, path, job_id, at}。
+    # 右侧检查器的「质检速览 / 生效参数 / 输出」必须据此判断能不能引用
+    # 最近一次转写的报告；导入了一版别的字幕时，绝不能继续展示上一次的质检数字。
+    review_source: dict = field(default_factory=dict)
+    # 可回溯时间线：history[0] 是「起始状态」，之后每一步是一次操作后的完整快照。
+    # 不用双栈，是因为界面要列「每一步是什么」并且允许点任意一步跳过去；
+    # 双栈只保留了「上一步」，没有可回溯的中间态可展示。
+    history: list[HistoryState] = field(default_factory=list)
+    history_cursor: int = -1
     updated_at: float = field(default_factory=time.time)
     # 转写任务在 worker 线程里回写结果，请求线程同时在读；一把会话锁避免
     # 「列表一半是旧结果一半是新结果」这种撕裂。
@@ -95,59 +122,211 @@ class Session:
 
     # -- 历史 ---------------------------------------------------------------
 
-    def _push_history(self) -> None:
-        self.undo_stack.append(_copy(self.review_cues))
-        if len(self.undo_stack) > UNDO_LIMIT:
-            self.undo_stack.pop(0)
-        self.redo_stack.clear()
-        self.updated_at = time.time()
+    def _ensure_baseline(self) -> None:
+        """第一次编辑前把当前内容记为「起始状态」。
 
-    def undo(self) -> bool:
-        if not self.undo_stack:
-            return False
-        self.redo_stack.append(_copy(self.review_cues))
-        self.review_cues = self.undo_stack.pop()
-        self.updated_at = time.time()
-        return True
+        不能在建会话时立刻记：那时还没有导入任何字幕，空基线没有意义；
+        等到第一次真正要改的时候记，才能保证 ⌘Z 能退回导入前的样子。
+        """
+        if not self.history:
+            self.history = [
+                HistoryState(
+                    _copy(self.review_cues),
+                    "起始状态",
+                    source=dict(self.review_source),
+                )
+            ]
+            self.history_cursor = 0
 
-    def redo(self) -> bool:
-        if not self.redo_stack:
-            return False
-        self.undo_stack.append(_copy(self.review_cues))
-        self.review_cues = self.redo_stack.pop()
-        self.updated_at = time.time()
-        return True
+    def _record(self, label: str) -> None:
+        with self.lock:
+            self._ensure_baseline()
+            # 从历史中间编辑：截断后面的分支，与普通编辑器语义一致
+            if self.history_cursor < len(self.history) - 1:
+                del self.history[self.history_cursor + 1 :]
+            text = (label or "编辑字幕").strip()[:120] or "编辑字幕"
+            self.history.append(
+                HistoryState(
+                    _copy(self.review_cues),
+                    text,
+                    source=dict(self.review_source),
+                )
+            )
+            self.history_cursor = len(self.history) - 1
+            overflow = len(self.history) - (HISTORY_LIMIT + 1)
+            if overflow > 0:
+                del self.history[:overflow]
+                self.history_cursor -= overflow
+            self.updated_at = time.time()
+
+    @property
+    def can_undo(self) -> bool:
+        return self.history_cursor > 0
+
+    @property
+    def can_redo(self) -> bool:
+        return 0 <= self.history_cursor < len(self.history) - 1
+
+    def undo_label(self) -> str:
+        """下一次 ⌘Z 会撤回哪一步（没有可撤回的返回空串）。"""
+        if not self.can_undo:
+            return ""
+        return self.history[self.history_cursor].label
+
+    def redo_label(self) -> str:
+        """下一次 ⇧⌘Z 会重做哪一步。"""
+        if not self.can_redo:
+            return ""
+        return self.history[self.history_cursor + 1].label
+
+    def undo_timestamp(self) -> float:
+        """下一次 ⌘Z 会撤回的那一步是在什么时候记录的。
+
+        界面用它和本地「导出设置」历史比先后：全局 ⌘Z 必须撤回**最近一次**操作，
+        而不是永远先撤回字幕。没有可撤回步骤时返回 0。
+        """
+        if not self.can_undo:
+            return 0.0
+        return float(self.history[self.history_cursor].at)
+
+    def redo_timestamp(self) -> float:
+        """下一次 ⇧⌘Z 会重做的那一步的时间；没有时返回 0。"""
+        if not self.can_redo:
+            return 0.0
+        return float(self.history[self.history_cursor + 1].at)
+
+    def undo(self) -> str | None:
+        """退回上一步，返回被撤回操作的标签；没有历史时返回 None。"""
+        with self.lock:
+            self._ensure_baseline()
+            if self.history_cursor <= 0:
+                return None
+            label = self.history[self.history_cursor].label
+            self.history_cursor -= 1
+            state = self.history[self.history_cursor]
+            self.review_cues = _copy(state.cues)
+            self.review_source = dict(state.source)
+            self.updated_at = time.time()
+            return label
+
+    def redo(self) -> str | None:
+        with self.lock:
+            self._ensure_baseline()
+            if self.history_cursor >= len(self.history) - 1:
+                return None
+            self.history_cursor += 1
+            state = self.history[self.history_cursor]
+            self.review_cues = _copy(state.cues)
+            self.review_source = dict(state.source)
+            self.updated_at = time.time()
+            return state.label
+
+    def jump_history(self, index: int) -> str | None:
+        """点历史里的任意一步：直接回到那个状态。
+
+        越界返回 None；不产生新的历史条目——跳转不是编辑，时间线保持原样。
+        """
+        with self.lock:
+            self._ensure_baseline()
+            if not 0 <= index < len(self.history):
+                return None
+            self.history_cursor = index
+            state = self.history[index]
+            self.review_cues = _copy(state.cues)
+            self.review_source = dict(state.source)
+            self.updated_at = time.time()
+            return state.label
+
+    def history_items(self) -> list[dict]:
+        with self.lock:
+            self._ensure_baseline()
+            items = []
+            for i, state in enumerate(self.history):
+                if i == self.history_cursor:
+                    status = "current"
+                elif i < self.history_cursor:
+                    status = "past"
+                else:
+                    status = "undone"
+                items.append(
+                    {
+                        "id": i,
+                        "label": state.label,
+                        "at": state.at,
+                        "state": status,
+                        "cue_count": len(state.cues),
+                    }
+                )
+            return items
 
     # -- 变更（全部返回是否成功，越界不抛异常） ------------------------------
 
-    def replace_review(self, cues: list[SubtitleCue]) -> None:
-        self._push_history()
-        self.review_cues = _copy(cues)
+    def replace_review(
+        self,
+        cues: list[SubtitleCue],
+        label: str = "替换全部字幕",
+        *,
+        source: dict | None = None,
+    ) -> None:
+        """整表替换；``source`` 非空时同步改写这张表的来源。
 
-    def update_cue(self, index: int, start: float, end: float, text: str) -> bool:
-        if not 0 <= index < len(self.review_cues):
-            return False
-        self._push_history()
-        self.review_cues[index] = SubtitleCue(start=start, end=end, text=text)
-        return True
+        来源必须和字幕一起进历史：先导入 A、再导入 B、再 ⌘Z 时，回退的是
+        「B 的字幕 + B 的来源」，不能只回退字幕而让检查器继续把 B 当当前文件。
+        普通编辑（AI 应用、查找替换）不传 ``source``，保留原来源。
+        """
+        with self.lock:
+            self._ensure_baseline()
+            self.review_cues = _copy(cues)
+            if source is not None:
+                self.review_source = dict(source)
+            self._record(label)
 
-    def delete_cue(self, index: int) -> bool:
-        if not 0 <= index < len(self.review_cues):
-            return False
-        self._push_history()
-        del self.review_cues[index]
-        return True
+    def update_cue(
+        self,
+        index: int,
+        start: float,
+        end: float,
+        text: str,
+        label: str = "",
+    ) -> bool:
+        with self.lock:
+            if not 0 <= index < len(self.review_cues):
+                return False
+            self._ensure_baseline()
+            self.review_cues[index] = SubtitleCue(start=start, end=end, text=text)
+            self._record(label or f"修改第 {index + 1} 条")
+            return True
 
-    def insert_cue(self, index: int, start: float, end: float, text: str) -> bool:
-        if not 0 <= index <= len(self.review_cues):
-            return False
-        self._push_history()
-        self.review_cues.insert(index, SubtitleCue(start=start, end=end, text=text))
-        return True
+    def delete_cue(self, index: int, label: str = "") -> bool:
+        with self.lock:
+            if not 0 <= index < len(self.review_cues):
+                return False
+            self._ensure_baseline()
+            del self.review_cues[index]
+            self._record(label or f"删除第 {index + 1} 条")
+            return True
 
-    def clear_review(self) -> None:
-        self._push_history()
-        self.review_cues = []
+    def insert_cue(
+        self,
+        index: int,
+        start: float,
+        end: float,
+        text: str,
+        label: str = "",
+    ) -> bool:
+        with self.lock:
+            if not 0 <= index <= len(self.review_cues):
+                return False
+            self._ensure_baseline()
+            self.review_cues.insert(index, SubtitleCue(start=start, end=end, text=text))
+            self._record(label or f"插入第 {index + 1} 条")
+            return True
+
+    def clear_review(self, label: str = "清空全部字幕") -> None:
+        with self.lock:
+            self._ensure_baseline()
+            self.review_cues = []
+            self._record(label)
 
     # -- 译文轨 -------------------------------------------------------------
 

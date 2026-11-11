@@ -40,13 +40,18 @@ fi
 echo "== 0/7 生成应用图标 =="
 # 从矢量源按 macOS 尺寸重新渲染：docs/logo-1024.png 是白底 flattened 图，
 # 直接打包会在深色背景的 Finder 里露出白角。
-if [ -f "docs/logo.svg" ]; then
+if [ -f "docs/app-icon.png" ]; then
+  rm -rf "build/pack/icon.iconset"
+  swift tools/pack/make_icon.swift docs/app-icon.png "build/pack/icon.iconset"
+  mkdir -p desktop/build
+  iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
+elif [ -f "docs/logo.svg" ]; then
   rm -rf "build/pack/icon.iconset"
   swift tools/pack/make_icon.swift docs/logo.svg "build/pack/icon.iconset"
   mkdir -p desktop/build
   iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
 else
-  echo "⚠️ 没找到 docs/logo.svg，沿用 desktop/build/icon.icns"
+  echo "⚠️ 没找到 docs/app-icon.png / docs/logo.svg，沿用 desktop/build/icon.icns"
 fi
 
 echo "== 1/7 复制 Electron 框架 =="
@@ -134,7 +139,7 @@ cp -R "$SIDECAR" "$APP/Contents/Resources/python"
 cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || true
 
 echo "== 6/7 模型目录（本机自用：指向仓库里已下载的 6.6 GB）=="
-APPSUP="$HOME/Library/Application Support/KikuSub"
+APPSUP="${KIKUSUB_APP_SUPPORT_DIR:-$HOME/Library/Application Support/KikuSub}"
 mkdir -p "$APPSUP"
 MODELS_REAL="$(cd "$REPO_ROOT/models" 2>/dev/null && pwd -P || true)"
 if [ -n "$MODELS_REAL" ] && [ ! -e "$APPSUP/models" ]; then

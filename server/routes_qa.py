@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -28,12 +29,44 @@ from .sessions import Session
 
 router = APIRouter(tags=["qa"], dependencies=[Depends(require_token)])
 
+# 只有「这张表是转写结果」时，媒体同名的 .qa.json 才对得上。
+# 导入字幕 / 恢复草稿都会整表换掉内容，旧队列的 item id 与当前字幕不再对应，
+# 继续允许操作会删错句、补错区间——所以这两类来源一律暂停队列。
+_DETACHED_KINDS = {"import", "draft"}
+
 
 class QaActionRequest(BaseModel):
     id: str = Field(min_length=1)
     action: str = Field(pattern="^(mark|skip|delete_cue|restore|focus)$")
     status: str | None = None
     resolution: str | None = None
+
+
+def _review_source(session: Session) -> dict:
+    return dict(session.review_source or {})
+
+
+def _detached_reason(session: Session) -> str:
+    source = _review_source(session)
+    kind = str(source.get("kind") or "")
+    name = str(source.get("name") or "外部字幕")
+    if kind == "import":
+        return f"当前核对表来自导入的「{name}」，这次转写的质检队列只对应转写结果。"
+    if kind == "draft":
+        return f"当前核对表来自暂存草稿「{name}」，不与这次转写的质检队列对应。"
+    return ""
+
+
+def _is_detached(session: Session) -> bool:
+    return str(_review_source(session).get("kind") or "") in _DETACHED_KINDS
+
+
+def _detached_payload(session: Session, media_path: str) -> dict:
+    data = _parse(empty_audit_payload(Path(media_path).name))
+    data["detached"] = True
+    data["detached_reason"] = _detached_reason(session)
+    data["review_source"] = _review_source(session)
+    return data
 
 
 def _media_path(request: Request, session: Session) -> str:
@@ -54,10 +87,16 @@ def _parse(text: str) -> dict:
 
 @router.get("/api/qa")
 def get_qa(request: Request, session: Session = Depends(get_session)) -> dict:
-    """读当前媒体的质检队列（从磁盘 payload 恢复，跨请求一致）。"""
+    """读当前媒体的质检队列（从磁盘 payload 恢复，跨请求一致）。
+
+    当前核对表不是转写结果时（导入字幕 / 恢复草稿），旧队列与字幕已经对不上，
+    返回一份带 ``detached`` 标记的空态，由界面说明原因；不把 item 交给前端。
+    """
     if not session.media_id:
         return _parse(empty_audit_payload())
     path = _media_path(request, session)
+    if _is_detached(session):
+        return _detached_payload(session, path)
     return _parse(load_audit_payload(path))
 
 
@@ -68,14 +107,26 @@ def post_qa_action(
     session: Session = Depends(get_session),
 ) -> dict:
     path = _media_path(request, session)
+    if _is_detached(session):
+        raise HTTPException(
+            status_code=409,
+            detail=_detached_reason(session) or "当前字幕不是转写结果，质检队列不可用",
+        )
     payload_text = load_audit_payload(path)
 
     cmd = payload.model_dump(exclude_none=True)
     res = qa.apply_action(cmd, session.review_cues, path, payload_text)
 
     if res.cues_changed:
-        # replace_review 内部会压撤回栈，服务端仍是唯一真源
-        session.replace_review(res.cues)
+        # replace_review 内部会记一步历史，服务端仍是唯一真源
+        action_label = {
+            "mark": "标记",
+            "skip": "跳过",
+            "delete_cue": "删除字幕",
+            "restore": "恢复字幕",
+            "focus": "定位",
+        }.get(payload.action, payload.action)
+        session.replace_review(res.cues, label=f"质检：{action_label}")
 
     return {
         "ok": res.ok,
@@ -85,7 +136,10 @@ def post_qa_action(
         "force_table_sync": res.force_table_sync,
         "focus": res.focus,
         "cues": [{"start": c.start, "end": c.end, "text": c.text} for c in session.review_cues],
-        "can_undo": bool(session.undo_stack),
-        "can_redo": bool(session.redo_stack),
+        "can_undo": session.can_undo,
+        "can_redo": session.can_redo,
+        "undo_label": session.undo_label(),
+        "redo_label": session.redo_label(),
+        "review_source": dict(session.review_source),
         "qa": _parse(res.qa_payload or payload_text),
     }

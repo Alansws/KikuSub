@@ -23,12 +23,61 @@
     transcribeRange,
   } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
+  import { cubicOut } from 'svelte/easing';
 
-  const items = $derived<any[]>(qa.payload?.items ?? []);
+  /**
+   * 浮层从右下角「弹」出来：10px 上移 + 0.985→1 的轻微放大，
+   * 比单纯淡入更接近 macOS popover 的手感；收起时反向收回。
+   */
+  function popIn(_node: HTMLElement, { duration }: { duration: number }) {
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t: number) =>
+        `opacity:${t};transform:translateY(${(1 - t) * 10}px) scale(${0.985 + 0.015 * t});`,
+    };
+  }
+
+  function popOut(_node: HTMLElement, { duration }: { duration: number }) {
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t: number) =>
+        `opacity:${t};transform:translateY(${(1 - t) * 8}px) scale(${0.985 + 0.015 * t});`,
+    };
+  }
+
+  /**
+   * 当前核对表不是转写结果时（导入字幕 / 恢复草稿），媒体同名的质检队列
+   * 与这张表已经对不上。服务端会返回 detached 空态，这里再按前端来源兜一层，
+   * 避免刷新队列完成前的旧 item 被误点。
+   */
+  const detached = $derived(
+    qa.payload?.detached === true ||
+      app.reviewSource?.kind === 'import' ||
+      app.reviewSource?.kind === 'draft',
+  );
+  const detachedReason = $derived.by(() => {
+    const fromServer = String(qa.payload?.detached_reason ?? '').trim();
+    if (fromServer) return fromServer;
+    const name = app.reviewSource?.name || '外部字幕';
+    if (app.reviewSource?.kind === 'draft') {
+      return `当前核对表来自暂存草稿「${name}」，不与这次转写的质检队列对应。`;
+    }
+    return `当前核对表来自导入的「${name}」，这次转写的质检队列只对应转写结果。`;
+  });
+  const detachedSource = $derived(app.reviewSource?.name || '外部字幕');
+
+  const items = $derived<any[]>(detached ? [] : (qa.payload?.items ?? []));
   const statuses = $derived<Record<string, any>>(qa.payload?.statuses ?? {});
   const counts = $derived<any>(qa.payload?.counts ?? {});
   const scanned = $derived<any>(qa.payload?.scanned ?? {});
-  const phase = $derived<string>(qa.payload?.phase ?? 'idle');
+  const phase = $derived<string>(detached ? 'idle' : (qa.payload?.phase ?? 'idle'));
+  /** 动效：系统开启减少动态效果时，面板与列表直接出现。 */
+  const motion =
+    typeof window === 'undefined' ||
+    !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   // 报告有数字、队列却是空的时候必须说出来，而不是让用户看到「0 条」
   const reportFindings = $derived(
     Number(app.report?.quality?.coverage ?? 0) +
@@ -181,58 +230,113 @@
     if (next) locate(next);
     else toast('这一组没有待核项了');
   }
+
+  /** 导入 / 草稿状态下，唯一能让质检重新对应字幕的动作是重新整片转写。 */
+  function goTranscribe() {
+    void toggleQaPanel(false);
+    setView('transcribe');
+  }
 </script>
 
 {#if qa.open}
-  <div class="qa-panel">
-    <div class="qa-head">
-      <button class="icon-btn" onclick={() => toggleQaPanel(false)} title="收起">
-        <Icon name="close" size={11} />
+  <aside
+    class="qa-panel"
+    class:detached
+    aria-label="质检待核队列"
+    in:popIn={motion ? { duration: 220 } : { duration: 0 }}
+    out:popOut={motion ? { duration: 130 } : { duration: 0 }}
+  >
+    <header class="qa-head" class:bare={detached || !items.length}>
+      <span class="qa-mark" class:off={detached}>
+        <Icon name={detached ? 'doc' : 'search'} size={12} />
+      </span>
+      <div class="qa-title">
+        <span class="title">质检待核</span>
+        <span class="meta">
+          {#if detached}
+            已暂停 · 字幕不是转写结果
+          {:else if total}
+            {viewDone} / {viewTotal} 已核对 · {viewPending} 待核
+          {:else}
+            还没有可核对的结果
+          {/if}
+        </span>
+      </div>
+      <button
+        class="icon-btn"
+        onclick={jumpNext}
+        disabled={!viewPending || detached}
+        title="定位到下一条待核"
+        aria-label="定位到下一条待核"
+      >
+        <Icon name="play" size={10} />
       </button>
-      <span class="title">质检待核</span>
-      <span class="meta">{viewDone} / {viewTotal} 已核对</span>
-      <button class="icon-btn" onclick={() => refreshQa()} title="刷新队列">
+      <button class="icon-btn" onclick={() => refreshQa()} title="刷新队列" aria-label="刷新队列">
         <Icon name="undo" size={11} />
       </button>
-    </div>
-
-    <div class="progress">
-      <i style="width:{viewTotal ? (viewDone / viewTotal) * 100 : 0}%"></i>
-    </div>
-
-    <div class="tabs">
-      {#each [['pending', '待核'], ['all', '全部'], ['done', '已处理']] as [key, label] (key)}
-        <button class:on={filter === key} onclick={() => (filter = key as typeof filter)}>
-          {label}
-          {#if key === 'pending' && viewPending}
-            <b>{viewPending}</b>
-          {/if}
-        </button>
-      {/each}
-      <div class="tabs-spacer"></div>
-      <button class="next-btn" onclick={jumpNext} title="定位到下一条待核">
-        下一个 <Icon name="play" size={9} />
+      <button
+        class="icon-btn"
+        onclick={() => toggleQaPanel(false)}
+        title="收起（Esc）"
+        aria-label="收起质检面板"
+      >
+        <Icon name="close" size={11} />
       </button>
-    </div>
+    </header>
 
-    <div class="groups">
-      <button class:on={group === 'miss'} onclick={() => (group = 'miss')}>
-        漏检 <b>{missCount}</b>
-      </button>
-      <button class:on={group === 'low'} onclick={() => (group = 'low')}>
-        低置信 <b>{lowCount}</b>
-      </button>
-      <button class:on={group === 'all'} onclick={() => (group = 'all')}>全部</button>
-    </div>
+    {#if !detached && items.length}
+      <div class="progress" aria-hidden="true">
+        <i style="width:{viewTotal ? (viewDone / viewTotal) * 100 : 0}%"></i>
+      </div>
+
+      <div class="filters">
+        <div class="groups" role="group" aria-label="问题类型">
+          <button class:on={group === 'miss'} onclick={() => (group = 'miss')}>
+            <i class="gdot miss"></i>漏检 <b>{missCount}</b>
+          </button>
+          <button class:on={group === 'low'} onclick={() => (group = 'low')}>
+            <i class="gdot low"></i>低置信 <b>{lowCount}</b>
+          </button>
+          <button class:on={group === 'all'} onclick={() => (group = 'all')}>全部</button>
+        </div>
+        <div class="tabs" role="group" aria-label="核对状态">
+          {#each [['pending', '待核'], ['done', '已核'], ['all', '全部']] as [key, label] (key)}
+            <button class:on={filter === key} onclick={() => (filter = key as typeof filter)}>
+              {label}
+              {#if key === 'pending' && viewPending}
+                <b>{viewPending}</b>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <div class="qa-body">
-      {#if !items.length}
+      {#if detached}
         <div class="empty">
+          <div class="empty-icon"><Icon name="doc" size={18} /></div>
+          <div class="empty-title">当前字幕不是这次转写的结果</div>
+          <div class="empty-sub">{detachedReason}</div>
+          <div class="source-chip" title={app.reviewSource?.path ?? ''}>
+            <span>{app.reviewSource?.kind === 'draft' ? '暂存草稿' : '导入字幕'}</span>
+            <b>{detachedSource}</b>
+          </div>
+          <div class="empty-tip">
+            质检查的是转写结果；换一版字幕后队列暂停，避免删错句或补错区间。
+          </div>
+          {#if app.media}
+            <button class="btn primary empty-cta" onclick={goTranscribe}>去转写并生成质检</button>
+          {/if}
+        </div>
+      {:else if !items.length}
+        <div class="empty">
+          <div class="empty-icon"><Icon name={phase === 'idle' ? 'wave' : 'check'} size={18} /></div>
           {#if phase === 'idle' && reportFindings > 0}
             <div class="empty-title">队列为空，但报告里有 {reportFindings} 处待核</div>
             <div class="empty-sub">
               这通常是旧版本局部转写没有把队列落盘。请重新转写一次；若仍为空，到「设置 →
-              日志与诊断」复制日志发给我。
+              日志与诊断」复制日志反馈。
             </div>
           {:else if phase === 'idle'}
             <div class="empty-title">还没有可核对的转写</div>
@@ -254,6 +358,7 @@
         </div>
       {:else if !shown.length}
         <div class="empty">
+          <div class="empty-icon"><Icon name={group === 'miss' ? 'search' : 'check'} size={18} /></div>
           <div class="empty-title">
             {#if group === 'miss' && missCount === 0}
               没有未覆盖空白
@@ -277,13 +382,14 @@
         {#each shown as item (item.id)}
           {@const st = statusOf(item.id)}
           {@const res = resolutionOf(item.id)}
-          <div class="item" class:done={st !== 'pending'}>
+          <article class="item" class:done={st !== 'pending'}>
             <button
               class="check"
               class:on={st !== 'pending'}
               onclick={() => toggle(item)}
               role="checkbox"
               aria-checked={st !== 'pending'}
+              aria-label={st === 'pending' ? '标记为已核对' : '重新放回待核'}
               title={st === 'pending' ? '标记为已核对' : '重新放回待核'}
             >
               {#if st !== 'pending'}<Icon name="check" size={10} />{/if}
@@ -295,7 +401,10 @@
                 <span class="time">{tcShort(Number(item.start))} → {tcShort(Number(item.end))}</span>
                 <span class="dur">{Number(item.dur ?? 0).toFixed(2)}s</span>
                 {#if st !== 'pending'}
-                  <span class="stamp">{RESOLUTION_LABEL[res] ?? (st === 'skipped' ? '已跳过' : '已核对')}</span>
+                  <span class="stamp">
+                    <Icon name="check" size={8} />
+                    {RESOLUTION_LABEL[res] ?? (st === 'skipped' ? '已跳过' : '已核对')}
+                  </span>
                 {/if}
               </div>
 
@@ -304,48 +413,48 @@
               {/if}
 
               <div class="acts">
-                <button class="btn tiny" onclick={() => locate(item)}>
-                  <Icon name="search" size={9} />定位
+                <button class="act" onclick={() => locate(item)} title="在核对台定位这一段">
+                  <Icon name="target" size={10} />定位
                 </button>
 
                 {#if item.kind === 'coverage' || item.kind === 'missed'}
-                  <button class="btn tiny primary" onclick={() => fill(item)} disabled={busy}>
+                  <button class="act primary" onclick={() => fill(item)} disabled={busy}>
                     {#if app.qaFillId === item.id}<span class="spin"></span>{/if}
                     补录
                   </button>
                   <button
-                    class="btn tiny ghost"
+                    class="act"
                     onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'not-speech' })}
                   >不是台词</button>
                 {:else if item.kind === 'dropped'}
-                  <button class="btn tiny" onclick={() => act(item, { action: 'restore' })}>
+                  <button class="act primary-ghost" onclick={() => act(item, { action: 'restore' })}>
                     恢复原句
                   </button>
                   <button
-                    class="btn tiny ghost"
+                    class="act"
                     onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'confirmed' })}
                   >确认删除</button>
                 {:else}
                   <button
-                    class="btn tiny"
+                    class="act primary-ghost"
                     onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'kept' })}
                   >保留</button>
-                  <button class="btn tiny ghost danger" onclick={() => act(item, { action: 'delete_cue' })}>
+                  <button class="act danger" onclick={() => act(item, { action: 'delete_cue' })}>
                     删除此句
                   </button>
                 {/if}
 
-                <button class="btn tiny ghost" onclick={() => act(item, { action: 'skip' })}>跳过</button>
+                <button class="act skip" onclick={() => act(item, { action: 'skip' })}>跳过</button>
                 {#if st !== 'pending'}
-                  <button class="btn tiny ghost" onclick={() => toggle(item)}>放回</button>
+                  <button class="act" onclick={() => toggle(item)}>放回</button>
                 {/if}
               </div>
             </div>
-          </div>
+          </article>
         {/each}
       {/if}
     </div>
-  </div>
+  </aside>
 {/if}
 
 <style>
@@ -354,190 +463,326 @@
     right: 14px;
     bottom: 40px;
     width: 438px;
-    max-height: min(66vh, 600px);
-    background: var(--bg-content);
-    border: 1px solid var(--separator);
-    border-radius: 12px;
+    max-height: min(68vh, 620px);
+    background: var(--raise);
+    border: 1px solid var(--line);
+    border-radius: 14px;
     box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     z-index: 60;
     overflow: hidden;
+    transform-origin: 100% 100%;
   }
 
   .qa-head {
     display: flex;
     align-items: center;
-    gap: 7px;
-    padding: 8px 9px 7px 9px;
-    border-bottom: 1px solid var(--separator-soft);
+    gap: 8px;
+    padding: 10px 10px 9px 12px;
     flex: 0 0 auto;
   }
+  .qa-head.bare {
+    box-shadow: inset 0 -1px 0 var(--separator-soft);
+  }
+  .qa-mark {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    border-radius: 7px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+  }
+  .qa-mark.off {
+    background: var(--fill);
+    color: var(--text-3);
+  }
+  .qa-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
   .title {
-    font-size: 12.5px;
+    font-size: 13px;
+    line-height: 17px;
     font-weight: 600;
   }
   .meta {
-    flex: 1;
-    font-size: 11px;
+    font-size: 11.5px;
+    line-height: 15px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .icon-btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: grid;
+    place-items: center;
+    color: var(--text-3);
+    padding: 0;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .icon-btn:hover:not(:disabled) {
+    background: var(--fill);
+    color: var(--text);
+  }
+  .icon-btn:disabled {
+    opacity: 0.35;
   }
 
   .progress {
-    height: 2px;
+    height: 3px;
+    flex: 0 0 3px;
+    margin: 0 12px;
+    border-radius: 999px;
     background: var(--fill);
-    flex: 0 0 2px;
+    overflow: hidden;
   }
   .progress i {
     display: block;
     height: 100%;
-    background: var(--accent);
-    transition: width 240ms var(--ease);
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 68%, #fff),
+      var(--accent)
+    );
+    transition: width 260ms var(--ease);
   }
 
-  .tabs {
+  .filters {
     display: flex;
     align-items: center;
-    gap: 2px;
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--separator-soft);
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 10px 8px 12px;
     flex: 0 0 auto;
-  }
-  .tabs button {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    font: inherit;
-    font-size: 11px;
-    color: var(--text-2);
-    height: 20px;
-    padding: 0 7px;
-    border-radius: 5px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .tabs button:hover {
-    background: var(--fill);
-  }
-  .tabs button.on {
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-weight: 500;
-  }
-  .tabs b {
-    font-size: 10px;
-    min-width: 14px;
-    height: 14px;
-    border-radius: 7px;
-    background: var(--accent);
-    color: #fff;
-    display: grid;
-    place-items: center;
-    font-weight: 600;
-    padding: 0 3px;
-  }
-  .tabs-spacer {
-    flex: 1;
+    box-shadow: inset 0 -1px 0 var(--separator-soft);
   }
   .groups {
-    display: flex;
-    gap: 4px;
-    padding: 5px 9px;
-    border-bottom: 1px solid var(--separator-soft);
-    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 6px;
+    background: var(--fill);
   }
   .groups button {
     appearance: none;
     border: 0;
     background: transparent;
     font: inherit;
-    font-size: 10.5px;
-    color: var(--text-3);
-    padding: 2px 7px;
-    border-radius: 6px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--text-2);
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 4px;
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    white-space: nowrap;
   }
   .groups button:hover {
-    background: var(--fill);
-    color: var(--text-2);
+    color: var(--text);
   }
   .groups button.on {
-    background: var(--accent-soft);
-    color: var(--accent);
+    background: var(--raise);
+    color: var(--text);
     font-weight: 500;
+    box-shadow: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
+  }
+  :global(html[data-theme='dark']) .groups button.on {
+    background: rgba(236, 241, 250, 0.14);
   }
   .groups b {
-    font-size: 10px;
-    min-width: 14px;
-    height: 14px;
-    border-radius: 7px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 4px;
     background: var(--fill);
-    color: var(--text-2);
+    color: var(--text-3);
     display: grid;
     place-items: center;
+    font-size: 11.5px;
     font-weight: 600;
-    padding: 0 3px;
+    font-variant-numeric: tabular-nums;
   }
   .groups button.on b {
-    background: var(--accent);
-    color: #fff;
+    background: var(--accent-soft);
+    color: var(--accent);
   }
-  .next-btn {
+  .gdot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .gdot.miss {
+    background: #e0534a;
+  }
+  .gdot.low {
+    background: #c88a1a;
+  }
+  :global(html[data-theme='dark']) .gdot.miss {
+    background: #ff8a80;
+  }
+  :global(html[data-theme='dark']) .gdot.low {
+    background: #e6b450;
+  }
+
+  .tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+  }
+  .tabs button {
     appearance: none;
     border: 0;
     background: transparent;
     font: inherit;
-    font-size: 10.5px;
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-3);
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 4px;
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    padding: 2px 5px;
-    border-radius: 5px;
+    gap: 4px;
+    position: relative;
+    white-space: nowrap;
   }
-  .next-btn:hover {
+  .tabs button:hover {
     background: var(--fill);
     color: var(--text-2);
+  }
+  .tabs button.on {
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .tabs button.on::after {
+    content: '';
+    position: absolute;
+    left: 7px;
+    right: 7px;
+    bottom: 2px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+  .tabs b {
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .qa-body {
     overflow-y: auto;
-    padding: 2px 0;
+    padding: 2px 0 4px;
   }
 
   .empty {
-    padding: 18px 15px 16px;
+    padding: 24px 20px 22px;
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .empty-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: var(--fill);
+    color: var(--text-3);
+    display: grid;
+    place-items: center;
+    margin-bottom: 2px;
   }
   .empty-title {
-    font-size: 12.5px;
-    font-weight: 500;
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 600;
     color: var(--text);
   }
   .empty-sub {
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 18px;
     color: var(--text-3);
-    line-height: 1.55;
+    max-width: 330px;
   }
+  .empty-tip {
+    font-size: 11.5px;
+    line-height: 16px;
+    color: var(--text-3);
+    max-width: 330px;
+  }
+  .source-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    margin-top: 3px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--fill);
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .source-chip span {
+    color: var(--text-3);
+    flex: 0 0 auto;
+  }
+  .source-chip b {
+    min-width: 0;
+    font-weight: 500;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .empty-cta {
+    margin-top: 8px;
+  }
+
   .coverage {
     display: flex;
     gap: 6px;
-    margin-top: 6px;
+    margin-top: 8px;
     flex-wrap: wrap;
+    justify-content: center;
   }
   .cov {
-    font-size: 10px;
-    padding: 2px 7px;
-    border-radius: 8px;
+    font-size: 11.5px;
+    line-height: 16px;
+    padding: 2px 8px;
+    border-radius: 999px;
     background: var(--accent-soft);
     color: var(--accent);
     font-variant-numeric: tabular-nums;
+  }
+  .cov b {
+    font-weight: 600;
   }
   .cov.off {
     background: var(--fill);
@@ -546,33 +791,52 @@
 
   .item {
     display: flex;
-    gap: 8px;
-    padding: 8px 11px 9px 10px;
-    border-bottom: 1px solid var(--separator-soft);
+    gap: 9px;
+    padding: 11px 13px 10px 12px;
+    position: relative;
+    transition: background var(--dur-fast) var(--ease);
+    animation: qaItemIn 180ms var(--ease) both;
   }
-  .item:last-child {
-    border-bottom: 0;
+  @keyframes qaItemIn {
+    from {
+      opacity: 0;
+      transform: translateY(3px);
+    }
+  }
+  .item + .item {
+    box-shadow: inset 0 1px 0 var(--separator-soft);
+  }
+  .item:hover {
+    background: var(--row-hover);
   }
   .item.done {
-    opacity: 0.62;
+    opacity: 0.64;
+  }
+  .item.done:hover {
+    opacity: 0.82;
   }
 
   .check {
     appearance: none;
-    width: 15px;
-    height: 15px;
-    flex: 0 0 15px;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
     margin-top: 1px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--raise);
     display: grid;
     place-items: center;
     color: #fff;
     padding: 0;
+    transition: background var(--dur-fast) var(--ease),
+      border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
   }
   .check:hover {
     border-color: var(--accent);
+  }
+  .check:active {
+    transform: scale(0.92);
   }
   .check.on {
     background: var(--accent);
@@ -584,70 +848,76 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
   }
 
   .line1 {
     display: flex;
     align-items: baseline;
     gap: 7px;
-    font-size: 10.5px;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 16px;
   }
   .kind {
     font-weight: 600;
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 8px;
+    font-size: 11.5px;
+    line-height: 16px;
+    padding: 1px 7px;
+    border-radius: 999px;
     background: var(--fill);
     color: var(--text-2);
     white-space: nowrap;
   }
   .k-coverage {
-    background: rgba(255, 59, 48, 0.16);
-    color: #c0392b;
+    background: rgba(224, 83, 74, 0.14);
+    color: #b5342c;
   }
   .k-missed {
-    background: rgba(255, 159, 10, 0.16);
-    color: #b26a00;
+    background: rgba(200, 138, 26, 0.16);
+    color: #96640e;
   }
   .k-dropped {
-    background: rgba(255, 69, 58, 0.14);
-    color: #c0392b;
+    background: rgba(224, 83, 74, 0.12);
+    color: #b5342c;
   }
   .k-suspect {
-    background: rgba(10, 132, 255, 0.14);
+    background: var(--accent-soft);
     color: var(--accent);
   }
-  html[data-theme='dark'] .k-coverage {
+  :global(html[data-theme='dark']) .k-coverage {
     color: #ff8a80;
   }
-  html[data-theme='dark'] .k-missed {
-    color: #ffb340;
+  :global(html[data-theme='dark']) .k-missed {
+    color: #e6b450;
   }
-  html[data-theme='dark'] .k-dropped {
-    color: #ff7b70;
+  :global(html[data-theme='dark']) .k-dropped {
+    color: #ff8a80;
   }
 
   .time {
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
   .dur {
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
   .stamp {
     margin-left: auto;
-    color: var(--text-3);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--success);
     white-space: nowrap;
   }
 
   .text {
-    font-size: 12.5px;
-    line-height: 1.45;
+    font-size: 13px;
+    line-height: 19px;
     color: var(--text);
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -657,43 +927,69 @@
 
   .acts {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     flex-wrap: wrap;
     margin-top: 1px;
   }
-  .tiny {
-    height: 20px;
-    font-size: 10.5px;
-    padding: 0 6px;
-  }
-  .tiny.primary {
-    background: var(--accent);
-    color: #fff;
-  }
-  .tiny.danger {
-    color: #ff453a;
-  }
-
-  .icon-btn {
+  .act {
     appearance: none;
-    border: 0;
+    border: 1px solid transparent;
     background: transparent;
-    width: 20px;
-    height: 20px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 16px;
+    height: 22px;
+    padding: 0 7px;
     border-radius: 5px;
-    display: grid;
-    place-items: center;
-    color: var(--text-3);
-    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-2);
+    white-space: nowrap;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+      border-color var(--dur-fast) var(--ease);
   }
-  .icon-btn:hover {
+  .act:hover:not(:disabled) {
     background: var(--fill);
     color: var(--text);
   }
+  .act:disabled {
+    opacity: 0.45;
+  }
+  .act.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 500;
+  }
+  .act.primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+  .act.primary-ghost {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .act.primary-ghost:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent);
+  }
+  .act.danger {
+    color: var(--danger);
+  }
+  .act.danger:hover:not(:disabled) {
+    background: rgba(179, 38, 30, 0.08);
+    color: var(--danger);
+  }
+  .act.skip {
+    margin-left: auto;
+    color: var(--text-3);
+  }
 
   .spin {
-    width: 8px;
-    height: 8px;
+    width: 9px;
+    height: 9px;
+    flex: 0 0 9px;
     border-radius: 50%;
     border: 1.4px solid currentColor;
     border-top-color: transparent;
@@ -702,6 +998,28 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  /* 紧凑模式（≤900px）：面板铺满工作区宽度，层级压到检查器抽屉（z 20）之下，
+     打开抽屉时面板不会盖住正在编辑的当前句。 */
+  @media (max-width: 900px) {
+    .qa-panel {
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      width: auto;
+      max-height: min(58vh, 520px);
+      z-index: 18;
+    }
+    .empty {
+      padding: 18px 14px;
+    }
+    .filters {
+      flex-wrap: wrap;
+    }
+    .tabs {
+      margin-left: auto;
     }
   }
 </style>

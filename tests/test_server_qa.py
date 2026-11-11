@@ -210,3 +210,49 @@ def test_qa_payload_survives_reload(ctx):
     reloaded = json.loads((Path(str(media)).parent / f"{Path(str(media)).stem}.qa.json").read_text(encoding="utf-8"))
     assert reloaded["statuses"]["missed:1000:2000"]["status"] == "skipped"
     assert client.get("/api/qa", headers=AUTH).json()["counts"]["skipped"] == 1
+
+
+def _write_srt(path: Path, text: str) -> str:
+    path.write_text(
+        f"1\n00:00:01,000 --> 00:00:02,000\n{text}\n",
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_imported_subtitle_detaches_stale_qa_queue(ctx, tmp_path):
+    """导入另一版字幕后，媒体同名的旧队列不能再作用于当前表。"""
+    client, _, _ = ctx
+    imported = client.post(
+        "/api/cues/import",
+        headers=AUTH,
+        json={"path": _write_srt(tmp_path / "another.srt", "別の字幕")},
+    )
+    assert imported.status_code == 200, imported.text
+    data = imported.json()
+    assert data["review_source"]["kind"] == "import"
+    assert data["review_source"]["name"] == "another.srt"
+
+    qa = client.get("/api/qa", headers=AUTH).json()
+    assert qa["detached"] is True
+    assert qa["items"] == []
+    assert "another.srt" in qa["detached_reason"]
+
+    # 队列已暂停：不允许再按旧 item 删除 / 补录当前表
+    resp = client.post(
+        "/api/qa/action", headers=AUTH, json={"id": "missed:1000:2000", "action": "skip"}
+    )
+    assert resp.status_code == 409
+
+
+def test_undo_import_restores_previous_review_source(ctx, tmp_path):
+    """导入两版字幕后 ⌘Z：字幕和来源必须一起回退。"""
+    client, _, _ = ctx
+    first = _write_srt(tmp_path / "first.srt", "第一版")
+    second = _write_srt(tmp_path / "second.srt", "第二版")
+    client.post("/api/cues/import", headers=AUTH, json={"path": first})
+    client.post("/api/cues/import", headers=AUTH, json={"path": second})
+
+    undone = client.post("/api/cues/undo", headers=AUTH).json()
+    assert undone["cues"][0]["text"] == "第一版"
+    assert undone["review_source"]["name"] == "first.srt"

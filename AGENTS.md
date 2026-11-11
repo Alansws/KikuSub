@@ -34,10 +34,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `server/` | **服务层（FastAPI）**。`python -m server` 启动，stdout 首行输出 `{"event":"ready","port":…,"token":…}` 供 Electron 主进程握手。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
 | `server/routes_ai.py` | 提案接口：`/api/ai/proposal`、`/api/ai/apply`、`/api/ai/prompt`、`/api/ai/from-srt`、`/api/ai/proposal/import`。 |
 | `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
+| `core/tts/` | 本地 TTS 子系统：引擎抽象（`base.py`）、macOS `say` 兜底（`mac_say.py`）、OmniVoice 零样本克隆（`clone_engine.py`）、音色仓库（`voice_manager.py`）、懒加载/空闲卸载（`manager.py`）、权重下载（`model_store.py`）。**不 import fastapi / gradio**；torch / omnivoice 只在 `load()` 里延迟导入。 |
+| `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、从视频切片建音色、上传/重命名/删除、模型下载、`/media/tts/*` 音频流。 |
 | `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`。前端不得自己算 digest 或另写校验。 |
 | `core/ai_client.py` | OpenAI 兼容的纯 urllib 客户端（不引 SDK），只管传输与 JSON 解析。 |
 | `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间。 |
-| `core/i18n.py` | 双语 cue 的唯一构造（`bilingual_cues()`），导出与显示都调它。 |
+| `core/i18n.py` | 双语排版的唯一构造：`bilingual_cues()`（一条两行，烧录/叠加层）与 `bilingual_entries()`（每语种一条，字幕交付文件）。 |
 | `core/transcribe.py` | 共用字幕数据结构/格式、时间解析、FFmpeg 音频抽取、Anime Whisper、Silero VAD 和启发式分句。 |
 | `core/qwen_ctc.py` | Qwen3-ASR 模型推理、CTC 对齐头、日语断句动态规划（含 P1-1 词边界成本）、字幕劈词修复、编码特征复用。 |
 | `core/audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台波形共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。partial 文件名带 pid + 随机后缀，支持取消。 |
@@ -46,11 +48,15 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理与后台线程 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
-| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）；改 Python 后必须先重打 sidecar。 |
+| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配 → 打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
 | `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
-| `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`。 |
+| `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |
+| `core/prompts.py` | 可编辑提示词模板库：默认模板、`{{SRT}}` / `{{LANG}}` 渲染、`prompts.json` 原子读写。 |
+| `server/routes_prompts.py` | 提示词模板接口：`/api/prompts`（读取/新建/改/选中/删除/恢复内置）。 |
+| `core/video_export.py` | 成片导出：探测、分辨率/码率规划、Pillow 字幕精灵 + ffmpeg crop/overlay 硬字幕、软字幕/仅封装。 |
+| `server/routes_export.py` | 成片导出接口：`/api/export/options`、`/api/export/plan`、`/api/export`。 |
 | `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
 | `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
 | `outputs/` | 生成的字幕样例和运行产物。 |
@@ -85,6 +91,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   同名共用），不覆盖导出交付文件；编辑成功后由 `scheduleDraftSave()` 0.9s 防抖自动写一次。
   `导出` 调 `POST /api/cues/export` 写 `settings.json` 的 `export_dir`。两者语义不同：
   草稿是防丢备份，导出是交付文件；即使没有任务报告（重开应用后手动导入字幕）也必须能导出。
+- **核对表来源与报告解耦（2026-11 修复）**：`Session.review_source`（`transcription` /
+  `import` / `draft`）随字幕快照一起返回，并参与历史回滚；导入字幕或恢复草稿后，
+  右侧检查器不得再展示上一次转写的质检速览 / 生效参数 / 输出，`GET /api/qa` 返回
+  `detached: true` 的空态且 `POST /api/qa/action` 返回 409——旧 item 与当前字幕已经
+  对不上，继续操作会删错句、补错区间。整片/追加转写会重写来源；单句/选区重转保留来源，
+  因为它不重写质检队列。
 - **跟随**：状态持久化在 `localStorage['kikusub.follow']`；**只有按钮能改它**，缩放/平移、
   点击字幕、表格、画面、质检定位一律不得改——这曾经被报成「缩放时间线/点一下字幕
   跟随就被取消」。暂停时跳转依靠 `revealPlayhead()` 平移视窗让播放头保持可见，
@@ -110,6 +122,91 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   漏句清单 / 质检 JSON / 代理缓存仍属于运行数据，留在 `output_dir`。
 - 桌面端的导入页、转写页与核对台都有「导入字幕…」，原生对话框的 `defaultPath` 就是导出目录；
   新增入口时继续走 `window.kikusub.pickSubtitle()`，不要让用户自己逐层找路径。
+- **最近打开封面**走 `core/thumbnails.py` + `GET /api/media/thumb?path=…`：先取真正的首帧，
+  用 Pillow 判断是否纯黑/接近黑场；是黑场才用 FFmpeg `thumbnail` 在前 60 秒里挑代表帧。
+  结果按「路径 + mtime + 大小」缓存在 `{output_dir}/thumbnails/`，并限制 2 个并发 ffmpeg。
+  不要为了封面解码整部片，也不要在前端用 canvas 抓首帧（MKV/HEVC 会黑屏）。
+
+### 3.4.2 历史、TTS、查找替换与手动补字幕（2026-11 新增）
+
+- **20 步可回溯历史**：`Session.history` 是「起始状态 + 每一步操作后的完整快照」的时间线，
+  `history_cursor` 指向当前状态。**不要再退回 undo_stack/redo_stack 双栈**：界面要列出
+  「这一步做了什么」并允许点任意一步跳过去，双栈没有中间态可展示。
+  - 所有编辑都必须带操作说明：`replace_review(cues, label=...)`、`update_cue(..., label=...)`；
+    新增写字幕的路径时也要传 label，否则历史里会出现「编辑字幕」这种无信息条目。
+  - 上限是 **20 步操作**（`HISTORY_LIMIT`，另加一条起始状态）；超出后从最旧的操作开始丢。
+  - `POST /api/cues/history/jump` 只移动 cursor、不产生新历史；跳转后后面的步骤仍可重做。
+  - 没有实际变化的 PATCH 不压历史（`routes_cues.patch_cue` 已做相等判断）。
+  - 前端 `cueHistory` 下拉在工具栏撤销/重做右侧；点条目走 `jumpCueHistory()`。
+- **全局撤销：字幕 + 导出设置（2026-11 扩展）**：只在核对台里撤销不够——导出页调
+  字号/描边/预设/形式/分辨率这些动作以前按了没反应，用户明确报过。
+  - `store.svelte.ts` 的 `uiHistory` 是**渲染层本地**时间线（起始状态 + 每步完整快照，
+    同样 20 步）；导出面板的字号/字重/预设/形式/字幕轨/分辨率/码率/位置写进这里。
+    **禁止**在 `ExportView.svelte` 里直接写 `exporter.size = ...` 之类：一律走
+    `setExportMode / setExportTrack / setExportResolution / setExportQuality / setExportSrt /
+    setExportOutDir / updateExportStyle / applyExportStylePreset / resetExportStyle`，
+    否则动作不会进历史。滑杆 `input` 由 `editExportUi()` 按 1.2 秒窗口合并成一步。
+  - 服务端快照带 `undo_at` / `redo_at`（`Session.undo_timestamp()` / `redo_timestamp()`）；
+    `nextUndo()/nextRedo()` 取**时间更近**的一边，所以 ⌘Z 撤回的是最近一次操作，
+    不会永远先撤字幕。
+  - 工具栏的撤销/重做/历史按钮对所有视图可见；历史面板分「字幕编辑」「导出设置」两组，
+    各自可点任意一步跳回。⌘Z 在滑杆/复选框聚焦时也要生效（`App.svelte` 的 `onKey`
+    对滑杆放行、只给文本输入框保留原生逐字撤销）。
+  - 换片（`openMedia`）时 `resetExportUiHistory()`：上一部的字号快照不该在新片上被 ⌘Z 抬回来。
+- **聚焦倍率固定 69×**：`ReviewView` 的 `FOCUS_ZOOM=69`，工具栏「聚焦」、选区「聚焦」、
+  右栏「聚焦」、质检定位全部走 `duration/69`。**禁止**再使用「当前 viewSpan / 6」这类
+  会随已有缩放叠加的公式（用户报过 145× 再点一次变 415×）。
+- **转写选区完成后必须定位到新句**：服务端 `first_cue_in_range()` 返回 `target_index`
+  （合并后第一条与区间重叠的字幕），前端 `onJobDone` 用 `jumpToCue()` 选中并强制滚动。
+  `play.selectNonce` 用于绕开 `lastRevealed` 去重；只改 `play.selected` 会遇到
+  「新句下标没变 → 表格不滚」的旧 bug。**转写选区不得改视窗缩放**：不要再在这里调
+  `focusRange()`（它会把波形放大，用户明确要求保持当前聚焦状态）。
+- **⌘F 查找与替换（只处理原文）**：`findState` 在 store 里；`ReviewView` 负责匹配计数、
+  高亮与跳转，`replaceAllInCues()` 走一次 `replaceCues`（整表提交，历史里只有一步）。
+  替换文本必须用函数替换（`() => replacement`），不能把 `$&` / `$1` 当正则替换模式。
+  菜单 `查找与替换…` 与渲染层快捷键都要能打开；输入框聚焦时也要生效。
+- **右键手动补字幕**：音轨 `contextmenu` → 「添加字幕」→ `insertCueAt(t)` 在光标处居中插入
+  **0.8 秒空字幕**（贴片尾时自动前移），随后 `play.editNonce` 让右侧检查器文本框拿到焦点。
+  这是给气声 / 模型识别为空 / 只想手打「啊」的场景用的，不要试图自动跑识别。
+  **右键菜单与新建音色浮层必须用 `portal` 挂到 `body`**：`.view-enter.animated` 的切页动画
+  `fill-mode: both` 会让计算后的 transform 变成 identity matrix，从而成为 `position: fixed`
+  的包含块；留在里面会把菜单整体推偏「侧栏 + 工具栏」的距离（用户报过「离鼠标太远」）。
+- **本机 TTS（2026-11 升级：系统 say → 本地零样本克隆）**：
+  - 引擎分两层，都在 `core/tts/`：`mac_say.py`（零显存兜底，`say -v ?` 的日语列表）与
+    `clone_engine.py`（OmniVoice，Apache-2.0，0.6B，官方建议 3–10 秒参考音频）。
+    **不要**把 VoiceStudio 的 AGPL 代码搬进来；只借鉴「参考音频克隆 + 音色管理」的产品逻辑。
+  - `voice_id` 是唯一命名空间：`system:Kyoko` / `clone:<8位id>`；空串由服务端选默认
+    （服务端默认仍是系统语音；**用户可在设置「TTS 对照」里把默认偏好切到克隆音色**，
+    存 `kikusub.ttsDefaultKind` / `kikusub.ttsDefaultVoiceId`，没有可用克隆音色时回退系统语音）。
+    只有非 macOS 拿不到 `say` 时才回退到已有克隆音色。旧接口 `POST /api/tts`
+    （`voice` + `rate`）保留兼容，内部换算成 `voice_id` + `speed`。
+  - 音色落在 `{output_dir}/voices/<id>/`：`ref.wav`（24k/单声道/PCM16，已去首尾静音、≤10s）、
+    `meta.json`（名称/参考文本/时长/来源）、`prompt.pt`（OmniVoice 声线 embedding 缓存，
+    损坏或模型升级后自动重建）。**目录名用 id，不用音色名**：用户会重命名、用中文/空格。
+  - 接口：`GET /api/tts/voices`（system + custom + engine/download 状态）、
+    `POST /api/tts/synthesize`、`POST /api/tts /voices/extract-from-media`（用 ffmpeg 从
+    当前视频精准切片 → 建音色）、`/api/tts/voices/upload`、`PATCH|DELETE /api/tts/voices/{id}`、
+    `PUT .../ref-text`、`POST /api/tts/model/download`、`GET /api/tts/model/verify`
+    （只读校验权重，0 字节文件也算缺失；设置页「校验 / 补齐」先走它，完整时不再弹下载确认）。
+  - 缓存键 =「引擎 + voice_id + 参考音频指纹(mtime/size) + ref_text + 文本 + 速度」，
+    命中直接返回文件名；`{output_dir}/tts_cache` 只留最近 240 个。音频流仍是
+    `/media/tts/{file}?token=`（`<audio>` 发不了 Authorization 头）。
+  - 资源：克隆模型**首次真正合成才加载**；空闲 `KIKUSUB_TTS_IDLE_SECONDS`（默认 300s）
+    自动卸载；`JobManager` 的 `on_heavy_job` 在 transcribe / proxy / export 开跑前调
+    `TTSManager.release()`。`KIKUSUB_TTS_DEVICE=cpu|mps` 可强制设备，
+    `KIKUSUB_TTS_MODEL_DIR` 可改权重目录（默认 `models/omnivoice`）。
+  - 下载走 `core/tts/model_store.py` 的独立后台线程（不占 `JobManager` 单槽），
+    进度由 `/api/tts/voices` 的 `engine.download` 带出；模型约 3.3GB，**不随包分发**。
+  - 前端：`store.tts` 的 `voiceId`/`speed` 落 `localStorage['kikusub.ttsVoiceId']` /
+    `['kikusub.ttsSpeed']`（旧 `ttsVoice`/`ttsRate` 自动迁移）。右侧检查器负责音色下拉
+    （克隆/系统分组）、**上传参考音频（原生对话框默认落在上次上传目录 / 当前视频目录，
+    可一次选多段，每段各建一个音色）**、**从当前句截取**、**音色库（保存/试听/设为默认/
+    重命名/删除/在访达中打开）**、模型下载；字幕表与波形右键「以此句音频新建音色…」
+    仍走 `extractTtsVoiceFromCue()`。参考音频提示只保留一行「3–10 秒、单人、干声、无音乐」。
+    换句/换片仍必须 `stopTts()`；不做云端 TTS，不读 AI Key。
+  - **降级是硬要求**：没装 `omnivoice`、没下模型、MPS 失败（回退 CPU）都必须只让克隆
+    引擎不可用，系统语音与界面不能卡死；合成失败返回可读的 502/503，前端弹 toast。
+
 
 ## 3.5 日志与诊断（2026-11 新增）
 
@@ -140,6 +237,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   选择模型目录的向导。旧用户目录里已有模型则**跳过**，保持原样。
 - 向导完成前**不得启动 sidecar**：模型目录必须作为 `KIKUSUB_MODELS_DIR` 在 spawn 时传入，
   Python 的 `core.paths.MODELS_DIR` 是 import 期常量，运行中改不了。
+- **首次启动第二步是「配置本地模型」**（`FirstRun.svelte` → `EngineSetup.svelte`）：
+  `completeSetup` 写入目录并启动 sidecar 后，列出 `core.engines` 的两个 ASR 引擎与可选的
+  OmniVoice，用户可勾选后「一键配置所选」或「稍后再说」。**默认只勾推荐 Anime Whisper；
+  OmniVoice 默认不勾**，TTS 默认仍是 `say`，但用户可在设置「TTS 对照」里切换默认偏好（见 §3.4.2）。已安装项只展示、不重复下载；
+  下载进度用 `/api/engines/{key}/download` + `/api/jobs/{id}` 与 `/api/tts/model/status` 轮询。
+  设置页「引擎与模型 → 运行首次配置…」复用同一个组件，所以老用户也能补配置。
 - 偏好写在 `dataDir()/preferences.json`（`KIKUSUB_PREFERENCES_PATH` 可覆盖）：
   `setupCompleted / modelsDir / theme`。开发模式 `dataDir()` 是仓库根，文件已 gitignore。
 - 设置页「运行环境 → 模型目录 → 更改…」会保存新目录并重启 sidecar；重启走
@@ -150,6 +253,13 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - **双击素材启动不能丢文件**：首次启动时 `open-file` 可能早于窗口/sidecar。主进程用
   `pendingFile` 等 `did-finish-load` 再送；渲染层 `openMedia()` 在内核未连接时把路径存进
   `pendingMediaPath`，`boot()` 成功后自动补导入。菜单打开/拖放到 Dock 走同一条链路。
+- **重启自动接上一次会话**：`openMedia` 成功后写 `localStorage['kikusub.lastMedia']`；
+  手动导入字幕写 `['kikusub.lastSubtitle']`（带媒体路径，防止串片）；核对台每 2.5 秒写
+  `['kikusub.lastPosition']`。冷启动 `App.svelte` 在 `boot()` 且没有 dev seed 时调
+  `restoreLastSession()`：先 `openMedia(path, { restoreDraft: true })`，有工作草稿就恢复
+  草稿，否则恢复上次手动导入的字幕，最后 `seekTo()` 回到上次播放头。**不要**把字幕快照
+  另存一份到 localStorage；必须走现有 `restoreDraft` / `openSubtitle` 链路，来源标记、
+  质检解耦与 ⌘Z 才不会和真实会话不一致。
 
 ### 快捷键
 
@@ -166,6 +276,14 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   操作主进程捕获的候选路径，渲染进程传别的路径不得生效。
 - 确认/清理期间用 `quitConfirming` 阻断重复的 `before-quit`/`close`；取消退出时必须清掉
   `quitFlow` 并让窗口继续活着。`quit:confirm` 期间 `quitting=true`，sidecar 退出后不得自动重启。
+- **退出必须先 `beginQuitTeardown()` 再动 sidecar**（2026-11 修复）：它 `sendToRenderer('app:quitting')`
+  并立刻 `win.hide()`。渲染层收到后置 `app.quitting=true`，`markSidecarDown()` 在退出期间只把
+  连接状态置灰——不弹「正在启动转写内核…」遮罩、不清会话、不弹“内核已断开”toast。
+  漏掉这步，`stopSidecar()` 的 `sidecar:down` 会被当成崩溃重启，用户按 ⌘Q 看到的是重启遮罩。
+- **`stopSidecarAndWait()` 的“已退出”判定必须同时看 `exitCode` 与 `signalCode`**：Node 里被信号
+  杀掉的子进程 `exitCode` 恒为 `null`、只有 `signalCode`。只判 `exitCode` 会让每次 ⌘Q 都等满
+  5 秒超时（sidecar 实际 0.3 秒就退了）。`restartSidecar()` 的存活判定同理；`child.on('exit')`
+  里还要把 `childRef` 置空，否则崩溃后 `activate` / 改模型目录会把死引用当活内核。
 - 清理逻辑在 `desktop/main/files.cjs`，用 `node --test desktop/test/files.test.cjs` 回归；
   区间文件名正则要与 `core/subtitles.format_time_tag` 保持一致（`00m40s-00m52s`、
   `01h02m03s`、`from_`/`to_`）。`isFragmentSubtitle()` 必须排除
@@ -232,8 +350,17 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   不进 `review_cues` 的撤销栈；译文有自己的 `translation_undo[lang]`（上限 20 版）。
 - 条数必须相等、`i` 必须连续、digest 必须匹配；**不通过就整批拒绝**，
   绝不落一份对不齐的轨（`test_server_translations.py`）。
-- 双语 = **一条 cue 两行**（D-4），构造只有一份实现：`core/i18n.bilingual_cues()`。
-  导出与显示都调它，禁止各写一遍。
+- 双语分两种排版，**不能混用**（D-4，2026-11 修订）：
+  - `core/i18n.bilingual_cues()` = **一条 cue 两行**，只给画面叠加层与烧录硬字幕用
+    （ffmpeg 字幕精灵按 cue 取块，一条两行才能一起排版）。
+  - `core/i18n.bilingual_entries()` = **每语种一条独立 cue**、共享同一时间轴，给
+    `.bilingual.srt/.vtt` 交付文件用。官方双语 SRT（如诸神字幕组）就是这个写法；
+    重新导入核对台时每条都是单行，不会被 `white-space:nowrap` 挤成「日文 中文」一行。
+  - 字幕文件导出（`/api/cues/export`、成片附带 SRT）走 `bilingual_entries()`；
+    烧录/叠加层走 `bilingual_cues()`。两处各写一遍同样禁止。
+- 旧版双语文件（同一条 cue 两行）导入时按 `.bilingual.srt/.vtt` 文件名拆开：
+  `core/subtitles.split_multiline_cues()`；普通 SRT 的多行 cue 不拆（只影响显示，
+  表格用「 / 」连接、画面叠加层按 `\n` 分行）。
 - 三态导出：`POST /api/cues/export` 的 `track`（`source|target|both`）+ `lang`；
   文件名后缀 `.lang` / `.bilingual`。**新增后缀必须同步 `desktop/main/files.cjs`
   的 `TRANSLATION_SUFFIX`**，否则退出清理会把交付物当碎片默认删除。
@@ -262,6 +389,84 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   为的是让模型逐条对齐），`POST /api/ai/from-srt` 解析回复时**只按顺序取文本，
   序号与时间戳全部丢弃**，时间轴仍用我们自己的 cue。条数不符整批拒绝（422）。
   改这块时不要把解析结果里的时间戳写回字幕——那会直接破坏 D-1。
+
+## 3.8 提示词模板、成片导出与手动代理（2026-11 新增）
+
+### 3.8.1 提示词模板库
+
+- 模板是普通 JSON，默认与 `settings.json` 同级（`prompts.json`，
+  `KIKUSUB_PROMPTS_PATH` 可覆盖）。内置两条：`legacy`（原有模板）与
+  `localization`（成熟汉化组）；用户对内置模板的修改会持久化，删掉文件恢复出厂。
+- 正文占位符只有 `{{SRT}}` 与 `{{LANG}}`（兼容旧版 `__SRT__` / `__LANG__`）。
+  **没有 `{{SRT}}` 时自动把当前字幕追加到末尾**，所以纯指令模板也能直接用。
+- 手动通道 `GET /api/ai/prompt` 现在接受 `template_id`，缺省用当前选中模板；
+  解析回来的 SRT 仍然**只按顺序取文本**，序号/时间戳全部丢弃（D-1 不破）。
+- 界面：侧栏「提示词库」；单击选中、双击就地编辑；保存后 AI 优化台的
+  「复制提示词」立刻用新内容。禁止把模板内容写进 `settings.json` 或日志。
+
+### 3.8.2 成片导出
+
+- **不要依赖 ffmpeg 的 `subtitles` / `ass` 滤镜**：Homebrew 的 ffmpeg 默认没有
+  libass/freetype（本机 9.0.2 实测没有）。硬字幕走 Pillow 透明精灵 + ffmpeg
+  `crop` 时间表达式 + 单个 `overlay`；每批最多 60 句（240 句时 FFmpeg 会报
+  `Failed to configure input pad`），块高固定，第 0 块是空白。
+- 输出文件名用**实际高度**（源 360p 选 1080p 不会放大，名字写 `360p`），不要
+  用用户选的档位骗人。
+- 三种模式：`burn`（重编码 + 烧录）、`soft`（重编码 + `mov_text` 软字幕）、
+  `copy`（`-c copy` + 软字幕，MP4 不兼容时退回 MKV）。`copy` 模式忽略分辨率/
+  码率，规划里要明确告诉用户。
+- 编码先试 `h264_videotoolbox`，失败回退 `libx264`；音频 AAC（≥720p 192k，
+  否则 128k）；写 `.part` 再原子 rename；`JobManager` 单槽，kind=`export`。
+- **进度与取消（2026-11 修复）**：ffmpeg 命令必须带 `-nostats -progress pipe:1`，
+  `core/video_export._progress_reader` 用读线程 + 队列轮询，每 150ms 检查取消令牌。
+  旧实现没有 `-progress`，stdout 永远没有数据：进度停在 0%，取消也要等 ffmpeg 自己跑完。
+  精灵渲染阶段同样要报进度（0–10%）并在每批前检查取消/关机状态。
+- **不能留下孤儿 ffmpeg（2026-11 修复）**：Electron 以 `detached:true` 启动 sidecar
+  （新进程组），退出时 `kill(-pid)` 覆盖整棵树；主进程退出路径必须
+  `await stopSidecarAndWait()` 后再 `app.exit`，不能只发信号就走。
+  sidecar 侧：`_KikuSubServer` 在 SIGTERM/SIGINT 时先 `jobs.cancel_all()`，
+  再 `begin_shutdown()` + `terminate_all_processes()`；`core/procutil` 的
+  `SPAWN_LOCK` 保证关机开始后不会再出生新的 ffmpeg；`server/__main__.py` 还有
+  父进程看门狗（Electron 崩溃/被强杀时 sidecar 在 2s 内自杀）。
+  **禁止**把这些改回裸 `subprocess.run` 或只 `child.kill()`。
+- **字幕样式（2026-11 新增）**：`SubtitleStyle`（字体/字重/字号/描边/阴影/位置/颜色）
+  只影响 `burn`；字体以「文件名 + TTC 内 family/style 名」解析（macOS 的 PingFang、
+  兰亭黑等位于 AssetsV2 的 hash 目录，禁止写死路径）。内置预设见 `STYLE_PRESETS`；
+  `/api/export/styles` 必须返回本机可用性，`/api/export/style-preview` 用与导出
+  完全相同的 `_text_layer()` 渲染 PNG（可带真实视频帧与 `zoom` 特写）。
+  改样式字段时同步 `desktop/renderer/src/lib/api.ts` 的 `SubtitleStylePayload`。
+- 目录：设置里的 `video_export_dir`，空值跟随 `export_dir`；所有路径统一在
+  设置页「运行环境」的 `.path-row` 列表中展示/更改。
+- 依赖：`Pillow>=10` 必须进 `requirements.txt`；`plan_export` 在缺 Pillow 时
+  直接给「改用软字幕」的可读错误。`tests/test_export.py` 覆盖 burn/soft/copy。
+
+### 3.8.3 手动代理
+
+- `MediaInfo` 现在带 `video_width/height/bitrate` 与 `proxy_reason`
+  （`container` / `codec` / `bitrate`）。`needs_proxy` 在码率 ≥25 Mbps 时也为真。
+- 自动压制仍由 `auto_proxy` 控制；核对台工具栏与画面提示都提供手动
+  「压制代理」，不依赖自动判定。代理任务仍走 `/api/jobs` 的 `kind=proxy`。
+- 高码率 H.264 的提示文案要说明「能播但拖动卡」，不要写成「无法解码」。
+
+### 3.8.3.1 媒体 Range（2026-11 修复）
+
+- 当前 Starlette 0.38 的 `FileResponse` **没有 Range 支持**（0.39 才加），直接返回
+  `FileResponse` 会让 `<video>` 拖动进度条时重新下载整段。`server/routes_media.py`
+  的 `_media_response()` 自己处理单段 Range：206 + `Content-Range`，只读请求区间；
+  无效 Range 返回 416；无 Range 才退回 `FileResponse`。**不要**再把 `stream_media`
+  改回裸 `FileResponse`。`tests/test_server_api.py` 与 `tests/test_proxy.py` 的
+  Range 用例是这条的回归保护。
+
+### 3.8.4 日志清理与复制
+
+- `/api/diagnostics/log/clean` 保持「按保留策略清备份」的语义；新增
+  `/api/diagnostics/log/clear` 才**一定释放空间**：通过 handler 的
+  `doRollover()` 轮转活动日志，再按 0 天/0 字节删备份，绝不直接 truncate
+  正在写的流。主进程的 `main.log` 由 `logs:clear-main` IPC 截断/删备份。
+- 设置页文案必须区分两者；`clean` 返回 0 时提示「没有过期备份，可点清空全部」。
+- 「复制最近日志」限制 80 行、每行 500 字符；「复制精简诊断」只带最近 8 条问题
+  + 20 行日志 + 路径/引擎摘要，并硬截断 24k 字符。**禁止**再把完整 300 行
+  日志或 8000 字符 detail 直接塞进剪贴板。
 
 ## 4. 转录任务详报面板（Gradio 版，已归档）
 

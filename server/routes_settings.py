@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from core import engines
 from core import settings as settings_store
-from core.logging_setup import prune_logs
+from core.logging_setup import clear_logs, prune_logs
 from core.paths import MODELS_DIR, OUTPUT_DIR, PRESETS_PATH
 
 from . import API_VERSION
@@ -50,8 +50,9 @@ CLIENT_LEVELS = {
 class SettingsPatch(BaseModel):
     enabled_engines: list[str] | None = None
     auto_proxy: bool | None = None
-    # 空字符串表示恢复默认（应用输出目录）。非空必须是绝对路径。
+    # 空字符串表示恢复默认（应用输出目录 / 跟随字幕导出目录）。非空必须是绝对路径。
     export_dir: str | None = None
+    video_export_dir: str | None = None
 
 
 class ClientLog(BaseModel):
@@ -119,16 +120,49 @@ def _export_dir(request: Request, settings: dict | None = None) -> Path:
     )
 
 
+def _video_export_dir(request: Request, settings: dict | None = None) -> Path:
+    current = settings if settings is not None else settings_store.load_settings(_settings_path(request))
+    return settings_store.resolve_video_export_dir(
+        current,
+        Path(getattr(request.app.state.config, "output_dir", OUTPUT_DIR)),
+    )
+
+
 def _paths(request: Request, settings: dict | None = None) -> dict:
+    output_dir = Path(getattr(request.app.state.config, "output_dir", OUTPUT_DIR))
     return {
-        "output_dir": str(getattr(request.app.state.config, "output_dir", OUTPUT_DIR)),
+        "output_dir": str(output_dir),
         "export_dir": str(_export_dir(request, settings)),
+        "video_export_dir": str(_video_export_dir(request, settings)),
         "models_dir": str(MODELS_DIR),
         "presets_path": str(PRESETS_PATH),
         "settings_path": str(_settings_path(request)),
+        "proxy_dir": str(output_dir / "web_proxies"),
+        "tts_cache_dir": str(output_dir / "tts_cache"),
+        "voices_dir": str(output_dir / "voices"),
+        "tts_model_dir": str(
+            getattr(request.app.state.config, "tts_model_dir", None)
+            or (MODELS_DIR / "omnivoice")
+        ),
         "log_path": str(_log_path(request)),
         "log_dir": str(_log_path(request).parent),
     }
+
+
+def _validate_dir(raw: str, label: str) -> str:
+    text = raw.strip()
+    if not text:
+        return ""
+    target = Path(text).expanduser()
+    if not target.is_absolute():
+        raise HTTPException(status_code=422, detail=f"{label}必须使用绝对路径")
+    if target.exists() and not target.is_dir():
+        raise HTTPException(status_code=422, detail=f"不是文件夹：{target}")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=422, detail=f"无法创建{label}：{exc}") from exc
+    return str(target.resolve())
 
 
 def _payload(request: Request, settings: dict) -> dict:
@@ -161,20 +195,9 @@ def patch_settings(payload: SettingsPatch, request: Request) -> dict:
     if payload.auto_proxy is not None:
         patch["auto_proxy"] = payload.auto_proxy
     if payload.export_dir is not None:
-        raw = payload.export_dir.strip()
-        if not raw:
-            patch["export_dir"] = ""
-        else:
-            target = Path(raw).expanduser()
-            if not target.is_absolute():
-                raise HTTPException(status_code=422, detail="导出文件夹必须使用绝对路径")
-            if target.exists() and not target.is_dir():
-                raise HTTPException(status_code=422, detail=f"不是文件夹：{target}")
-            try:
-                target.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                raise HTTPException(status_code=422, detail=f"无法创建导出文件夹：{exc}") from exc
-            patch["export_dir"] = str(target.resolve())
+        patch["export_dir"] = _validate_dir(payload.export_dir, "导出文件夹")
+    if payload.video_export_dir is not None:
+        patch["video_export_dir"] = _validate_dir(payload.video_export_dir, "成片导出文件夹")
     if not patch:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 
@@ -278,6 +301,7 @@ def diagnostics(request: Request, lines: int = 200) -> dict:
         ),
         "log_path": str(log_path),
         "log_exists": log_path.exists(),
+        "log_bytes": log_path.stat().st_size if log_path.exists() else 0,
         "log_tail": tail,
         "recent_problems": errors,
     }
@@ -289,6 +313,24 @@ def clean_logs(request: Request) -> dict:
     result = prune_logs(_log_path(request).parent)
     log.info(
         "日志清理 | removed=%s | freed=%s | total=%s | dir=%s",
+        result.get("removed"),
+        result.get("freed"),
+        result.get("total_bytes"),
+        result.get("log_dir"),
+    )
+    return result
+
+
+@router.post("/api/diagnostics/log/clear")
+def clear_log_files(request: Request) -> dict:
+    """真正释放日志占用：轮转活动日志并删除全部备份。
+
+    设置页的「清空全部日志」走这里；`/clean` 仍保留按保留策略清理的语义。
+    """
+    result = clear_logs(_log_path(request).parent)
+    log.info(
+        "日志清空 | rotated=%s | removed=%s | freed=%s | total=%s | dir=%s",
+        result.get("rotated"),
         result.get("removed"),
         result.get("freed"),
         result.get("total_bytes"),

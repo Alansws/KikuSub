@@ -165,6 +165,45 @@ def prune_logs(
     }
 
 
+def clear_logs(log_dir: str | Path, *, active_names: frozenset[str] | set[str] = ACTIVE_LOG_NAMES) -> dict:
+    """用户主动「清空全部日志」：轮转活动日志，再删掉所有备份。
+
+    与 :func:`prune_logs` 的区别是**一定**会释放空间：prune 只按保留策略删过期
+    备份，在「只有一个 5 MB 活动日志、没有轮转备份」时返回 0，用户会以为按钮坏了。
+    这里先把活动文件滚成 ``.log.1``（handler 自己关闭/重开，不碰 inode），再把
+    备份按 0 天 / 0 字节策略全部删掉。永远不直接 truncate 正在写的 handler 流。
+    """
+    directory = Path(log_dir)
+    rotated = 0
+    if directory.exists():
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            if not getattr(handler, "_kikusub_handler", False):
+                continue
+            if not isinstance(handler, logging.handlers.RotatingFileHandler):
+                continue
+            try:
+                handler.acquire()
+                handler.doRollover()
+                rotated += 1
+            except Exception:  # noqa: BLE001 - 轮转失败退化为普通清理
+                logging.getLogger(__name__).debug("活动日志轮转失败", exc_info=True)
+            finally:
+                try:
+                    handler.release()
+                except Exception:
+                    pass
+
+    result = prune_logs(
+        directory,
+        max_age_days=0,
+        max_total_bytes=0,
+        active_names=active_names,
+    )
+    result["rotated"] = rotated
+    return result
+
+
 def setup_logging(
     log_dir: str | Path,
     *,

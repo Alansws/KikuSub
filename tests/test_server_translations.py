@@ -203,7 +203,7 @@ def test_export_target_only_translation(ctx):
     assert "早上好" in text and "おはよう" not in text
 
 
-def test_export_bilingual_puts_both_lines(ctx):
+def test_export_bilingual_writes_one_cue_per_language(ctx):
     client, _ = ctx
     client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
     res = client.post(
@@ -213,9 +213,58 @@ def test_export_bilingual_puts_both_lines(ctx):
     assert path.name.endswith(".bilingual.srt")
 
     cues = srt_to_cues(path.read_text(encoding="utf-8"))
-    assert len(cues) == 3
-    assert cues[0].text == "おはよう\n早上好"
-    assert [(c.start, c.end) for c in cues] == [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    # 每条 cue 只有一行：原文一条、译文一条，共享同一时间轴（官方双语 SRT 的写法）
+    assert len(cues) == 6
+    assert [c.text for c in cues] == ["おはよう", "早上好", "今日は雨だ", "今天下雨", "またね", "再见"]
+    assert all("\n" not in c.text for c in cues)
+    assert [(c.start, c.end) for c in cues] == [
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (1.0, 2.0),
+        (1.0, 2.0),
+        (2.0, 3.0),
+        (2.0, 3.0),
+    ]
+
+
+def test_reimport_bilingual_export_has_single_line_cues(ctx):
+    """回归：`.bilingual.srt` 重新导入核对台不能把两种语言挤成一行。"""
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    exported = client.post(
+        "/api/cues/export", headers=AUTH, json={"format": "SRT", "track": "both", "lang": "zh-Hans"}
+    ).json()
+    imported = client.post("/api/cues/import", headers=AUTH, json={"path": exported["path"]})
+    assert imported.status_code == 200, imported.text
+    cues = imported.json()["cues"]
+    assert len(cues) == 6
+    assert all("\n" not in cue["text"] for cue in cues)
+    assert cues[0]["text"] == "おはよう" and cues[1]["text"] == "早上好"
+
+
+def test_import_legacy_bilingual_two_line_cue_is_split(ctx, tmp_path):
+    """旧版导出把两种语言写在一条 cue 的两行里；导入时按行拆开。"""
+    client, tmp_path = ctx
+    legacy = tmp_path / "episode.bilingual.srt"
+    legacy.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nおはよう\n早上好\n\n"
+        "2\n00:00:01,000 --> 00:00:02,000\nまたね\n",
+        encoding="utf-8",
+    )
+    res = client.post("/api/cues/import", headers=AUTH, json={"path": str(legacy)})
+    assert res.status_code == 200, res.text
+    cues = res.json()["cues"]
+    assert [c["text"] for c in cues] == ["おはよう", "早上好", "またね"]
+
+
+def test_import_plain_multiline_srt_keeps_lines(ctx, tmp_path):
+    """普通 SRT 的多行 cue 不做拆分：只有 .bilingual 文件名才按双语处理。"""
+    client, tmp_path = ctx
+    plain = tmp_path / "episode.srt"
+    plain.write_text("1\n00:00:00,000 --> 00:00:01,000\n長い行\n折り返し\n", encoding="utf-8")
+    res = client.post("/api/cues/import", headers=AUTH, json={"path": str(plain)})
+    assert res.status_code == 200, res.text
+    assert [c["text"] for c in res.json()["cues"]] == ["長い行\n折り返し"]
 
 
 def test_export_target_without_track_is_409(ctx):

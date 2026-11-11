@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('kikusub', {
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),
   // 默认打开导出文件夹，只让用户挑字幕；设置页用 pickDirectory 选导出目录
   pickSubtitle: (defaultDir) => ipcRenderer.invoke('dialog:pick-subtitle', defaultDir),
+  // 克隆音色的参考音频：只读路径，转换与落盘都在 Python 侧
+  pickAudio: (defaultDir) => ipcRenderer.invoke('dialog:pick-audio', defaultDir),
   pickProposal: (defaultDir) => ipcRenderer.invoke('dialog:pick-proposal', defaultDir),
 
   // Agent 技能：把随包 skill 装到 ~/.agents/skills/（DSH 扫描的用户级根）
@@ -56,6 +58,8 @@ contextBridge.exposeInMainWorld('kikusub', {
 
   // 剪贴板：file:// 页面里 navigator.clipboard 不一定可用，走主进程更稳
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
+  // 设置页「清空全部日志」：sidecar 清 kikusub.log，主进程清 main.log
+  clearMainLog: () => ipcRenderer.invoke('logs:clear-main'),
 
   // 文件操作（只给「在访达中显示」，不给读写）
   revealInFinder: (target) => ipcRenderer.invoke('shell:reveal', target),
@@ -76,6 +80,8 @@ contextBridge.exposeInMainWorld('kikusub', {
   // 退出前清理：主进程发清单，渲染进程回传要保留的路径
   onQuitPrompt: (cb) => on('quit:prompt', cb),
   onQuitCancelled: (cb) => on('quit:cancelled', cb),
+  // 主进程已在退出：之后的 sidecar:down 是收尾，不是内核崩溃，别弹重启遮罩
+  onQuitting: (cb) => on('app:quitting', cb),
   // 页面可能比 before-quit 晚挂载：启动时补问一次当前待确认的清理清单
   getQuitPrompt: () => ipcRenderer.invoke('quit:get'),
   confirmQuit: (keepPaths) => ipcRenderer.invoke('quit:confirm', keepPaths),
@@ -90,6 +96,7 @@ contextBridge.exposeInMainWorld('kikusub', {
       on('menu:export', () => cb({ type: 'export' })),
       on('menu:inspector', () => cb({ type: 'inspector' })),
       on('menu:theme', () => cb({ type: 'theme' })),
+      on('menu:find', () => cb({ type: 'find' })),
       on('menu:play', () => cb({ type: 'play' })),
       on('menu:prev-cue', () => cb({ type: 'prev-cue' })),
       on('menu:next-cue', () => cb({ type: 'next-cue' })),

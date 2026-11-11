@@ -17,23 +17,31 @@
    * - 每一行都能单独重转，不会冲掉整张表；
    * - 质检面板通过 store 的 focusRange 定位到这里，跳转是真的跳。
    */
-  import { untrack } from 'svelte';
+  import { tick as nextTick, untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
   import {
     app,
     applyCueTimes,
+    closeFind,
+    extractTtsVoiceFromCue,
+    findState,
     focusRange,
+    insertCueAt,
     isTranslationStale,
-    openSubtitle,
+    jumpToCue,
     play,
     previewRange,
+    rememberPlayhead,
+    replaceAllInCues,
+    replaceInCue,
     seekTo,
-    setView as switchView,
+    startProxyJob,
     toast,
     translationAt,
     transcribeRange,
+    tts,
   } from '../lib/store.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
 
@@ -52,9 +60,9 @@
   let scrollTop = $state(0);
   let viewH = $state(0);
   let waveW = $state(0);
-  // 波形高度：默认比旧版高一半，可拖动底部把手调整；记住用户选择。
+  // 波形高度：默认 80（D 稿），可拖动底部把手调整；记住用户选择。
   const savedHeight = Number(localStorage.getItem('kikusub.waveHeight') || 0);
-  let waveHeight = $state(Math.max(110, Math.min(300, savedHeight || 148)));
+  let waveHeight = $state(Math.max(72, Math.min(300, savedHeight || 80)));
 
   // 波形视窗（秒）。duration 来自媒体元数据。
   const duration = $derived(app.media?.duration ?? 0);
@@ -69,6 +77,11 @@
   let selection = $state<{ start: number; end: number } | null>(null);
 
   const MIN_SPAN = 0.5;
+  /**
+   * 所有「聚焦」按钮的统一倍率：相对全片时长固定 69×，不会因为当前已经放大
+   * 到 145× 再点一次就叠成 415×。用户明确要求「聚焦定死 69 倍」。
+   */
+  const FOCUS_ZOOM = 69;
 
   // 时间轴三条竖带。绘制与命中判定共用同一组常量，避免“看到的”和“点到的”错位。
   const RULER_H = 17; // 顶部刻度条：按住拖动 = 擦洗播放头
@@ -85,19 +98,29 @@
   let hoverKey = $state('');
   let dragKey = $state('');
   let cueTip = $state<{ x: number; label: string } | null>(null);
+  /** 音轨/字幕表右键菜单：在光标处插入空字幕，或把这一句切成克隆音色。 */
+  let contextMenu = $state<{ x: number; y: number; t: number; index: number } | null>(null);
+  /** 「以此句音频新建音色」浮层：命名 + 可选参考文本。 */
+  let voiceDialog = $state<{ index: number; name: string; refText: string } | null>(null);
+  let voiceBusy = $state(false);
+  let voiceNameEl = $state<HTMLInputElement | null>(null);
 
   // 视频进度条拖动
   let trackDrag = $state(false);
   // 最近一次自动滚到/选中过的字幕行，避免同一句反复滚动
   let lastRevealed = -1;
 
-  // 虚拟列表：行高固定 26px，只渲染可视区 ± OVERSCAN 行。
-  const ROW_H = 26;
-  const OVERSCAN = 6;
+  // 虚拟列表：行高固定 30px（双语 60px），只渲染可视区 ± OVERSCAN 行。
+  const ROW_H = 30;
+  const OVERSCAN = 7;
 
   // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
   const src = $derived(
     app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready)) : '',
+  );
+  const proxyBusy = $derived(
+    app.jobKind === 'proxy' &&
+      (app.job?.status === 'running' || app.job?.status === 'queued'),
   );
 
   // 当前播放到的字幕。双语 SRT 的两行区间完全相同，必须一起显示。
@@ -134,16 +157,19 @@
 
     // 画面字幕跟着「原文 / 译文 / 双语」切换：双语是原文在上、译文在下。
     // 译文缺失时退回原文，绝不在画面上留空行。
+    //
+    // 一条 cue 里可能带 `\n`（外部 SRT 的硬换行、旧版双语文件）：必须拆成多行
+    // 交给叠加层，否则 `white-space` 会把它压成「日文 中文」一行（用户报过）。
     for (const k of idxs) {
-      const source = cues[k].text;
-      const target = translationAt(k);
+      const sourceLines = captionTextLines(cues[k].text);
+      const targetLines = captionTextLines(translationAt(k));
       if (app.track === 'target') {
-        lines.push(target || source);
+        lines.push(...(targetLines.length ? targetLines : sourceLines));
       } else if (app.track === 'both') {
-        lines.push(source);
-        if (target) lines.push(target);
+        lines.push(...sourceLines);
+        if (targetLines.length) lines.push(...targetLines);
       } else {
-        lines.push(source);
+        lines.push(...sourceLines);
       }
     }
     return lines;
@@ -324,10 +350,15 @@
     const h = waveWrap.clientHeight;
     if (!w || !h) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    // 播放时每帧都会重绘：只在尺寸真变了的时候重设画布，避免每帧重新分配位图。
+    const pw = Math.round(w * dpr);
+    const ph = Math.round(h * dpr);
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width = pw;
+      canvas.height = ph;
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
@@ -337,7 +368,7 @@
     const sep = token('--separator-soft', 'rgba(0,0,0,.06)');
     const sepStrong = token('--separator', 'rgba(0,0,0,.1)');
     const waveColor = token('--wave', '#7b8a99');
-    const accent = token('--accent', '#007aff');
+    const accent = token('--accent', '#4f6bff');
     const text3 = token('--text-3', '#98989d');
     const cueLane = token('--cue-lane', 'rgba(0,0,0,.055)');
     const cueWash = token('--cue-wash', 'rgba(0,122,255,.035)');
@@ -367,7 +398,7 @@
 
     // 时间刻度
     const step = pickStep(viewSpan);
-    ctx.font = '9.5px -apple-system, ui-monospace, Menlo, monospace';
+    ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
     ctx.textBaseline = 'top';
     const first = Math.ceil(viewStart / step) * step;
     for (let t = first; t <= viewStart + viewSpan; t += step) {
@@ -377,7 +408,10 @@
       ctx.fillRect(x, 0, 1, major ? 7 : 4);
       if (major || step >= 5) {
         ctx.fillStyle = text3;
-        ctx.fillText(rulerLabel(t, step), x + 3, 1);
+        const label = rulerLabel(t, step);
+        const lw = ctx.measureText(label).width;
+        // 最右一格的标签别被画布裁掉：贴着右边界时向左放
+        ctx.fillText(label, x + 4 + lw > w ? Math.max(0, x - lw - 4) : x + 3, 1);
       }
     }
     ctx.fillStyle = sep;
@@ -387,15 +421,14 @@
     // 之前是「一个采样点画一根柱子」，放大后柱子间距会被拉开；逐像素合并后
     // 无论缩放到多深都是一条连续的包络，不会出现可数的柱形。
     const n = peaks.length;
-    if (!n) {
-      ctx.fillStyle = sepStrong;
-      ctx.fillRect(0, Math.round(mid), w, 1);
-    } else {
-      ctx.fillStyle = waveColor;
-      ctx.globalAlpha = 0.88;
+    const paintBars = (color: string, alpha: number, right: number) => {
+      if (!n) return;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = alpha;
       const span = peaksSpan || 1;
       const perBin = span / n;
-      for (let x = 0; x < w; x += 1) {
+      const limit = Math.max(0, Math.min(w, right));
+      for (let x = 0; x < limit; x += 1) {
         const t0 = viewStart + (x / w) * viewSpan;
         const t1 = viewStart + ((x + 1) / w) * viewSpan;
         let i0 = Math.floor((t0 - peaksFrom) / perBin);
@@ -414,16 +447,25 @@
         ctx.fillRect(x, mid - bh / 2, 1, bh);
       }
       ctx.globalAlpha = 1;
+    };
+    if (!n) {
+      ctx.fillStyle = sepStrong;
+      ctx.fillRect(0, Math.round(mid), w, 1);
+    } else {
+      paintBars(waveColor, 0.9, w);
+      // 已播放段用 accent 再画一遍：当前进度在波形上一眼可见（比未播放段更深）
+      const playedX = xOf(play.time);
+      if (playedX > 0.5) paintBars(accent, 0.9, playedX);
     }
 
-    // 选中行的区间高亮（不是选区，只是当前条目）
+    // 选中行的区间高亮（不是选区，只是当前条目）：中性墨，别再加一层蓝
     if (play.selected >= 0 && app.cues[play.selected]) {
       const sel = app.cues[play.selected];
       const x0 = Math.max(0, xOf(sel.start));
       const x1 = Math.min(w, xOf(sel.end));
       if (x1 > x0) {
-        ctx.fillStyle = accent;
-        ctx.globalAlpha = 0.07;
+        ctx.fillStyle = sepStrong;
+        ctx.globalAlpha = 0.5;
         ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
         ctx.globalAlpha = 1;
       }
@@ -505,6 +547,7 @@
     void dragKey;
     void app.theme;
     void waveW;
+    void play.time;
     requestAnimationFrame(draw);
   });
 
@@ -699,8 +742,8 @@
     const req = play.focus;
     if (!req || req.nonce === seenFocus) return;
     seenFocus = req.nonce;
-    const pad = Math.min(2.5, Math.max(0.5, (req.end - req.start) * 0.6));
-    const span = Math.max(2, req.end - req.start + pad * 2);
+    // 右栏「聚焦」/ 质检定位也统一 69×：区间本身仍然框出来，但倍率不叠加。
+    const span = focusSpan();
     const center = (req.start + req.end) / 2;
     // 这是程序化定位，不是用户手势：不要顺手关掉跟随
     setView(center - span / 2, span);
@@ -969,6 +1012,7 @@
 
   function onWavePointerDown(e: PointerEvent) {
     if (!waveWrap || e.button !== 0) return;
+    contextMenu = null;
     try {
       (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     } catch {
@@ -1067,8 +1111,111 @@
     selection = { start: Math.min(dragAnchor, t), end: Math.max(dragAnchor, t) };
   }
 
+  // 记住播放头：定时写 localStorage，重启后自动回到上次的位置。
+  // 不在 $effect 里直接写：播放时 play.time 每帧变化，会变成每帧一次 localStorage。
+  $effect(() => {
+    const media = app.media;
+    if (!media) return;
+    const timer = setInterval(() => {
+      if (play.time > 0.2) rememberPlayhead(play.time);
+    }, 2500);
+    return () => clearInterval(timer);
+  });
+
   function t0() {
     return viewStart + viewSpan;
+  }
+
+  /**
+   * 把浮层挂到 body 下。
+   *
+   * `.view-enter.animated` 的切页动画带 `animation-fill-mode: both`，结束后
+   * 计算出的 transform 仍是 identity matrix——它会让 `position: fixed` 相对
+   * 这个容器定位，于是右键菜单被整体推开了「侧栏 + 工具栏」那么多（用户报过
+   * 「菜单离鼠标太远」）。挂到 body 后 clientX/clientY 才是真正的视口坐标。
+   */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
+  /** 光标下是否有字幕；返回下标，没有就 -1。 */
+  function cueUnder(t: number): number {
+    for (let i = 0; i < app.cues.length; i += 1) {
+      if (app.cues[i].start <= t && t <= app.cues[i].end) return i;
+    }
+    return -1;
+  }
+
+  /** 右键：菜单出现在光标处；越靠近窗口边缘越往回收，避免被裁掉。 */
+  function onWaveContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    const t = Math.max(0, Math.min(duration || Number.POSITIVE_INFINITY, timeAt(e.clientX)));
+    const hit = cueUnder(t);
+    if (hit >= 0) play.selected = hit;
+    const x = Math.min(e.clientX, window.innerWidth - 232);
+    const y = Math.min(e.clientY, window.innerHeight - 132);
+    contextMenu = { x, y, t, index: hit };
+  }
+
+  /** 字幕表整行右键：选中这一行，并提供「以此句音频新建音色」。 */
+  function onCueContextMenu(e: MouseEvent, index: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    play.selected = index;
+    const cue = app.cues[index];
+    const x = Math.min(e.clientX, window.innerWidth - 232);
+    const y = Math.min(e.clientY, window.innerHeight - 132);
+    contextMenu = { x, y, t: cue?.start ?? timeAt(e.clientX), index };
+  }
+
+  async function addCueHere() {
+    const t = contextMenu?.t ?? play.time;
+    contextMenu = null;
+    await insertCueAt(t);
+  }
+
+  /** 右键「以此句音频新建音色…」：先给角色起名，再让后端精确切片。 */
+  function openVoiceDialog(index: number) {
+    contextMenu = null;
+    const cue = app.cues[index];
+    if (!cue) return;
+    voiceDialog = {
+      index,
+      name: `角色 ${tts.custom.length + 1}`,
+      refText: cue.text,
+    };
+  }
+
+  // 浮层打开后把焦点放进名字输入框（比 autofocus 更可控，也不会触发 Svelte 的无障碍告警）
+  $effect(() => {
+    if (!voiceDialog) return;
+    void nextTick().then(() => {
+      voiceNameEl?.focus();
+      voiceNameEl?.select();
+    });
+  });
+
+  async function createVoiceFromCue() {
+    if (!voiceDialog) return;
+    const name = voiceDialog.name.trim();
+    if (!name) {
+      toast('先给这个音色起个名字', 'warn');
+      return;
+    }
+    voiceBusy = true;
+    try {
+      await extractTtsVoiceFromCue(voiceDialog.index, name, voiceDialog.refText);
+      voiceDialog = null;
+    } catch (err) {
+      toast(`提取音色失败：${(err as Error).message}`, 'error');
+    } finally {
+      voiceBusy = false;
+    }
   }
 
   function onWavePointerUp(e: PointerEvent) {
@@ -1159,16 +1306,22 @@
     setView(0, duration || viewSpan);
   }
 
-  /** 一键聚焦：把播放头附近放大到便于核对的尺度。 */
+  /** 聚焦统一用同一个 span：duration / 69。媒体还没就绪时才退回 2–12 秒。 */
+  function focusSpan() {
+    if (duration > 0) return Math.max(MIN_SPAN, duration / FOCUS_ZOOM);
+    return Math.max(2, Math.min(12, viewSpan / 6 || 6));
+  }
+
+  /** 一键聚焦：把播放头附近放大到固定 69×（不随当前缩放叠加）。 */
   function focusPlayhead() {
-    const span = Math.max(2, Math.min(12, viewSpan / 6 || 6));
+    const span = focusSpan();
     setView(play.time - span / 2, span);
     follow = true;
   }
 
   function focusSelection() {
     if (!selection) return;
-    const span = Math.max(1.5, (selection.end - selection.start) * 1.6);
+    const span = focusSpan();
     const center = (selection.start + selection.end) / 2;
     setView(center - span / 2, span);
   }
@@ -1186,6 +1339,131 @@
   function selectCue(i: number, doSeek = true) {
     play.selected = i;
     if (doSeek) seek(app.cues[i].start + 0.02);
+  }
+
+  // ---------------- 查找与替换（⌘F，只作用于原文） ----------------
+  let findInput = $state<HTMLInputElement | null>(null);
+
+  function escapeRe(text: string) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /** 所有匹配：记录属于第几条、在文本里的起止，用于计数、跳转与高亮。 */
+  const findMatches = $derived.by(() => {
+    const query = findState.query;
+    const hits: { cue: number; start: number; end: number }[] = [];
+    if (!query) return hits;
+    const flags = findState.caseSensitive ? 'g' : 'gi';
+    const source = escapeRe(query);
+    app.cues.forEach((cue, index) => {
+      const re = new RegExp(source, flags);
+      let found: RegExpExecArray | null;
+      while ((found = re.exec(cue.text)) !== null) {
+        hits.push({ cue: index, start: found.index, end: found.index + found[0].length });
+        if (found[0].length === 0) re.lastIndex += 1;
+      }
+    });
+    return hits;
+  });
+
+  const matchedCueSet = $derived(new Set(findMatches.map((hit) => hit.cue)));
+
+  $effect(() => {
+    const nonce = findState.focusNonce;
+    void nonce;
+    if (!findState.open) return;
+    void nextTick().then(() => {
+      findInput?.focus();
+      findInput?.select();
+    });
+  });
+
+  // 替换后匹配数会变少：把当前位置拉回合法范围
+  $effect(() => {
+    const total = findMatches.length;
+    if (total === 0) {
+      if (findState.pos !== 0) findState.pos = 0;
+      return;
+    }
+    if (findState.pos >= total) findState.pos = 0;
+  });
+
+  function findGo(delta: number) {
+    const total = findMatches.length;
+    if (!total) {
+      toast('没有找到匹配的文本', 'warn');
+      return;
+    }
+    findState.pos = (findState.pos + delta + total) % total;
+    jumpToCue(findMatches[findState.pos].cue);
+  }
+
+  async function findReplaceCurrent() {
+    if (!findState.query) return;
+    const total = findMatches.length;
+    if (!total) {
+      toast('没有可替换的匹配', 'warn');
+      return;
+    }
+    const hit = findMatches[Math.min(findState.pos, total - 1)];
+    const ok = await replaceInCue(
+      hit.cue,
+      findState.query,
+      findState.replacement,
+      findState.caseSensitive,
+      hit.start,
+    );
+    if (ok) toast('已替换 1 处');
+  }
+
+  async function findReplaceAll() {
+    if (!findState.query) return;
+    const count = await replaceAllInCues(
+      findState.query,
+      findState.replacement,
+      findState.caseSensitive,
+    );
+    if (count) {
+      findState.pos = 0;
+      toast(`已替换 ${count} 处（⌘Z 可一次撤回）`);
+    } else {
+      toast('没有找到匹配的文本', 'warn');
+    }
+  }
+
+  /** 画面叠加层：一条 cue 里的硬换行拆成多行，空行丢掉。 */
+  function captionTextLines(text: string): string[] {
+    return String(text || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  /**
+   * 表格里一行只能放一行文字（虚拟列表固定行高），多行 cue 用「 / 」分隔显示，
+   * 不再让 newline 被 nowrap 压成一个空格——两种语言粘在一起看起来像识别错误。
+   * 完整原文仍在检查器文本框里按原样编辑。
+   */
+  function cueDisplayText(text: string): string {
+    return captionTextLines(text).join(' / ');
+  }
+
+  /** 把一条字幕文本切成「命中 / 未命中」片段，交给表格渲染 <span>。 */
+  function highlightSegments(text: string) {
+    const query = findState.query;
+    if (!findState.open || !query) return [{ text, hit: false }];
+    const re = new RegExp(escapeRe(query), findState.caseSensitive ? 'g' : 'gi');
+    const parts: { text: string; hit: boolean }[] = [];
+    let last = 0;
+    let found: RegExpExecArray | null;
+    while ((found = re.exec(text)) !== null) {
+      if (found.index > last) parts.push({ text: text.slice(last, found.index), hit: false });
+      parts.push({ text: found[0], hit: true });
+      last = found.index + found[0].length;
+      if (found[0].length === 0) re.lastIndex += 1;
+    }
+    if (last < text.length) parts.push({ text: text.slice(last), hit: false });
+    return parts.length ? parts : [{ text, hit: false }];
   }
 
   async function retranscribeRow(i: number) {
@@ -1245,6 +1523,8 @@
     return false;
   }
 
+  let revealRaf = 0;
+
   function revealRow(i: number) {
     if (!rowsEl) return;
     const top = i * rowHeight;
@@ -1252,10 +1532,28 @@
     const viewBottom = viewTop + rowsEl.clientHeight;
     // 已经在可视区中间就不动，避免播放时每句都抖一下
     if (top >= viewTop + rowHeight * 2 && top + rowHeight <= viewBottom - rowHeight * 2) return;
-    // 用即时滚动而不是 smooth：跳转要「同步」，动画在后台窗口会被节流，
-    // 让人以为表格没跟上。落点按整行对齐，避免顶部永远卡着半行。
     const above = Math.max(1, Math.floor((rowsEl.clientHeight * 0.4) / rowHeight));
-    rowsEl.scrollTop = Math.max(0, (i - above) * rowHeight);
+    const target = Math.max(0, (i - above) * rowHeight);
+    cancelAnimationFrame(revealRaf);
+    // 播放中必须瞬时：平滑滚动会被后台窗口节流，让人以为表格没跟上。
+    // 暂停时的跳转用 120ms 自己滚，手感比浏览器自带 smooth（约 300ms）干脆。
+    if (play.playing || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      rowsEl.scrollTop = target;
+      return;
+    }
+    const from = rowsEl.scrollTop;
+    const dist = target - from;
+    if (Math.abs(dist) < 2) {
+      rowsEl.scrollTop = target;
+      return;
+    }
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / 120);
+      rowsEl!.scrollTop = from + dist * (1 - Math.pow(1 - k, 3));
+      if (k < 1) revealRaf = requestAnimationFrame(step);
+    };
+    revealRaf = requestAnimationFrame(step);
   }
 
   /**
@@ -1286,6 +1584,23 @@
     revealRow(selectedInBlock ? play.selected : first);
   });
 
+  /**
+   * 程序化选中（转写选区完成 / 右键添加字幕 / 查找定位）必须强制滚到目标行。
+   * cueIndex 的 effect 有 lastRevealed 去重：局部转写的新句经常落在同一下标，
+   * 只改 play.selected 会被当成「已经在看这句」而不滚动——用户必须手动点一下
+   * 新字幕才能让底部和右侧同步。selectNonce 每次自增，绕过去重。
+   */
+  let seenSelect = 0;
+  $effect(() => {
+    const nonce = play.selectNonce;
+    if (nonce === seenSelect) return;
+    seenSelect = nonce;
+    const index = untrack(() => play.selected);
+    if (index < 0 || index >= app.cues.length) return;
+    lastRevealed = index;
+    revealRow(index);
+  });
+
   // 跟随是持久偏好：重开应用也记住用户的选择
   $effect(() => {
     localStorage.setItem('kikusub.follow', follow ? '1' : '0');
@@ -1311,17 +1626,6 @@
   }
   export function api_focus() {
     focusPlayhead();
-  }
-
-  /** 从设置里的导出文件夹挑一个字幕导入核对台（换基线，不动当前媒体）。 */
-  async function importSubtitleFromExport() {
-    const dir = app.config?.export_dir || app.config?.output_dir || '';
-    if (!dir) {
-      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
-      return;
-    }
-    const file = await window.kikusub.pickSubtitle(dir);
-    if (file) await openSubtitle(file);
   }
 </script>
 
@@ -1361,22 +1665,43 @@
       {#if videoFailed || (app.media?.needs_proxy && !app.media?.proxy_ready)}
         <div class="notice">
           <Icon name="warn" size={13} />
-          {#if app.media?.proxy_ready}
-            Chromium 无法解码这个容器，代理已就绪但播放失败——请查看日志
-          {:else}
-            正在后台压制 480p 监看代理，完成后会自动切换
+          <div class="notice-main">
+            {#if app.media?.proxy_ready}
+              Chromium 无法解码这个容器，代理已就绪但播放失败——请查看日志
+            {:else if proxyBusy}
+              正在后台压制 480p 监看代理，完成后会自动切换；可以先让它在后台跑
+            {:else if app.media?.needs_proxy}
+              {app.media.proxy_reason === 'bitrate'
+                ? `源视频码率约 ${((app.media.video_bitrate ?? 0) / 1_000_000).toFixed(1)} Mbps，直接拖进度条可能很卡`
+                : 'Chromium 可能无法解码这个视频的容器/编码'}
+              <span class="notice-sub">压一份 480p 代理后，核对台拖动会稳定很多。</span>
+            {:else}
+              画面加载失败，可以尝试压制一份 480p 代理
+            {/if}
+          </div>
+          {#if !app.media?.proxy_ready}
+            <button
+              class="btn tiny"
+              onclick={() => startProxyJob()}
+              disabled={proxyBusy}
+            >
+              {proxyBusy ? '压制中…' : '压制代理'}
+            </button>
           {/if}
         </div>
       {/if}
     </div>
 
     <div class="transport">
-      <button class="btn icon" onclick={togglePlay} title="播放 / 暂停（空格）">
-        <Icon name={play.playing ? 'pause' : 'play'} size={13} />
+      <button
+        class="playbtn"
+        onclick={togglePlay}
+        title="播放 / 暂停（空格）"
+        aria-label={play.playing ? '暂停' : '播放'}
+      >
+        <Icon name={play.playing ? 'pause' : 'play'} size={11} />
       </button>
-      <div class="tp-time">
-        <b>{tc(play.time)}</b>
-      </div>
+      <span class="tp-time">{tc(play.time)}</span>
       <div
         class="tp-track"
         class:dragging={trackDrag}
@@ -1397,19 +1722,14 @@
         </div>
         <div class="tp-knob" style="left:{progressPct}%"></div>
       </div>
-      <div class="tp-dur">{formatDuration(duration)}</div>
+      <span class="tp-dur">{formatDuration(duration)}</span>
     </div>
-  </div>
 
-  <div class="timeline">
-    <div class="tl-head">
-      <div class="tl-bar">
+    <!-- 第二行只放「看时间轴」的工具：缩放、全景、聚焦、跟随。
+         AI 优化 / 导出在顶栏，压制代理 / 导入字幕在「⋯」里。 -->
+    <div class="tl-tools">
       <div class="zoom-group">
-        <button
-          class="btn icon ghost"
-          onclick={() => zoomAt(play.time, 1.5)}
-          title="缩小波形"
-        >
+        <button class="zbtn" onclick={() => zoomAt(play.time, 1.5)} title="缩小波形" aria-label="缩小波形">
           <Icon name="minus" size={12} />
         </button>
         <input
@@ -1419,91 +1739,75 @@
           max="100"
           step="1"
           value={sliderValue}
+          style="--zoom-pct:{sliderValue}%"
           oninput={zoomSliderInput}
           title="波形缩放"
+          aria-label="波形缩放"
         />
         <button
-          class="btn icon ghost"
+          class="zbtn"
           onclick={() => zoomAt(play.time, 1 / 1.5)}
           title="放大波形（滚轮 / 捏合同效）"
+          aria-label="放大波形"
         >
           <Icon name="plus" size={12} />
         </button>
         <span class="zoom-x">{zoomX >= 10 ? Math.round(zoomX) : zoomX.toFixed(1)}×</span>
-        <button class="btn ghost" onclick={fit} title="显示全片">全景</button>
-        <button class="btn ghost" onclick={focusPlayhead} title="聚焦到播放头并放大">
-          <Icon name="search" size={11} />聚焦
-        </button>
-        <button
-          class="btn ghost"
-          onclick={() => switchView('ai')}
-          title="按全片语境修正识别错误：左原文、右 AI 建议，时间码不变"
-        >
-          <Icon name="doc" size={11} />AI 优化
-        </button>
-        <button
-          class="btn ghost"
-          onclick={importSubtitleFromExport}
-          disabled={busy}
-          title="从导出文件夹选择上次转写的字幕，导入核对台作为基线"
-        >
-          <Icon name="export" size={11} />导入字幕
-        </button>
-        <button
-          class="btn ghost"
-          class:on={follow}
-          aria-pressed={follow}
-          onclick={toggleFollow}
-          title={follow ? '跟随中：播放与跳转时保持播放头在视窗内；缩放/平移不会关闭它' : '开启后，播放或跳转字幕时波形会跟随播放头'}
-        >
-          {follow ? '跟随中' : '跟随'}
-        </button>
       </div>
+      <button class="mini-text" onclick={fit} title="显示全片">全景</button>
+      <button class="mini-text" onclick={focusPlayhead} title="聚焦到播放头并放大">聚焦</button>
+      <div class="grow"></div>
+      <button
+        class="follow-pill"
+        class:on={follow}
+        aria-pressed={follow}
+        onclick={toggleFollow}
+        title={follow
+          ? '跟随中：播放与跳转时保持播放头在视窗内；缩放/平移不会关闭它'
+          : '开启后，播放或跳转字幕时波形会跟随播放头'}
+      >
+        <i></i>{follow ? '跟随中' : '跟随'}
+      </button>
 
-      <div class="tl-spacer"></div>
-
-      {#if !selection}
-        <span class="tl-hint">
-          单击跳转 · 拖动框选 · 顶部刻度 / 播放头拖动逐帧擦洗 · 底部字幕块可拖动改时间
-        </span>
-      {/if}
-    </div>
-
-    {#if selection}
-      <div class="sel-bar">
-        <span class="sel-info">
-          {tcShort(selection.start)} → {tcShort(selection.end)}
-          <b>{(selection.end - selection.start).toFixed(2)}s</b>
-        </span>
-        <button
-          class="btn tiny"
-          onclick={() => seekTo(selection!.start, { stopAt: selection!.end, play: true })}
-          title="只播放选区"
-        >
-          <Icon name="play" size={10} />试听
-        </button>
-        <button class="btn tiny primary" onclick={transcribeSelection} disabled={rangeBusy}>
-          {#if rangeBusy}
-            <span class="spin"></span>转写中
-          {:else}
-            <Icon name="wave" size={10} />转写选区
-          {/if}
-        </button>
-        <button class="btn tiny" onclick={sendSelectionToTranscribe} title="填到转写页的区间">
-          填入转写
-        </button>
-        <button class="btn tiny" onclick={focusSelection} title="放大到选区">聚焦</button>
-        <div class="tl-spacer"></div>
-        <button class="btn tiny ghost" onclick={clearSelection} title="清除选区">
-          <Icon name="close" size={10} />
-        </button>
+      {#if selection}
+        <div class="sel-bar">
+          <span class="sel-info">
+            <span class="sel-range">{tcShort(selection.start)} → {tcShort(selection.end)}</span>
+            <b>{(selection.end - selection.start).toFixed(2)}s</b>
+          </span>
+          <button
+            class="btn tiny"
+            onclick={() => seekTo(selection!.start, { stopAt: selection!.end, play: true })}
+            title="只播放选区"
+          >
+            <Icon name="play" size={10} />试听
+          </button>
+          <button class="btn tiny primary" onclick={transcribeSelection} disabled={rangeBusy}>
+            {#if rangeBusy}
+              <span class="spin"></span>转写中
+            {:else}
+              <Icon name="wave" size={10} />转写选区
+            {/if}
+          </button>
+          <button class="btn tiny" onclick={sendSelectionToTranscribe} title="填到转写页的区间">
+            填入转写
+          </button>
+          <button class="btn tiny" onclick={focusSelection} title="放大到选区">聚焦</button>
+          <div class="tl-spacer"></div>
+          <button class="btn tiny ghost" onclick={clearSelection} title="清除选区">
+            <Icon name="close" size={10} />
+          </button>
         </div>
       {/if}
     </div>
+  </div>
 
+  <div class="timeline">
     <div
       class="wave-wrap"
       bind:this={waveWrap}
+      role="group"
+      aria-label="波形时间轴与字幕轨道"
       style="height:{waveHeight}px;cursor:{waveCursor}"
       onpointerdown={onWavePointerDown}
       onpointermove={onWavePointerMove}
@@ -1516,6 +1820,7 @@
         }
       }}
       onwheel={onWaveWheel}
+      oncontextmenu={onWaveContextMenu}
       ondblclick={(e) => {
         const t = timeAt(e.clientX);
         const span = Math.max(1.5, Math.min(10, viewSpan / 5 || 5));
@@ -1592,6 +1897,71 @@
   </div>
 
   <div class="table-area">
+    {#if findState.open}
+      <div class="find-bar">
+        <Icon name="search" size={12} />
+        <input
+          bind:this={findInput}
+          class="find-input"
+          bind:value={findState.query}
+          oninput={() => (findState.pos = 0)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              findGo(e.shiftKey ? -1 : 1);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              closeFind();
+            }
+          }}
+          placeholder="查找原文…"
+          spellcheck="false"
+        />
+        <span class="find-count">
+          {#if findState.query}
+            {findMatches.length ? `${findState.pos + 1} / ${findMatches.length}` : '无结果'}
+          {:else}
+            0
+          {/if}
+        </span>
+        <button class="btn icon ghost" onclick={() => findGo(-1)} title="上一个（⇧Enter）">
+          <Icon name="chevron-left" size={11} />
+        </button>
+        <button class="btn icon ghost" onclick={() => findGo(1)} title="下一个（Enter）">
+          <Icon name="chevron-right" size={11} />
+        </button>
+        <button
+          class="find-case"
+          class:on={findState.caseSensitive}
+          onclick={() => (findState.caseSensitive = !findState.caseSensitive)}
+          title="区分大小写"
+        >
+          Aa
+        </button>
+        <div class="find-sep"></div>
+        <input
+          class="find-input replace"
+          bind:value={findState.replacement}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void findReplaceCurrent();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              closeFind();
+            }
+          }}
+          placeholder="替换为（可留空）"
+          spellcheck="false"
+        />
+        <button class="btn tiny" onclick={findReplaceCurrent}>替换</button>
+        <button class="btn tiny primary" onclick={findReplaceAll}>全部替换</button>
+        <div class="tl-spacer"></div>
+        <button class="btn icon ghost" onclick={closeFind} title="关闭（Esc）">
+          <Icon name="close" size={11} />
+        </button>
+      </div>
+    {/if}
     <div class="thead">
       <div class="c-idx">#</div>
       <div class="c-t">开始</div>
@@ -1603,7 +1973,7 @@
     <div class="rows" bind:this={rowsEl} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
       {#if !app.cues.length}
         <div class="empty-rows">
-          还没有字幕。到「转写」跑一次，或导入 SRT；质检定位也会在这里高亮。
+          还没有字幕。到「转写」跑一次，或导入 SRT。
         </div>
       {:else}
         <div style="height:{rowStart * rowHeight}px"></div>
@@ -1613,9 +1983,11 @@
             class="row"
             class:dual={app.track === 'both'}
             class:row-sel={play.selected === i}
+            class:row-match={matchedCueSet.has(i)}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
             onclick={() => selectCue(i)}
+            oncontextmenu={(e) => onCueContextMenu(e, i)}
             ondblclick={() => previewRange(cue.start, cue.end)}
             role="button"
             tabindex="-1"
@@ -1631,12 +2003,20 @@
                   {translationAt(i) || '（这条还没有译文）'}
                 </span>
               {:else if app.track === 'both'}
-                <span class="line">{cue.text}</span>
+                <span class="line">
+                  {#each highlightSegments(cueDisplayText(cue.text)) as part}
+                    <span class:text-hit={part.hit}>{part.text}</span>
+                  {/each}
+                </span>
                 <span class="line sub" class:stale={isTranslationStale(i)}>
-                  {translationAt(i)}
+                  {cueDisplayText(translationAt(i))}
                 </span>
               {:else}
-                {cue.text}
+                <span class="line">
+                  {#each highlightSegments(cueDisplayText(cue.text)) as part}
+                    <span class:text-hit={part.hit}>{part.text}</span>
+                  {/each}
+                </span>
               {/if}
             </div>
             <div class="c-acts">
@@ -1668,6 +2048,116 @@
       {/if}
     </div>
   </div>
+
+  {#if contextMenu}
+    <button
+      class="ctx-backdrop"
+      use:portal
+      aria-label="关闭菜单"
+      onclick={() => (contextMenu = null)}
+    ></button>
+    <div
+      class="ctx-menu"
+      use:portal
+      style="left:{contextMenu.x}px;top:{contextMenu.y}px"
+      role="menu"
+      aria-label="音轨菜单"
+    >
+      <div class="ctx-head">
+        <span>{tcShort(contextMenu.t)}</span>
+        <span class="ctx-hint">
+          {contextMenu.index >= 0 ? `第 ${contextMenu.index + 1} 句` : '0.8 秒'}
+        </span>
+      </div>
+      {#if contextMenu.index >= 0}
+        <button
+          class="ctx-item"
+          onclick={() => openVoiceDialog(contextMenu.index)}
+          role="menuitem"
+        >
+          <Icon name="speaker" size={12} />
+          <span class="ctx-label">以此句音频新建音色…</span>
+        </button>
+        <button
+          class="ctx-item"
+          onclick={() => {
+            const index = contextMenu.index;
+            const c = app.cues[index];
+            contextMenu = null;
+            if (c) previewRange(c.start, c.end);
+          }}
+          role="menuitem"
+        >
+          <Icon name="play" size={12} />
+          <span class="ctx-label">试听这句原声</span>
+        </button>
+        <div class="ctx-sep"></div>
+      {/if}
+      <button class="ctx-item" onclick={addCueHere} role="menuitem">
+        <Icon name="plus" size={12} />
+        <span class="ctx-label">添加字幕</span>
+        <span class="ctx-hint">在光标处居中插入空字幕</span>
+      </button>
+    </div>
+  {/if}
+
+  {#if voiceDialog}
+    {@const vc = app.cues[voiceDialog.index]}
+    <button
+      class="vd-backdrop"
+      use:portal
+      aria-label="关闭新建音色"
+      onclick={() => {
+        if (!voiceBusy) voiceDialog = null;
+      }}
+    ></button>
+    <div class="vd" use:portal role="dialog" aria-modal="true" aria-label="新建克隆音色">
+      <div class="vd-head">以此句音频新建音色</div>
+      <div class="vd-sub">
+        {#if vc}
+          第 {voiceDialog.index + 1} 句 · {tcShort(vc.start)}–{tcShort(vc.end)}
+          <span class="vd-dur">{(vc.end - vc.start).toFixed(1)}s</span>
+        {/if}
+      </div>
+      <label class="vd-field">
+        <span>音色名</span>
+        <input
+          bind:this={voiceNameEl}
+          bind:value={voiceDialog.name}
+          maxlength="40"
+          placeholder="角色名，例如「女主角」"
+          onkeydown={(e) => {
+            if (e.key === 'Enter' && !voiceBusy) {
+              e.preventDefault();
+              void createVoiceFromCue();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              voiceDialog = null;
+            }
+          }}
+        />
+      </label>
+      <label class="vd-field">
+        <span>参考文本（这句的日文，用于对齐声线）</span>
+        <textarea bind:value={voiceDialog.refText} rows="2"></textarea>
+      </label>
+      <p class="vd-note">
+        后端会用 ffmpeg 从当前视频精确切出这句的人声（前后各留 0.2 秒），
+        3–10 秒最稳。{tts.engine && !tts.engine.installed
+          ? '提取不需要模型；朗读前再到右侧点「下载克隆模型」。'
+          : ''}
+      </p>
+      <div class="vd-actions">
+        <button class="btn mini" onclick={() => (voiceDialog = null)} disabled={voiceBusy}>
+          取消
+        </button>
+        <span class="vd-spacer"></span>
+        <button class="btn mini primary" onclick={createVoiceFromCue} disabled={voiceBusy}>
+          {voiceBusy ? '提取中…' : '提取并保存'}
+        </button>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1679,24 +2169,28 @@
   }
 
   .stage {
-    padding: 12px 14px 0;
+    padding: 18px 26px 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
     flex: 0 0 auto;
   }
 
+  /* 画面固定在 640×360 的 16:9 框里（窗口更窄时等比缩），只留阴影，不要光晕 */
   .player {
     position: relative;
-    width: 100%;
-    height: min(42vh, 380px);
+    width: min(640px, 100%);
+    aspect-ratio: 16 / 9;
+    margin: 0 auto;
     background: #000;
     border-radius: 10px;
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-video);
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+  :global(html[data-theme='dark']) .player {
+    box-shadow: var(--shadow-video), 0 0 0 1px rgba(236, 241, 250, 0.06);
   }
   video {
     width: 100%;
@@ -1722,7 +2216,7 @@
     font-size: 14px;
     line-height: 1.5;
     padding: 5px 13px;
-    border-radius: 6px;
+    border-radius: 4px;
     text-align: center;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
     pointer-events: none;
@@ -1747,34 +2241,72 @@
     background: rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(6px);
     color: #fff;
-    font-size: 11.5px;
+    font-size: 12px;
     padding: 5px 10px;
     border-radius: 8px;
-    pointer-events: none;
+    pointer-events: auto;
+    max-width: min(620px, 92%);
+  }
+
+  .notice-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .notice-sub {
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 12px;
+  }
+
+  .notice .btn {
+    margin-left: 4px;
+    flex: 0 0 auto;
   }
 
   .transport {
     display: flex;
     align-items: center;
     gap: 9px;
-    padding: 0 2px;
+    height: 32px;
+    flex: 0 0 32px;
+    margin-top: 10px;
+  }
+  .playbtn {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: var(--raise);
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    cursor: default;
+    transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  }
+  .playbtn:hover {
+    border-color: var(--accent-line);
+    color: var(--accent);
   }
   .tp-time {
-    font-size: 11.5px;
+    font-size: 12px;
+    line-height: 16px;
     font-variant-numeric: tabular-nums;
-    color: var(--text-3);
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--text);
+    font-family: var(--font-mono);
     letter-spacing: -0.01em;
     white-space: nowrap;
-  }
-  .tp-time b {
-    color: var(--text);
-    font-weight: 500;
+    min-width: 84px;
   }
   .tp-dur {
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
     min-width: 38px;
     text-align: right;
   }
@@ -1792,7 +2324,7 @@
     content: '';
     position: absolute;
     inset: -2px -4px;
-    border-radius: 6px;
+    border-radius: 4px;
     background: transparent;
     transition: background 120ms var(--ease);
   }
@@ -1803,13 +2335,14 @@
   .tp-rail {
     position: relative;
     width: 100%;
-    height: 4px;
+    height: 3px;
     border-radius: 2px;
-    background: var(--fill-strong);
+    background: var(--line);
+    transition: height var(--dur-fast) var(--ease);
   }
   .tp-track:hover .tp-rail,
   .tp-track.dragging .tp-rail {
-    height: 6px;
+    height: 5px;
   }
   .tp-fill {
     position: absolute;
@@ -1820,14 +2353,15 @@
   .tp-knob {
     position: absolute;
     top: 50%;
-    width: 11px;
-    height: 11px;
-    margin-left: -5.5px;
+    width: 9px;
+    height: 9px;
+    margin-left: -4.5px;
     border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+    background: var(--raise);
+    border: 1px solid var(--accent);
+    box-shadow: 0 1px 2px rgba(27, 39, 64, 0.18);
     transform: translateY(-50%);
-    transition: transform 100ms var(--ease);
+    transition: transform var(--dur-fast) var(--ease);
   }
   .tp-track:hover .tp-knob,
   .tp-track.dragging .tp-knob {
@@ -1836,69 +2370,162 @@
 
   /* ---------------- 波形区 ---------------- */
   .timeline {
-    padding: 6px 14px 0;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+    padding: 6px 26px 0;
     flex: 0 0 auto;
   }
-  .tl-head {
+
+  /* 时间线第二行：只放时间轴工具 */
+  .tl-tools {
     position: relative;
-    min-height: 26px;
-  }
-  .tl-bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 26px;
+    height: 30px;
+    flex: 0 0 30px;
+    margin-top: 3px;
   }
   .zoom-group {
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
+  }
+  .zbtn {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+    cursor: default;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .zbtn:hover {
+    background: var(--line-2);
+    color: var(--ink);
   }
   .zoom-slider {
-    width: 118px;
-    accent-color: var(--accent);
+    appearance: none;
+    width: 64px;
     height: 14px;
+    background: transparent;
+    cursor: default;
+  }
+  /* 和播放进度同一种滑块语言：已选段实心 accent + 实心拇指 */
+  .zoom-slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(
+      to right,
+      var(--accent) var(--zoom-pct, 0%),
+      var(--line) var(--zoom-pct, 0%)
+    );
+  }
+  .zoom-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    margin-top: -3px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 0;
+    box-shadow: 0 1px 2px rgba(27, 39, 64, 0.28);
+  }
+  .zoom-slider:hover::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .zoom-x {
-    font-size: 10.5px;
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
-    min-width: 34px;
+    min-width: 32px;
     text-align: right;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
+  }
+  .mini-text {
+    height: 24px;
+    padding: 0 7px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12px;
+    cursor: default;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .mini-text:hover {
+    background: var(--line-2);
+    color: var(--ink);
+  }
+  .grow {
+    flex: 1;
+  }
+  .follow-pill {
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: default;
+  }
+  .follow-pill i {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--ink-3);
+  }
+  .follow-pill.on {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .follow-pill.on i {
+    background: var(--accent);
+  }
+  .follow-pill:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
   }
   .tl-spacer {
     flex: 1;
   }
-  .tl-hint {
-    font-size: 10.5px;
-    color: var(--text-3);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-  }
 
   .sel-bar {
+    animation: selIn 140ms var(--ease);
     display: flex;
     align-items: center;
     gap: 5px;
-    /* 悬浮在工具栏上层：出现/消失不能让波形上下跳，
+    /* 悬浮在工具行上层：出现/消失不能让波形上下跳，
        否则刚拖完选区的下一次点击会落到别的位置。 */
     position: absolute;
     inset: 0;
     z-index: 2;
-    background: color-mix(in srgb, var(--accent) 9%, var(--bg-content));
+    background: color-mix(in srgb, var(--accent) 8%, var(--paper));
     box-shadow: inset 0 0 0 1px var(--accent-ring);
-    border-radius: 7px;
-    padding: 2px 5px 2px 9px;
-    height: 26px;
+    border-radius: 4px;
+    padding: 0 6px 0 9px;
+    height: 30px;
+  }
+  @keyframes selIn {
+    from {
+      opacity: 0;
+    }
   }
   .sel-info {
-    font-size: 10.5px;
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -1910,18 +2537,14 @@
     margin-left: 3px;
   }
   .tiny {
-    height: 20px;
-    font-size: 10.5px;
-    padding: 0 6px;
-    background: var(--bg-content);
+    height: 22px;
+    font-size: 12px;
+    padding: 0 7px;
+    background: var(--raise);
   }
   .btn.primary.tiny {
     background: var(--accent);
     color: #fff;
-  }
-  .btn.on {
-    background: var(--accent-soft);
-    color: var(--accent);
   }
   .spin {
     width: 9px;
@@ -1940,8 +2563,7 @@
   .wave-wrap {
     position: relative;
     border-radius: 8px;
-    background: var(--bg-inspector);
-    border: 1px solid var(--separator-soft);
+    background: transparent;
     overflow: hidden;
     touch-action: none;
     /* 具体光标由脚本按命中区域切换（刻度/播放头/字幕块/波形） */
@@ -1959,7 +2581,7 @@
     transform: translateX(-50%);
     background: var(--accent);
     color: #fff;
-    font-size: 10px;
+    font-size: 12px;
     line-height: 16px;
     height: 16px;
     padding: 0 6px;
@@ -2003,7 +2625,7 @@
     position: absolute;
     top: 17px;
     bottom: 0;
-    background: rgba(0, 122, 255, 0.13);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
     border-left: 1px solid var(--accent);
     border-right: 1px solid var(--accent);
     pointer-events: none;
@@ -2064,7 +2686,7 @@
     transform: translateX(-50%);
     background: var(--accent);
     color: #fff;
-    font-size: 9.5px;
+    font-size: 12px;
     line-height: 13px;
     padding: 0 4px;
     height: 13px;
@@ -2079,7 +2701,7 @@
     inset: 0;
     display: grid;
     place-items: center;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     background: color-mix(in srgb, var(--bg-inspector) 74%, transparent);
   }
@@ -2090,53 +2712,64 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    margin-top: 4px;
-    border-top: 1px solid var(--separator);
+    margin: 6px 26px 0;
+    border-top: 1px solid var(--line);
   }
   .thead {
-    display: flex;
+    display: grid;
+    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 44px;
+    column-gap: 6px;
     align-items: center;
-    height: 26px;
-    padding: 0 14px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-3);
-    border-bottom: 1px solid var(--separator-soft);
-    flex: 0 0 26px;
+    height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text-2);
+    box-shadow: inset 0 -1px 0 var(--line-2);
+    flex: 0 0 30px;
   }
   .rows {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
-    padding-bottom: 6px;
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
+    padding-bottom: 0;
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
   }
 
   .row {
-    display: flex;
+    display: grid;
+    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 44px;
+    column-gap: 6px;
     align-items: center;
-    height: 26px;
-    padding: 0 14px;
-    font-size: 13px;
-    border-bottom: 1px solid var(--separator-soft);
+    height: 30px;
+    padding: 0 10px;
+    font-size: 15px;
+    line-height: 20px; /* 15/20：行内上下各 5px，基线稳定，不出现 20.25 的分数行高 */
+    /* 发丝线用 inset shadow：border 会吃掉 1px，行内 20px 文字就变成上下 4.5/5.5 */
+    box-shadow: inset 0 -1px 0 var(--line-2);
     position: relative;
     transition: background 120ms var(--ease);
   }
   .row:hover {
-    background: var(--row-hover);
+    background: var(--line-2);
+  }
+  .row.row-match {
+    background: color-mix(in srgb, #ffd60a 16%, transparent);
   }
   .row.row-sel {
     background: var(--accent-soft);
   }
-  .row.playing::before {
+  .row.playing::before,
+  .row.row-sel::before {
     content: '';
     position: absolute;
     left: 0;
     top: 0;
     bottom: 0;
-    width: 2.5px;
+    width: 2px;
     background: var(--accent);
   }
   .row.playing .c-idx {
@@ -2147,47 +2780,75 @@
     font-weight: 500;
   }
 
+  @media (max-width: 1400px) {
+    /* 1360 默认窗口：给字幕文本多 16px，当前句不要被时间码/图标挤掉尾巴 */
+    .thead,
+    .row {
+      grid-template-columns: 34px 94px 94px 54px minmax(0, 1fr) 42px;
+    }
+  }
+
+  @media (max-width: 1220px) {
+    /* 窄窗口里选区工具条会挤出右边界：只留时长，把时间范围让给按钮 */
+    .sel-range {
+      display: none;
+    }
+    .thead,
+    .row {
+      grid-template-columns: 30px 88px 88px 48px minmax(0, 1fr) 38px;
+      column-gap: 4px;
+    }
+    .thead {
+      padding: 0 8px;
+    }
+    .row {
+      padding: 0 8px;
+    }
+  }
+
   .c-idx {
-    width: 30px;
-    flex: 0 0 30px;
-    font-size: 11.5px;
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
   }
   .c-t {
-    width: 92px;
-    flex: 0 0 92px;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11.5px;
-    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-2);
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.02em;
   }
   .c-dur {
-    width: 54px;
-    flex: 0 0 54px;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11.5px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
   .c-text {
-    flex: 1;
     min-width: 0;
+    font-size: 15px;
+    line-height: 20px;
+    color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    padding-right: 6px;
   }
-  /* 双语：固定两行，行高与虚拟列表的 52px 对齐 */
+  /* 双语：固定两行，行高与虚拟列表的 60px 对齐 */
   .row.dual {
-    height: 52px;
+    height: 60px;
   }
   .c-text.dual {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 1px;
-    line-height: 1.3;
+    /* 20 + 16 + 2 = 38：(60 - 38) / 2 = 11，双语的上下留白落在整数像素上 */
+    gap: 2px;
+    line-height: 20px;
   }
   .c-text .line {
     display: block;
@@ -2197,21 +2858,28 @@
     text-overflow: ellipsis;
   }
   .c-text .line.sub {
-    font-size: 11.5px;
+    font-size: 12px;
+    line-height: 16px;
     color: var(--text-2);
   }
   .c-text .line.stale {
     color: #b26a00;
   }
-  html[data-theme='dark'] .c-text .line.stale {
+  .c-text .text-hit {
+    background: #ffd60a66;
+    border-radius: 2px;
+    color: inherit;
+  }
+  :global(html[data-theme='dark']) .c-text .text-hit {
+    background: #ffd60a4d;
+  }
+  :global(html[data-theme='dark']) .c-text .line.stale {
     color: #ffb340;
   }
   .c-acts {
-    width: 46px;
-    flex: 0 0 46px;
     display: flex;
     justify-content: flex-end;
-    gap: 2px;
+    gap: 4px;
     opacity: 0;
     transition: opacity 120ms var(--ease);
   }
@@ -2229,6 +2897,13 @@
     border-radius: 4px;
     display: grid;
     place-items: center;
+    position: relative;
+  }
+  /* 视觉 19px，热区 24px：伪元素只扩大命中范围，不改变行高与列宽 */
+  .row-btn::after {
+    content: '';
+    position: absolute;
+    inset: -2.5px -2px;
   }
   .row-btn:hover {
     background: var(--fill-strong);
@@ -2242,5 +2917,309 @@
     padding: 22px 14px;
     color: var(--text-3);
     font-size: 12.5px;
+  }
+
+  /* ---------------- 查找与替换 ---------------- */
+  .find-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 14px;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--separator-soft);
+    background: color-mix(in srgb, var(--accent) 5%, var(--bg-content));
+  }
+  .find-input {
+    height: 24px;
+    width: 190px;
+    min-width: 96px;
+    flex: 0 1 190px;
+    border-radius: 4px;
+    border: 1px solid var(--separator);
+    background: var(--bg-content);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 0 7px;
+  }
+  .find-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+  }
+  .find-input.replace {
+    width: 160px;
+    flex-basis: 160px;
+  }
+  .find-count {
+    min-width: 58px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    white-space: nowrap;
+  }
+  .find-case {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-3);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    height: 22px;
+    padding: 0 5px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .find-case:hover {
+    background: var(--fill-strong);
+  }
+  .find-case.on {
+    background: var(--accent-soft);
+    border-color: var(--accent-ring);
+    color: var(--accent);
+  }
+  .find-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--separator);
+    margin: 0 3px;
+    flex: 0 0 1px;
+  }
+
+  /* ---------------- 音轨右键菜单 ---------------- */
+  .ctx-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: default;
+  }
+  .ctx-sep {
+    height: 1px;
+    margin: 3px 4px;
+    background: var(--separator-soft);
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 71;
+    width: 216px;
+    padding: 4px;
+    border-radius: 4px;
+    background: var(--bg-content);
+    border: 1px solid var(--separator);
+    box-shadow: var(--shadow-pop);
+  }
+  .ctx-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 7px 5px;
+    margin-bottom: 3px;
+    border-bottom: 1px solid var(--separator-soft);
+    font-size: 12px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  .ctx-item {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .ctx-item:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .ctx-label {
+    flex: 1;
+    font-size: 12px;
+  }
+  .ctx-hint {
+    font-size: 12px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+
+  /* ---------------- 以此句音频新建音色 ---------------- */
+  .vd-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    background: rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(1px);
+    cursor: default;
+  }
+  .vd {
+    position: fixed;
+    z-index: 81;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(340px, calc(100vw - 48px));
+    padding: 14px 16px 12px;
+    border-radius: 8px;
+    background: var(--bg-content);
+    border: 1px solid var(--separator);
+    box-shadow: var(--shadow-pop);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .vd-head {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .vd-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: -5px;
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .vd-dur {
+    padding: 0 5px;
+    border-radius: 3px;
+    background: var(--separator-soft);
+  }
+  .vd-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .vd-field input,
+  .vd-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg-inset, var(--raise));
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 7px;
+    resize: vertical;
+  }
+  .vd-field input:focus,
+  .vd-field textarea:focus {
+    outline: none;
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+  }
+  .vd-note {
+    margin: 0;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--text-3);
+  }
+  .vd-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+  }
+  .vd-spacer {
+    flex: 1;
+  }
+
+  /* ============================================================
+     紧凑模式（≤900px；200% 页面缩放后是 680×419 / 540×340）。
+     三块保持原顺序、整屏纵向滚动：播放器按可用宽度等比缩，
+     时间线跟其后，表格保底 200px（虚拟列表自己滚），
+     不再出现「内容区 96px、视频 44×25」的塌陷。
+     ============================================================ */
+  @media (max-width: 900px) {
+    .review {
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    .stage {
+      padding: 12px 16px 0;
+    }
+    /* 200% 下保持 592×333 会把播放条推出首屏：按「视频 + 播放行 + 工具行」
+       正好占满一屏可用高度来定宽，波形与表格往下滚一屏即可。 */
+    .player {
+      width: min(640px, 100%, calc((100vh - 170px) * 16 / 9));
+    }
+    .timeline {
+      padding: 6px 16px 0;
+    }
+    .table-area {
+      flex: 0 0 auto;
+      height: clamp(200px, 52vh, 300px);
+      margin: 6px 16px 16px;
+    }
+    .transport,
+    .tl-tools {
+      gap: 7px;
+    }
+    /* 查找栏在 680/540 宽下要留在一行：隐藏「Aa」与分隔线，输入框可收缩。
+       折行会把表格再吃掉一行高度，关闭按钮也会单独掉到第二行。 */
+    .find-bar {
+      padding: 5px 6px;
+      gap: 3px;
+    }
+    .find-input {
+      width: auto;
+      flex: 1 1 110px;
+      min-width: 80px;
+    }
+    .find-input.replace {
+      width: auto;
+      flex: 1 1 96px;
+      min-width: 72px;
+    }
+    .find-count {
+      min-width: 42px;
+    }
+    .find-case,
+    .find-sep {
+      display: none;
+    }
+  }
+
+  @media (max-width: 700px) {
+    /* 540 / 680 宽：只留「# / 开始 / 字幕文本 / 行内动作」四列 */
+    .thead,
+    .row {
+      grid-template-columns: 30px 78px minmax(0, 1fr) 36px;
+      column-gap: 4px;
+      padding: 0 8px;
+    }
+    .thead > :nth-child(3),
+    .thead > :nth-child(4),
+    .row > :nth-child(3),
+    .row > :nth-child(4) {
+      display: none;
+    }
+    .find-input,
+    .find-input.replace {
+      width: 120px;
+      flex-basis: 120px;
+    }
   }
 </style>

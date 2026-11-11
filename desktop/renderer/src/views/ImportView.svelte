@@ -1,7 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
+  import PageHeader from '../components/PageHeader.svelte';
   import { app, openMedia, openSubtitle, toast } from '../lib/store.svelte';
+  import { mediaThumbUrl } from '../lib/api';
   import { formatBytes, formatDuration } from '../lib/time';
 
   interface Recent {
@@ -93,8 +95,10 @@
 </script>
 
 <div class="pane">
-  <div class="h1">导入素材</div>
-  <p class="p">把视频拖进窗口，或按 <b>⌘O</b> 选择文件。导入不会复制文件——只记录路径。</p>
+  <PageHeader
+    title="导入素材"
+    subtitle="把视频拖进窗口，或按 ⌘O 选择文件。导入不会复制文件——只记录路径。"
+  />
 
   <button class="dropzone" onclick={pick}>
     <span class="dz-ico"><Icon name="tray" size={20} /></span>
@@ -104,8 +108,8 @@
     </span>
   </button>
 
-  <p class="note">
-    Chromium 解不开 MKV / HEVC，导入后会在后台自动压一份 480p 监看代理，拖动进度条才能流畅秒开。
+  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入后可在核对台手动压制代理。">
+    MKV / HEVC 自动压一份 480p 监看代理，拖动才能秒开；也可以在核对台手动压制。
   </p>
 
   {#if exportDir}
@@ -131,7 +135,16 @@
       {#each recents as r (r.path)}
         <div class="recent-row">
           <button class="recent-main" onclick={() => openMedia(r.path)} title={r.path}>
-            <span class="ri"><Icon name="film" size={13} /></span>
+            <span class="ri">
+              <Icon name="film" size={13} />
+              <img
+                class="ri-img"
+                src={mediaThumbUrl(r.path, String(r.size))}
+                alt=""
+                loading="lazy"
+                onerror={(e) => e.currentTarget.remove()}
+              />
+            </span>
             <span class="rn-wrap">
               <span class="rn">{r.name}</span>
               <span class="rm">
@@ -156,30 +169,22 @@
 
 <style>
   .pane {
-    padding: 22px 26px 28px;
-    overflow-y: auto;
     flex: 1;
-  }
-  .pane > * {
-    max-width: 720px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--sp-8) var(--sp-10) var(--sp-12);
+    display: grid;
+    grid-template-columns: minmax(0, 720px);
+    justify-content: center;
+    align-content: start;
   }
 
-  .h1 {
-    font-size: 19px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    margin: 2px 0 4px;
-  }
-  .p {
-    font-size: 12.5px;
-    color: var(--text-2);
-    margin: 0 0 16px;
-  }
   .note {
-    font-size: 11.5px;
-    line-height: 1.6;
+    font-size: var(--fs-label);
+    line-height: 1.7;
     color: var(--text-3);
     margin: 14px 0 0;
+    max-width: 640px;
   }
 
   .dropzone {
@@ -187,8 +192,9 @@
     display: block;
     width: 100%;
     border: 1.5px dashed var(--separator);
-    border-radius: 12px;
-    padding: 46px 20px;
+    border-radius: var(--rad-panel);
+    padding: 48px 20px;
+    margin-top: 4px;
     text-align: center;
     background: transparent;
     color: inherit;
@@ -203,7 +209,7 @@
     width: 40px;
     height: 40px;
     margin: 0 auto 10px;
-    border-radius: 11px;
+    border-radius: 8px;
     background: var(--fill);
     display: grid;
     place-items: center;
@@ -211,18 +217,18 @@
   }
   .dz-title {
     display: block;
-    font-size: 13.5px;
-    font-weight: 500;
-    margin-bottom: 3px;
+    font-size: var(--fs-heading);
+    font-weight: 600;
+    margin-bottom: 4px;
   }
   .dz-sub {
     display: block;
-    font-size: 12px;
+    font-size: var(--fs-label);
     color: var(--text-3);
   }
   code {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--fill);
     padding: 1px 4px;
     border-radius: 4px;
@@ -233,7 +239,7 @@
     align-items: center;
     gap: 10px;
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 10px 12px;
     background: var(--bg-content);
   }
@@ -259,7 +265,7 @@
     font-weight: 500;
   }
   .ec-path {
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -268,7 +274,7 @@
 
   .recent {
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
     overflow: hidden;
   }
   .recent-row {
@@ -293,7 +299,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 44px;
+    height: 52px;
     padding: 0 4px 0 12px;
     text-align: left;
     cursor: default;
@@ -317,14 +323,23 @@
     border-left-color: var(--separator-soft);
   }
   .ri {
-    width: 26px;
-    height: 26px;
-    border-radius: 6px;
+    position: relative;
+    width: 54px;
+    height: 31px;
+    border-radius: 4px;
     background: var(--fill);
     display: grid;
     place-items: center;
     color: var(--text-2);
-    flex: 0 0 26px;
+    flex: 0 0 54px;
+    overflow: hidden;
+  }
+  .ri-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   .rn-wrap {
     display: flex;
@@ -340,12 +355,12 @@
     white-space: nowrap;
   }
   .rm {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
   .rt {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     flex: 0 0 auto;
   }

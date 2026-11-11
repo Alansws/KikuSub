@@ -65,3 +65,28 @@ def test_tail_keeps_the_end():
     result = tail(text, 100)
     assert result.endswith("KEY")
     assert len(result) <= 101
+
+
+def test_registered_children_are_terminated_together():
+    """sidecar 退出时必须连带杀掉 ffmpeg；旧实现把子进程留给了 launchd。"""
+    import subprocess
+
+    from core.procutil import (
+        active_processes,
+        register_process,
+        terminate_all_processes,
+        unregister_process,
+    )
+
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    register_process(proc)
+    try:
+        assert proc in active_processes()
+        count = terminate_all_processes(grace_s=1.0)
+        assert count >= 1
+        assert proc.poll() is not None
+        assert proc not in active_processes()
+    finally:
+        unregister_process(proc)
+        if proc.poll() is None:
+            proc.kill()

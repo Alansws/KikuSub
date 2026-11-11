@@ -5,27 +5,81 @@
     deleteCue,
     exportCues,
     focusRange,
+    cloneEngineReady,
+    deleteTtsVoice,
+    downloadTtsModel,
+    extractTtsVoiceFromCue,
     loadTranslations,
+    loadTtsVoices,
     play,
     previewRange,
+    previewTtsVoice,
     refreshDraftInfo,
     restoreDraft,
     reviewDraft,
+    renameTtsVoice,
     saveDraft,
     isTranslationStale,
     setTrackLang,
     setTrackMode,
+    setTtsDefaultVoiceId,
+    setTtsSpeed,
+    setTtsVoiceId,
+    setView,
+    speakCue,
     staleTranslationCount,
+    stopTts,
+    toast,
     translationAt,
+    tts,
+    ttsVoice,
     undoTranslation,
     updateCue,
     updateTranslation,
+    updateTtsRefText,
+    uploadTtsVoice,
+    uploadTtsVoices,
     type TrackMode,
   } from '../lib/store.svelte';
   import { tc } from '../lib/time';
+  import { tick } from 'svelte';
 
   const cue = $derived(app.cues[play.selected] ?? null);
-  const quality = $derived(app.report?.quality ?? null);
+
+  /**
+   * 当前核对表的来源决定右侧信息能不能引用「最近一次转写」：
+   * - transcription：报告/参数/质检都属于这张表；
+   * - import / draft：换了一版字幕，旧报告已经对不上，不能再展示它的数字。
+   */
+  const source = $derived(app.reviewSource);
+  const imported = $derived(source?.kind === 'import' || source?.kind === 'draft');
+  const sourceLabel = $derived(
+    source?.kind === 'import'
+      ? '手动导入'
+      : source?.kind === 'draft'
+        ? '暂存草稿'
+        : source?.kind === 'transcription'
+          ? '本次转写'
+          : '未记录',
+  );
+  const report = $derived.by(() => {
+    if (imported) return null;
+    const data = app.report;
+    if (!data) return null;
+    // 任务 id 都已知时必须一致：否则是上一部片 / 上一次转写的报告。
+    const sourceJob = source?.job_id || '';
+    if (sourceJob && data.job_id && sourceJob !== data.job_id) return null;
+    return data;
+  });
+  const reportStale = $derived(Boolean(app.report && !imported && !report));
+  const quality = $derived(report?.quality ?? null);
+  const outputName = $derived.by(() => {
+    if (source?.name) return source.name;
+    if (report?.out_filename) return report.out_filename;
+    const fromReport = report?.overview?.find((r) => r.label === '字幕文件名')?.value;
+    return fromReport ?? app.media?.name ?? '—';
+  });
+  const sourcePath = $derived(source?.path || '');
 
   let draft = $state('');
   let draftTr = $state('');
@@ -35,6 +89,253 @@
   let exportFormat = $state<'SRT' | 'VTT' | 'TXT'>('SRT');
   let exportTrack = $state<'source' | 'target' | 'both'>('source');
   let exporting = $state(false);
+  let sourceEl = $state<HTMLTextAreaElement | null>(null);
+  let targetEl = $state<HTMLTextAreaElement | null>(null);
+
+  // ---- TTS 音色管理（克隆音色重命名/参考文本/上传） ----
+  let ttsManage = $state(false);
+  let ttsName = $state('');
+  let ttsRefText = $state('');
+  let ttsSaving = $state(false);
+  let uploadDraft = $state<{ path: string; name: string; refText: string } | null>(null);
+  /** 从当前句截取参考音频：与右键菜单共用后端切片，但入口放在 TTS 面板里。 */
+  let extractDraft = $state<{ index: number; name: string; refText: string } | null>(null);
+  /** 音色库：列出所有已保存的克隆音色，随时复用。 */
+  let ttsLibrary = $state(false);
+  let batch = $state<{ done: number; total: number; name: string } | null>(null);
+  const selectedTts = $derived(ttsVoice());
+  const downloading = $derived(tts.download?.status === 'running');
+  const engineLabel = $derived.by(() => {
+    // 标题跟「当前选中的音色」走：选着 Kyoko 却显示 OmniVoice 会让人以为已经在用克隆。
+    if (selectedTts?.kind === 'clone') {
+      if (!tts.engine?.installed) return '克隆模型未就绪';
+      return tts.engine.device === 'mps' ? 'OmniVoice · Apple GPU' : 'OmniVoice · CPU';
+    }
+    return tts.engine ? '系统语音 · 零显存' : '读取中…';
+  });
+
+  function openManage() {
+    if (!selectedTts || selectedTts.kind !== 'clone') return;
+    ttsName = selectedTts.name;
+    ttsRefText = selectedTts.ref_text || '';
+    uploadDraft = null;
+    extractDraft = null;
+    ttsLibrary = false;
+    ttsManage = !ttsManage;
+  }
+
+  function cancelPanels() {
+    ttsManage = false;
+    uploadDraft = null;
+    extractDraft = null;
+  }
+
+  /** 上次上传参考音频的目录 → 当前视频所在目录 → 系统音乐目录。 */
+  function lastAudioDir(): string {
+    try {
+      const saved = localStorage.getItem('kikusub.lastAudioDir') || '';
+      if (saved) return saved;
+    } catch {
+      /* localStorage 不可用时直接走视频目录 */
+    }
+    const mediaPath = app.media?.path || '';
+    if (mediaPath.includes('/')) return mediaPath.slice(0, mediaPath.lastIndexOf('/'));
+    return '';
+  }
+
+  function voiceSourceLabel(source: Record<string, unknown> | undefined): string {
+    const kind = String(source?.kind || '');
+    if (kind === 'cue') return '视频截取';
+    if (kind === 'upload') return '上传';
+    return '克隆';
+  }
+
+  async function saveManage() {
+    if (!selectedTts) return;
+    ttsSaving = true;
+    try {
+      if (ttsName.trim() && ttsName.trim() !== selectedTts.name) {
+        await renameTtsVoice(selectedTts.id, ttsName.trim());
+      }
+      if (ttsRefText.trim() !== (selectedTts.ref_text || '').trim()) {
+        await updateTtsRefText(selectedTts.id, ttsRefText.trim());
+      }
+      ttsManage = false;
+    } catch (err) {
+      toast(`保存音色失败：${(err as Error).message}`, 'error');
+    } finally {
+      ttsSaving = false;
+    }
+  }
+
+  async function removeManagedVoice() {
+    if (!selectedTts) return;
+    if (!window.confirm(`删除音色「${selectedTts.name}」？参考音频会一起删掉。`)) return;
+    try {
+      await deleteTtsVoice(selectedTts.id);
+      if (tts.defaultVoiceId === selectedTts.id) setTtsDefaultVoiceId('');
+      ttsManage = false;
+      toast('音色已删除', 'info');
+    } catch (err) {
+      toast(`删除音色失败：${(err as Error).message}`, 'error');
+    }
+  }
+
+  async function startModelDownload() {
+    if (
+      !window.confirm(
+        '下载 OmniVoice 克隆模型（约 3.3GB）？\n\n下载后可离线使用；系统语音兜底不受影响。',
+      )
+    ) {
+      return;
+    }
+    await downloadTtsModel();
+  }
+
+  async function chooseUpload() {
+    const paths = await window.kikusub.pickAudio(lastAudioDir());
+    if (!paths.length) return;
+    try {
+      const dir = paths[0].slice(0, paths[0].lastIndexOf('/'));
+      if (dir) localStorage.setItem('kikusub.lastAudioDir', dir);
+    } catch {
+      /* 记不住目录不影响上传 */
+    }
+    ttsManage = false;
+    extractDraft = null;
+    ttsLibrary = false;
+    if (paths.length === 1) {
+      const base = paths[0].split('/').pop()?.replace(/\.[^.]+$/, '') || '新音色';
+      uploadDraft = { path: paths[0], name: base, refText: '' };
+      return;
+    }
+    // OmniVoice 一次只吃一段参考音频；多选就是一次建多个独立音色。
+    const picked = paths.slice(0, 8);
+    if (paths.length > 8) toast('一次最多处理 8 段音频，其余已忽略', 'warn');
+    ttsSaving = true;
+    batch = { done: 0, total: picked.length, name: '' };
+    try {
+      const created = await uploadTtsVoices(picked, (done, total, name) => {
+        batch = { done, total, name };
+      });
+      toast(`已保存 ${created.length} 个克隆音色，可在「音色库」里复用`, 'info');
+    } catch (err) {
+      toast(`上传参考音频失败：${(err as Error).message}`, 'error');
+    } finally {
+      ttsSaving = false;
+      batch = null;
+    }
+  }
+
+  function openExtract() {
+    const index = play.selected;
+    const current = app.cues[index];
+    if (!app.media) {
+      toast('还没有导入视频，无法截取音轨', 'warn');
+      return;
+    }
+    if (!current) {
+      toast('先在字幕表里选中一句，再截取它的声音', 'warn');
+      return;
+    }
+    ttsManage = false;
+    uploadDraft = null;
+    ttsLibrary = false;
+    extractDraft = {
+      index,
+      name: `角色 ${tts.custom.length + 1}`,
+      refText: current.text,
+    };
+  }
+
+  async function confirmExtract() {
+    if (!extractDraft) return;
+    const draft = extractDraft;
+    if (!draft.name.trim()) {
+      toast('先给音色起个名字', 'warn');
+      return;
+    }
+    ttsSaving = true;
+    try {
+      await extractTtsVoiceFromCue(draft.index, draft.name.trim(), draft.refText.trim());
+      extractDraft = null;
+    } catch (err) {
+      toast(`截取音色失败：${(err as Error).message}`, 'error');
+    } finally {
+      ttsSaving = false;
+    }
+  }
+
+  function openLibrary() {
+    ttsManage = false;
+    uploadDraft = null;
+    extractDraft = null;
+    ttsLibrary = !ttsLibrary;
+  }
+
+  function useLibraryVoice(id: string) {
+    setTtsVoiceId(id);
+    ttsLibrary = false;
+  }
+
+  async function previewLibraryVoice(id: string) {
+    setTtsVoiceId(id);
+    await previewTtsVoice();
+  }
+
+  function manageLibraryVoice(id: string) {
+    setTtsVoiceId(id);
+    const voice = tts.custom.find((item) => item.id === id);
+    if (!voice) return;
+    ttsName = voice.name;
+    ttsRefText = voice.ref_text || '';
+    uploadDraft = null;
+    extractDraft = null;
+    ttsLibrary = false;
+    ttsManage = true;
+  }
+
+  async function removeLibraryVoice(id: string, name: string) {
+    if (!window.confirm(`删除音色「${name}」？参考音频会一起删掉。`)) return;
+    try {
+      await deleteTtsVoice(id);
+      if (tts.defaultVoiceId === id) setTtsDefaultVoiceId('');
+      toast('音色已删除', 'info');
+    } catch (err) {
+      toast(`删除音色失败：${(err as Error).message}`, 'error');
+    }
+  }
+
+  function makeDefaultVoice(id: string, name: string) {
+    setTtsDefaultVoiceId(id);
+    toast(`默认朗读音色已设为「${name}」`);
+  }
+
+  function openVoicesDir() {
+    if (!tts.voicesDir) {
+      toast('还没有音色目录，先保存一个音色', 'warn');
+      return;
+    }
+    void window.kikusub.openPath(tts.voicesDir);
+  }
+
+  async function confirmUpload() {
+    if (!uploadDraft) return;
+    const draft = uploadDraft;
+    if (!draft.name.trim()) {
+      toast('先给音色起个名字', 'warn');
+      return;
+    }
+    ttsSaving = true;
+    try {
+      await uploadTtsVoice(draft.name.trim(), draft.path, draft.refText.trim());
+      uploadDraft = null;
+    } catch (err) {
+      toast(`上传参考音频失败：${(err as Error).message}`, 'error');
+    } finally {
+      ttsSaving = false;
+    }
+  }
 
   const trackLangs = $derived(Object.keys(app.translations).sort());
   const hasTrack = $derived(Boolean(app.translations[app.trackLang]));
@@ -47,7 +348,25 @@
     if (app.connected && app.media) {
       void refreshDraftInfo();
       void loadTranslations();
+      void loadTtsVoices();
     }
+  });
+
+  // 换一条字幕就停掉上一句的 TTS：否则点下一句时上一句还在念，没法对照
+  $effect(() => {
+    void play.selected;
+    stopTts();
+  });
+
+  // 右键「添加字幕」后把光标直接放进文本框，用户不用再点一下
+  $effect(() => {
+    const nonce = play.editNonce;
+    if (!nonce) return;
+    void tick().then(() => {
+      const el = app.track === 'target' ? targetEl : sourceEl;
+      el?.focus();
+      el?.select();
+    });
   });
 
   const draftLabel = $derived.by(() => {
@@ -116,156 +435,446 @@
 </script>
 
 <aside class="inspector" class:hidden={!app.inspectorOpen}>
-  <div>
-    <div class="ins-h">显示</div>
-    <div class="track-row">
-      <div class="seg">
-        <button class:on={app.track === 'source'} onclick={() => setTrackMode('source')}>原文</button>
-        <button
-          class:on={app.track === 'target'}
-          disabled={!hasTrack}
-          title={hasTrack ? '只显示译文' : '还没有译文'}
-          onclick={() => setTrackMode('target')}>译文</button
-        >
-        <button
-          class:on={app.track === 'both'}
-          disabled={!hasTrack}
-          title={hasTrack ? '原文 + 译文上下两行' : '还没有译文'}
-          onclick={() => setTrackMode('both')}>双语</button
-        >
-      </div>
-      <select
-        class="lang-sel"
-        value={app.trackLang}
-        title="译文语种"
-        onchange={(e) => setTrackLang(e.currentTarget.value)}
+  <div class="ins-scroll">
+  <div class="insp-head">
+    <span>当前条目</span>
+    <div class="head-right">
+      <b>{app.cues.length ? `#${play.selected + 1}` : '—'}</b>
+      <button
+        class="ins-close"
+        onclick={() => (app.inspectorOpen = false)}
+        title="收起检查器（Esc）"
+        aria-label="收起检查器"
       >
-        {#each trackLangs as lang (lang)}
-          <option value={lang}>{lang}</option>
-        {/each}
-        {#if !trackLangs.length}
-          <option value={app.trackLang}>{app.trackLang}</option>
+        <Icon name="close" size={11} />
+      </button>
+    </div>
+  </div>
+  <div class="display-row">
+    <div class="seg">
+      <button class:on={app.track === 'source'} onclick={() => setTrackMode('source')}>原文</button>
+      <button
+        class:on={app.track === 'target'}
+        disabled={!hasTrack}
+        title={hasTrack ? '只显示译文' : '还没有译文'}
+        onclick={() => setTrackMode('target')}>译文</button
+      >
+      <button
+        class:on={app.track === 'both'}
+        disabled={!hasTrack}
+        title={hasTrack ? '原文 + 译文上下两行' : '还没有译文'}
+        onclick={() => setTrackMode('both')}>双语</button
+      >
+    </div>
+    <select
+      class="lang-sel"
+      value={app.trackLang}
+      title="译文语种"
+      onchange={(e) => setTrackLang(e.currentTarget.value)}
+    >
+      {#each trackLangs as lang (lang)}
+        <option value={lang}>{lang}</option>
+      {/each}
+      {#if !trackLangs.length}
+        <option value={app.trackLang}>{app.trackLang}</option>
+      {/if}
+    </select>
+  </div>
+  {#if hasTrack}
+    <div class="track-meta">
+      <span>{app.translations[app.trackLang]?.count ?? 0} 条</span>
+      {#if staleCount > 0}
+        <span class="warn">{staleCount} 条待更新</span>
+      {:else}
+        <span class="ok">全部同步</span>
+      {/if}
+      <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
+    </div>
+  {/if}
+
+  <!-- 当前句 = 一张稿纸卡：20/600、白色卡片、2px 蓝左线。它是这一屏最大的字。 -->
+  <div class="cue-card">
+    {#if cue}
+      <div class="cue-tc">{tc(cue.start)} → {tc(cue.end)} · {(cue.end - cue.start).toFixed(2)}s</div>
+
+      {#if app.track === 'source'}
+        <textarea
+          class="cue-text"
+          bind:this={sourceEl}
+          bind:value={draft}
+          onblur={commit}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+          }}
+          spellcheck="false"
+          rows="2"
+        ></textarea>
+      {:else if app.track === 'target'}
+        <div class="edit-label">译文 · {app.trackLang}</div>
+        <textarea
+          class="cue-text sub"
+          bind:this={targetEl}
+          bind:value={draftTr}
+          onblur={commit}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+          }}
+          spellcheck="false"
+          rows="2"
+        ></textarea>
+        {#if isTranslationStale(play.selected)}
+          <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
+        {/if}
+      {:else}
+        <div class="edit-label">原文</div>
+        <textarea
+          class="cue-text"
+          bind:this={sourceEl}
+          bind:value={draft}
+          onblur={commit}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+          }}
+          spellcheck="false"
+          rows="2"
+        ></textarea>
+        <div class="edit-label">译文 · {app.trackLang}</div>
+        <textarea
+          class="cue-text sub"
+          bind:this={targetEl}
+          bind:value={draftTr}
+          onblur={commit}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
+          }}
+          spellcheck="false"
+          rows="2"
+        ></textarea>
+        {#if isTranslationStale(play.selected)}
+          <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
+        {/if}
+      {/if}
+    {:else}
+      <div class="cue-empty">还没有字幕。到「转写」跑一次，或在音轨上右键添加一条。</div>
+    {/if}
+  </div>
+
+  {#if cue}
+    <div class="actions">
+      <button class="btn" onclick={() => previewRange(cue.start, cue.end)}>
+        <Icon name="play" size={11} />试听
+      </button>
+      <button class="btn ghost" onclick={() => focusRange(cue.start, cue.end)} title="在波形上聚焦放大这一句">
+        <Icon name="search" size={11} />聚焦
+      </button>
+      <button class="btn icon ghost danger" onclick={remove} title="删除此句">
+        <Icon name="trash" size={12} />
+      </button>
+      <button
+        class="btn primary commit"
+        onclick={commit}
+        disabled={app.track === 'source'
+          ? draft === cue.text
+          : draft === cue.text && draftTr === translationAt(play.selected)}
+      >
+        更新此行
+      </button>
+    </div>
+  {/if}
+
+  <div class="tts-block">
+    <div class="tts-head">
+      <b>TTS 对照</b>
+      <span title="选中克隆音色就按角色声线朗读；系统语音零显存兜底">
+        {engineLabel}
+      </span>
+    </div>
+    <div class="tts-controls">
+      <button
+        class="btn mini"
+        class:on={tts.playing && tts.index === play.selected}
+        onclick={() => speakCue(play.selected)}
+        disabled={!cue || tts.loading}
+        title={!cue
+          ? '先选中一条字幕'
+          : selectedTts?.kind === 'clone' && !cloneEngineReady()
+            ? '克隆模型还没下载，只能先用系统语音'
+            : '朗读这句字幕；再点一次停止'}
+      >
+        {#if tts.loading && tts.index === play.selected}
+          <span class="spin"></span>生成中
+        {:else if tts.playing && tts.index === play.selected}
+          <Icon name="stop" size={10} />停止
+        {:else}
+          <Icon name="speaker" size={11} />朗读
+        {/if}
+      </button>
+      <select
+        class="tts-sel voice"
+        value={tts.voiceId}
+        title="音色：系统语音零显存，克隆音色按角色声线朗读"
+        onchange={(e) => {
+          setTtsVoiceId(e.currentTarget.value);
+          ttsManage = false;
+        }}
+      >
+        {#if tts.custom.length}
+          <optgroup label="克隆音色">
+            {#each tts.custom as voice (voice.id)}
+              <option value={voice.id}>{voice.name}</option>
+            {/each}
+          </optgroup>
+        {/if}
+        <optgroup label="系统音色 · 零显存">
+          {#each tts.system as voice (voice.id)}
+            <option value={voice.id}>{voice.name}</option>
+          {/each}
+        </optgroup>
+        {#if !tts.system.length && !tts.custom.length}
+          <option value="">{tts.loaded ? '无可用语音' : '读取中…'}</option>
         {/if}
       </select>
+      <select
+        class="tts-sel rate"
+        value={tts.speed}
+        title="语速"
+        onchange={(e) => setTtsSpeed(Number(e.currentTarget.value))}
+      >
+        <option value={0.8}>0.8×</option>
+        <option value={1}>1.0×</option>
+        <option value={1.2}>1.2×</option>
+      </select>
     </div>
-    {#if hasTrack}
-      <div class="track-meta">
-        <span>{app.translations[app.trackLang]?.count ?? 0} 条</span>
-        {#if staleCount > 0}
-          <span class="warn">{staleCount} 条待更新</span>
-        {:else}
-          <span class="ok">全部同步</span>
-        {/if}
-        <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
+
+    <div class="tts-tools">
+      <button class="tts-link" onclick={chooseUpload} title="上传 3–10 秒参考音频；可一次选多段，每段建一个音色">
+        + 上传参考音频
+      </button>
+      <span class="tts-dot">·</span>
+      <button
+        class="tts-link"
+        onclick={openExtract}
+        disabled={!cue || !app.media}
+        title={!app.media ? '先导入视频' : !cue ? '先选中一句字幕' : '用当前这句的原声建立克隆音色'}
+      >
+        从当前句截取
+      </button>
+      {#if tts.custom.length}
+        <span class="tts-dot">·</span>
+        <button class="tts-link" onclick={openLibrary} title="保存过的克隆音色都在这里">
+          音色库 {tts.custom.length}
+        </button>
+      {/if}
+      {#if selectedTts?.kind === 'clone' && !ttsLibrary}
+        <span class="tts-dot">·</span>
+        <button class="tts-link" onclick={openManage} title="重命名 / 修改参考文本 / 删除">
+          管理「{selectedTts.name}」
+        </button>
+      {/if}
+      <span class="tts-spacer"></span>
+      {#if !cloneEngineReady()}
+        <button
+          class="tts-link accent"
+          onclick={startModelDownload}
+          disabled={downloading}
+          title="下载 OmniVoice（约 3.3GB），之后可用参考音频克隆声线"
+        >
+          {downloading ? '下载中…' : '下载克隆模型'}
+        </button>
+      {:else}
+        <span class="tts-ready" title="克隆模型已就绪，首次合成时才加载权重">
+          {tts.engine?.loaded ? '已加载' : '按需加载'} · {tts.custom.length} 个音色
+        </span>
+      {/if}
+    </div>
+    <div class="tts-hint">参考音频 3–10 秒：单人、干声、无背景音乐；多选会各存为一个音色。</div>
+
+    {#if downloading}
+      <div class="tts-progress" role="progressbar" aria-valuenow={tts.download?.percent ?? 0}>
+        <div style="width:{tts.download?.percent ?? 0}%"></div>
+      </div>
+      <div class="tts-progress-label">
+        {tts.download?.stage || '正在下载…'} {tts.download?.percent ?? 0}%
       </div>
     {/if}
 
-    <div class="ins-h">
-      当前条目
-      <span class="muted">#{play.selected + 1}</span>
-    </div>
-    <div class="card">
-      {#if cue}
-        <div class="kv">
-          <span class="k">时间</span>
-          <span class="v mono">{tc(cue.start)} → {tc(cue.end)}</span>
+    {#if batch}
+      <div class="tts-progress-label">
+        正在创建音色 {batch.done}/{batch.total}{batch.name ? ` · ${batch.name}` : ''}
+      </div>
+    {/if}
+
+    {#if ttsLibrary}
+      <div class="voice-panel">
+        <div class="vp-head">
+          <span>音色库 · {tts.custom.length} 个</span>
+          <button class="tts-link" onclick={openVoicesDir}>在访达中打开</button>
         </div>
-        <div class="kv">
-          <span class="k">时长</span>
-          <span class="v mono">{(cue.end - cue.start).toFixed(2)} s</span>
+        {#if !tts.custom.length}
+          <p class="vp-hint">
+            还没有保存的克隆音色。可以上传参考音频，或选中一句后点「从当前句截取」。
+          </p>
+        {:else}
+          <div class="voice-list">
+            {#each tts.custom as voice (voice.id)}
+              <div class="voice-row" class:active={voice.id === tts.voiceId}>
+                <button
+                  class="voice-pick"
+                  onclick={() => useLibraryVoice(voice.id)}
+                  title="使用这个音色"
+                >
+                  <span class="voice-name">{voice.name}</span>
+                  <span class="voice-meta">
+                    {voice.duration ? `${voice.duration.toFixed(1)}s` : '—'} · {voiceSourceLabel(
+                      voice.source,
+                    )}
+                  </span>
+                </button>
+                <button
+                  class="tts-link"
+                  onclick={() => previewLibraryVoice(voice.id)}
+                  disabled={tts.loading}
+                  title="试听"
+                >
+                  试听
+                </button>
+                <button
+                  class="tts-link"
+                  onclick={() => makeDefaultVoice(voice.id, voice.name)}
+                  title="以后启动默认用它"
+                >
+                  默认
+                </button>
+                <button
+                  class="tts-link"
+                  onclick={() => manageLibraryVoice(voice.id)}
+                  title="重命名 / 参考文本 / 删除"
+                >
+                  管理
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if ttsManage && selectedTts?.kind === 'clone'}
+      <div class="voice-panel">
+        <div class="vp-head">
+          <span>{selectedTts.duration ? `${selectedTts.duration.toFixed(1)}s 参考音频` : '参考音频'}</span>
+          <button class="tts-link" onclick={previewTtsVoice} disabled={tts.loading}>
+            {tts.loading && tts.index === -1 ? '生成中…' : '试听'}
+          </button>
         </div>
-        <div class="kv">
-          <span class="k">字符</span>
-          <span class="v">
-            {cue.text.length} 字{app.track === 'source' ? '' : ` · 译文 ${translationAt(play.selected).length} 字`}
+        <label class="vp-field">
+          <span>音色名</span>
+          <input bind:value={ttsName} maxlength="40" placeholder="角色名" />
+        </label>
+        <label class="vp-field">
+          <span>参考音频日文</span>
+          <textarea
+            bind:value={ttsRefText}
+            rows="2"
+            placeholder="这段参考音频的台词，用于对齐声线（可留空）"
+          ></textarea>
+        </label>
+        <div class="vp-actions">
+          <button class="btn mini ghost danger" onclick={removeManagedVoice}>删除</button>
+          <span class="tts-spacer"></span>
+          <button class="btn mini" onclick={cancelPanels}>取消</button>
+          <button class="btn mini primary" onclick={saveManage} disabled={ttsSaving}>
+            {ttsSaving ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if uploadDraft}
+      <div class="voice-panel">
+        <div class="vp-head">
+          <span title={uploadDraft.path}>{uploadDraft.path.split('/').pop()}</span>
+        </div>
+        <label class="vp-field">
+          <span>音色名</span>
+          <input bind:value={uploadDraft.name} maxlength="40" placeholder="角色名" />
+        </label>
+        <label class="vp-field">
+          <span>参考音频日文</span>
+          <textarea
+            bind:value={uploadDraft.refText}
+            rows="2"
+            placeholder="这段参考音频的台词，用于对齐声线（可留空）"
+          ></textarea>
+        </label>
+        <p class="vp-hint">音频会自动去首尾静音；超过 10 秒只保留前 10 秒。</p>
+        <div class="vp-actions">
+          <button class="btn mini ghost" onclick={() => (uploadDraft = null)}>取消</button>
+          <span class="tts-spacer"></span>
+          <button class="btn mini primary" onclick={confirmUpload} disabled={ttsSaving}>
+            {ttsSaving ? '保存中…' : '保存音色'}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if extractDraft}
+      {@const ec = app.cues[extractDraft.index]}
+      <div class="voice-panel">
+        <div class="vp-head">
+          <span>
+            {ec ? `${ec.start.toFixed(1)}–${ec.end.toFixed(1)}s` : '当前句'} 的原声
           </span>
         </div>
-        <div style="height:8px"></div>
-
-        {#if app.track === 'source'}
+        <label class="vp-field">
+          <span>音色名</span>
+          <input bind:value={extractDraft.name} maxlength="40" placeholder="角色名" />
+        </label>
+        <label class="vp-field">
+          <span>参考音频日文</span>
           <textarea
-            class="cue-text"
-            bind:value={draft}
-            onblur={commit}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
-            }}
-            spellcheck="false"
+            bind:value={extractDraft.refText}
             rows="2"
+            placeholder="这段参考音频的台词，用于对齐声线（可留空）"
           ></textarea>
-        {:else if app.track === 'target'}
-          <div class="edit-label">译文 · {app.trackLang}</div>
-          <textarea
-            class="cue-text"
-            bind:value={draftTr}
-            onblur={commit}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
-            }}
-            spellcheck="false"
-            rows="2"
-          ></textarea>
-          {#if isTranslationStale(play.selected)}
-            <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
-          {/if}
-        {:else}
-          <div class="edit-label">原文</div>
-          <textarea
-            class="cue-text"
-            bind:value={draft}
-            onblur={commit}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
-            }}
-            spellcheck="false"
-            rows="2"
-          ></textarea>
-          <div class="edit-label">译文 · {app.trackLang}</div>
-          <textarea
-            class="cue-text"
-            bind:value={draftTr}
-            onblur={commit}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit();
-            }}
-            spellcheck="false"
-            rows="2"
-          ></textarea>
-          {#if isTranslationStale(play.selected)}
-            <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
-          {/if}
-        {/if}
-        <div class="btn-row">
-          <button class="btn" onclick={() => previewRange(cue.start, cue.end)}>
-            <Icon name="play" size={11} />试听
-          </button>
-          <button class="btn ghost" onclick={() => focusRange(cue.start, cue.end)} title="在波形上聚焦放大这一句">
-            <Icon name="search" size={11} />聚焦
-          </button>
-          <button
-            class="btn primary"
-            onclick={commit}
-            disabled={app.track === 'source'
-              ? draft === cue.text
-              : draft === cue.text && draftTr === translationAt(play.selected)}
-          >
-            更新此行
+        </label>
+        <p class="vp-hint">从当前音轨精准切片，前后留 0.2 秒上下文。</p>
+        <div class="vp-actions">
+          <button class="btn mini ghost" onclick={() => (extractDraft = null)}>取消</button>
+          <span class="tts-spacer"></span>
+          <button class="btn mini primary" onclick={confirmExtract} disabled={ttsSaving}>
+            {ttsSaving ? '截取中…' : '建立音色'}
           </button>
         </div>
-        <div class="btn-row">
-          <button class="btn danger" onclick={remove}>
-            <Icon name="trash" size={11} />删除此句
-          </button>
-        </div>
-      {:else}
-        <div class="muted" style="padding:6px 2px">还没有字幕</div>
-      {/if}
-    </div>
+      </div>
+    {/if}
   </div>
 
-  {#if quality}
-    <div>
-      <div class="ins-h">质检速览</div>
+  {#if imported}
+    <!--
+      换了一版字幕（导入 / 恢复草稿）后，转写报告与质检队列属于另一版内容。
+      这里不再展示它们的数字，改用当前字幕自己的来源与条数，避免“面板说 A、
+      核对台在用 B”。
+    -->
+    <div class="meta-sec">
+      <div class="meta-h">当前字幕</div>
+      <div class="source-row">
+        <span class="source-badge">{sourceLabel}</span>
+        <span class="source-name" title={sourcePath || outputName}>{outputName}</span>
+      </div>
+      <p class="meta-note">
+        质检速览与生效参数属于这次转写，和当前导入的字幕不是同一版；整片转写后会重新生成。
+      </p>
+      {#if app.media}
+        <button class="meta-link" onclick={() => setView('transcribe')}>
+          去转写
+          <Icon name="chevron-right" size={10} />
+        </button>
+      {/if}
+    </div>
+  {:else if quality}
+    <div class="meta-sec">
+      <div class="meta-h">质检速览</div>
       <div class="chips">
         <span
           class="chip"
@@ -277,7 +886,7 @@
         <span
           class="chip"
           class:ok={(quality.low_confidence ?? 0) === 0}
-          class:soft={(quality.low_confidence ?? 0) > 0}
+          class:warn={(quality.low_confidence ?? 0) > 0}
         >
           低置信 <b>{quality.low_confidence ?? 0}</b>
         </span>
@@ -285,41 +894,38 @@
     </div>
   {/if}
 
-  <div>
-    <div class="ins-h">生效参数</div>
-    <div class="card">
-      {#if app.report?.params?.length}
-        {#each app.report.params.slice(0, 6) as row (row.label)}
+  {#if !imported}
+    <div class="meta-sec">
+      <div class="meta-h">生效参数</div>
+      {#if report?.params?.length}
+        {#each report.params.slice(0, 6) as row (row.label)}
           <div class="kv"><span class="k">{row.label}</span><span class="v">{row.value}</span></div>
         {/each}
       {:else}
-        <div class="kv"><span class="k">设备</span><span class="v">{app.config?.device ?? '—'}</span></div>
-        <div class="kv"><span class="k">引擎</span><span class="v">{app.config?.engines?.[0]?.label ?? '—'}</span></div>
-        <div class="kv"><span class="k">版本</span><span class="v">v{app.config?.version ?? '—'}</span></div>
-        <div class="kv" style="color:var(--text-3)">
-          <span class="k">参数</span><span class="v" style="color:var(--text-3)">转写后可见</span>
-        </div>
+        <div class="kv"><span class="k">设备</span><span class="v mono">{app.config?.device ?? '—'}</span></div>
+        <div class="kv"><span class="k">引擎</span><span class="v">{app.config?.engines?.find((e) => e.key === app.engine)?.label ?? '—'}</span></div>
+        <div class="kv"><span class="k">版本</span><span class="v mono">v{app.config?.version ?? '—'}</span></div>
+        <div class="kv"><span class="k">参数</span><span class="v muted">转写后可见</span></div>
       {/if}
+      {#if reportStale}
+        <p class="meta-note">报告属于另一次转写，已隐藏；重新整片转写后会恢复。</p>
+      {/if}
+    </div>
+  {/if}
+
+  <div class="meta-sec">
+    <div class="meta-h">输出</div>
+    <div class="kv">
+      <span class="k">文件</span>
+      <span class="v mono" title={sourcePath || outputName}>{outputName}</span>
+    </div>
+    <div class="kv"><span class="k">条数</span><span class="v">{app.cues.length} 条</span></div>
+    <div class="kv">
+      <span class="k">字符</span>
+      <span class="v">{app.cues.reduce((n, c) => n + c.text.length, 0)} 字</span>
     </div>
   </div>
 
-  <div>
-    <div class="ins-h">输出</div>
-    <div class="card">
-      <div class="kv">
-        <span class="k">文件</span>
-        <span class="v mono" style="font-size:11px">
-          {app.report?.overview?.find((r) => r.label === '字幕文件名')?.value ??
-            app.media?.name ??
-            '—'}
-        </span>
-      </div>
-      <div class="kv"><span class="k">条数</span><span class="v">{app.cues.length} 条</span></div>
-      <div class="kv">
-        <span class="k">字符</span>
-        <span class="v">{app.cues.reduce((n, c) => n + c.text.length, 0)} 字</span>
-      </div>
-    </div>
   </div>
 
   <!--
@@ -341,13 +947,13 @@
           ? `把当前全部字幕写入工作草稿 ${reviewDraft.path}，不会覆盖导出文件`
           : '把当前核对台的全部字幕写入工作草稿，防止应用关闭或崩溃后丢失'}
       >
-        <Icon name="save" size={11} />{reviewDraft.saving ? '暂存中' : '暂存进度'}
+        <Icon name="save" size={11} />{reviewDraft.saving ? '暂存中' : '暂存'}
       </button>
       <select
         class="sd-fmt"
         bind:value={exportTrack}
         disabled={exporting}
-        title="导出内容：原文 / 仅译文 / 双语（一条两行）"
+        title="导出内容：原文 / 仅译文 / 双语（同一时间轴下原文、译文各一条）"
       >
         <option value="source">原文</option>
         <option value="target" disabled={!hasTrack}>译文</option>
@@ -371,7 +977,7 @@
           ? `把核对台当前时间轴导出到 ${app.config.export_dir}`
           : '把核对台当前时间轴导出到导出文件夹'}
       >
-        <Icon name="export" size={11} />{exporting ? '导出中' : '导出'}
+        <Icon name="export" size={11} />{exporting ? '导出中' : '导出字幕'}
       </button>
     </div>
     {#if reviewDraft.exists || app.lastExportPath}
@@ -402,88 +1008,90 @@
 
 <style>
   .inspector {
-    width: 320px;
-    flex: 0 0 320px;
-    background: var(--bg-inspector);
-    border-left: 1px solid var(--separator);
-    overflow-y: auto;
-    padding: 12px 14px 20px;
+    width: 348px;
+    flex: 0 0 348px;
+    background: var(--paper);
+    border-left: 1px solid var(--line-2);
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    transition: width var(--dur) var(--ease), flex-basis var(--dur) var(--ease),
-      padding var(--dur) var(--ease), opacity 140ms var(--ease);
+    transition: width var(--dur-panel) var(--ease), flex-basis var(--dur-panel) var(--ease),
+      opacity 140ms var(--ease);
   }
-  .edit-label {
-    margin: 2px 0 3px;
-    font-size: 10.5px;
-    color: var(--text-3);
+  .ins-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 20px 16px;
   }
-
-  .edit-hint {
-    margin-top: 4px;
-    font-size: 10.5px;
-    color: #b26a00;
+  .insp-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--ink-2);
   }
-
-  html[data-theme='dark'] .edit-hint {
-    color: #ffb340;
+  .insp-head b {
+    font-family: var(--font-mono);
+    font-weight: 400;
+    color: var(--ink-3);
   }
-
-  .track-row {
+  .head-right {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: 0 0 6px;
+    gap: 8px;
+  }
+  /* 只有紧凑模式的抽屉才需要显式的关闭入口（桌面由工具栏开关控制） */
+  .ins-close {
+    display: none;
+  }
+
+  .display-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
   }
   .seg {
-    display: inline-flex;
+    height: 26px;
     padding: 2px;
-    border-radius: 7px;
-    background: var(--fill);
+    border-radius: 6px;
   }
   .seg button {
-    border: 0;
-    background: transparent;
-    color: var(--text-2);
-    font: inherit;
-    font-size: 11px;
-    padding: 3px 9px;
-    border-radius: 5px;
-    cursor: pointer;
-  }
-  .seg button.on {
-    background: var(--bg-content);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  }
-  .seg button:disabled {
-    color: var(--text-3);
-    cursor: default;
+    height: 20px;
+    padding: 0 9px;
+    font-size: 12px;
+    border-radius: 4px;
   }
   .lang-sel {
     margin-left: auto;
+    height: 26px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--raise);
+    color: var(--ink);
     font: inherit;
-    font-size: 11px;
-    padding: 2px 5px;
-    border-radius: 6px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
+    font-size: 12px;
+    padding: 0 7px;
   }
   .track-meta {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 0 0 8px;
-    font-size: 10.5px;
-    color: var(--text-3);
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-3);
   }
   .track-meta .ok {
-    color: #1c7c36;
+    color: var(--success);
   }
   .track-meta .warn {
-    color: #b26a00;
+    color: var(--warn);
   }
   .track-meta .link {
     margin-left: auto;
@@ -491,73 +1099,421 @@
     background: transparent;
     color: var(--accent);
     font: inherit;
-    font-size: 10.5px;
+    font-size: 12px;
     cursor: pointer;
     padding: 0;
+  }
+
+  /* 当前句：全屏最大的字，也是唯一带蓝左线的卡片 */
+  .cue-card {
+    margin-top: 16px;
+    background: var(--raise);
+    border: 1px solid var(--line-2);
+    border-left: 2px solid var(--accent);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .cue-tc {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+  .cue-text {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    padding: 0;
+    font: inherit;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 29px; /* 20/29：1.45 取整，避免 29.0004 的小数行高 */
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    resize: none;
+    min-height: 58px;
+    user-select: text;
+    outline: none;
+    transition: box-shadow var(--dur-fast) var(--ease);
+  }
+  .cue-text.sub {
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 24px;
+    color: var(--ink-2);
+    min-height: 44px;
+  }
+  .cue-text:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .edit-label {
+    margin: 12px 0 0;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-3);
+  }
+  .edit-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--warn);
+  }
+  .cue-empty {
+    padding-top: 8px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--ink-3);
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .actions .btn.primary {
+    flex: 1;
+    justify-content: center;
+  }
+  .actions .btn.icon {
+    flex: 0 0 28px;
+  }
+  .danger {
+    color: var(--danger);
+  }
+
+  .tts-block {
+    margin-top: 16px;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--line-2);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .tts-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
+  .tts-head b {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    color: var(--ink-2);
+    flex: 0 0 auto;
+  }
+  .tts-head span {
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tts-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .mini {
+    height: 26px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  .mini.on {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent);
+  }
+  .tts-sel {
+    height: 26px;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--raise);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12px;
+    padding: 0 4px;
+  }
+  .tts-sel.rate {
+    flex: 0 0 56px;
+    width: 56px;
+  }
+  .tts-sel.voice {
+    flex: 1 1 auto;
+    width: auto;
+  }
+  .tts-tools {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding-bottom: 10px;
+  }
+  .tts-link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    line-height: 16px;
+    padding: 2px 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .tts-link:hover {
+    text-decoration: underline;
+  }
+  .tts-link:disabled {
+    color: var(--text-3);
+    cursor: default;
+    text-decoration: none;
+  }
+  .tts-link.accent {
+    font-weight: 600;
+  }
+  .tts-dot {
+    color: var(--text-3);
+  }
+  .tts-spacer {
+    flex: 1;
+  }
+  .tts-ready {
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .tts-progress {
+    height: 3px;
+    margin: 0 0 3px;
+    border-radius: 2px;
+    background: var(--separator-soft);
+    overflow: hidden;
+  }
+  .tts-progress > div {
+    height: 100%;
+    background: var(--accent);
+    transition: width 240ms ease;
+  }
+  .tts-progress-label {
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--text-3);
+    margin-bottom: 8px;
+  }
+  .voice-panel {
+    margin: 2px 0 10px;
+    padding: 8px 9px 9px;
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    background: var(--bg-inset, var(--raise));
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .vp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--text-3);
+    min-width: 0;
+  }
+  .vp-head > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vp-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--text-3);
+  }
+  .vp-field input,
+  .vp-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg-content);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 6px;
+    resize: vertical;
+  }
+  .vp-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 1px;
+  }
+  .vp-actions .btn.danger {
+    color: var(--danger);
+  }
+  .tts-hint,
+  .vp-hint {
+    margin: 0;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--text-3);
+  }
+  .voice-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 208px;
+    overflow-y: auto;
+    border: 1px solid var(--separator-soft);
+    border-radius: 5px;
+    background: var(--bg-content);
+  }
+  .voice-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 4px 3px 7px;
+    border-bottom: 1px solid var(--separator-soft);
+  }
+  .voice-row:last-child {
+    border-bottom: 0;
+  }
+  .voice-row.active {
+    background: var(--accent-soft);
+  }
+  .voice-pick {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    padding: 2px 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  .voice-name {
+    max-width: 100%;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .voice-row.active .voice-name {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .voice-meta {
+    font-size: 10.5px;
+    line-height: 14px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .meta-sec {
+    margin-top: 12px;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--line-2);
+  }
+  .meta-h {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 600;
+    color: var(--ink-2);
+    letter-spacing: 0.01em;
+    margin-bottom: 5px;
+  }
+  .source-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin: 2px 0 5px;
+  }
+  .source-badge {
+    flex: 0 0 auto;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 12px;
+    line-height: 18px;
+    font-weight: 500;
+  }
+  .source-name {
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .meta-note {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 17px;
+    color: var(--ink-3);
+  }
+  .meta-link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+  }
+  .meta-link:hover {
+    text-decoration: underline;
+  }
+  .muted,
+  .kv .v.muted {
+    color: var(--ink-3);
+    font-weight: 400;
   }
 
   .inspector.hidden {
     width: 0;
     flex-basis: 0;
-    padding-left: 0;
-    padding-right: 0;
     opacity: 0;
     overflow: hidden;
     border-left-color: transparent;
   }
 
-  .muted {
-    color: var(--text-3);
-    font-weight: 400;
-  }
-
-  .cue-text {
-    width: 100%;
-    border: 1px solid transparent;
-    background: var(--fill);
-    border-radius: 8px;
-    padding: 9px 10px;
-    font: inherit;
-    font-size: 15px;
-    line-height: 1.5;
-    color: var(--text);
-    resize: vertical;
-    min-height: 56px;
-    user-select: text;
-    transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
-  }
-  .cue-text:hover {
-    border-color: var(--separator);
-  }
-  .cue-text:focus {
-    outline: none;
-    border-color: var(--accent);
-    background: var(--bg-content);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  .btn-row {
-    display: flex;
-    gap: 6px;
-    margin-top: 8px;
-  }
-  .btn-row .btn {
-    flex: 1;
-    justify-content: center;
-  }
-
-  /* 常驻保存区：吸在右侧栏底部，滚动检查器时也不消失 */
+  /* 常驻保存区：固定在右侧栏底部，内容单独滚动 */
   .save-dock {
-    position: sticky;
-    bottom: 0;
-    z-index: 3;
-    margin: 0 -14px -20px;
-    padding: 9px 14px 12px;
-    border-top: 1px solid var(--separator);
-    background: color-mix(in srgb, var(--bg-inspector) 94%, var(--bg-content));
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    box-shadow: 0 -10px 20px -16px rgba(0, 0, 0, 0.35);
+    flex: 0 0 auto;
+    padding: 10px 20px 12px;
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+    box-shadow: 0 -10px 20px -18px rgba(27, 39, 64, 0.35);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -570,24 +1526,23 @@
     min-width: 0;
   }
   .sd-title {
-    font-size: 11px;
+    font-size: 12px;
+    line-height: 16px;
     font-weight: 600;
-    color: var(--text-3);
+    color: var(--ink-2);
     letter-spacing: 0.02em;
     flex: 0 0 auto;
   }
   .sd-state {
-    font-size: 10.5px;
-    color: var(--text-3);
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .sd-state.warn {
-    color: #b26a00;
-  }
-  :global(html[data-theme='dark']) .sd-state.warn {
-    color: #ffb340;
+    color: var(--warn);
   }
   .sd-row {
     display: flex;
@@ -600,17 +1555,16 @@
     min-width: 0;
   }
   .sd-fmt {
-    appearance: none;
     height: 26px;
-    width: 58px;
-    flex: 0 0 58px;
-    border-radius: 6px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text-2);
+    width: 54px;
+    flex: 0 0 54px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--raise);
+    color: var(--ink-2);
     font: inherit;
-    font-size: 11.5px;
-    padding: 0 4px;
+    font-size: 12px;
+    padding: 0 2px 0 5px;
   }
   .sd-export {
     min-width: 64px;
@@ -628,7 +1582,7 @@
     background: transparent;
     color: var(--accent);
     font: inherit;
-    font-size: 10.5px;
+    font-size: 12px;
     text-align: left;
     padding: 0;
     cursor: pointer;
@@ -640,6 +1594,69 @@
     text-decoration: underline;
   }
   .sd-link:disabled {
-    color: var(--text-3);
+    color: var(--ink-3);
+  }
+
+  .spin {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    animation: spin 650ms linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* 紧凑模式（≤900px）：不再占列，改成右侧抽屉。
+     收起 = 平移出屏幕（不动 width，避免每次开关都触发布局）；
+     遮罩与 Esc 关闭由 App.svelte 负责。 */
+  @media (max-width: 900px) {
+    .inspector {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(348px, 92vw);
+      flex: 0 0 auto;
+      z-index: 20;
+      border-left: 1px solid var(--line);
+      box-shadow: -18px 0 46px -26px rgba(27, 39, 64, 0.5);
+      transform: translateX(103%);
+      transition: transform 180ms var(--ease);
+      opacity: 1;
+      overflow: hidden;
+    }
+    .inspector:not(.hidden) {
+      transform: none;
+    }
+    .inspector.hidden {
+      width: min(348px, 92vw);
+      flex-basis: auto;
+      opacity: 1;
+      border-left-color: transparent;
+      box-shadow: none;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .ins-close {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      margin: -4px -4px 0 0;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--ink-3);
+    }
+    .ins-close:hover {
+      background: var(--fill);
+      color: var(--ink);
+    }
   }
 </style>

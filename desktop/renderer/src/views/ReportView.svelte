@@ -23,6 +23,28 @@
 
   const report = $derived(app.report);
   const q = $derived(report?.quality);
+  /**
+   * 报告页也可以从旧任务打开。核对台换过字幕 / 转写后，报告不再对应
+   * 当前时间轴；保留报告本身，但必须明说它属于哪一版。
+   */
+  const reviewSource = $derived(app.reviewSource);
+  const sourceMismatch = $derived.by(() => {
+    if (!reviewSource) return false;
+    if (reviewSource.kind === 'import' || reviewSource.kind === 'draft') return true;
+    if (
+      reviewSource.kind === 'transcription' &&
+      reviewSource.job_id &&
+      report?.job_id
+    ) {
+      return reviewSource.job_id !== report.job_id;
+    }
+    return false;
+  });
+  const mismatchNote = $derived(
+    reviewSource?.kind === 'import' || reviewSource?.kind === 'draft'
+      ? '当前核对台用的是导入的字幕，这份报告只属于上一次转写。'
+      : '当前核对台来自另一次转写，这份报告不是它的结果。',
+  );
 
   let lastExport = $state('');
 
@@ -122,6 +144,13 @@
         </button>
       </div>
     </div>
+
+    {#if sourceMismatch}
+      <div class="banner">
+        <Icon name="warn" size={12} />
+        {mismatchNote}
+      </div>
+    {/if}
 
     {#if report.overview.find((r) => r.label === '完成状态')?.value?.includes('打断') ||
       report.raw_text.includes('转录已中途打断')}
@@ -286,12 +315,13 @@
 
 <style>
   .report-wrap {
-    padding: 18px 26px 34px;
+    padding: var(--sp-8) var(--sp-10) var(--sp-12);
     overflow-y: auto;
     flex: 1;
-  }
-  .report-wrap > * {
-    max-width: 900px;
+    display: grid;
+    grid-template-columns: minmax(0, 960px);
+    justify-content: center;
+    align-content: start;
   }
 
   .empty {
@@ -312,7 +342,7 @@
     margin-top: 18px;
     padding: 12px 14px;
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
     max-width: 520px;
     display: flex;
     flex-direction: column;
@@ -352,7 +382,7 @@
     letter-spacing: -0.01em;
   }
   .meta {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -364,7 +394,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11.5px;
+    font-size: 12px;
     color: #b26a00;
     background: rgba(255, 159, 10, 0.12);
     border-radius: 8px;
@@ -377,7 +407,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0 22px;
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 9px 14px;
   }
   .grid.inner {
@@ -410,7 +440,7 @@
   }
   .v.mono {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .sec-head {
@@ -420,14 +450,14 @@
     margin: 18px 0 8px;
   }
   .sec-h {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-3);
     letter-spacing: 0.02em;
     flex: 0 0 auto;
   }
   .sec-note {
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -439,7 +469,7 @@
   }
   .tiny {
     height: 21px;
-    font-size: 10.5px;
+    font-size: 12px;
     padding: 0 7px;
   }
 
@@ -452,7 +482,7 @@
     display: inline-flex;
     align-items: baseline;
     gap: 5px;
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-2);
     background: var(--fill);
     border-radius: 8px;
@@ -460,7 +490,7 @@
   }
   .chip b {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text);
   }
@@ -505,7 +535,7 @@
 
   .sections {
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
     overflow: hidden;
   }
   .sec {
@@ -517,7 +547,7 @@
   .sec.params {
     margin-top: 14px;
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
   }
   summary {
     display: flex;
@@ -551,14 +581,14 @@
     color: var(--text-3);
   }
   .sn {
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     flex: 0 0 auto;
   }
 
   .note {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-2);
     padding: 0 14px 7px;
     line-height: 1.5;
@@ -572,7 +602,7 @@
     gap: 9px;
     padding: 4px 0;
     border-top: 1px solid var(--separator-soft);
-    font-size: 11.5px;
+    font-size: 12px;
     min-width: 0;
   }
   .time-link {
@@ -580,7 +610,7 @@
     border: 0;
     background: transparent;
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--accent);
     padding: 0;
     flex: 0 0 auto;
@@ -590,16 +620,16 @@
     text-decoration: underline;
   }
   .tag {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-2);
     background: var(--fill);
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 0 5px;
     flex: 0 0 auto;
   }
   .dur,
   .peak {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     flex: 0 0 auto;
@@ -619,7 +649,7 @@
     gap: 7px;
     margin: 0 0 9px;
     min-width: 0;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
   }
   .saved-ok {
@@ -644,7 +674,7 @@
     flex-wrap: wrap;
   }
   .path {
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
     overflow: hidden;

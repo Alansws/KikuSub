@@ -9,14 +9,22 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core import settings as settings_store
-from core.i18n import bilingual_cues, target_cues
-from core.subtitles import SubtitleCue, cues_to_srt, cues_to_txt, cues_to_vtt, srt_to_cues
+from core.i18n import bilingual_entries, target_cues
+from core.subtitles import (
+    SubtitleCue,
+    cues_to_srt,
+    cues_to_txt,
+    cues_to_vtt,
+    split_multiline_cues,
+    srt_to_cues,
+)
 from core.textio import write_text_atomic
 
 from .deps import get_session
@@ -36,6 +44,8 @@ class Cue(BaseModel):
 
 class CueList(BaseModel):
     cues: list[Cue] = Field(default_factory=list)
+    # 批量替换（查找替换 / AI 应用）可以自带操作说明，历史列表直接显示它。
+    label: str = ""
 
 
 class CuePatch(BaseModel):
@@ -49,6 +59,10 @@ class InsertRequest(BaseModel):
     start: float
     end: float
     text: str = ""
+
+
+class HistoryJumpRequest(BaseModel):
+    index: int
 
 
 class ExportRequest(BaseModel):
@@ -71,8 +85,17 @@ def _snapshot(session: Session) -> dict:
     return {
         "cues": _to_dicts(session.review_cues),
         "count": len(session.review_cues),
-        "can_undo": bool(session.undo_stack),
-        "can_redo": bool(session.redo_stack),
+        "can_undo": session.can_undo,
+        "can_redo": session.can_redo,
+        # 工具栏按钮的 title 直接显示「下一步会撤回/重做什么」
+        "undo_label": session.undo_label(),
+        "redo_label": session.redo_label(),
+        # 与渲染层「导出设置」的本地历史比先后，决定全局 ⌘Z 撤回哪一边
+        "undo_at": session.undo_timestamp(),
+        "redo_at": session.redo_timestamp(),
+        # 当前核对表来自哪里（转写 / 导入字幕 / 暂存草稿）。检查器据此判断
+        # 能不能引用最近一次转写的质检与参数。
+        "review_source": dict(session.review_source),
     }
 
 
@@ -152,7 +175,8 @@ def replace_cues(payload: CueList, session: Session = Depends(get_session)) -> d
     for item in payload.cues:
         _validate(item.start, item.end)
         cues.append(SubtitleCue(start=item.start, end=item.end, text=item.text))
-    session.replace_review(cues)
+    label = (payload.label or "").strip() or f"替换全部字幕（{len(cues)} 条）"
+    session.replace_review(cues, label=label)
     return _snapshot(session)
 
 
@@ -197,7 +221,28 @@ def import_cues(payload: ImportPathRequest, session: Session = Depends(get_sessi
     cues = srt_to_cues(text)
     if not cues:
         raise HTTPException(status_code=422, detail="没有从该文件里解析出字幕")
-    session.replace_review(cues)
+    # 旧版双语交付文件：同一条 cue 里两行。拆成同时间轴的两条，与官方双语 SRT 一致。
+    if _BILINGUAL_FILE_RE.search(path.name):
+        cues, exploded = split_multiline_cues(cues)
+        if exploded:
+            log.info("导入双语字幕：按行拆分 | file=%s | cues=%d", path.name, len(cues))
+    session.replace_review(
+        cues,
+        label=f"导入字幕（{len(cues)} 条）",
+        source={
+            "kind": "import",
+            "name": path.name,
+            "path": str(path),
+            "job_id": "",
+            "at": time.time(),
+        },
+    )
+    # 导入会整表替换：与旧表条数对不上的译文轨已经无法逐条对齐，直接丢弃，
+    # 否则核对台会继续显示上一版的译文，看起来像“新字幕的译文”。
+    for lang in list(session.translations):
+        if len(session.translations[lang].texts) != len(cues):
+            session.drop_translation(lang)
+            log.info("导入字幕时丢弃错位的译文轨 | lang=%s", lang)
     return {**_snapshot(session), "source": str(path)}
 
 
@@ -255,7 +300,17 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
         raise HTTPException(status_code=400, detail=f"读取暂存草稿失败：{exc}") from exc
     if not cues:
         raise HTTPException(status_code=422, detail="暂存草稿里没有解析出字幕")
-    session.replace_review(cues)
+    session.replace_review(
+        cues,
+        label="恢复暂存草稿",
+        source={
+            "kind": "draft",
+            "name": path.name,
+            "path": str(path),
+            "job_id": "",
+            "at": time.time(),
+        },
+    )
 
     # 换了整张表，任何条数对不上的旧轨都已经无法对齐，先丢掉（不留一份错位的轨）
     for lang in list(session.translations):
@@ -293,6 +348,43 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
     return {**_snapshot(session), "source": str(path), "translations": sorted(restored_langs)}
 
 
+# ---------------------------------------------------------------------------
+# 可回溯历史（20 步）
+#
+# 放在 `/api/cues/{index}` 之前：未来若新增 GET 详情路由，"history" 不能被当成 index。
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/cues/history")
+def cue_history(session: Session = Depends(get_session)) -> dict:
+    """当前会话的时间线：每一步的说明、时间、是否当前状态。
+
+    ``state`` 取 ``past``（可点回去）/ ``current`` / ``undone``（可重做）。
+    """
+    return {
+        "items": session.history_items(),
+        "cursor": session.history_cursor,
+        "can_undo": session.can_undo,
+        "can_redo": session.can_redo,
+        "undo_label": session.undo_label(),
+        "redo_label": session.redo_label(),
+        "undo_at": session.undo_timestamp(),
+        "redo_at": session.redo_timestamp(),
+    }
+
+
+@router.post("/api/cues/history/jump")
+def cue_history_jump(
+    payload: HistoryJumpRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """点历史里的任意一步：直接回到那个状态（后面的步骤仍可重做）。"""
+    label = session.jump_history(payload.index)
+    if label is None:
+        raise HTTPException(status_code=422, detail=f"历史位置 {payload.index} 不存在")
+    return {**_snapshot(session), "label": label, "index": payload.index}
+
+
 @router.patch("/api/cues/{index}")
 def patch_cue(index: int, payload: CuePatch, session: Session = Depends(get_session)) -> dict:
     if not 0 <= index < len(session.review_cues):
@@ -302,7 +394,16 @@ def patch_cue(index: int, payload: CuePatch, session: Session = Depends(get_sess
     end = current.end if payload.end is None else payload.end
     text = current.text if payload.text is None else payload.text
     _validate(start, end)
-    session.update_cue(index, start, end, text)
+    # 没有实际变化就不压历史：否则历史列表里会出现一串「点了但没改」的空操作
+    if start == current.start and end == current.end and text == current.text:
+        return _snapshot(session)
+    parts = []
+    if text != current.text:
+        parts.append("文本")
+    if start != current.start or end != current.end:
+        parts.append("时间")
+    label = f"修改第 {index + 1} 条{'与'.join(parts)}"
+    session.update_cue(index, start, end, text, label=label)
     return _snapshot(session)
 
 
@@ -316,24 +417,26 @@ def delete_cue(index: int, session: Session = Depends(get_session)) -> dict:
 @router.post("/api/cues/{index}/insert")
 def insert_cue(index: int, payload: InsertRequest, session: Session = Depends(get_session)) -> dict:
     _validate(payload.start, payload.end)
-    if not session.insert_cue(payload.index if payload.index >= 0 else index,
-                              payload.start, payload.end, payload.text):
+    target = payload.index if payload.index >= 0 else index
+    if not session.insert_cue(target, payload.start, payload.end, payload.text):
         raise HTTPException(status_code=422, detail=f"插入位置 {payload.index} 越界")
     return _snapshot(session)
 
 
 @router.post("/api/cues/undo")
 def undo(session: Session = Depends(get_session)) -> dict:
-    if not session.undo():
+    label = session.undo()
+    if label is None:
         raise HTTPException(status_code=409, detail="没有可撤回的操作")
-    return _snapshot(session)
+    return {**_snapshot(session), "undone": label}
 
 
 @router.post("/api/cues/redo")
 def redo(session: Session = Depends(get_session)) -> dict:
-    if not session.redo():
+    label = session.redo()
+    if label is None:
         raise HTTPException(status_code=409, detail="没有可重做的操作")
-    return _snapshot(session)
+    return {**_snapshot(session), "redone": label}
 
 
 @router.post("/api/cues/clear")
@@ -343,6 +446,10 @@ def clear_cues(session: Session = Depends(get_session)) -> dict:
 
 
 _EXPORTERS = {"SRT": (cues_to_srt, ".srt"), "VTT": (cues_to_vtt, ".vtt"), "TXT": (cues_to_txt, ".txt")}
+
+# 旧版（≤2026-11）双语导出把原文/译文写进同一条 cue 的两行；文件名带 `.bilingual`
+# 时按行拆开，重新导入才不会显示成「日文 中文」挤在一行（开发文档 D-4）。
+_BILINGUAL_FILE_RE = re.compile(r"\.bilingual(?=\.(?:srt|vtt)$)", re.IGNORECASE)
 
 
 @router.post("/api/cues/export")
@@ -379,7 +486,9 @@ def export_cues(
             cues, skipped = target_cues(cues, translation.texts)
             suffix = f".{lang}"
         else:
-            cues = bilingual_cues(cues, translation.texts)
+            # 交付文件用「每语种一条 cue」，与官方双语 SRT 的写法一致：
+            # 播放器里叠成两行，重新导入核对台也不会把两种语言挤成一行。
+            cues = bilingual_entries(cues, translation.texts)
             suffix = ".bilingual"
         if not cues:
             raise HTTPException(status_code=409, detail="译文全是空的，没有可导出的内容")

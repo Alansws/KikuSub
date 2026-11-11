@@ -8,6 +8,7 @@
    * 安装检测都自然沿用同一个目录。
    */
   import Icon from './Icon.svelte';
+  import EngineSetup from './EngineSetup.svelte';
 
   let {
     defaultDir,
@@ -27,6 +28,8 @@
   const chosen = $derived(picked || currentDir || defaultDir);
   let busy = $state(false);
   let error = $state('');
+  /** 第二步：选完目录、主进程开始拉 sidecar 后，再让用户勾选要下载的模型。 */
+  let step = $state<'dir' | 'engines'>('dir');
 
   async function pick() {
     error = '';
@@ -44,7 +47,8 @@
     busy = true;
     try {
       await window.kikusub.completeSetup(chosen);
-      ondone();
+      // 不立刻 ondone：先进入模型配置，sidecar 会在后台启动。
+      step = 'engines';
     } catch (err) {
       error = (err as Error).message || '无法使用这个目录';
     } finally {
@@ -53,13 +57,16 @@
   }
 </script>
 
+{#if step === 'engines'}
+  <EngineSetup ondone={ondone} />
+{:else}
 <div class="setup-overlay">
   <div class="setup-card">
     <div class="logo">KikuSub</div>
     <h1>欢迎使用 KikuSub</h1>
     <p class="lead">
-      转写模型体积较大（每个约 3–4 GB）。请先选择模型的保存位置，之后下载的模型都会放在这里；
-      以后也可以在「设置 → 引擎与模型」里更改。
+      转写模型体积较大（每个约 3–4 GB）。请先选择模型的保存位置，下一步再选择要下载哪些
+      模型（包括可选的 OmniVoice 音色克隆）；以后也可以在「设置 → 引擎与模型」里更改。
     </p>
 
     <div class="path-box">
@@ -85,13 +92,14 @@
 
     <div class="actions">
       <button class="btn primary" onclick={start} disabled={busy}>
-        {busy ? '正在准备…' : '使用此位置并开始'}
+        {busy ? '正在准备…' : '使用此位置并继续'}
       </button>
     </div>
 
     <div class="fine">模型只在本机使用，不会上传。第一次转写前可在设置页按需下载。</div>
   </div>
 </div>
+{/if}
 
 <style>
   .setup-overlay {
@@ -108,13 +116,13 @@
     width: min(560px, 100%);
     background: var(--bg-content);
     border: 1px solid var(--separator);
-    border-radius: 14px;
+    border-radius: 12px;
     box-shadow: var(--shadow-pop);
     padding: 28px 30px 22px;
     -webkit-app-region: no-drag;
   }
   .logo {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.08em;
     color: var(--accent);
@@ -134,7 +142,7 @@
   }
   .path-box {
     border: 1px solid var(--separator);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 11px 12px;
     background: var(--fill);
   }
@@ -143,7 +151,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
   }
   .path {
@@ -156,7 +164,7 @@
   }
   .path-note {
     margin-top: 6px;
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -164,7 +172,7 @@
   }
   .mono {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11px;
+    font-size: 12px;
     user-select: text;
   }
   .warn,
@@ -175,7 +183,7 @@
     margin-top: 12px;
     padding: 8px 10px;
     border-radius: 8px;
-    font-size: 11.5px;
+    font-size: 12px;
     line-height: 1.5;
   }
   .warn {
@@ -204,13 +212,13 @@
   }
   .fine {
     margin-top: 14px;
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     text-align: right;
   }
   .tiny {
     height: 20px;
-    font-size: 10.5px;
+    font-size: 12px;
     padding: 0 7px;
   }
 </style>

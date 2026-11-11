@@ -22,7 +22,7 @@ const {
   nativeTheme,
   shell,
 } = require('electron');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const aikey = require('./aikey.cjs');
@@ -44,6 +44,29 @@ const SHOT_PATH =
   process.env.KIKUSUB_SHOT || (SHOT_ARG ? SHOT_ARG.split('=')[1] || '/tmp/kikusub-app.png' : null);
 // 截图前等多久：要盖住「sidecar 启动 + 首帧数据」的时间，默认 5.5s
 const SHOT_DELAY_MS = Number(process.env.KIKUSUB_SHOT_DELAY || 5500);
+// 开发截图用：KIKUSUB_WIN_SIZE=1440x900 覆盖默认窗口尺寸，方便按设计稿视口核对。
+const WIN_SIZE = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.KIKUSUB_WIN_SIZE || '');
+
+// 开发模式下固定 userData：Electron 的单实例锁跟着 userData 走，如果每次
+// 启动都带不同的 --user-data-dir，就会真的跑出第二个 Electron，Dock 里
+// 出现两个图标。截图模式（SHOT_PATH）仍允许独立 profile 并行取证。
+// 确实需要并行调试时显式设 KIKUSUB_ALLOW_MULTIPLE=1。
+if (IS_DEV && !SHOT_PATH && process.env.KIKUSUB_ALLOW_MULTIPLE !== '1') {
+  try {
+    const devUserData = path.join(REPO_ROOT, '.dev-userdata');
+    fs.mkdirSync(devUserData, { recursive: true });
+    app.setPath('userData', devUserData);
+  } catch {
+    /* 路径不可写时退回默认 userData，不影响启动 */
+  }
+}
+if (IS_DEV) {
+  try {
+    app.setName('KikuSub');
+  } catch {
+    /* 某些环境不允许改 name，忽略 */
+  }
+}
 
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -231,6 +254,46 @@ function mainLog(message) {
   } catch {
     /* 日志失败不能影响主流程 */
   }
+}
+
+/**
+ * 清空主进程自己的 `main.log` 与它的轮转备份。
+ *
+ * sidecar 的「清空全部日志」只能处理它自己持有的 handler；主进程的日志由这里
+ * 负责。主进程每次写日志都是 appendFileSync（没有长期持有的 fd），所以直接截断
+ * 活动文件是安全的；备份文件直接删除。
+ */
+function clearMainLogs() {
+  let removed = 0;
+  let freed = 0;
+  try {
+    const dir = logsDir();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      return { removed, freed };
+    }
+    for (const name of entries) {
+      if (name !== 'main.log' && !name.startsWith('main.log.')) continue;
+      const full = path.join(dir, name);
+      try {
+        const stat = fs.statSync(full);
+        if (name === 'main.log') {
+          fs.writeFileSync(full, '');
+        } else {
+          fs.unlinkSync(full);
+          removed += 1;
+        }
+        freed += stat.size;
+      } catch {
+        /* 单个文件失败不影响其他文件 */
+      }
+    }
+  } catch {
+    /* 日志清理失败不能拖垮应用 */
+  }
+  return { removed, freed };
 }
 
 /**
@@ -438,6 +501,10 @@ function startSidecar() {
     cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // 关键：让 sidecar 成为新进程组的组长。退出时用负 pid 一次带走它和它启动的
+    // ffmpeg；否则只杀 Python 会把正在编码的 ffmpeg 留给 launchd 继续跑。
+    // Windows 不支持负 pid，保持默认行为（stopSidecar 里用 taskkill /T）。
+    detached: process.platform !== 'win32',
   });
 
   let handshakeBuf = '';
@@ -478,6 +545,7 @@ function startSidecar() {
     console.warn(`[sidecar] 退出 code=${code} signal=${signal}`);
     mainLog(`[sidecar] exit code=${code} signal=${signal}`);
     sidecar = null;
+    if (childRef === child) childRef = null;
     sendToRenderer('sidecar:down', { code, signal });
     if (quitting) return;
     if (restartPending) {
@@ -513,41 +581,97 @@ function startSidecar() {
 let childRef = null;
 let resolvePending = null;
 
+/** sidecar 以 detached 启动，是进程组组长；负 pid 能一次覆盖它和 ffmpeg 等子进程。 */
+function killProcessGroup(child, signal) {
+  if (!child || !child.pid || process.platform === 'win32') return false;
+  try {
+    process.kill(-child.pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function processGroupAlive(child) {
+  if (!child || !child.pid || process.platform === 'win32') return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 杀整棵 sidecar 进程树；组不存在时才退回只杀直接子进程。 */
+function killSidecarTree(child, signal) {
+  if (!child || !child.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F']);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  if (killProcessGroup(child, signal)) {
+    mainLog(`[sidecar] group ${signal} -> pid=${child.pid}`);
+    return;
+  }
+  mainLog(`[sidecar] group ${signal} failed，退回单进程 -> pid=${child.pid}`);
+  try {
+    child.kill(signal);
+  } catch {
+    /* 已退出 */
+  }
+}
+
 function stopSidecar() {
   const child = childRef;
   // 注意：`child.killed` 只表示「SIGTERM 发出去了」，不代表进程已退出。
   // 用它判断会让 3 秒后的 SIGKILL 永远不执行，留下占着模型的孤儿进程。
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    child.kill('SIGTERM');
-  } catch {
-    /* 已退出 */
+  if (!child) {
+    mainLog('[sidecar] stop skipped: no child');
+    return;
   }
-  // 3 秒还没退就强杀，绝不留下孤儿进程占着模型
+  mainLog(`[sidecar] stop pid=${child.pid} exit=${child.exitCode} signal=${child.signalCode}`);
+  killSidecarTree(child, 'SIGTERM');
+  // 3 秒还没退就强杀，绝不留下孤儿进程占着模型/继续编码
   setTimeout(() => {
-    try {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    } catch {
-      /* ignore */
+    if (child.exitCode === null && child.signalCode === null) {
+      killSidecarTree(child, 'SIGKILL');
+    } else if (processGroupAlive(child)) {
+      // sidecar 自己退了，但它启动的 ffmpeg 还在组里
+      killSidecarTree(child, 'SIGKILL');
     }
   }, 3000).unref?.();
 }
 
-/** 等 sidecar 真退出（最多 timeoutMs），退出清理删代理前必须等它停手。 */
+/** 等 sidecar 与它的子进程都退出（最多 timeoutMs），退出清理删代理前必须等它停手。 */
 function stopSidecarAndWait(timeoutMs = 5000) {
   return new Promise((resolve) => {
     const child = childRef;
-    if (!child || child.exitCode !== null) {
+    if (!child) {
       resolve();
       return;
     }
     let done = false;
+    let timer = null;
     const finish = () => {
       if (done) return;
       done = true;
+      if (timer) clearInterval(timer);
       resolve();
     };
-    child.once('exit', finish);
+    // 被信号杀掉时 exitCode 保持 null，只有 signalCode 有值。只判 exitCode 会让
+    // 这里永远等满 timeoutMs——sidecar 明明 0.3 秒就退了，用户却要盯着「正在启动
+    // 转写内核」的遮罩 5 秒才退出（⌘Q 卡顿的根因）。
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    const check = () => {
+      if (exited() && !processGroupAlive(child)) finish();
+    };
+    child.once('exit', check);
+    timer = setInterval(check, 120);
+    timer.unref?.();
     stopSidecar();
     setTimeout(finish, timeoutMs).unref?.();
   });
@@ -559,7 +683,9 @@ function restartSidecar() {
     startSidecar();
     return;
   }
-  if (!childRef || childRef.exitCode !== null) {
+  // 被信号杀掉时 exitCode 是 null、signalCode 才有值；只判 exitCode 会把
+  // 已经死掉的 childRef 当成活进程，于是只写 restartPending 却不再拉起新内核。
+  if (!childRef || childRef.exitCode !== null || childRef.signalCode !== null) {
     startSidecar();
     return;
   }
@@ -586,8 +712,8 @@ if (process.env.KIKUSUB_DEV_SEED) {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1360,
-    height: 838,
+    width: IS_DEV && WIN_SIZE ? Number(WIN_SIZE[1]) : 1360,
+    height: IS_DEV && WIN_SIZE ? Number(WIN_SIZE[2]) : 838,
     minWidth: 1080,
     minHeight: 680,
     show: false,
@@ -617,6 +743,19 @@ function createWindow() {
 
   // 渲染进程就绪后把已有握手补发一次（避免 sidecar 比页面先好的竞态）
   win.webContents.on('did-finish-load', () => {
+    // 开发用：KIKUSUB_ZOOM=2 把页面放大到 200%，用于缩放健壮性截图。
+    // 这是取证开关，不是产品功能（应用没有缩放菜单）。
+    if (IS_DEV && process.env.KIKUSUB_ZOOM) {
+      const factor = Number(process.env.KIKUSUB_ZOOM);
+      if (Number.isFinite(factor) && factor > 0) {
+        try {
+          win.webContents.setZoomFactor(Math.min(3, Math.max(0.5, factor)));
+          console.log('[zoom] factor=', win.webContents.getZoomFactor());
+        } catch {
+          /* 缩放失败不影响启动 */
+        }
+      }
+    }
     if (sidecar) sendToRenderer('sidecar:ready', sidecar);
     if (pendingFile) {
       sendToRenderer('file:opened', pendingFile);
@@ -701,6 +840,14 @@ async function captureAndQuit() {
       );
       console.log('[probe]', info);
     }
+    // 截图前把指针挪到窗口左上角：真实鼠标可能正停在某个控件上，
+    // 截图里就会带出一块随机 hover 底色，评审时容易被误读成选中态。
+    try {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: 2, y: 2 });
+      await new Promise((r) => setTimeout(r, 120));
+    } catch {
+      /* 合成器不接受时忽略，截图照常 */
+    }
     const image = await win.webContents.capturePage();
     fs.writeFileSync(SHOT_PATH, image.toPNG());
     console.log('[shot] 已保存', SHOT_PATH);
@@ -708,7 +855,9 @@ async function captureAndQuit() {
     console.error('[shot] 失败', err);
   } finally {
     quitting = true;
-    stopSidecar();
+    // 不能只发信号就 app.exit：退出期间 sidecar 可能还在 spawn ffmpeg。
+    // 等整棵进程树真的退出（最多 4 秒，超时后 SIGKILL）再走。
+    await stopSidecarAndWait(4000);
     app.exit(0);
   }
 }
@@ -723,11 +872,24 @@ function sessionCleanupCandidates() {
   return listCleanupCandidates(path.join(baseDir(), 'outputs'), 0);
 }
 
+/**
+ * 退出流程真正开始：先把「这是在退出」告诉渲染进程，再收起窗口。
+ *
+ * 没有这一步，`stopSidecar()` 触发的 `sidecar:down` 会让渲染层以为是内核崩溃，
+ * 弹出「正在启动转写内核…」遮罩并清空会话，用户要对着它等 sidecar 收尾
+ * （⌘Q 假死的表象）。退出时既要停掉这套重连 UI，也要立刻让窗口消失。
+ */
+function beginQuitTeardown() {
+  quitting = true;
+  sendToRenderer('app:quitting');
+  if (win && !win.isDestroyed() && win.isVisible()) win.hide();
+}
+
 function finishQuit() {
   allowQuit = true;
-  quitting = true;
-  quitFlow = null;
   quitConfirming = false;
+  beginQuitTeardown();
+  quitFlow = null;
   stopSidecar();
   app.quit();
 }
@@ -786,7 +948,7 @@ function buildMenu() {
       submenu: [
         { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => pickMedia(true) },
         { type: 'separator' },
-        { label: '导出字幕…', accelerator: 'CmdOrCtrl+E', click: send('menu:export') },
+        { label: '导出…', accelerator: 'CmdOrCtrl+E', click: send('menu:export') },
         { type: 'separator' },
         { role: 'close', label: '关闭窗口' },
       ],
@@ -802,6 +964,8 @@ function buildMenu() {
         { role: 'copy', label: '拷贝' },
         { role: 'paste', label: '粘贴' },
         { role: 'selectAll', label: '全选' },
+        { type: 'separator' },
+        { label: '查找与替换…', accelerator: 'CmdOrCtrl+F', click: send('menu:find') },
       ],
     },
     {
@@ -810,7 +974,8 @@ function buildMenu() {
         { label: '导入', accelerator: 'CmdOrCtrl+1', click: send('menu:view', 'import') },
         { label: '转写', accelerator: 'CmdOrCtrl+2', click: send('menu:view', 'transcribe') },
         { label: '核对', accelerator: 'CmdOrCtrl+3', click: send('menu:view', 'review') },
-        { label: '详情与导出', accelerator: 'CmdOrCtrl+4', click: send('menu:view', 'report') },
+        { label: '导出', accelerator: 'CmdOrCtrl+4', click: send('menu:view', 'export') },
+        { label: '任务详报', accelerator: 'CmdOrCtrl+5', click: send('menu:view', 'report') },
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
         { label: '切换外观', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:theme') },
@@ -908,6 +1073,44 @@ async function pickSubtitle(defaultDir) {
   return result.filePaths[0];
 }
 
+/**
+ * 选择参考音频：上传克隆音色时用，只认音频扩展名。
+ *
+ * 渲染层会传来「上次上传的目录」或当前视频所在目录；这比每次落在音乐文件夹
+ * 有用得多——用户的参考音频通常就和素材放在一起。支持一次选多段，每段会
+ * 各自建立一个克隆音色（OmniVoice 一次只接受一段参考音频）。
+ */
+async function pickAudio(defaultDir) {
+  if (!win) return [];
+  let initial = typeof defaultDir === 'string' && defaultDir.trim() ? defaultDir.trim() : '';
+  try {
+    if (initial && fs.existsSync(initial) && !fs.statSync(initial).isDirectory()) {
+      initial = path.dirname(initial);
+    }
+  } catch {
+    initial = '';
+  }
+  if (!initial) {
+    try {
+      initial = app.getPath('music');
+    } catch {
+      initial = app.getPath('home');
+    }
+  }
+  const result = await dialog.showOpenDialog(win, {
+    title: '选择参考音频（3–10 秒干净人声效果最好）',
+    message: '支持 wav / mp3 / m4a / flac 等常见格式；可一次选多段，每段建立一个音色',
+    defaultPath: initial,
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: '音频', extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'aiff', 'aif', 'wma'] },
+      { name: '全部文件', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return [];
+  return result.filePaths;
+}
+
 /** 通用目录选择：设置页切换导出文件夹。 */
 async function pickDirectory(title, defaultPath) {
   if (!win) return null;
@@ -962,6 +1165,7 @@ ipcMain.handle('app:info', () => ({
 
 ipcMain.handle('dialog:pick-media', () => pickMedia());
 ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir) => pickSubtitle(defaultDir));
+ipcMain.handle('dialog:pick-audio', (_e, defaultDir) => pickAudio(defaultDir));
 ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultDir));
 
 // ---- AI 密钥 ----
@@ -1061,8 +1265,9 @@ ipcMain.handle('quit:confirm', async (_event, keepPaths) => {
   clearTimeout(flow.timer);
   quitFlow = null;
   quitConfirming = true;
-  // 先让 sidecar 停手（可能正在写代理/字幕），再删文件
-  quitting = true;
+  // 先让 sidecar 停手（可能正在写代理/字幕），再删文件。
+  // 窗口在这里就收起：删除 + 等进程树退出期间不该再让用户看见任何界面状态。
+  beginQuitTeardown();
   let result = { removed: 0, failed: 0, freed: 0, errors: [] };
   try {
     await stopSidecarAndWait(5000);
@@ -1102,6 +1307,8 @@ ipcMain.handle('clipboard:write', (_e, text) => {
     return false;
   }
 });
+
+ipcMain.handle('logs:clear-main', () => clearMainLogs());
 
 ipcMain.handle('shell:reveal', (_e, target) => {
   if (typeof target === 'string' && target) shell.showItemInFolder(target);
@@ -1170,6 +1377,16 @@ if (!app.requestSingleInstanceLock()) {
       mainLog(`[main] unhandledRejection ${reason && reason.stack ? reason.stack : reason}`);
     });
     buildMenu();
+    // 开发模式 Dock 默认是 Electron 图标；带上应用图标，避免和真正的
+    // Electron 进程混淆。打包后 Info.plist 会直接使用 icon.icns。
+    if (IS_DEV && process.platform === 'darwin' && app.dock) {
+      const iconPath = path.join(DESKTOP_ROOT, 'build', 'icon.png');
+      try {
+        if (fs.existsSync(iconPath)) app.dock.setIcon(iconPath);
+      } catch {
+        /* 图标问题不能挡启动 */
+      }
+    }
     // sidecar 启动失败不能连累窗口：先建窗口，出问题也要能看见界面和日志
     createWindow();
     if (!firstRunPending) {
@@ -1219,8 +1436,15 @@ if (!app.requestSingleInstanceLock()) {
     }
     const files = sessionCleanupCandidates();
     if (!files.length) {
-      quitting = true;
-      stopSidecar();
+      // 没有临时文件要问，但 sidecar/ffmpeg 可能还在跑：先等进程树退出再退出。
+      // 先收起窗口并通知渲染层，别让 sidecar 的 down 事件弹成“正在启动转写内核”。
+      event.preventDefault();
+      quitConfirming = true;
+      beginQuitTeardown();
+      stopSidecarAndWait(5000).finally(() => {
+        allowQuit = true;
+        app.quit();
+      });
       return;
     }
     event.preventDefault();

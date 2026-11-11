@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
+  import PageHeader from '../components/PageHeader.svelte';
   import ParamPanel from '../components/ParamPanel.svelte';
   import {
     app,
@@ -24,6 +25,12 @@
   let applyMode = $state<'auto' | 'replace' | 'append'>('auto');
   let presetName = $state('');
   let picked = $state('');
+
+  const transcribeSub = $derived(
+    app.media
+      ? '当前媒体已就绪。留空时间区间即转写全片。'
+      : '还没有导入媒体——先去「导入」挑一个文件。',
+  );
 
   const running = $derived(
     app.job?.status === 'queued' ||
@@ -120,17 +127,9 @@
 </script>
 
 <div class="pane">
+  <PageHeader title="开始转写" subtitle={transcribeSub} />
   <div class="cols">
     <section class="left">
-      <div class="h1">开始转写</div>
-      <p class="p">
-        {#if app.media}
-          当前媒体已就绪。留空时间区间即转写全片。
-        {:else}
-          还没有导入媒体——先去「导入」挑一个文件。
-        {/if}
-      </p>
-
       <div class="form">
         <label for="engine">识别引擎</label>
         {#if (app.config?.engines ?? []).some((e) => e.enabled)}
@@ -194,7 +193,7 @@
             <span class="hint">同一时间只允许一个重任务</span>
           {:else}
             <button
-              class="btn primary"
+              class="btn primary lg"
               onclick={go}
               disabled={!app.media || !app.connected || !hasEnabledEngine}
             >
@@ -280,19 +279,23 @@
 
 <style>
   .pane {
-    padding: 18px 22px 22px;
+    padding: var(--sp-8) var(--sp-10) var(--sp-8);
     overflow: hidden;
     flex: 1;
     min-height: 0;
     display: flex;
+    flex-direction: column;
   }
 
   .cols {
     display: grid;
     grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-    gap: 26px;
+    gap: 32px;
     width: 100%;
+    max-width: 1120px;
+    margin: 0 auto;
     min-height: 0;
+    flex: 1;
   }
 
   .left {
@@ -307,18 +310,6 @@
     min-height: 0;
     border-left: 1px solid var(--separator-soft);
     padding-left: 22px;
-  }
-
-  .h1 {
-    font-size: 19px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    margin: 2px 0 4px;
-  }
-  .p {
-    font-size: 12.5px;
-    color: var(--text-2);
-    margin: 0 0 16px;
   }
 
   .form {
@@ -346,7 +337,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 11.5px;
+    font-size: 12px;
     text-align: left;
     color: var(--text-2);
   }
@@ -373,14 +364,19 @@
     gap: 8px;
   }
   .hint {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-3);
+  }
+
+  .btn.lg {
+    height: var(--ctl-h-lg);
+    padding: 0 14px;
   }
 
   .progress-card {
     margin-top: 18px;
     border: 1px solid var(--separator-soft);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 12px 14px;
   }
   .pc-top {
@@ -416,7 +412,7 @@
     display: flex;
     gap: 14px;
     margin-top: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
@@ -435,13 +431,13 @@
     align-items: center;
     gap: 4px;
     flex: 0 0 auto;
-    font-size: 10.5px;
+    font-size: 12px;
     color: #1c7c36;
   }
   .saved-path {
     flex: 1;
     min-width: 0;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -458,14 +454,14 @@
     flex: 0 0 auto;
   }
   .pb-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-3);
   }
   .preset-bar select {
     appearance: none;
     height: 26px;
-    border-radius: 6px;
+    border-radius: 4px;
     border: 1px solid var(--separator);
     background-color: var(--bg-content);
     color: var(--text);
@@ -482,5 +478,43 @@
   .preset-name {
     width: 132px;
     flex: 0 1 132px;
+  }
+
+  /* 紧凑模式（≤900px）：双栏放不下（680 下右栏只剩 200px，标签会竖排），
+     改成单栏上下排，整页滚动；右栏的分隔线从左边改成上边。 */
+  @media (max-width: 900px) {
+    .pane {
+      overflow-y: auto;
+      padding: 20px 16px 24px;
+    }
+    .cols {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 20px;
+      flex: 0 0 auto;
+    }
+    .left {
+      overflow: visible;
+      padding-right: 0;
+    }
+    .right {
+      border-left: 0;
+      border-top: 1px solid var(--separator-soft);
+      padding-left: 0;
+      padding-top: 16px;
+    }
+    .form {
+      grid-template-columns: 64px minmax(0, 1fr);
+    }
+    .preset-bar {
+      flex-wrap: wrap;
+    }
+    .preset-bar select {
+      flex: 1 1 120px;
+      max-width: none;
+    }
+    .preset-name {
+      flex: 1 1 120px;
+      width: auto;
+    }
   }
 </style>

@@ -1,11 +1,14 @@
-"""双语字幕的构造（无 UI / 无网络依赖）。
+"""双语字幕的两种排版（无 UI / 无网络依赖）。
 
-为什么双语是**一条 cue 两行**而不是"同区间两条 cue"（开发文档 D-4）：
+这里有两个函数，用途必须分清（开发文档 D-4）：
 
-- 播放器兼容性最好，`srt_to_cues()` 也能原样读回成一条带 ``\\n`` 的 cue；
-- 核对台的画面字幕叠加层本来就按 ``(start, end)`` 聚合多行，喂两行即可，不用新增机制。
+- :func:`bilingual_cues`：**一条 cue 两行**（原文上、译文下）。给烧录/画面叠加层用：
+  ffmpeg 的字幕精灵按 cue 取块，一条两行才能让两种语言在同一块里排版。
+- :func:`bilingual_entries`：**每个语种一条独立 cue**，共享同一时间轴。给交付文件用：
+  官方双语 SRT（如「诸神字幕组」）就是这种写法，播放器里自然叠成两行；
+  重新导入核对台时每条都是单行，不会被挤成「日文 中文」一行。
 
-导出与显示**必须共用这里**的实现，不允许两处各写一遍。
+导出字幕文件与烧录成片必须各自调用对应的函数，不允许两处各写一遍。
 """
 
 from __future__ import annotations
@@ -20,7 +23,11 @@ def _text_at(texts: list[str], index: int) -> str:
 
 
 def bilingual_cues(cues: list[SubtitleCue], texts: list[str]) -> list[SubtitleCue]:
-    """原文在上、译文在下；译文缺失的条目退化成单行，不产出空行。"""
+    """原文在上、译文在下；译文缺失的条目退化成单行，不产出空行。
+
+    只给「一块画面里排两行」的场景用（烧录硬字幕、画面叠加层）。
+    **字幕文件导出请用 :func:`bilingual_entries`。**
+    """
     out: list[SubtitleCue] = []
     for index, cue in enumerate(cues):
         source = cue.text.strip()
@@ -32,6 +39,24 @@ def bilingual_cues(cues: list[SubtitleCue], texts: list[str]) -> list[SubtitleCu
                 text=f"{source}\n{target}" if target else source,
             )
         )
+    return out
+
+
+def bilingual_entries(cues: list[SubtitleCue], texts: list[str]) -> list[SubtitleCue]:
+    """交付文件用的双语排版：每个语种一条独立 cue，共享同一时间轴。
+
+    与 :func:`bilingual_cues` 的区别见模块头。原文在前、译文在后；译文缺失的条目
+    只写原文，绝不产出空行。重新导入时每条都是单行，核对台按 ``(start, end)``
+    聚合回同一块，两种语言各占一行——和官方双语 SRT 的行为一致。
+    """
+    out: list[SubtitleCue] = []
+    for index, cue in enumerate(cues):
+        source = cue.text.strip()
+        target = _text_at(texts, index)
+        if source:
+            out.append(SubtitleCue(start=cue.start, end=cue.end, text=source))
+        if target:
+            out.append(SubtitleCue(start=cue.start, end=cue.end, text=target))
     return out
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from core.i18n import bilingual_cues, stale_indices, target_cues
-from core.subtitles import SubtitleCue
+from core.i18n import bilingual_cues, bilingual_entries, stale_indices, target_cues
+from core.subtitles import SubtitleCue, srt_to_cues, split_multiline_cues
 
 CUES = [
     SubtitleCue(0.0, 1.0, "おはよう"),
@@ -28,6 +28,59 @@ def test_bilingual_survives_short_texts():
     out = bilingual_cues(CUES, ["只有一条"])
     assert out[0].text == "おはよう\n只有一条"
     assert out[2].text == "またね"
+
+
+# --------------------------------------------------- 交付文件：每语种一条 cue
+
+
+def test_bilingual_entries_puts_each_language_on_its_own_cue():
+    out = bilingual_entries(CUES, TEXTS)
+    # 三条原文 → 六条交付 cue，原文在前、译文在后，时间轴完全相同
+    assert [c.text for c in out] == [
+        "おはよう",
+        "早上好",
+        "今日は雨だ",
+        "今天下雨",
+        "またね",
+        "再见",
+    ]
+    assert [(c.start, c.end) for c in out] == [
+        (0.0, 1.0),
+        (0.0, 1.0),
+        (1.0, 2.0),
+        (1.0, 2.0),
+        (2.0, 3.0),
+        (2.0, 3.0),
+    ]
+
+
+def test_bilingual_entries_skips_missing_target_without_blank_line():
+    out = bilingual_entries(CUES, ["早上好", "", "再见"])
+    assert [c.text for c in out] == ["おはよう", "早上好", "今日は雨だ", "またね", "再见"]
+
+
+def test_bilingual_entries_survive_short_texts():
+    out = bilingual_entries(CUES, ["只有一条"])
+    assert [c.text for c in out] == ["おはよう", "只有一条", "今日は雨だ", "またね"]
+
+
+def test_bilingual_entries_roundtrip_keeps_one_line_per_cue():
+    """导出 → 写 SRT → 读回：每条单行、时间轴不变（重新导入核对台的前提）。"""
+    from core.subtitles import cues_to_srt
+
+    text = cues_to_srt(bilingual_entries(CUES, TEXTS))
+    parsed = srt_to_cues(text)
+    assert len(parsed) == 6
+    assert all("\n" not in cue.text for cue in parsed)
+    assert [cue.text for cue in parsed] == ["おはよう", "早上好", "今日は雨だ", "今天下雨", "またね", "再见"]
+
+
+def test_split_multiline_cues_explodes_legacy_bilingual_cues():
+    legacy = [SubtitleCue(0.0, 1.0, "おはよう\n早上好"), SubtitleCue(1.0, 2.0, "またね")]
+    out, exploded = split_multiline_cues(legacy)
+    assert exploded == 1
+    assert [c.text for c in out] == ["おはよう", "早上好", "またね"]
+    assert [(c.start, c.end) for c in out] == [(0.0, 1.0), (0.0, 1.0), (1.0, 2.0)]
 
 
 def test_target_skips_blank_and_counts_them():

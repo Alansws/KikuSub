@@ -52,6 +52,23 @@ def media(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def test_high_bitrate_h264_still_suggests_proxy():
+    from server.media import HIGH_BITRATE_BPS, MediaInfo
+
+    info = MediaInfo(
+        id="x",
+        path=Path("episode.mp4"),
+        name="episode.mp4",
+        size=1024,
+        video_codec="h264",
+        has_video=True,
+        video_bitrate=HIGH_BITRATE_BPS + 1,
+    )
+    assert info.needs_proxy is True
+    assert info.proxy_reason == "bitrate"
+    assert info.to_dict()["proxy_reason"] == "bitrate"
+
+
 def test_proxy_paths_embed_media_size(media, tmp_path):
     standard, partial = proxy.proxy_paths(media, tmp_path)
     assert standard.name == f"clip_{media.stat().st_size}_preview.mp4"

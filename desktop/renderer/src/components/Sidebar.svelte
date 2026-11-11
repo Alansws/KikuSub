@@ -1,24 +1,26 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { app, setView, type View } from '../lib/store.svelte';
+  import appIcon from '../assets/app-icon.png';
 
   const items: { view: View; icon: string; label: string }[] = [
     { view: 'import', icon: 'tray', label: '导入' },
     { view: 'transcribe', icon: 'wave', label: '转写' },
     { view: 'review', icon: 'listcheck', label: '核对' },
-    { view: 'report', icon: 'doc', label: '详情与导出' },
+    { view: 'ai', icon: 'sparkle', label: 'AI 优化' },
+    { view: 'export', icon: 'export', label: '导出' },
   ];
-
-  // 底部状态块必须跟随顶部工具栏当前选中的引擎，而不是永远显示注册表第一个。
-  const activeEngine = $derived(
-    (app.config?.engines ?? []).find((e) => e.key === app.engine) ?? null,
-  );
-  const activeEngineLabel = $derived(
-    activeEngine ? (activeEngine.short_label || activeEngine.label) : '—',
-  );
 </script>
 
 <aside class="sidebar">
+  <div class="sb-brand" aria-label="KikuSub 字幕工作台">
+    <img class="brand-mark" src={appIcon} width="20" height="20" alt="" aria-hidden="true" />
+    <span>
+      <span class="brand-name">KikuSub</span>
+      <span class="brand-sub">字幕工作台</span>
+    </span>
+  </div>
+
   <div class="sb-label">工作区</div>
 
   {#each items as item (item.view)}
@@ -27,6 +29,7 @@
       class:active={app.view === item.view}
       onclick={() => setView(item.view)}
       title={item.label}
+      aria-label={item.label}
     >
       <span class="ico"><Icon name={item.icon} /></span>
       <span>{item.label}</span>
@@ -38,51 +41,79 @@
 
   <div class="sb-spacer"></div>
 
-  <div class="sb-env">
-    <div class="row">
-      <span><i class="dot" class:off={!app.connected}></i>设备</span>
-      <b>{app.config?.device?.toUpperCase() ?? '—'}</b>
-    </div>
-    <div class="row">
-      <span>引擎</span>
-      <b title={activeEngine?.label ?? '还没有可用引擎'}>{activeEngineLabel}</b>
-    </div>
-    <div class="row">
-      <span>状态</span>
-      <b>{app.connected ? '就绪' : app.connecting ? '连接中' : '未连接'}</b>
-    </div>
-  </div>
+
+  <button
+    class="sb-item"
+    class:active={app.view === 'prompts'}
+    onclick={() => setView('prompts')}
+    title="提示词库：选中、编辑并复制翻译提示词"
+    aria-label="提示词库"
+  >
+    <span class="ico"><Icon name="quote" /></span>
+    <span>提示词库</span>
+  </button>
 
   <button
     class="sb-item"
     class:active={app.view === 'settings'}
     onclick={() => setView('settings')}
-    title="设置：引擎与模型、日志与诊断"
+    title="设置：引擎与模型、文件夹路径、日志与诊断"
+    aria-label="设置"
   >
     <span class="ico"><Icon name="gear" /></span>
     <span>设置</span>
   </button>
+
 </aside>
 
 <style>
-  .sb-label {
-    font-size: 11px;
+  .sb-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px 14px;
+    color: var(--text);
+  }
+  .brand-mark {
+    display: block;
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    border-radius: 5px;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  .brand-name {
+    display: block;
+    font-size: 13px;
     font-weight: 600;
-    color: var(--text-3);
-    padding: 10px 8px 4px;
     letter-spacing: 0.01em;
+  }
+  .brand-sub {
+    display: block;
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 1px;
+  }
+  .sb-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-2);
+    padding: 10px 8px 4px;
+    letter-spacing: 0.02em;
   }
 
   .sb-item {
     appearance: none;
     border: 0;
     background: transparent;
-    height: 28px;
+    height: 30px;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 0 8px;
-    border-radius: 6px;
+    border-radius: var(--rad-control);
     color: var(--text);
     font: inherit;
     font-size: 13px;
@@ -97,6 +128,7 @@
     background: var(--accent-soft);
     color: var(--accent);
     font-weight: 500;
+    box-shadow: inset 2px 0 0 var(--accent);
   }
   .sb-item.active .ico {
     color: var(--accent);
@@ -112,7 +144,7 @@
 
   .sb-count {
     margin-left: auto;
-    font-size: 10.5px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
@@ -124,26 +156,17 @@
     flex: 1;
   }
 
-  .sb-env {
-    margin: 6px 4px 4px;
-    padding: 8px 9px;
-    border-radius: 8px;
-    background: var(--fill);
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .sb-env .row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-size: 11px;
-    color: var(--text-2);
-  }
-  .sb-env b {
-    font-weight: 500;
-    color: var(--text);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
+  /* 紧凑模式（≤900px）：56px 图标轨。标签的显隐在 app.css（全局骨架）里，
+     品牌文字在这里收起——组件样式排在 app.css 之后，同一份规则放这里才生效。 */
+  @media (max-width: 900px) {
+    .sb-brand {
+      justify-content: center;
+      gap: 0;
+      padding: 4px 0 12px;
+    }
+    .brand-name,
+    .brand-sub {
+      display: none;
+    }
   }
 </style>
