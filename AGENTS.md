@@ -217,16 +217,21 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 渲染端 API 失败会自动带 `X-Request-Id` 记日志；新增「用户关键动作」时同时 `logEvent(...)`，否则用户报障时无法还原操作序列。
 - 局部转写的 `write_audit` 语义：`replace_range`（核对台单句/选区修正）**不写**整片质检队列；转写页的整片/区间任务都要写，否则报告与质检面板数字不一致。
 
-### 3.5.1 应用图标（2026-11 修复）
+### 3.5.1 应用图标（2026-11 修订）
 
-- `desktop/build/icon.icns` 必须由 `docs/logo.svg` 重新渲染后打包，不能用
-  `docs/logo-1024.png` 直接转 icns——那张是白底 flattened PNG，四角不透明，
-  在深色 Finder 下会露出白角（用户报过「访达里图标异常、Dock 正常」）。
-  `tools/pack/make_icon.swift` 负责按 macOS 全部尺寸渲染透明圆角图标，
-  `build_app.sh` 的 0/7 步会先执行它。
+- **唯一图标源是 `docs/app-icon.png`**（1024×1024、RGBA、圆角与投影已烘进图里）。
+  `desktop/build/icon.icns` 必须由它重新渲染后打包：`tools/pack/make_icon.swift`
+  按 macOS 全部尺寸生成 iconset，`build_app.sh` 的 0/7 步先执行它，缺图直接失败——
+  绝不允许「沿用上一版 icon.icns」静默装出图标过时的 .app。
+- 旧波形 logo（深色圆角 + 米白声波 + 朱红底线）只作历史资产留在
+  `docs/archive/logo-waveform.*`，**不再参与打包，也不要再被 README 引用**。
+  README / README_EN 头部与仓库社交预览都必须用新图标（蓝紫渐变 K + 播放键 + 胶片）。
 - 装配后删除 Electron 自带的 `Contents/Resources/electron.icns`，避免图标缓存
   误用旧图；`build_app.sh` 末尾会 `touch` + `lsregister -f`。Finder 缓存仍顽固时
   运行 `bash tools/pack/refresh_finder_icon.sh --restart`。
+- 对外展示面（README 头部、GitHub「Social preview」卡）与安装包图标是两条链路：
+  前者是仓库文件 + Settings 手工上传，后者才走打包脚本。改图标时三处都要看，
+  否则会出现「Dock 是新的、仓库页还是旧的」。
 
 ## 3.6 桌面启动、设置与退出清理（2026-11 新增）
 

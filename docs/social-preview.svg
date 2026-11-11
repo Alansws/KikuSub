@@ -1,19 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="title desc">
   <title id="title">KikuSub</title>
-  <desc id="desc">KikuSub logo lockup: a speech waveform standing on a vermilion subtitle line.</desc>
-  <rect width="1280" height="640" fill="#161A22"/>
-  <g transform="translate(540 80) scale(0.390625)">
-    <rect width="512" height="512" rx="116" fill="#1F242E"/>
-    <g fill="#F4EFE6">
-      <rect x="108" y="263" width="40" height="96" rx="20"/>
-      <rect x="172" y="191" width="40" height="168" rx="20"/>
-      <rect x="236" y="127" width="40" height="232" rx="20"/>
-      <rect x="300" y="207" width="40" height="152" rx="20"/>
-      <rect x="364" y="287" width="40" height="72" rx="20"/>
-    </g>
-    <rect x="96" y="367" width="320" height="18" rx="9" fill="#E2543C"/>
-  </g>
-  <text x="640" y="392" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="108" font-weight="700" letter-spacing="-2"><tspan fill="#F4EFE6">Kiku</tspan><tspan fill="#E2543C">Sub</tspan></text>
-  <text x="640" y="444" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#9C968D" letter-spacing="0.3">Japanese subtitle transcription · frame-accurate timing review</text>
-  <text x="640" y="548" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="21" font-weight="400" fill="#6F6A63" letter-spacing="0.4">Local-first · Gradio · Anime Whisper / Qwen3-ASR + CTC</text>
+  <desc id="desc">KikuSub 应用图标（蓝紫渐变 K + 播放键 + 胶片）居中，下面是字标与产品定位。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0C111A"/>
+      <stop offset="1" stop-color="#101724"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.28" r="0.55">
+      <stop offset="0" stop-color="#3B5BFF" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#3B5BFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#3B5BFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <image href="app-icon.png" x="540" y="72" width="200" height="200"/>
+
+  <text x="640" y="400" text-anchor="middle"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="104" font-weight="700" letter-spacing="-2">
+    <tspan fill="#F5F7FB">Kiku</tspan><tspan fill="#8FA6FF">Sub</tspan>
+  </text>
+
+  <text x="640" y="452" text-anchor="middle"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="26" font-weight="400" fill="#9BA7BC" letter-spacing="0.3">Japanese subtitle transcription · frame-accurate timing review</text>
+
+  <text x="640" y="556" text-anchor="middle"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="21" font-weight="400" fill="#5F6B80" letter-spacing="0.4">macOS desktop app · Anime Whisper / Qwen3-ASR + CTC · Local-first</text>
 </svg>

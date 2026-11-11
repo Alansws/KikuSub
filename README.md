@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" width="112" alt="KikuSub logo">
+  <img src="docs/app-icon.png" width="112" alt="KikuSub logo">
 </p>
 
 <h1 align="center">KikuSub</h1>

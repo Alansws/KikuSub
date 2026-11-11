@@ -38,21 +38,22 @@ if [ -x "$SIDECAR_BIN" ]; then
 fi
 
 echo "== 0/7 生成应用图标 =="
-# 从矢量源按 macOS 尺寸重新渲染：docs/logo-1024.png 是白底 flattened 图，
-# 直接打包会在深色背景的 Finder 里露出白角。
-if [ -f "docs/app-icon.png" ]; then
-  rm -rf "build/pack/icon.iconset"
-  swift tools/pack/make_icon.swift docs/app-icon.png "build/pack/icon.iconset"
-  mkdir -p desktop/build
-  iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
-elif [ -f "docs/logo.svg" ]; then
-  rm -rf "build/pack/icon.iconset"
-  swift tools/pack/make_icon.swift docs/logo.svg "build/pack/icon.iconset"
-  mkdir -p desktop/build
-  iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
-else
-  echo "⚠️ 没找到 docs/app-icon.png / docs/logo.svg，沿用 desktop/build/icon.icns"
+# 唯一图标源是 docs/app-icon.png（1024×1024、带 alpha、圆角与投影已烘进图里）。
+# 用它重渲染整套 iconset，而不是把某张扁平 PNG 直接转 icns：
+# 直接转的话 Finder 在深色背景下会露出白角，或者沿用上一版缓存图。
+# 旧波形 logo（docs/archive/logo-waveform.*）只是历史资产，不再参与打包——
+# 缺图标必须立刻失败，否则会静默装出一个图标过时的 .app。
+if [ ! -f "docs/app-icon.png" ]; then
+  echo "❌ 缺少 docs/app-icon.png（应用图标唯一源）；没有它不允许继续装配" >&2
+  exit 1
 fi
+rm -rf "build/pack/icon.iconset"
+swift tools/pack/make_icon.swift docs/app-icon.png "build/pack/icon.iconset"
+mkdir -p desktop/build
+iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
+# 开发模式（npx electron .）没有 Info.plist，Dock 图标走 desktop/build/icon.png。
+# 这里一起刷新，否则改完图标跑开发模式仍是上一次拷进去的旧图。
+cp docs/app-icon.png desktop/build/icon.png
 
 echo "== 1/7 复制 Electron 框架 =="
 rm -rf "$APP"

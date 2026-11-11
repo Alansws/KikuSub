@@ -35,7 +35,10 @@
 
 - `images/`：README 用的当前界面截图（由 `desktop` 的自截图机制生成，见
   [desktop/README.md](../desktop/README.md)）。
-- `logo.svg` / `logo.png` / `logo-1024.png`：应用图标源文件（`tools/pack/make_icon.swift`
-  从 `logo.svg` 渲染 `.icns`）。
-- `social-preview.*`：仓库社交预览图。
-- `archive/`：旧 Gradio 界面截图，仅作历史对照。
+- `app-icon.png`：**唯一应用图标源**（1024×1024、RGBA，圆角与投影已烘进图里）。
+  README / README_EN 头部与 `tools/pack/make_icon.swift`（生成 `icon.icns`）都读它；
+  换图标只换这一张，然后重跑 `tools/pack/build_app.sh`。
+- `social-preview.*`：仓库社交预览卡（1280×640）。`social-preview.svg` 是源文件，
+  `social-preview.png` 是渲染结果——它需要手工在 GitHub 仓库 Settings → Social preview 上传，
+  改仓库文件不会自动更新。
+- `archive/`：旧 Gradio 界面截图与旧波形 logo（`logo-waveform.*`），仅作历史对照。
