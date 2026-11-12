@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core import ai_client
+from core import ai_polish
 from core import ai_proposal as proposals
 from core import ai_translate
 from core import prompts as prompt_store
@@ -293,15 +294,24 @@ def get_manual_prompt(
     """「一键复制提示词」：把当前字幕整成 SRT 塞进所选模板，供用户粘到任意聊天窗。
 
     模板来自 ``prompts.json``（设置页可编辑、AI 优化台可切换）；没有选择时用
-    当前选中的模板。M3 只对翻译开放；润色的提示词与解析见后续里程碑。
+    当前选中的模板。润色走内置提示词，不需要 API Key，也不要求 AI 优化开关。
     """
     kind, lang = _normalize(kind, lang)
-    if kind != "translate":
-        raise HTTPException(status_code=422, detail="目前只支持复制翻译提示词")
     cues = session.review_cues
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕")
     srt = cues_to_srt(cues)
+    if kind == "polish":
+        # 润色也支持「复制提示词 → 网页版模型 → 粘回来」；不绑定 AI 优化。
+        prompt = ai_polish.build_manual_prompt(srt)
+        return {
+            "prompt": prompt,
+            "count": len(cues),
+            "lang": "",
+            "chars": len(prompt),
+            "template_id": "builtin-polish",
+            "template_name": "内置润色提示词",
+        }
     settings_path = _settings_path(request)
     prompt, template = prompt_store.render_prompt(
         srt,
@@ -332,13 +342,14 @@ def proposal_from_pasted_srt(
     时间戳一律丢弃并使用原文的——这样"模型改了时间轴"也不会污染交付文件。
     """
     kind, lang = _normalize(payload.kind, payload.lang)
-    if kind != "translate":
-        raise HTTPException(status_code=422, detail="目前只支持解析翻译结果")
     cues = session.review_cues
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕")
     try:
-        proposal, warnings = ai_translate.proposal_from_srt(payload.text, cues, lang)
+        if kind == "polish":
+            proposal, warnings = ai_polish.proposal_from_srt(payload.text, cues)
+        else:
+            proposal, warnings = ai_translate.proposal_from_srt(payload.text, cues, lang)
     except ai_client.AiError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"proposal": proposal, "warnings": warnings, "count": len(proposal["items"])}

@@ -25,6 +25,126 @@
   import { tcShort } from '../lib/time';
   import { cubicOut } from 'svelte/easing';
 
+  const POS_KEY = 'kikusub.qaPanelPos.v1';
+
+  function loadSavedPos(): { right: number; bottom: number } | null {
+    try {
+      const raw = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+      if (raw && Number.isFinite(raw.right) && Number.isFinite(raw.bottom)) {
+        return { right: Number(raw.right), bottom: Number(raw.bottom) };
+      }
+    } catch {
+      /* 手改坏：回到默认停靠 */
+    }
+    return null;
+  }
+
+  let panelEl = $state<HTMLElement | null>(null);
+  let savedPos = $state<{ right: number; bottom: number } | null>(loadSavedPos());
+  let dragging = $state(false);
+  let dragPos:
+    | {
+        startX: number;
+        startY: number;
+        startRight: number;
+        startBottom: number;
+        parentW: number;
+        parentH: number;
+        width: number;
+        height: number;
+      }
+    | null = null;
+
+  /** 核对台且检查器展开时，默认停靠在检查器左侧，而不是盖住右栏。 */
+  const dockInspector = $derived(app.view === 'review' && app.inspectorOpen && !app.compact);
+  const panelStyle = $derived(
+    savedPos && !app.compact
+      ? `right:${savedPos.right}px;bottom:${savedPos.bottom}px;`
+      : '',
+  );
+
+  function persistPos() {
+    try {
+      if (savedPos) localStorage.setItem(POS_KEY, JSON.stringify(savedPos));
+      else localStorage.removeItem(POS_KEY);
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  function onHeadPointerDown(e: PointerEvent) {
+    if (!panelEl) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+    const parent = panelEl.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    e.preventDefault();
+    const pr = parent.getBoundingClientRect();
+    const r = panelEl.getBoundingClientRect();
+    dragPos = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startRight: pr.right - r.right,
+      startBottom: pr.bottom - r.bottom,
+      parentW: pr.width,
+      parentH: pr.height,
+      width: r.width,
+      height: r.height,
+    };
+    dragging = true;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function onHeadPointerMove(e: PointerEvent) {
+    if (!dragPos) return;
+    const dx = e.clientX - dragPos.startX;
+    const dy = e.clientY - dragPos.startY;
+    const maxRight = Math.max(8, dragPos.parentW - dragPos.width - 8);
+    const maxBottom = Math.max(8, dragPos.parentH - dragPos.height - 8);
+    const right = Math.max(8, Math.min(maxRight, dragPos.startRight - dx));
+    const bottom = Math.max(8, Math.min(maxBottom, dragPos.startBottom + dy));
+    savedPos = { right: Math.round(right), bottom: Math.round(bottom) };
+  }
+
+  function onHeadPointerUp(e: PointerEvent) {
+    if (!dragPos) return;
+    dragPos = null;
+    dragging = false;
+    persistPos();
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** 双击标题栏回到默认停靠位置（检查器左侧）。 */
+  function resetPanelPosition() {
+    savedPos = null;
+    persistPos();
+  }
+
+  // 窗口缩小 / 检查器展开后，上次保存的位置可能已经跑到工作区外：拉回可视范围。
+  $effect(() => {
+    if (!panelEl || !savedPos || app.compact) return;
+    const parent = panelEl.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const pr = parent.getBoundingClientRect();
+    const r = panelEl.getBoundingClientRect();
+    const maxRight = Math.max(8, pr.width - r.width - 8);
+    const maxBottom = Math.max(8, pr.height - r.height - 8);
+    if (savedPos.right > maxRight || savedPos.bottom > maxBottom) {
+      savedPos = {
+        right: Math.min(savedPos.right, maxRight),
+        bottom: Math.min(savedPos.bottom, maxBottom),
+      };
+    }
+  });
+
   /**
    * 浮层从右下角「弹」出来：10px 上移 + 0.985→1 的轻微放大，
    * 比单纯淡入更接近 macOS popover 的手感；收起时反向收回。
@@ -241,12 +361,27 @@
 {#if qa.open}
   <aside
     class="qa-panel"
+    bind:this={panelEl}
     class:detached
+    class:dock-inspector={dockInspector}
+    class:dragging={dragging}
+    style={panelStyle}
     aria-label="质检待核队列"
     in:popIn={motion ? { duration: 220 } : { duration: 0 }}
     out:popOut={motion ? { duration: 130 } : { duration: 0 }}
   >
-    <header class="qa-head" class:bare={detached || !items.length}>
+    <header
+      class="qa-head"
+      class:bare={detached || !items.length}
+      role="group"
+      aria-label="质检面板标题栏，可拖动"
+      title="拖动标题栏移动面板；双击复位到检查器左侧"
+      onpointerdown={onHeadPointerDown}
+      onpointermove={onHeadPointerMove}
+      onpointerup={onHeadPointerUp}
+      onpointercancel={onHeadPointerUp}
+      ondblclick={resetPanelPosition}
+    >
       <span class="qa-mark" class:off={detached}>
         <Icon name={detached ? 'doc' : 'search'} size={12} />
       </span>
@@ -474,6 +609,17 @@
     overflow: hidden;
     transform-origin: 100% 100%;
   }
+  /* 默认停在检查器左侧（348px）外，避免盖住字幕编辑框和朗读按钮。
+     窗口不够宽时退到最左，仍可拖动到任意位置。 */
+  .qa-panel.dock-inspector {
+    right: max(14px, min(362px, calc(100% - 452px)));
+  }
+  .qa-panel.dragging {
+    user-select: none;
+  }
+  .qa-panel.dragging .qa-head {
+    cursor: grabbing;
+  }
 
   .qa-head {
     display: flex;
@@ -481,6 +627,8 @@
     gap: 8px;
     padding: 10px 10px 9px 12px;
     flex: 0 0 auto;
+    cursor: grab;
+    touch-action: none;
   }
   .qa-head.bare {
     box-shadow: inset 0 -1px 0 var(--separator-soft);

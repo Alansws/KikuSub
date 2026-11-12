@@ -6,6 +6,7 @@
     exportCues,
     focusRange,
     cloneEngineReady,
+    deleteTranslation,
     deleteTtsVoice,
     downloadTtsModel,
     extractTtsVoiceFromCue,
@@ -358,10 +359,14 @@
     stopTts();
   });
 
-  // 右键「添加字幕」后把光标直接放进文本框，用户不用再点一下
+  // 右键「添加字幕」后把光标直接放进文本框，用户不用再点一下。
+  // 只在 nonce **变化**时聚焦：Inspector 切页重挂载时如果直接读旧 nonce，
+  // 每次回到核对页都会把整段文本选中，用户按空格试听就把字幕替换成空格了。
+  let seenEditNonce = play.editNonce;
   $effect(() => {
     const nonce = play.editNonce;
-    if (!nonce) return;
+    if (nonce === seenEditNonce) return;
+    seenEditNonce = nonce;
     void tick().then(() => {
       const el = app.track === 'target' ? targetEl : sourceEl;
       el?.focus();
@@ -402,8 +407,9 @@
     const idx = play.selected;
     const c = app.cues[idx];
     if (!c) return;
-    const version = app.translations[app.trackLang]?.created_at ?? 0;
-    const key = `${idx}:${app.track}:${app.trackLang}:${version}`;
+    // 撤销 / 历史跳转 / 删除 / 切割 / 合并后，cue 与译文都会重新拉取：
+    // 只用 created_at 当版本号时，⌘Z 恢复了原文、右侧编辑框却还是空白的。
+    const key = `${idx}:${app.track}:${app.trackLang}:${app.cuesRevision}:${app.translationsRevision}`;
     if (key === syncKey) return;
     syncKey = key;
     editingIndex = idx;
@@ -412,25 +418,42 @@
   });
 
   /** 只提交当前显示模式里真正可见的那几个框。 */
-  function commit() {
+  async function commit() {
     if (!cue) return;
+    const index = play.selected;
+    const nextSource = draft;
+    const nextTarget = draftTr;
+    const sourceChanged = nextSource !== cue.text;
+    const targetChanged = nextTarget !== translationAt(index);
+
     if (app.track === 'source') {
-      if (draft !== cue.text) updateCue(play.selected, { text: draft });
+      if (sourceChanged) await updateCue(index, { text: nextSource });
       return;
     }
     if (app.track === 'target') {
-      if (draftTr !== translationAt(play.selected)) updateTranslation(play.selected, draftTr);
+      if (targetChanged) await updateTranslation(index, nextTarget);
       return;
     }
-    // 双语：两个框都能改，各自独立提交
-    if (draft !== cue.text) updateCue(play.selected, { text: draft });
-    if (draftTr !== translationAt(play.selected)) updateTranslation(play.selected, draftTr);
+    // 双语：两个框都能改。必须先落原文再落译文——服务端在改译文时会用
+    // 当前原文刷新 base，顺序反了会让「原文改过了」的提示永远消不掉。
+    if (sourceChanged) await updateCue(index, { text: nextSource });
+    if (targetChanged) await updateTranslation(index, nextTarget);
   }
 
   function remove() {
     if (!cue) return;
     deleteCue(play.selected);
     play.selected = Math.max(0, play.selected - 1);
+  }
+
+  async function removeTranslation() {
+    const lang = app.trackLang;
+    if (!lang || !app.translations[lang]) return;
+    if (!window.confirm(`删除 ${lang} 译文？原文与时间轴不受影响，可用「撤销译文」找回上一版。`)) {
+      return;
+    }
+    await deleteTranslation(lang);
+    if (app.track !== 'source' && !app.translations[lang]) setTrackMode('source');
   }
 </script>
 
@@ -489,6 +512,7 @@
         <span class="ok">全部同步</span>
       {/if}
       <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
+      <button class="link danger" onclick={removeTranslation}>删除译文</button>
     </div>
   {/if}
 
@@ -1102,6 +1126,12 @@
     font-size: 12px;
     cursor: pointer;
     padding: 0;
+  }
+  .track-meta .link + .link {
+    margin-left: 2px;
+  }
+  .track-meta .link.danger {
+    color: var(--danger);
   }
 
   /* 当前句：全屏最大的字，也是唯一带蓝左线的卡片 */

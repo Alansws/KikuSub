@@ -181,6 +181,23 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   **右键菜单与新建音色浮层必须用 `portal` 挂到 `body`**：`.view-enter.animated` 的切页动画
   `fill-mode: both` 会让计算后的 transform 变成 identity matrix，从而成为 `position: fixed`
   的包含块；留在里面会把菜单整体推偏「侧栏 + 工具栏」的距离（用户报过「离鼠标太远」）。
+- **切割 / 合并 / 多选删除（2026-11 新增）**：
+  - 有字幕区域右键新增「切割字幕」：`POST /api/cues/{index}/split` 在光标时间把一句切成两段，
+    **两段都保留完整原文**（用户明确要求：自动判断断点内容不可靠，先保留原句再分别删减）。
+    切割点距两端至少 0.05 秒；译文轨在同一位置复制一条，双语不会错位。
+  - 框选两条以上字幕后右键「合并这 N 句字幕」：`POST /api/cues/merge` 取首尾时间、文本按顺序
+    直接相连（西文单词间补空格），译文轨同样拼接。只允许下标连续的多条。
+  - 底部字幕轨道支持 ⌘ 单击多选（再点取消），`POST /api/cues/delete` 批量删除只压一次历史；
+    ⌘ 多选块在画布上用 accent 描边。删除必须同步删掉译文轨同下标条目。
+  - 服务端的插入 / 删除 / 切割 / 合并都要经 `Session` 的结构性方法调整 `translations`，
+    **禁止**只改 `review_cues` 让译文轨自己错位。`HistoryState` 现在连译文轨一起快照，
+    ⌘Z 才能把字幕与译文成对恢复。
+- **可自定义快捷键（2026-11 新增）**：`desktop/renderer/src/lib/shortcuts.svelte.ts` 是唯一映射，
+  ⌘K 打开面板录制新组合（该快捷键本身也可改）。默认值：Enter 删除当前字幕（底部多选时一起删）、
+  Space 播放 / 暂停、↑↓ 上下句、⌘F 查找、⌘↩ 添加空字幕、⌘1/⌘2 在 AI 优化台切润色 / 翻译。
+  **菜单里不再给播放 / 上下句 / 视图 / 查找绑固定 accelerator**：否则用户改键后旧键仍然生效，
+  且 AI 优化台的 ⌘1/⌘2 会被「显示 → 导入 / 转写」抢先。视图切换仍在菜单里可点，但按键走渲染层。
+  输入框内只有 allowInTyping 的动作（视图切换 / AI 标签 / 查找 / 打开面板）生效。
 - **本机 TTS（2026-11 升级：系统 say → 本地零样本克隆）**：
   - 引擎分两层，都在 `core/tts/`：`mac_say.py`（零显存兜底，`say -v ?` 的日语列表）与
     `clone_engine.py`（OmniVoice，Apache-2.0，0.6B，官方建议 3–10 秒参考音频）。
@@ -280,6 +297,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 - **⌘,（Ctrl+,）** 打开设置。菜单 `设置…` 已绑 accelerator，渲染层 `onKey` 还要再兜一层：
   输入框聚焦时菜单快捷键可能被吃掉，且设置快捷键要在 `typing` early-return **之前**处理。
+- **⌘K** 打开「键盘快捷键」面板（`ShortcutsDialog.svelte`）；面板里的组合存
+  `localStorage['kikusub.shortcuts.v1']`，菜单里也有「键盘快捷键…」入口。用户自定义优先，
+  不要再把播放 / 删除 / 视图切换写死回菜单 accelerator。
 
 ### 退出前清理（⌘Q / 关窗）
 
@@ -382,6 +402,17 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 核对台三态与双语行高：`ReviewView` 的行高是 `$derived(app.track === 'both' ? ROW_H*2 : ROW_H)`，
   **固定双行高**；禁止改用自动测量（会和虚拟滚动的绝对定位打架）。
 - 暂存必须连译文一起写（`{stem}.autosave_draft.i18n.json`）；恢复时条数不符的轨直接丢弃。
+- **结构性编辑与译文对齐（2026-11 修复）**：删一句原文必须同时删掉 `translations[lang].texts/base`
+  同下标条目；插入补空占位；切割复制一条；合并拼接。`Session.delete_cue/delete_cues/insert_cue/
+  split_cue/merge_cues` 是唯一入口，路由不要自己改两张表。
+- **人工改译文 = 已同步**：`Session.patch_translation` 把 `base[index]` 更新成当前原文，
+  「这一条的原文改过了，译文可能需要同步」才会随这次保存消失。双语下同时改原文和译文时，
+  前端必须**先提交原文、再提交译文**，否则 base 会落在旧原文上，提示永远清不掉。
+- **换片清空**：`POST /api/session/bind` 检测到 media id 变化时调用 `reset_for_media()`，清空
+  字幕、译文、历史与来源；前端 `openMedia` 随后 `loadTranslations()`。这是「导入新视频后
+  上一部片的译文永远占着、软件不可用」的修复。核对台右栏也提供「删除译文」。
+- **切回三态要定位**：`ReviewView` 监听 `app.track/trackLang`，变化时把 `play.selected` 落到
+  当前时间的字幕并 `revealRow()`；双语是双行高，必须等 DOM 更新后再滚。
 ### 3.7.3 Agent 技能（2026-11 M4）
 
 - 技能包在 `desktop/resources/skill/kikusub-subtitle/`，装到 `~/.agents/skills/`（DSH 会扫描的
@@ -418,6 +449,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   解析回来的 SRT 仍然**只按顺序取文本**，序号/时间戳全部丢弃（D-1 不破）。
 - 界面：侧栏「提示词库」；单击选中、双击就地编辑；保存后 AI 优化台的
   「复制提示词」立刻用新内容。禁止把模板内容写进 `settings.json` 或日志。
+- **润色也能走手动通道（2026-11）**：`GET /api/ai/prompt?kind=polish` 返回内置润色提示词
+  （`core.ai_polish.build_manual_prompt`，带 SRT），`POST /api/ai/from-srt` 的 `kind=polish`
+  只按顺序取文本、时间轴仍用当前 cue。润色不要求 API Key，也不绑定「AI 优化」开关。
 
 ### 3.8.2 成片导出
 

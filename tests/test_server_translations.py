@@ -143,12 +143,90 @@ def test_stale_flags_after_source_edit(ctx):
     assert summary["stale"] == [1]
 
 
-def test_stale_flags_when_cues_shrink(ctx):
+def test_delete_cue_removes_same_translation_entry(ctx):
+    """删一句原文必须同时删掉同位置的译文，否则后面所有译文整体前移一条。"""
     client, _ = ctx
     client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
     client.delete("/api/cues/1", headers=AUTH)
     track = client.get("/api/translations", headers=AUTH).json()["items"][0]
-    assert 1 in track["stale"]
+    assert track["count"] == 2
+    assert track["texts"] == ["早上好", "再见"]
+    assert track["stale"] == []
+
+
+def test_delete_cue_undo_restores_translation_alignment(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    client.delete("/api/cues/1", headers=AUTH)
+    undone = client.post("/api/cues/undo", headers=AUTH)
+    assert undone.status_code == 200, undone.text
+    assert [c["text"] for c in undone.json()["cues"]] == TEXTS
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["texts"] == ZH
+
+
+def test_split_cue_duplicates_source_and_translation(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    res = client.post("/api/cues/0/split", headers=AUTH, json={"at": 0.5})
+    assert res.status_code == 200, res.text
+    cues = res.json()["cues"]
+    assert [c["text"] for c in cues] == ["おはよう", "おはよう", "今日は雨だ", "またね"]
+    assert (cues[0]["start"], cues[0]["end"]) == (0.0, 0.5)
+    assert (cues[1]["start"], cues[1]["end"]) == (0.5, 1.0)
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["texts"] == ["早上好", "早上好", "今天下雨", "再见"]
+
+
+def test_merge_cues_joins_source_and_translation(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    res = client.post("/api/cues/merge", headers=AUTH, json={"indices": [0, 1]})
+    assert res.status_code == 200, res.text
+    cues = res.json()["cues"]
+    assert len(cues) == 2
+    assert cues[0]["text"] == "おはよう今日は雨だ"
+    assert (cues[0]["start"], cues[0]["end"]) == (0.0, 2.0)
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["texts"] == ["早上好今天下雨", "再见"]
+    assert track["stale"] == []
+
+
+def test_batch_delete_is_one_history_step(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    res = client.post("/api/cues/delete", headers=AUTH, json={"indices": [0, 2]})
+    assert res.status_code == 200, res.text
+    assert [c["text"] for c in res.json()["cues"]] == ["今日は雨だ"]
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["texts"] == ["今天下雨"]
+
+    undone = client.post("/api/cues/undo", headers=AUTH).json()
+    assert [c["text"] for c in undone["cues"]] == TEXTS
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["texts"] == ZH
+
+
+def test_bind_new_media_clears_review_and_translations(ctx, tmp_path):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    other = tmp_path / "other.mkv"
+    other.write_bytes(b"x")
+    mid = client.post("/api/media", headers=AUTH, json={"path": str(other)}).json()["id"]
+    bound = client.post("/api/session/bind", headers=AUTH, json={"media_id": mid})
+    assert bound.status_code == 200, bound.text
+    assert bound.json()["review_cleared"] is True
+    assert client.get("/api/cues", headers=AUTH).json()["cues"] == []
+    assert client.get("/api/translations", headers=AUTH).json()["count"] == 0
+
+
+def test_patch_translation_clears_stale_for_that_entry(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    client.patch("/api/cues/1", headers=AUTH, json={"text": "今日は雪だ"})
+    assert client.get("/api/translations", headers=AUTH).json()["items"][0]["stale"] == [1]
+    client.patch("/api/translations/zh-Hans/1", headers=AUTH, json={"text": "今天下雪"})
+    assert client.get("/api/translations", headers=AUTH).json()["items"][0]["stale"] == []
 
 
 # --------------------------------------------------------------------------- 撤销 / 删除

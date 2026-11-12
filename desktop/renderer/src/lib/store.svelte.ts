@@ -77,6 +77,10 @@ export const app = $state({
   settings: null as AppSettings | null,
   media: null as MediaInfo | null,
   cues: [] as Cue[],
+  /** 每次服务端字幕快照落地都自增：检查器据此刷新编辑框（撤销后不会停在旧文本）。 */
+  cuesRevision: 0,
+  /** 译文轨每次重新加载都自增：检查器据此刷新译文编辑框。 */
+  translationsRevision: 0,
   /**
    * 当前核对表的来源。`import` / `draft` 时右侧检查器不能再用最近一次转写的
    * 质检与参数——那份报告对应的是另一版字幕。
@@ -171,6 +175,7 @@ export function previewRange(start: number, end: number) {
 /** 把服务端返回的字幕快照统一写回状态（含撤销/重做按钮的说明）。 */
 function applyCueSnapshot(data: CueSnapshot) {
   app.cues = data.cues;
+  app.cuesRevision += 1;
   app.canUndo = data.can_undo;
   app.canRedo = data.can_redo;
   // 来源与字幕一起回滚：导入字幕 / 撤销 / 历史跳转都会带新的来源。
@@ -239,6 +244,7 @@ export async function jumpCueHistory(index: number) {
   try {
     const data = await api.jumpCueHistory(index);
     applyCueSnapshot(data);
+    await loadTranslations();
     // 历史里可能从「导入字幕」跳回「转写结果」：质检队列的可用性跟着来源变。
     await refreshQa();
     scheduleDraftSave();
@@ -381,6 +387,7 @@ export async function insertCueAt(center: number): Promise<number> {
   try {
     const data = await api.insertCue(index, { start, end, text: '' });
     applyCueSnapshot(data);
+    await loadTranslations();
     scheduleDraftSave();
     // 空字幕一定是日文原文；切回原文模式，并确保右侧检查器可见，
     // 否则 editNonce 找不到 textarea，用户还得自己再点开一次。
@@ -1310,6 +1317,7 @@ export async function openMedia(
     // 新片的新会话还没产生字幕来源；refreshCues 会用服务端快照覆盖。
     app.reviewSource = null;
     await refreshCues();
+    await loadTranslations();
     await refreshQa();
     await refreshDraftInfo();
     // 换片后播放头必须归零，否则会带着上一部的进度落地
@@ -1381,6 +1389,7 @@ export async function openSubtitle(
     logEvent('info', 'subtitle-import', path);
     const res = await api.importCues(path);
     applyCueSnapshot(res);
+    await loadTranslations();
     setView('review');
     play.selected = 0;
     play.time = 0;
@@ -2126,6 +2135,7 @@ export async function undo() {
   try {
     const data = await api.undo();
     applyCueSnapshot(data);
+    await loadTranslations();
     await refreshQa();
     if (play.selected >= app.cues.length) {
       play.selected = Math.max(0, app.cues.length - 1);
@@ -2154,6 +2164,7 @@ export async function redo() {
   try {
     const data = await api.redo();
     applyCueSnapshot(data);
+    await loadTranslations();
     await refreshQa();
     if (play.selected >= app.cues.length) {
       play.selected = Math.max(0, app.cues.length - 1);
@@ -2176,12 +2187,67 @@ export async function updateCue(index: number, patch: Partial<Cue>) {
   }
 }
 
-export async function deleteCue(index: number) {
+export async function deleteCue(index: number): Promise<boolean> {
   try {
     applyCueSnapshot(await api.deleteCue(index));
+    // 服务端同时删掉了同位置的译文；不刷新的话双语行会整体错位。
+    await loadTranslations();
     scheduleDraftSave();
+    return true;
   } catch (err) {
     toast((err as Error).message, 'error');
+    return false;
+  }
+}
+
+/** 批量删除底部轨道上多选的字幕：一次历史、译文轨同步。 */
+export async function deleteCues(indices: number[]) {
+  const unique = [...new Set(indices)].filter((i) => i >= 0 && i < app.cues.length);
+  if (!unique.length) return 0;
+  try {
+    const res = await api.deleteCues(unique);
+    applyCueSnapshot(res);
+    await loadTranslations();
+    scheduleDraftSave();
+    toast(`已删除 ${res.removed} 条字幕（⌘Z 可撤销）`);
+    return res.removed;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return 0;
+  }
+}
+
+/** 在音频时间轴当前位置把一条字幕切成两条；两段都先保留完整原文。 */
+export async function splitCueAt(index: number, at: number) {
+  try {
+    const res = await api.splitCue(index, at);
+    applyCueSnapshot(res);
+    await loadTranslations();
+    scheduleDraftSave();
+    play.selected = res.index;
+    play.selectNonce += 1;
+    toast('已切成两句，两段都保留了原句；分别改掉多余部分即可（⌘Z 可撤销）');
+    return res.index;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return -1;
+  }
+}
+
+/** 合并连续多条字幕（双语时译文一起合并），一次历史。 */
+export async function mergeCuesAt(indices: number[]) {
+  try {
+    const res = await api.mergeCues(indices);
+    applyCueSnapshot(res);
+    await loadTranslations();
+    scheduleDraftSave();
+    play.selected = res.index;
+    play.selectNonce += 1;
+    toast(`已合并 ${indices.length} 句字幕（⌘Z 可撤销）`);
+    return res.index;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return -1;
   }
 }
 
@@ -2305,6 +2371,7 @@ export async function restoreDraft() {
   try {
     const res = await api.restoreDraft();
     applyCueSnapshot(res);
+    await loadTranslations();
     setView('review');
     if (play.selected >= app.cues.length) {
       play.selected = Math.max(0, app.cues.length - 1);
@@ -2862,11 +2929,13 @@ export async function loadTranslations() {
     const map: Record<string, TranslationTrack> = {};
     for (const item of data.items) map[item.lang] = item;
     app.translations = map;
+    app.translationsRevision += 1;
     // 当前语种没有轨时退回原文，避免界面停在"译文"却没有内容
     if (app.track !== 'source' && !map[app.trackLang]) app.track = 'source';
     return data;
   } catch {
     app.translations = {};
+    app.translationsRevision += 1;
     return null;
   }
 }
@@ -2921,6 +2990,7 @@ export async function undoTranslation(lang = app.trackLang) {
   try {
     const res = await api.undoTranslation(lang);
     await loadTranslations();
+    if (res.undone) scheduleDraftSave();
     toast(res.undone ? '已退回上一版译文' : '这个语种没有更早的译文了', res.undone ? 'info' : 'warn');
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -2931,6 +3001,7 @@ export async function deleteTranslation(lang = app.trackLang) {
   try {
     await api.deleteTranslation(lang);
     await loadTranslations();
+    scheduleDraftSave();
     toast(`已删除 ${lang} 译文`);
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -3201,7 +3272,27 @@ export async function applyAiProposal() {
  * 把回复粘回来 → 解析成提案 → 同一套 diff。
  */
 export async function copyAiPrompt() {
-  await copyPromptTemplate();
+  if (!app.cues.length) {
+    toast(ai.kind === 'translate' ? '当前没有可翻译的字幕' : '当前没有可润色的字幕', 'warn');
+    return false;
+  }
+  try {
+    const templateId = ai.kind === 'translate' ? prompts.selected : '';
+    const res = await api.getAiPrompt(ai.kind, ai.kind === 'translate' ? ai.lang : '', templateId);
+    if (window.kikusub?.writeClipboard) {
+      await window.kikusub.writeClipboard(res.prompt);
+    } else if (navigator.clipboard) {
+      await navigator.clipboard.writeText(res.prompt);
+    }
+    toast(
+      `已复制「${res.template_name}」：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`,
+    );
+    ai.pasteOpen = true;
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
+  }
 }
 
 /**
@@ -3218,7 +3309,11 @@ export async function parseAiPastedSrt() {
   }
   ai.parsing = true;
   try {
-    const res = await api.aiFromSrt({ kind: 'translate', lang: ai.lang, text });
+    const res = await api.aiFromSrt({
+      kind: ai.kind,
+      lang: ai.kind === 'translate' ? ai.lang : '',
+      text,
+    });
     ai.proposal = res.proposal;
     ai.path = '';
     ai.errors = [];
@@ -3230,7 +3325,11 @@ export async function parseAiPastedSrt() {
     ai.pasteText = '';
     // 标记成"已加载"，避免 $effect 又去拉磁盘上的旧提案把它顶掉
     ai.loadedFor = aiContextKey();
-    toast(`已解析 ${res.count} 条译文，右侧就是待应用的建议`);
+    toast(
+      ai.kind === 'translate'
+        ? `已解析 ${res.count} 条译文，右侧就是待应用的建议`
+        : `已解析 ${res.count} 条修改，右侧就是待应用的建议`,
+    );
   } catch (err) {
     toast((err as Error).message, 'error');
   } finally {
@@ -3247,12 +3346,12 @@ export async function applyAiTranslation() {
   if (!ai.proposal || ai.applying) return;
   const track = ai.proposal.kind === 'translate' ? ai.proposal : null;
   if (!track) {
-    toast('这不是一份翻译提案', 'warn');
+    toast('这不是一份翻译建议', 'warn');
     return;
   }
   const lang = (track.dst_lang || ai.lang || '').trim();
   if (!lang) {
-    toast('提案里没有目标语种', 'error');
+    toast('建议里没有目标语种', 'error');
     return;
   }
   ai.applying = true;
@@ -3282,7 +3381,7 @@ export async function saveAiProposalAs() {
     }));
     const res = await api.saveAiProposal({ ...ai.proposal, items }, ai.kind, ai.lang);
     ai.path = res.path;
-    toast(`已保存提案：${res.path.split('/').pop()}`);
+    toast(`已保存建议：${res.path.split('/').pop()}`);
   } catch (err) {
     toast((err as Error).message, 'error');
   } finally {
@@ -3304,7 +3403,7 @@ export async function discardAiProposal() {
   }
   resetAi();
   ai.loadedFor = aiContextKey();
-  toast('已丢弃提案');
+  toast('已丢弃建议');
 }
 
 /** 改某一条译文（三种显示模式下右侧检查器都用它）。 */
@@ -3314,6 +3413,7 @@ export async function updateTranslation(index: number, text: string) {
   try {
     await api.patchTranslation(lang, index, text);
     await loadTranslations();
+    scheduleDraftSave();
   } catch (err) {
     toast((err as Error).message, 'error');
   }
@@ -3338,7 +3438,7 @@ function onAiJobEvent(ev: any) {
     ai.jobId = '';
     aiStream?.();
     aiStream = null;
-    toast(ev.message || '生成提案失败', 'error');
+    toast(ev.message || '生成建议失败', 'error');
   } else if (ev?.type === 'cancelled') {
     ai.generating = false;
     ai.jobId = '';
@@ -3433,7 +3533,7 @@ export async function importAiProposal() {
     await api.importAiProposal(picked, ai.kind, ai.lang);
     ai.loadedFor = '';
     await loadAiProposal(true);
-    toast(`已导入提案：${picked.split('/').pop()}`);
+    toast(`已导入建议：${picked.split('/').pop()}`);
   } catch (err) {
     toast((err as Error).message, 'error');
   }

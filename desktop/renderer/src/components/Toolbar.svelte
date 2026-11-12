@@ -85,7 +85,7 @@
       case 'review':
         return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
       case 'ai':
-        return '提案对照 · 逐条采纳后整批应用';
+        return '建议对照 · 逐条采纳后整批应用';
       case 'prompts':
         return '提示词库 · 单击选中 / 双击编辑';
       case 'export':

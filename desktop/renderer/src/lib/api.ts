@@ -841,13 +841,34 @@ export const api = {
     }),
 
   deleteCue: (index: number) =>
-    req<CueSnapshot>(`/api/cues/${index}`, { method: 'DELETE' }),
+    req<CueSnapshot & { removed: number }>(`/api/cues/${index}`, { method: 'DELETE' }),
+
+  /** 批量删除（底部轨道 ⌘ 多选）：一次历史，译文轨同步。 */
+  deleteCues: (indices: number[]) =>
+    req<CueSnapshot & { removed: number }>('/api/cues/delete', {
+      method: 'POST',
+      body: JSON.stringify({ indices }),
+    }),
 
   /** 在指定下标插入一条（右键「添加字幕」/空字幕补录）。 */
   insertCue: (index: number, cue: Cue) =>
-    req<CueSnapshot>(`/api/cues/${index}/insert`, {
+    req<CueSnapshot & { index: number }>(`/api/cues/${index}/insert`, {
       method: 'POST',
       body: JSON.stringify({ index, ...cue }),
+    }),
+
+  /** 在音频时间轴上切割一条字幕；两段都保留完整原文。 */
+  splitCue: (index: number, at: number) =>
+    req<CueSnapshot & { index: number; new_index: number }>(`/api/cues/${index}/split`, {
+      method: 'POST',
+      body: JSON.stringify({ at }),
+    }),
+
+  /** 合并连续多条字幕（双语时译文一起拼），一次历史。 */
+  mergeCues: (indices: number[]) =>
+    req<CueSnapshot & { index: number }>('/api/cues/merge', {
+      method: 'POST',
+      body: JSON.stringify({ indices }),
     }),
 
   undo: () => req<CueSnapshot & { undone?: string }>('/api/cues/undo', { method: 'POST' }),

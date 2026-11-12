@@ -25,18 +25,22 @@
     app,
     applyCueTimes,
     closeFind,
+    deleteCue,
+    deleteCues,
     extractTtsVoiceFromCue,
     findState,
     focusRange,
     insertCueAt,
     isTranslationStale,
     jumpToCue,
+    mergeCuesAt,
     play,
     previewRange,
     rememberPlayhead,
     replaceAllInCues,
     replaceInCue,
     seekTo,
+    splitCueAt,
     startProxyJob,
     toast,
     translationAt,
@@ -98,8 +102,16 @@
   let hoverKey = $state('');
   let dragKey = $state('');
   let cueTip = $state<{ x: number; label: string } | null>(null);
-  /** 音轨/字幕表右键菜单：在光标处插入空字幕，或把这一句切成克隆音色。 */
-  let contextMenu = $state<{ x: number; y: number; t: number; index: number } | null>(null);
+  /** 音轨/字幕表右键菜单：添加 / 切割 / 合并字幕，或把这一句切成克隆音色。 */
+  let contextMenu = $state<{
+    x: number;
+    y: number;
+    t: number;
+    index: number;
+    merge: number[];
+  } | null>(null);
+  /** 底部字幕轨道多选：存块 key（`start:end`），双语同区间算一块。 */
+  let laneSelection = $state<string[]>([]);
   /** 「以此句音频新建音色」浮层：命名 + 可选参考文本。 */
   let voiceDialog = $state<{ index: number; name: string; refText: string } | null>(null);
   let voiceBusy = $state(false);
@@ -480,6 +492,7 @@
     const blockH = LANE_H - 6;
     const selectedCue = play.selected >= 0 ? app.cues[play.selected] : null;
     const selectedKey = selectedCue ? `${selectedCue.start}:${selectedCue.end}` : '';
+    const picked = new Set(laneSelection);
     drawn.clear();
     for (const cue of app.cues) {
       if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
@@ -492,14 +505,17 @@
       const bw = Math.max(2, x1 - x0 - 0.5);
       const active = key === activeKey;
       const touched = key === hoverKey || key === dragKey;
-      ctx.fillStyle = active ? cueBlockActive : touched ? cueBlockHover : cueBlock;
+      const chosen = picked.has(key);
+      ctx.fillStyle = active || chosen ? cueBlockActive : touched ? cueBlockHover : cueBlock;
+      if (chosen && !active) ctx.globalAlpha = 0.66;
       roundRect(ctx, x0, blockY, bw, blockH, 2.5);
       ctx.fill();
+      ctx.globalAlpha = 1;
       // 当前句/悬停/选中块描一圈边，哪怕底色很浅也能一眼分清边界
-      if (active || touched || key === selectedKey) {
-        ctx.strokeStyle = cueEdge;
-        ctx.globalAlpha = active ? 0.95 : 0.45;
-        ctx.lineWidth = 1;
+      if (active || touched || key === selectedKey || chosen) {
+        ctx.strokeStyle = chosen ? accent : cueEdge;
+        ctx.globalAlpha = active || chosen ? 0.95 : 0.45;
+        ctx.lineWidth = chosen ? 1.6 : 1;
         roundRect(ctx, x0 + 0.5, blockY + 0.5, Math.max(1, bw - 1), blockH - 1, 2.5);
         ctx.stroke();
         ctx.globalAlpha = 1;
@@ -545,6 +561,7 @@
     void activeKey;
     void hoverKey;
     void dragKey;
+    void laneSelection;
     void app.theme;
     void waveW;
     void play.time;
@@ -874,6 +891,31 @@
     return { key: bestKey, start: first.start, end: first.end, indices };
   }
 
+  function indicesForLaneKeys(keys: string[]): number[] {
+    if (!keys.length) return [];
+    const wanted = new Set(keys);
+    const out: number[] = [];
+    app.cues.forEach((cue, index) => {
+      if (wanted.has(`${cue.start}:${cue.end}`)) out.push(index);
+    });
+    return out;
+  }
+
+  /** 时间区间里的字幕下标（框选后右键合并用）。 */
+  function indicesInRange(start: number, end: number): number[] {
+    const out: number[] = [];
+    app.cues.forEach((cue, index) => {
+      if (cue.start < end && cue.end > start) out.push(index);
+    });
+    return out;
+  }
+
+  function toggleLaneKey(key: string) {
+    laneSelection = laneSelection.includes(key)
+      ? laneSelection.filter((item) => item !== key)
+      : [...laneSelection, key];
+  }
+
   function beginPlayhead(t: number) {
     dragMode = 'playhead';
     dragMoved = true;
@@ -881,11 +923,12 @@
     beginScrub(t);
   }
 
-  function beginSelect(a: number, b: number) {
+  function beginSelectRange(a: number, b: number) {
     dragMode = 'select';
     dragMoved = true;
     dragAnchor = a;
     selection = { start: Math.min(a, b), end: Math.max(a, b) };
+    laneSelection = [];
   }
 
   function beginCueDrag(e: PointerEvent, block: CueBlock, x: number) {
@@ -1050,8 +1093,21 @@
     if (pt.y >= pt.h - RESIZE_H - LANE_H) {
       const block = cueBlockAt(pt.x);
       if (block) {
+        // ⌘ 单击 = 多选（再按一次取消）；普通点击仍保持原来的拖动 / 跳转。
+        if (e.metaKey || e.ctrlKey) {
+          toggleLaneKey(block.key);
+          play.selected = block.indices[0];
+          dragMode = 'none';
+          requestAnimationFrame(draw);
+          return;
+        }
+        laneSelection = [block.key];
         beginCueDrag(e, block, pt.x);
         return;
+      }
+      if (laneSelection.length) {
+        laneSelection = [];
+        requestAnimationFrame(draw);
       }
       dragMode = 'pending';
       dragAnchor = t;
@@ -1060,7 +1116,7 @@
 
     // 4) 波形主体：Shift 直接框选；否则先当作「可能是单击」
     if (e.shiftKey) {
-      beginSelect(play.time, t);
+      beginSelectRange(play.time, t);
       return;
     }
     dragMode = 'pending';
@@ -1085,7 +1141,7 @@
       // 超过阈值才升级成框选：全局视图下 1px 可能是好几秒，
       // 但手抖不该把「单击跳转」判成「框选了几秒」。
       if (Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_SLOP) return;
-      beginSelect(dragAnchor, t);
+      beginSelectRange(dragAnchor, t);
       return;
     }
     if (dragMode === 'playhead') {
@@ -1157,9 +1213,17 @@
     const t = Math.max(0, Math.min(duration || Number.POSITIVE_INFINITY, timeAt(e.clientX)));
     const hit = cueUnder(t);
     if (hit >= 0) play.selected = hit;
-    const x = Math.min(e.clientX, window.innerWidth - 232);
-    const y = Math.min(e.clientY, window.innerHeight - 132);
-    contextMenu = { x, y, t, index: hit };
+    // 合并目标：优先用刚框选的区间，其次用底部轨道的 ⌘ 多选。
+    let merge: number[] = [];
+    if (selection && selection.end - selection.start > 0.08) {
+      merge = indicesInRange(selection.start, selection.end);
+    } else if (laneSelection.length >= 2) {
+      merge = indicesForLaneKeys(laneSelection);
+    }
+    if (merge.length < 2) merge = [];
+    const x = Math.min(e.clientX, window.innerWidth - 236);
+    const y = Math.min(e.clientY, window.innerHeight - 190);
+    contextMenu = { x, y, t, index: hit, merge };
   }
 
   /** 字幕表整行右键：选中这一行，并提供「以此句音频新建音色」。 */
@@ -1168,9 +1232,66 @@
     e.stopPropagation();
     play.selected = index;
     const cue = app.cues[index];
-    const x = Math.min(e.clientX, window.innerWidth - 232);
-    const y = Math.min(e.clientY, window.innerHeight - 132);
-    contextMenu = { x, y, t: cue?.start ?? timeAt(e.clientX), index };
+    const merge = laneSelection.length >= 2 ? indicesForLaneKeys(laneSelection) : [];
+    const x = Math.min(e.clientX, window.innerWidth - 236);
+    const y = Math.min(e.clientY, window.innerHeight - 190);
+    contextMenu = { x, y, t: cue?.start ?? timeAt(e.clientX), index, merge };
+  }
+
+  function canSplitHere(): boolean {
+    const menu = contextMenu;
+    if (!menu || menu.index < 0) return false;
+    const cue = app.cues[menu.index];
+    if (!cue) return false;
+    return menu.t > cue.start + 0.05 && menu.t < cue.end - 0.05;
+  }
+
+  function splitHere() {
+    const menu = contextMenu;
+    contextMenu = null;
+    if (!menu || menu.index < 0) return;
+    laneSelection = [];
+    selection = null;
+    void splitCueAt(menu.index, menu.t);
+  }
+
+  function mergeHere(indices: number[]) {
+    contextMenu = null;
+    laneSelection = [];
+    selection = null;
+    void mergeCuesAt(indices);
+  }
+
+  async function deleteSelectedNow() {
+    if (!app.cues.length) {
+      toast('当前没有可删除的字幕', 'warn');
+      return;
+    }
+    const fromLane = indicesForLaneKeys(laneSelection);
+    const indices = fromLane.length
+      ? fromLane
+      : play.selected >= 0 && play.selected < app.cues.length
+        ? [play.selected]
+        : [];
+    if (!indices.length) {
+      toast('先在底部字幕轨道点选一条，⌘ 点击可以多选', 'warn');
+      return;
+    }
+    const anchor = Math.min(...indices);
+    if (indices.length > 1) {
+      await deleteCues(indices);
+    } else {
+      const ok = await deleteCue(indices[0]);
+      if (ok) toast('已删除这条字幕（⌘Z 可撤销）');
+    }
+    laneSelection = [];
+    play.selected = Math.max(0, Math.min(anchor, app.cues.length - 1));
+    play.selectNonce += 1;
+  }
+
+  /** 供 App 的「删除选中的字幕」快捷键调用。 */
+  export function api_deleteSelected() {
+    void deleteSelectedNow();
   }
 
   async function addCueHere() {
@@ -1338,6 +1459,7 @@
 
   function selectCue(i: number, doSeek = true) {
     play.selected = i;
+    laneSelection = [];
     if (doSeek) seek(app.cues[i].start + 0.02);
   }
 
@@ -1601,6 +1723,31 @@
     revealRow(index);
   });
 
+  // 字幕被删除 / 切割 / 合并后，多选里的旧 key 已经不存在：悄悄清掉。
+  $effect(() => {
+    void app.cuesRevision;
+    if (!laneSelection.length) return;
+    const keys = new Set(app.cues.map((cue) => `${cue.start}:${cue.end}`));
+    const next = laneSelection.filter((key) => keys.has(key));
+    if (next.length !== laneSelection.length) laneSelection = next;
+  });
+
+  // 切回「原文 / 译文 / 双语」时，表格要滚到当前时间对应的那一句。
+  // 双语是双行高，行位置会整体变化；必须等 DOM 更新后再 revealRow。
+  let lastTrackKey = `${app.track}:${app.trackLang}`;
+  $effect(() => {
+    const key = `${app.track}:${app.trackLang}`;
+    if (key === lastTrackKey) return;
+    lastTrackKey = key;
+    const hit = untrack(() => cueIndex);
+    const target = hit >= 0 ? hit : untrack(() => play.selected);
+    if (target < 0 || target >= app.cues.length) return;
+    lastRevealed = -1;
+    play.selected = target;
+    play.selectNonce += 1;
+    void nextTick().then(() => revealRow(target));
+  });
+
   // 跟随是持久偏好：重开应用也记住用户的选择
   $effect(() => {
     localStorage.setItem('kikusub.follow', follow ? '1' : '0');
@@ -1769,7 +1916,21 @@
         <i></i>{follow ? '跟随中' : '跟随'}
       </button>
 
-      {#if selection}
+      {#if laneSelection.length > 1}
+        <div class="sel-bar lane-bar">
+          <span class="sel-info">
+            <span class="sel-range">已选 {laneSelection.length} 块字幕</span>
+            <b>可一起删除</b>
+          </span>
+          <button class="btn tiny danger" onclick={deleteSelectedNow} title="删除选中的全部字幕（⌘Z 可撤销）">
+            <Icon name="trash" size={10} />删除
+          </button>
+          <div class="tl-spacer"></div>
+          <button class="btn tiny ghost" onclick={() => (laneSelection = [])} title="取消多选">
+            <Icon name="close" size={10} />
+          </button>
+        </div>
+      {:else if selection}
         <div class="sel-bar">
           <span class="sel-info">
             <span class="sel-range">{tcShort(selection.start)} → {tcShort(selection.end)}</span>
@@ -2069,10 +2230,29 @@
           {contextMenu.index >= 0 ? `第 ${contextMenu.index + 1} 句` : '0.8 秒'}
         </span>
       </div>
-      {#if contextMenu.index >= 0}
+      {#if contextMenu.merge.length >= 2}
         <button
           class="ctx-item"
-          onclick={() => openVoiceDialog(contextMenu.index)}
+          onclick={() => mergeHere(contextMenu!.merge)}
+          role="menuitem"
+        >
+          <Icon name="merge" size={12} />
+          <span class="ctx-label">合并这 {contextMenu.merge.length} 句字幕</span>
+          <span class="ctx-hint">一起合并</span>
+        </button>
+        <div class="ctx-sep"></div>
+      {/if}
+      {#if contextMenu.index >= 0}
+        {#if canSplitHere()}
+          <button class="ctx-item" onclick={splitHere} role="menuitem">
+            <Icon name="split" size={12} />
+            <span class="ctx-label">切割字幕</span>
+            <span class="ctx-hint">分成两句</span>
+          </button>
+        {/if}
+        <button
+          class="ctx-item"
+          onclick={() => openVoiceDialog(contextMenu!.index)}
           role="menuitem"
         >
           <Icon name="speaker" size={12} />
@@ -3007,7 +3187,7 @@
   .ctx-menu {
     position: fixed;
     z-index: 71;
-    width: 216px;
+    width: 244px;
     padding: 4px;
     border-radius: 4px;
     background: var(--bg-content);
@@ -3047,13 +3227,19 @@
     color: var(--accent);
   }
   .ctx-label {
-    flex: 1;
+    flex: 0 0 auto;
     font-size: 12px;
+    white-space: nowrap;
   }
   .ctx-hint {
+    flex: 1;
+    min-width: 0;
     font-size: 12px;
     color: var(--text-3);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
   }
 
   /* ---------------- 以此句音频新建音色 ---------------- */

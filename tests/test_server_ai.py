@@ -427,9 +427,15 @@ def test_manual_prompt_contains_current_srt(ctx):
     assert "<subtitles>" in prompt
 
 
-def test_manual_prompt_rejects_polish(ctx):
+def test_manual_prompt_supports_polish(ctx):
     client, _ = ctx
-    assert client.get("/api/ai/prompt?kind=polish", headers=AUTH).status_code == 422
+    res = client.get("/api/ai/prompt?kind=polish", headers=AUTH)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["count"] == len(TEXTS)
+    assert "校对" in body["prompt"]
+    assert "おはよう" in body["prompt"]
+    assert "<subtitles>" in body["prompt"]
 
 
 def test_from_srt_builds_proposal_without_touching_cues(ctx):
@@ -444,6 +450,36 @@ def test_from_srt_builds_proposal_without_touching_cues(ctx):
     assert body["count"] == len(TEXTS)
     assert [it["after"] for it in body["proposal"]["items"]] == ["早上好", "今天下雨", "路上小心"]
     assert body["proposal"]["kind"] == "translate"
+    # 只解析，不改字幕
+    assert _texts(client) == TEXTS
+
+
+SRT_POLISHED = """1
+00:00:00,500 --> 00:00:01,500
+おはよう
+
+2
+00:00:02,000 --> 00:00:03,000
+今日は雨だ
+
+3
+00:00:03,500 --> 00:00:04,500
+行ってきます
+"""
+
+
+def test_from_srt_builds_polish_proposal(ctx):
+    client, _ = ctx
+    res = client.post(
+        "/api/ai/from-srt",
+        headers=AUTH,
+        json={"kind": "polish", "lang": "", "text": SRT_POLISHED},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["count"] == len(TEXTS)
+    assert body["proposal"]["kind"] == "polish"
+    assert [it["after"] for it in body["proposal"]["items"]] == TEXTS
     # 只解析，不改字幕
     assert _texts(client) == TEXTS
 

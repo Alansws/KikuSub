@@ -19,6 +19,7 @@
     discardAiProposal,
     focusRange,
     importAiProposal,
+    jumpToCue,
     loadAiProposal,
     loadPrompts,
     parseAiPastedSrt,
@@ -33,6 +34,7 @@
     setView,
     toggleAiAccept,
   } from '../lib/store.svelte';
+  import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -81,8 +83,10 @@
     }
   });
 
-  function goto(row: { start: number; end: number }) {
+  function goto(row: { i: number; start: number; end: number }) {
     setView('review');
+    // 先把选中行落下去，右侧检查器才会跟着切到这一条；再聚焦波形。
+    jumpToCue(row.i - 1, { seek: false });
     focusRange(row.start, row.end);
   }
 
@@ -124,12 +128,13 @@
 
 <div class="ai">
   <div class="head">
-    <div class="segs" role="tablist" aria-label="提案类型">
+    <div class="segs" role="tablist" aria-label="建议类型">
       <button
         role="tab"
         aria-selected={ai.kind === 'polish'}
         class="seg"
         class:on={ai.kind === 'polish'}
+        title={`润色（${formatCombo(comboOf('ai.polish'))}）`}
         onclick={() => setAiKind('polish')}>润色</button
       >
       <button
@@ -137,6 +142,7 @@
         aria-selected={ai.kind === 'translate'}
         class="seg"
         class:on={ai.kind === 'translate'}
+        title={`翻译（${formatCombo(comboOf('ai.translate'))}）`}
         onclick={() => setAiKind('translate')}>翻译</button
       >
     </div>
@@ -165,15 +171,17 @@
 
     <div class="spacer"></div>
 
+    <button
+      class="btn ghost"
+      onclick={copyAiPrompt}
+      disabled={!app.cues.length}
+      title={ai.kind === 'translate'
+        ? `使用「${selectedPromptTemplate()?.name ?? '当前模板'}」生成提示词；可粘到任意网页版模型，再把回复粘回来`
+        : '复制润色提示词；可粘到任意网页版模型，再把修正后的 SRT 粘回来'}
+    >
+      复制提示词
+    </button>
     {#if ai.kind === 'translate'}
-      <button
-        class="btn ghost"
-        onclick={copyAiPrompt}
-        disabled={!app.cues.length}
-        title={`使用「${selectedPromptTemplate()?.name ?? '当前模板'}」生成提示词；可粘到任意网页版模型，再把回复粘回来`}
-      >
-        复制提示词
-      </button>
       <button
         class="btn ghost"
         onclick={() => setView('prompts')}
@@ -181,28 +189,28 @@
       >
         提示词库
       </button>
-      <button
-        class="btn ghost"
-        onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
-        disabled={!app.cues.length}
-        title="粘贴模型返回的 SRT，解析后照样走双栏对照"
-      >
-        粘贴结果…
-      </button>
-      {#if ai.proposal}<div class="tb-div"></div>{/if}
     {/if}
+    <button
+      class="btn ghost"
+      onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
+      disabled={!app.cues.length}
+      title="粘贴模型返回的 SRT，解析后照样走双栏对照"
+    >
+      粘贴结果…
+    </button>
+    {#if ai.proposal}<div class="tb-div"></div>{/if}
 
     {#if ai.proposal}
       <button
         class="btn ghost"
         onclick={() => (ai.kind === 'translate' ? startAiTranslate() : startAiPolish())}
         disabled={ai.generating || !app.cues.length}
-        title={ai.kind === 'translate' ? '把原文字幕翻译成所选语种（只生成提案）' : '用设置里的模型生成一份新提案（不修改字幕）'}
+        title={ai.kind === 'translate' ? '把原文字幕翻译成所选语种（只生成建议）' : '用设置里的模型生成一份修改建议（不修改字幕）'}
       >
-        生成提案
+        生成建议
       </button>
       <button class="btn ghost" onclick={importAiProposal} title="导入一份外部生成的 proposal.json">
-        导入提案…
+        导入建议…
       </button>
       <div class="tb-div"></div>
       <button
@@ -253,7 +261,7 @@
   {:else if ai.proposal && !ai.digestMatch}
     <div class="note err">
       <Icon name="warn" size={11} />
-      <span>源文本已变化：这份提案是针对另一版字幕生成的，应用会被拒绝。</span>
+      <span>源文本已变化：这份建议是针对另一版字幕生成的，应用会被拒绝。</span>
     </div>
   {/if}
 
@@ -285,7 +293,7 @@
           onclick={parseAiPastedSrt}
           disabled={ai.parsing || !ai.pasteText.trim()}
         >
-          {ai.parsing ? '解析中…' : '解析成提案'}
+          {ai.parsing ? '解析中…' : '解析成建议'}
         </button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
         <span class="paste-hint">条数必须与当前字幕一致，否则整批拒绝</span>
@@ -296,21 +304,20 @@
   {#if ai.generating}
     <div class="note busy">
       <Icon name="wave" size={11} />
-      <span>正在生成提案：{ai.stage || '准备中'}</span>
+      <span>正在生成建议：{ai.stage || '准备中'}</span>
       <b class="pct">{ai.progress}%</b>
       <button class="link" onclick={cancelAiPolish}>取消</button>
     </div>
   {/if}
 
   {#if ai.loading}
-    <div class="empty"><div class="et">正在读取提案…</div></div>
+    <div class="empty"><div class="et">正在读取建议…</div></div>
   {:else if !ai.proposal}
     <div class="empty">
       <span class="empty-icon"><Icon name="doc" size={24} /></span>
-      <div class="et">{ai.kind === 'translate' ? '还没有译文提案' : '还没有可对照的提案'}</div>
+      <div class="et">{ai.kind === 'translate' ? '还没有译文建议' : '还没有可对照的修改建议'}</div>
       <div class="es">
-        用设置里的模型生成一份，或用「导入提案…」载入外部工具写好的提案；
-        提案里只有文本，时间码保持不变。
+        点「生成建议」，或导入外部工具写好的建议；时间码保持不变。
       </div>
       {#if visibleErrors.length}
         <div class="empty-err"><Icon name="warn" size={11} />{visibleErrors[0]}</div>
@@ -321,9 +328,9 @@
           onclick={() => (ai.kind === 'translate' ? startAiTranslate() : startAiPolish())}
           disabled={ai.generating || !app.cues.length}
         >
-          生成提案
+          生成建议
         </button>
-        <button class="btn ghost" onclick={importAiProposal}>导入提案…</button>
+        <button class="btn ghost" onclick={importAiProposal}>导入建议…</button>
       </div>
     </div>
   {:else if !visible.length}

@@ -29,6 +29,29 @@ def _copy(cues: list[SubtitleCue]) -> list[SubtitleCue]:
     return [SubtitleCue(start=c.start, end=c.end, text=c.text) for c in cues]
 
 
+def _copy_tracks(tracks: dict[str, "TranslationTrack"]) -> dict[str, "TranslationTrack"]:
+    """译文轨快照：结构性编辑与撤销必须一起回滚，否则时间轴与译文会错位。"""
+    return {lang: track.copy() for lang, track in tracks.items()}
+
+
+def _join_cue_texts(parts: list[str]) -> str:
+    """合并字幕时拼文本：日文/中文直接相连，两侧都是西文单词时才补一个空格。"""
+    out = ""
+    for raw in parts:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if not out:
+            out = text
+            continue
+        prev, nxt = out[-1], text[0]
+        if prev.isascii() and prev.isalnum() and nxt.isascii() and nxt.isalnum():
+            out += " " + text
+        else:
+            out += text
+    return out
+
+
 # 每个语种独立保留多少步"上一次的译文"。译文不走 review_cues 的撤销栈（D-3），
 # 否则改一句原文会把整条时间轴的撤销历史搅乱。
 TRACK_UNDO_LIMIT = 20
@@ -39,7 +62,8 @@ class TranslationTrack:
     """一个语种的译文轨：与 review_cues **逐条对齐**。
 
     ``base`` 是生成时的原文快照，用来算"哪几条译文已经过期"（`core.i18n.stale_indices`）。
-    结构变更（增删条）会让后面全部变 stale——这是如实反映，不是缺陷。
+    结构性编辑（插入 / 删除 / 切割 / 合并）必须同步搬动轨里对应位置的条目，
+    否则删一句原文就会让后面所有译文整体错位一条。
     """
 
     lang: str
@@ -86,12 +110,17 @@ class HistoryState:
 
     ``source`` 必须和字幕一起回滚：导入一份别的字幕后再 ⌘Z，右侧检查器要
     恢复成「这次转写」，而不是继续把当前表当导入文件。
+
+    ``translations`` 也跟着快照：删除 / 切割 / 合并会同步搬动译文轨，撤销时必须
+    把轨搬回去，否则恢复的字幕与译文会错位一条。应用整版译文本身仍不进这里，
+    它有每个语种自己的撤销栈。
     """
 
     cues: list[SubtitleCue]
     label: str
     at: float = field(default_factory=time.time)
     source: dict = field(default_factory=dict)
+    translations: dict[str, TranslationTrack] = field(default_factory=dict)
 
 
 @dataclass
@@ -134,6 +163,7 @@ class Session:
                     _copy(self.review_cues),
                     "起始状态",
                     source=dict(self.review_source),
+                    translations=_copy_tracks(self.translations),
                 )
             ]
             self.history_cursor = 0
@@ -150,6 +180,7 @@ class Session:
                     _copy(self.review_cues),
                     text,
                     source=dict(self.review_source),
+                    translations=_copy_tracks(self.translations),
                 )
             )
             self.history_cursor = len(self.history) - 1
@@ -206,6 +237,7 @@ class Session:
             state = self.history[self.history_cursor]
             self.review_cues = _copy(state.cues)
             self.review_source = dict(state.source)
+            self.translations = _copy_tracks(state.translations)
             self.updated_at = time.time()
             return label
 
@@ -218,6 +250,7 @@ class Session:
             state = self.history[self.history_cursor]
             self.review_cues = _copy(state.cues)
             self.review_source = dict(state.source)
+            self.translations = _copy_tracks(state.translations)
             self.updated_at = time.time()
             return state.label
 
@@ -234,6 +267,7 @@ class Session:
             state = self.history[index]
             self.review_cues = _copy(state.cues)
             self.review_source = dict(state.source)
+            self.translations = _copy_tracks(state.translations)
             self.updated_at = time.time()
             return state.label
 
@@ -273,13 +307,43 @@ class Session:
         来源必须和字幕一起进历史：先导入 A、再导入 B、再 ⌘Z 时，回退的是
         「B 的字幕 + B 的来源」，不能只回退字幕而让检查器继续把 B 当当前文件。
         普通编辑（AI 应用、查找替换）不传 ``source``，保留原来源。
+
+        条数变了的整表替换会让任何旧译文轨无法逐条对齐，这里统一丢弃错位的轨；
+        条数没变的替换保留轨（内容变化由 stale 计算如实反映）。
         """
         with self.lock:
             self._ensure_baseline()
             self.review_cues = _copy(cues)
             if source is not None:
                 self.review_source = dict(source)
+            self._drop_misaligned_translations()
             self._record(label)
+
+    def _drop_misaligned_translations(self) -> None:
+        """删掉条数已与字幕对不上的译文轨，绝不让错位的轨继续存在。"""
+        count = len(self.review_cues)
+        for lang in list(self.translations):
+            if len(self.translations[lang].texts) != count:
+                self.translations.pop(lang, None)
+                self.translation_undo.pop(lang, None)
+
+    def _drop_translation_undo(self) -> None:
+        """结构性编辑后旧版整轨已无法对齐，清掉该语种的整轨撤销栈。"""
+        self.translation_undo.clear()
+
+    def _remove_translation_at(self, index: int) -> None:
+        for track in self.translations.values():
+            if 0 <= index < len(track.texts):
+                del track.texts[index]
+            if 0 <= index < len(track.base):
+                del track.base[index]
+
+    def _insert_translation_at(self, index: int) -> None:
+        for track in self.translations.values():
+            pos = max(0, min(index, len(track.texts)))
+            track.texts.insert(pos, "")
+            pos_base = max(0, min(index, len(track.base)))
+            track.base.insert(pos_base, "")
 
     def update_cue(
         self,
@@ -298,13 +362,34 @@ class Session:
             return True
 
     def delete_cue(self, index: int, label: str = "") -> bool:
+        """删除一条：译文轨同步删掉同一位置，后面的译文不会整体前移一条。"""
         with self.lock:
             if not 0 <= index < len(self.review_cues):
                 return False
             self._ensure_baseline()
             del self.review_cues[index]
+            self._remove_translation_at(index)
+            self._drop_translation_undo()
             self._record(label or f"删除第 {index + 1} 条")
             return True
+
+    def delete_cues(self, indices: list[int], label: str = "") -> int:
+        """批量删除（底部轨道多选）：一次历史、译文轨同步。返回实际删除条数。"""
+        with self.lock:
+            valid = sorted(
+                {int(i) for i in indices if 0 <= int(i) < len(self.review_cues)},
+                reverse=True,
+            )
+            if not valid:
+                return 0
+            self._ensure_baseline()
+            for index in valid:
+                del self.review_cues[index]
+                self._remove_translation_at(index)
+            self._drop_translation_undo()
+            text = label or f"删除选中的 {len(valid)} 条字幕"
+            self._record(text)
+            return len(valid)
 
     def insert_cue(
         self,
@@ -314,21 +399,116 @@ class Session:
         text: str,
         label: str = "",
     ) -> bool:
+        """插入一条：译文轨在同一位置插入空占位，后续条目不会错位。"""
         with self.lock:
             if not 0 <= index <= len(self.review_cues):
                 return False
             self._ensure_baseline()
             self.review_cues.insert(index, SubtitleCue(start=start, end=end, text=text))
+            self._insert_translation_at(index)
+            self._drop_translation_undo()
             self._record(label or f"插入第 {index + 1} 条")
             return True
+
+    def split_cue(self, index: int, at: float, min_duration: float = 0.05) -> int:
+        """在 ``at`` 处把一条字幕切成两条；两段都保留完整原文。
+
+        用户明确要求切开后两段都先保留原句（若自动判断断点内容不可靠），
+        再由用户分别删减。译文同样复制一份，双语轨道不会错位。
+        返回新插入的后半段下标；失败返回 -1。
+        """
+        with self.lock:
+            if not 0 <= index < len(self.review_cues):
+                return -1
+            cue = self.review_cues[index]
+            span = cue.end - cue.start
+            if span <= min_duration * 2:
+                return -1
+            point = max(cue.start + min_duration, min(cue.end - min_duration, float(at)))
+            if point - cue.start < min_duration or cue.end - point < min_duration:
+                return -1
+            self._ensure_baseline()
+            left = SubtitleCue(start=cue.start, end=round(point, 3), text=cue.text)
+            right = SubtitleCue(start=round(point, 3), end=cue.end, text=cue.text)
+            self.review_cues[index] = left
+            self.review_cues.insert(index + 1, right)
+            for track in self.translations.values():
+                text = track.texts[index] if 0 <= index < len(track.texts) else ""
+                track.texts.insert(index + 1, text)
+                base = track.base[index] if 0 <= index < len(track.base) else ""
+                track.base.insert(index + 1, base)
+            self._drop_translation_undo()
+            self._record(f"切割第 {index + 1} 条字幕")
+            return index + 1
+
+    def merge_cues(self, indices: list[int]) -> int:
+        """把连续的多条字幕合并成一条（区间取首尾，文本按顺序拼接）。
+
+        双语时译文按同样规则拼接，合并后仍然逐条对齐。返回合并后的下标；
+        不足两条或下标不连续时返回 -1。
+        """
+        with self.lock:
+            ordered = sorted({int(i) for i in indices})
+            if len(ordered) < 2:
+                return -1
+            first, last = ordered[0], ordered[-1]
+            if ordered != list(range(first, last + 1)):
+                return -1
+            if first < 0 or last >= len(self.review_cues):
+                return -1
+            self._ensure_baseline()
+            span = self.review_cues[first:last + 1]
+            merged = SubtitleCue(
+                start=span[0].start,
+                end=span[-1].end,
+                text=_join_cue_texts([cue.text for cue in span]),
+            )
+            self.review_cues[first:last + 1] = [merged]
+            count = last - first + 1
+            for track in self.translations.values():
+                texts = track.texts[first:last + 1]
+                bases = track.base[first:last + 1]
+                track.texts[first:last + 1] = [_join_cue_texts(texts)]
+                track.base[first:last + 1] = [_join_cue_texts(bases)]
+            self._drop_translation_undo()
+            self._record(f"合并 {count} 条字幕")
+            return first
 
     def clear_review(self, label: str = "清空全部字幕") -> None:
         with self.lock:
             self._ensure_baseline()
             self.review_cues = []
+            self.translations.clear()
+            self.translation_undo.clear()
             self._record(label)
 
+    def reset_for_media(self) -> None:
+        """换片：清空上一部片的所有字幕、译文、历史与来源，绝不串片。"""
+        with self.lock:
+            self.review_cues = []
+            self.latest_cues = []
+            self.translations.clear()
+            self.translation_undo.clear()
+            self.review_source = {}
+            self.history = []
+            self.history_cursor = -1
+            self.updated_at = time.time()
+
     # -- 译文轨 -------------------------------------------------------------
+
+    def _sync_history_translations(self, lang: str) -> None:
+        """把最新的译文轨写回历史快照里条数相同的状态。
+
+        应用/修改译文本身不进字幕撤销栈，但之后若因删除字幕按 ⌘Z，撤回的
+        「删除前状态」必须带着当时已经应用的译文；否则会把译文一起撤回、
+        留下字幕恢复了但译文消失的假象。条数对不上的旧状态不能硬塞，直接清掉。
+        """
+        track = self.translations.get(lang)
+        for state in self.history:
+            if track is not None and len(state.cues) == len(track.texts):
+                state.translations[lang] = track.copy()
+            else:
+                state.translations.pop(lang, None)
 
     def set_translation(self, track: TranslationTrack) -> None:
         """整轨替换，并保留上一版供撤销。"""
@@ -340,6 +520,7 @@ class Session:
                 if len(stack) > TRACK_UNDO_LIMIT:
                     stack.pop(0)
             self.translations[track.lang] = track
+            self._sync_history_translations(track.lang)
             self.updated_at = time.time()
 
     def undo_translation(self, lang: str) -> bool:
@@ -350,11 +531,16 @@ class Session:
             self.translations[lang] = stack.pop()
             if not stack:
                 self.translation_undo.pop(lang, None)
+            self._sync_history_translations(lang)
             self.updated_at = time.time()
             return True
 
     def patch_translation(self, lang: str, index: int, text: str) -> bool:
-        """改某一条译文（不动原文、不动时间轴），并留一步撤销。"""
+        """改某一条译文（不动原文、不动时间轴），并留一步撤销。
+
+        人工改完译文就算「已同步」：把 ``base[index]`` 更新成当前原文，
+        这样「原文改过了，译文可能需要同步」的提示会随这一次保存消失。
+        """
         with self.lock:
             track = self.translations.get(lang)
             if track is None or not 0 <= index < len(track.texts):
@@ -364,6 +550,11 @@ class Session:
             if len(stack) > TRACK_UNDO_LIMIT:
                 stack.pop(0)
             track.texts[index] = str(text or "")
+            while len(track.base) < len(track.texts):
+                track.base.append("")
+            if 0 <= index < len(self.review_cues):
+                track.base[index] = self.review_cues[index].text
+            self._sync_history_translations(lang)
             self.updated_at = time.time()
             return True
 
@@ -372,6 +563,8 @@ class Session:
             if self.translations.pop(lang, None) is None:
                 return False
             self.translation_undo.pop(lang, None)
+            for state in self.history:
+                state.translations.pop(lang, None)
             self.updated_at = time.time()
             return True
 

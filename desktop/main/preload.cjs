@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('kikusub', {
       on('menu:undo', () => cb({ type: 'undo' })),
       on('menu:redo', () => cb({ type: 'redo' })),
       on('menu:settings', () => cb({ type: 'settings' })),
+      on('menu:shortcuts', () => cb({ type: 'shortcuts' })),
       on('menu:export', () => cb({ type: 'export' })),
       on('menu:inspector', () => cb({ type: 'inspector' })),
       on('menu:theme', () => cb({ type: 'theme' })),

@@ -46,5 +46,10 @@ def bind_media(payload: BindRequest, request: Request, session: Session = Depend
         info = request.app.state.media.get(payload.media_id)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    changed = session.media_id != info.id
     session.media_id = info.id
-    return {"id": session.id, "media": info.to_dict()}
+    if changed:
+        # 换片必须清空上一部片的字幕 / 译文 / 历史：否则新片核对台会继续
+        # 显示上一部的原文字幕，而译文轨还会永远占着，软件看起来彻底不可用。
+        session.reset_for_media()
+    return {"id": session.id, "media": info.to_dict(), "review_cleared": changed}

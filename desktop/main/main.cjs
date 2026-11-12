@@ -935,6 +935,7 @@ function buildMenu() {
         { role: 'about', label: '关于 KikuSub' },
         { type: 'separator' },
         { label: '设置…', accelerator: 'CmdOrCtrl,', click: send('menu:settings') },
+        { label: '键盘快捷键…', click: send('menu:shortcuts') },
         { type: 'separator' },
         { role: 'hide', label: '隐藏 KikuSub' },
         { role: 'hideOthers', label: '隐藏其他' },
@@ -965,17 +966,20 @@ function buildMenu() {
         { role: 'paste', label: '粘贴' },
         { role: 'selectAll', label: '全选' },
         { type: 'separator' },
-        { label: '查找与替换…', accelerator: 'CmdOrCtrl+F', click: send('menu:find') },
+        // 快捷键由渲染层的可自定义表处理（默认 ⌘F），这里只保留菜单动作，
+        // 否则用户把「查找」改成别的键后，旧 accelerator 仍然会抢先触发。
+        { label: '查找与替换…', click: send('menu:find') },
       ],
     },
     {
       label: '显示',
       submenu: [
-        { label: '导入', accelerator: 'CmdOrCtrl+1', click: send('menu:view', 'import') },
-        { label: '转写', accelerator: 'CmdOrCtrl+2', click: send('menu:view', 'transcribe') },
-        { label: '核对', accelerator: 'CmdOrCtrl+3', click: send('menu:view', 'review') },
-        { label: '导出', accelerator: 'CmdOrCtrl+4', click: send('menu:view', 'export') },
-        { label: '任务详报', accelerator: 'CmdOrCtrl+5', click: send('menu:view', 'report') },
+        // ⌘1–⌘5 由渲染层处理：AI 优化台里 ⌘1/⌘2 要优先切润色 / 翻译。
+        { label: '导入', click: send('menu:view', 'import') },
+        { label: '转写', click: send('menu:view', 'transcribe') },
+        { label: '核对', click: send('menu:view', 'review') },
+        { label: '导出', click: send('menu:view', 'export') },
+        { label: '任务详报', click: send('menu:view', 'report') },
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
         { label: '切换外观', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:theme') },
@@ -987,9 +991,10 @@ function buildMenu() {
     {
       label: '播放',
       submenu: [
-        { label: '播放 / 暂停', accelerator: 'Space', click: send('menu:play') },
-        { label: '上一句', accelerator: 'Up', click: send('menu:prev-cue') },
-        { label: '下一句', accelerator: 'Down', click: send('menu:next-cue') },
+        // 播放 / 上下句的按键可通过 ⌘K 面板重绑，菜单不再固定 accelerator。
+        { label: '播放 / 暂停', click: send('menu:play') },
+        { label: '上一句', click: send('menu:prev-cue') },
+        { label: '下一句', click: send('menu:next-cue') },
       ],
     },
     { role: 'windowMenu', label: '窗口' },

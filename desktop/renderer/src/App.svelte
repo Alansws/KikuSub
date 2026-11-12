@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import Icon from './components/Icon.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Toolbar from './components/Toolbar.svelte';
@@ -8,6 +8,7 @@
   import QaPanel from './components/QaPanel.svelte';
   import FirstRun from './components/FirstRun.svelte';
   import QuitPrompt from './components/QuitPrompt.svelte';
+  import ShortcutsDialog from './components/ShortcutsDialog.svelte';
   import ImportView from './views/ImportView.svelte';
   import TranscribeView from './views/TranscribeView.svelte';
   import ReviewView from './views/ReviewView.svelte';
@@ -23,6 +24,7 @@
     cancelJob,
     closeFind,
     findState,
+    insertCueAt,
     markQuitting,
     markSidecarDown,
     openFind,
@@ -31,6 +33,7 @@
     restoreLastSession,
     qa,
     redo,
+    setAiKind,
     setView,
     toast,
     toggleQaPanel,
@@ -38,12 +41,14 @@
     undo,
     type View,
   } from './lib/store.svelte';
+  import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
 
   let engine = $state('whisper');
   let review: {
     api_play: () => void;
     api_step: (d: number) => void;
     api_focus: () => void;
+    api_deleteSelected: () => void;
   } | undefined = $state();
   let dragging = $state(false);
   /** 紧凑模式（≤900px CSS 视口）：检查器变成抽屉，内容区拿回整宽。 */
@@ -263,8 +268,27 @@
         case 'find':
           openFind();
           break;
+        case 'shortcuts':
+          shortcuts.open = true;
+          break;
       }
     });
+  });
+
+  // 进入核对屏时先交还键盘焦点：从 AI 建议 / 其他页面跳回来时，如果光标还停在
+  // 右侧检查器的文本框里（且可能选中了整段文本），用户习惯性按空格试听就会把
+  // 文本替换成一个空格。核对台的空格应该是播放 / 暂停，不是输入。
+  $effect(() => {
+    if (app.view !== 'review') return;
+    const el = document.activeElement as HTMLElement | null;
+    if (!el || el === document.body) return;
+    // 只处理右侧检查器里的输入框：查找栏、AI 编辑框等由各自组件管理焦点，
+    // 在这里统一 blur 会把刚打开的查找框也踢掉。
+    const inInspector = Boolean(el.closest?.('.inspector')) || el.classList?.contains('cue-text');
+    if (!inInspector) return;
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable) {
+      el.blur();
+    }
   });
 
   // ---------------- 拖放 ----------------
@@ -287,6 +311,61 @@
   }
 
   // ---------------- 快捷键 ----------------
+  /** 执行一个可自定义快捷键对应的动作。 */
+  function runShortcut(id: string) {
+    switch (id) {
+      case 'shortcuts.open':
+        shortcuts.open = !shortcuts.open;
+        return;
+      case 'review.togglePlay':
+        if (app.view === 'review') review?.api_play();
+        return;
+      case 'review.prevCue':
+        if (app.view === 'review') review?.api_step(-1);
+        return;
+      case 'review.nextCue':
+        if (app.view === 'review') review?.api_step(1);
+        return;
+      case 'review.deleteCue':
+        if (app.view === 'review') review?.api_deleteSelected();
+        return;
+      case 'review.addCue': {
+        if (app.view !== 'review') setView('review');
+        void tick().then(() => insertCueAt(play.time));
+        return;
+      }
+      case 'review.find':
+        openFind();
+        return;
+      case 'review.toggleQa':
+        void toggleQaPanel();
+        return;
+      case 'ai.polish':
+        setView('ai');
+        setAiKind('polish');
+        return;
+      case 'ai.translate':
+        setView('ai');
+        setAiKind('translate');
+        return;
+      case 'view.import':
+        setView('import');
+        return;
+      case 'view.transcribe':
+        setView('transcribe');
+        return;
+      case 'view.review':
+        setView('review');
+        return;
+      case 'view.export':
+        setView('export');
+        return;
+      case 'view.report':
+        setView('report');
+        return;
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
     // ⌘, 是 macOS 的「设置…」惯例。菜单里也绑了同一条，但菜单快捷键在
     // 输入框聚焦时会被输入法/文本框吃掉，这里再兜一层。
@@ -297,11 +376,9 @@
       return;
     }
 
-    // ⌘F 查找替换：菜单里也绑了同一条，但输入框聚焦时菜单快捷键可能被吃掉。
-    // 不在核对屏时先切到核对屏，查找栏才有意义。
-    if (mod && (e.key === 'f' || e.code === 'KeyF')) {
+    if (shortcuts.open && e.key === 'Escape') {
       e.preventDefault();
-      openFind();
+      shortcuts.open = false;
       return;
     }
 
@@ -356,18 +433,28 @@
       }
       return;
     }
+
+    // 用户自定义的快捷键：输入框聚焦时只有 allowInTyping 的动作生效。
+    const action = resolveShortcut(e, app.view);
+    if (action) {
+      // 快捷键面板是模态：只有「再按一次打开键」能关闭，其余按键不穿透到核对台。
+      if (shortcuts.open && action.id !== 'shortcuts.open') return;
+      e.preventDefault();
+      runShortcut(action.id);
+      return;
+    }
+
     if (typing) return;
 
-    if (e.code === 'Space') {
+    // 物理 Delete / Backspace 始终可以删除选中的字幕（多选时一起删），
+    // 不必先记住默认的 Enter；文本框里不触发。
+    if (app.view === 'review' && (e.key === 'Backspace' || e.key === 'Delete')) {
       e.preventDefault();
-      review?.api_play();
-    } else if (e.code === 'ArrowDown') {
-      e.preventDefault();
-      review?.api_step(1);
-    } else if (e.code === 'ArrowUp') {
-      e.preventDefault();
-      review?.api_step(-1);
-    } else if (e.key === 'Escape' && app.job?.status === 'running') {
+      review?.api_deleteSelected();
+      return;
+    }
+
+    if (e.key === 'Escape' && app.job?.status === 'running') {
       cancelJob();
     }
   }
@@ -492,6 +579,8 @@
     <div>松手导入</div>
   </div>
 {/if}
+
+<ShortcutsDialog />
 
 {#if app.toast}
   <div class="toast" class:warn={app.toastKind === 'warn'} class:error={app.toastKind === 'error'}>

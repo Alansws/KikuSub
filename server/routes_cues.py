@@ -61,6 +61,18 @@ class InsertRequest(BaseModel):
     text: str = ""
 
 
+class SplitRequest(BaseModel):
+    at: float
+
+
+class MergeRequest(BaseModel):
+    indices: list[int] = Field(default_factory=list)
+
+
+class DeleteManyRequest(BaseModel):
+    indices: list[int] = Field(default_factory=list)
+
+
 class HistoryJumpRequest(BaseModel):
     index: int
 
@@ -334,7 +346,8 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
                 raw.setdefault("lang", lang)
                 track = TranslationTrack.from_dict(raw)
                 if len(track.texts) == len(cues):
-                    session.translations[track.lang] = track
+                    # 走 set_translation：同步历史快照，之后删字幕按 ⌘Z 才能带回译文
+                    session.set_translation(track)
                     restored_langs.append(track.lang)
                 else:
                     # 条数对不上就丢弃，宁可让用户重翻，也不给一份错位的轨
@@ -385,6 +398,42 @@ def cue_history_jump(
     return {**_snapshot(session), "label": label, "index": payload.index}
 
 
+@router.post("/api/cues/merge")
+def merge_cues(payload: MergeRequest, session: Session = Depends(get_session)) -> dict:
+    """合并连续的多条字幕（双语时译文一起拼），一次历史。
+
+    前端在音轨上框选两句后右键「合并这 N 句」走这里；时间轴取首尾，
+    文本按顺序直接相连（日文不需要空格）。
+    """
+    index = session.merge_cues(payload.indices)
+    if index < 0:
+        raise HTTPException(status_code=422, detail="只能合并两条以上、下标连续的字幕")
+    return {**_snapshot(session), "index": index}
+
+
+@router.post("/api/cues/delete")
+def delete_cues(payload: DeleteManyRequest, session: Session = Depends(get_session)) -> dict:
+    """批量删除（底部轨道 ⌘ 多选后按删除键）：一次历史、译文轨同步。"""
+    removed = session.delete_cues(payload.indices)
+    if not removed:
+        raise HTTPException(status_code=422, detail="没有可删除的字幕")
+    return {**_snapshot(session), "removed": removed}
+
+
+@router.post("/api/cues/{index}/split")
+def split_cue(index: int, payload: SplitRequest, session: Session = Depends(get_session)) -> dict:
+    """在音频时间轴的当前位置把一条字幕切成两条；两段都保留完整原文。"""
+    left = session.review_cues[index] if 0 <= index < len(session.review_cues) else None
+    if left is None:
+        raise HTTPException(status_code=404, detail=f"第 {index + 1} 条不存在")
+    if not (left.start < payload.at < left.end):
+        raise HTTPException(status_code=422, detail="切割点不在这条字幕的时间范围内")
+    new_index = session.split_cue(index, payload.at)
+    if new_index < 0:
+        raise HTTPException(status_code=422, detail="切割点太靠近字幕边缘，至少各留 0.05 秒")
+    return {**_snapshot(session), "index": index, "new_index": new_index}
+
+
 @router.patch("/api/cues/{index}")
 def patch_cue(index: int, payload: CuePatch, session: Session = Depends(get_session)) -> dict:
     if not 0 <= index < len(session.review_cues):
@@ -409,9 +458,10 @@ def patch_cue(index: int, payload: CuePatch, session: Session = Depends(get_sess
 
 @router.delete("/api/cues/{index}")
 def delete_cue(index: int, session: Session = Depends(get_session)) -> dict:
+    """删除一条；同一位置的译文也一起删，后面的轨不会整体错位。"""
     if not session.delete_cue(index):
         raise HTTPException(status_code=404, detail=f"第 {index + 1} 条不存在")
-    return _snapshot(session)
+    return {**_snapshot(session), "removed": 1}
 
 
 @router.post("/api/cues/{index}/insert")
@@ -420,7 +470,7 @@ def insert_cue(index: int, payload: InsertRequest, session: Session = Depends(ge
     target = payload.index if payload.index >= 0 else index
     if not session.insert_cue(target, payload.start, payload.end, payload.text):
         raise HTTPException(status_code=422, detail=f"插入位置 {payload.index} 越界")
-    return _snapshot(session)
+    return {**_snapshot(session), "index": target}
 
 
 @router.post("/api/cues/undo")

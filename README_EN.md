@@ -68,11 +68,13 @@ Everything except the optional AI features is local inference.
 - **TTS comparison** in the current-cue card: the macOS Japanese voice works instantly with zero VRAM, and Settings can switch the default to a cloned voice. Upload a reference clip (defaults to the last upload folder / current video folder; multi-select creates one voice per clip), use **Extract from current line**, or right-click any cue → **New voice from this line…** to cut a 3–10 s reference. Saved voices stay in the voice library, where you can audition, set a default, rename, edit the reference transcript and delete them. OmniVoice is zero-shot, runs on the Apple GPU, downloads on demand and unloads after 5 idle minutes.
 - **⌘F find & replace** in the cue table: search the source text, jump between hits, replace one or replace all (a batch replace is a single history step).
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
+- **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
+- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action (play/pause, prev/next, view switching, AI polish/translate tabs).
 - Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
 **QA queue**
 
-- Appears bottom-right after a run, sorted by time: `missed` (speech with no text), `dropped` (text that was gated away), `suspect` (kept but short or sparse), `coverage` (gaps the main VAD never segmented).
+- Appears bottom-right by default, docked left of the inspector (draggable by its header, double-click to reset), sorted by time: `missed` (speech with no text), `dropped` (text that was gated away), `suspect` (kept but short or sparse), `coverage` (gaps the main VAD never segmented).
 - Every item can be located, auto-selected and re-transcribed; progress is written to `*.qa.json`.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
@@ -81,7 +83,7 @@ Everything except the optional AI features is local inference.
 
 ![AI view: source on the left, suggestion on the right, applied as one batch](docs/images/ai-view.jpg)
 
-- Every AI result lands as a **proposal file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
+- Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
 - Two columns: source is read-only, the suggestion is editable on double-click. Accept or reject item by item; filter to changed rows only.
 - Applying is one history entry — ⌘Z reverts the whole batch. A digest mismatch (different media or edited source) is rejected without touching a single byte.

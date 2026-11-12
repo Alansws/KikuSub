@@ -212,3 +212,89 @@ def run_polish(
     if not check.ok:
         raise client.AiError("模型输出未通过校验：" + "；".join(check.errors[:3]))
     return proposal, check.warnings
+
+
+# --------------------------------------------------------------------------- 手动通道
+#
+# 与翻译一样，没有 API Key / 想用网页版模型时：
+#   「复制提示词」→ 粘到任意聊天窗 → 把模型回的 SRT 粘回来 → 解析成提案 → 同一套 diff。
+# 差别只在提示词与校验类型：润色输出的是 corrected SRT，不是译文。
+
+
+MANUAL_PROMPT = """你是日语影视字幕校对员。下面是带序号和时间戳的 SRT 字幕。
+
+只修正明显的识别错误：
+- 同音字/近音字误识
+- 助词、活用、断词错误
+- 人名、专有名词、作品内术语的一致性
+- 标点与全角半角
+
+严禁改写风格、润色措辞、增删句子、合并或拆分条目。
+严格保留原 SRT 的序号和时间戳，只输出修正后的 SRT；不要解释、不要 markdown 代码块。
+内容如下：
+<subtitles>
+__SRT__
+</subtitles>"""
+
+
+def build_manual_prompt(srt_text: str) -> str:
+    """组润色手写通道的提示词。``srt_text`` 用与导出同一份 ``cues_to_srt``。"""
+    return MANUAL_PROMPT.replace("__SRT__", (srt_text or "").strip())
+
+
+def proposal_from_srt(
+    srt_text: str,
+    cues,
+    *,
+    entry: str = "manual",
+) -> tuple[dict, list[str]]:
+    """把模型回吐的修正版 SRT 变成 polish 提案。
+
+    与翻译通道同样只按**顺序**取文本，序号和时间戳一律丢弃；条数不一致整批拒绝。
+    时间轴仍由 ``cues`` 提供（D-1 不破）。
+    """
+    from .subtitles import srt_to_cues
+
+    parsed = srt_to_cues(srt_text or "")
+    if not parsed:
+        raise client.AiError("没有从粘贴内容里解析到字幕：确认贴的是完整 SRT（含序号与时间戳）")
+    if len(parsed) != len(cues):
+        raise client.AiError(
+            f"条数对不上：解析到 {len(parsed)} 条，当前字幕 {len(cues)} 条。"
+            "常见原因是模型合并/拆分了句子或漏改——请让它按原序号逐条输出"
+        )
+
+    warnings: list[str] = []
+    drift = 0
+    items = []
+    for idx, cue in enumerate(cues, start=1):
+        got = parsed[idx - 1]
+        if abs(got.start - cue.start) > 1.0:
+            drift += 1
+        after = got.text.strip()
+        items.append(
+            {
+                "i": idx,
+                "before": cue.text,
+                "after": after,
+                "note": "手动粘贴" if after != cue.text else "",
+            }
+        )
+    if drift:
+        warnings.append(
+            f"{drift} 条的时间戳与原文对不上（已按顺序采用文本，时间轴仍用原文）"
+        )
+
+    proposal = proposals.build_proposal(
+        kind="polish",
+        src_lang="ja",
+        texts=[c.text for c in cues],
+        items=items,
+        model="manual-paste",
+        entry=entry,
+        chunks=1,
+    )
+    check = proposals.validate_proposal(proposal, [c.text for c in cues])
+    if not check.ok:
+        raise client.AiError("；".join(check.errors[:3]))
+    return proposal, warnings + check.warnings

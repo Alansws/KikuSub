@@ -83,7 +83,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>KikuSub</string>
   <key>CFBundleIdentifier</key><string>com.kikusub.desktop</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleSignature</key><string>????</string>
   <key>CFBundleIconFile</key><string>icon.icns</string>
@@ -121,7 +121,7 @@ mv "$APP/Contents/Resources/app/renderer-dist" "$APP/Contents/Resources/app/rend
 cat > "$APP/Contents/Resources/app/package.json" <<'JSON'
 {
   "name": "kikusub-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "main": "main/main.cjs"
 }
