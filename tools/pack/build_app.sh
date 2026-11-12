@@ -139,7 +139,7 @@ fi
 cp desktop/build/icon.icns "$APP/Contents/Resources/icon.icns"
 cp presets.json "$APP/Contents/Resources/python-presets.json" 2>/dev/null || true
 
-echo "== 5/7 放入 Python sidecar（737 MB，慢）=="
+echo "== 5/7 放入 Python sidecar（$(du -sh "$SIDECAR" | cut -f1)，慢）=="
 cp -R "$SIDECAR" "$APP/Contents/Resources/python"
 cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || true
 
