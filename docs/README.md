@@ -11,6 +11,7 @@
 | [../AGENTS.md](../AGENTS.md) | **索引**：项目定位、仓库结构、红线与改动纪律、契约索引（2026-11-13 起瘦身为索引，正文拆到 `contracts/`）。 |
 | [contracts/engineering-practice.md](contracts/engineering-practice.md) | **方法论**：长期项目的五类失控与五道护栏在本仓库的落点、规则→测试的升级路径、多模型协作命令。新接手先读这份。 |
 | [contracts/](contracts/) | **分域契约正文**：`review-console.md`（核对台/内核边界/历史/主题）、`desktop-lifecycle.md`（启动/日志/退出清理）、`ai-proposal.md`（AI 提案 / 润色 / 翻译 / 技能，含冻结决定 D-1～D-6 与验收断言 A1–A8）、`export-and-prompt.md`（提示词/成片导出/代理）。改哪块先读哪份。 |
+| [review.md](review.md) | **合入前自审清单**：Review 四件事的可执行版本、本仓库的硬检查、单模型下的三个补偿动作（隔一轮再读 / 给置信度 / 换入口找问题）。配合 PR 模板用。 |
 | [release.md](release.md) | **发版规范**：四步流程（合入审查 → 本地实测 → 打包分发 → 发布日志）、版本号与分支模型、回滚口径、Release notes 模板。发版前必读。 |
 | [../README.md](../README.md) · [../README_EN.md](../README_EN.md) | 用户安装与使用说明。 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | 开发环境、测试与提交流程。 |

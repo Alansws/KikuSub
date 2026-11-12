@@ -114,9 +114,14 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   完整四步与回滚口径见 [docs/release.md](docs/release.md)。
 - 提交按层拆开：`core,server` / `desktop` / `docs` 各自成 commit，不要把渲染层和内核混成一个包。
 - 改动前 `git status` 必须是干净的（或明确知道自己在改哪几个文件）；不要在混杂工作区上叠加新改动。
-- 验证顺序：`pytest -q` → `python -m core.smoke` → `cd desktop && npm run build` → `npm run test:main`
+- 验证顺序：`pytest -q`（含 `tests/test_e2e_flow.py` 的主链路 e2e）→ `python -m core.smoke`
+  → `cd desktop && npm run check`（tsc 类型检查）→ `npm run build` → `npm run test:main`
   → 改了界面再跑 `bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline`（见
   [tools/shots/README.md](tools/shots/README.md)；单屏取证也可以用 `KIKUSUB_DEV_SEED` + `--screenshot`）。
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 33 个类型错误已冻结成基线
+  （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
+  这一步是目前唯一的类型防线。
+- 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
 - 规则沉淀：Review 里同一个位置反复出错，就把结论压缩成 1–2 句写进本页「红线」，或写进对应契约；
   能变成测试的（导错、漏 import、样式漂移）优先变成测试——`desktop/test/svelte-imports.test.cjs` 就是范例。
 

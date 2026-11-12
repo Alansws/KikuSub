@@ -24,7 +24,7 @@
 | ① 选型 | `docs/contracts/` 只记录已定的技术选择与理由（Electron + sidecar、原生而非跨端、令牌体系） | 要换技术栈时先看这里有没有反向约束 |
 | ② 方案 | 改任何一域前先读对应契约（`review-console` / `desktop-lifecycle` / `ai-proposal` / `export-and-prompt`）；方案要"人能看懂"：界面怎么变、思路与改动范围、特殊情况与取舍、怎么验收 | 读契约 → 写 4 句话方案 → 再动手 |
 | ③ 任务派发 | 主 Agent 定方向，执行方按契约做，不许自由发挥；提交按层拆（`core,server` / `desktop` / `docs`） | 见 [AGENTS.md](../../AGENTS.md) §5 |
-| ④ 测试与取证 | `pytest`（400+ 例，全量约 50s）、`python -m core.smoke`、`npm run test:main`（主进程用例）、`--screenshot` 静默取证、`KIKUSUB_DEV_SEED` 造状态 | 静默截图不抢焦点，可后台跑；像素比对用 PSNR |
+| ④ 测试与取证 | `pytest`（400+ 例，全量约 50s；含 `tests/test_e2e_flow.py` 的「导入→转写→改→撤销→导出→重导」主链路）、`python -m core.smoke`、`npm run check`（tsc）与 `check:svelte`（33 错基线，只许降）、`npm run test:main`、`--screenshot` 静默取证、`KIKUSUB_DEV_SEED` 造状态 | 静默截图不抢焦点，可后台跑；像素比对用 PSNR |
 | ⑤ 发版 | 四步流程写进 [release.md](../release.md)，并落成程序化闸门：`tools/release/preflight.sh`（版本号 / tag 是否已发 / 是否已合入 main / sidecar 新鲜度 / 图标尺寸）、CI `release-tag` job（tag == version、tag 提交必须在 `main` 上）、可选本地钩子 `tools/git-hooks/pre-push`；`build_app.sh` 会因 sidecar 过期直接退出；连续 2 次启动失败进安全模式（`desktop/main/launchguard.cjs`） | 见 [release.md](../release.md) |
 
 ### 静默取证（最容易被忽略的一条）
