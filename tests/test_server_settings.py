@@ -31,12 +31,18 @@ def client(tmp_path: Path) -> TestClient:
 
 def test_settings_lists_engines_and_paths(client: TestClient, tmp_path: Path) -> None:
     data = client.get("/api/settings", headers=AUTH).json()
-    assert {e["key"] for e in data["engines"]} == {"whisper", "qwen"}
+    assert {e["key"] for e in data["engines"]} == set(engines.KEYS)
     for engine in data["engines"]:
-        assert engine["languages"] == ["日语"]
+        # 日语两个默认引擎 + 两个可选装中文引擎；中文引擎必须真的声明中文，
+        # 否则设置页的语种胶囊会骗人。
+        assert engine["languages"], engine["key"]
+        if engine["key"] in {"whisper", "qwen"}:
+            assert engine["languages"] == ["日语"]
+        else:
+            assert "中文" in engine["languages"]
         assert engine["approx_bytes"] > 0
         assert "installed" in engine and "enabled" in engine
-    assert data["settings"]["enabled_engines"] == ["whisper", "qwen"]
+    assert data["settings"]["enabled_engines"] == list(engines.DEFAULT_ENABLED)
     assert data["paths"]["settings_path"] == str(tmp_path / "settings.json")
     assert data["paths"]["log_dir"].endswith("logs")
 
@@ -54,7 +60,7 @@ def test_patch_settings_persists_and_reaches_config(client: TestClient, tmp_path
     config = client.get("/api/config", headers=AUTH).json()
     assert config["settings"]["enabled_engines"] == ["qwen"]
     flags = {e["key"]: e["enabled"] for e in config["engines"]}
-    assert flags == {"whisper": False, "qwen": True}
+    assert flags == {key: key == "qwen" for key in engines.KEYS}
 
 
 def test_patch_settings_rejects_unknown_engine(client: TestClient) -> None:

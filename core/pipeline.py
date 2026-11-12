@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from . import engines as engine_registry
 from .audit import build_audit_items, make_audit_payload, write_audit_payload
 from .cues import cues_to_table
 from .paths import OUTPUT_DIR
@@ -44,6 +45,11 @@ from .transcribe import (
     format_time_tag,
 )
 from .qwen_ctc import QwenCtcConfig, QwenCtcEngine
+from .sherpa_asr import (
+    FireRedAsrEngine,
+    SenseVoiceEngine,
+    SherpaAsrConfig,
+)
 
 log = logging.getLogger(__name__)
 
@@ -51,15 +57,21 @@ ProgressCb = Callable[[float, str], None]
 
 # 引擎是进程级单例：模型权重只加载一次，多任务复用。
 QWEN = QwenCtcEngine()
+SENSEVOICE = SenseVoiceEngine()
+FIRERED = FireRedAsrEngine()
 
-ENGINE_KEYS = ("whisper", "qwen")
+# 唯一来源是 `core/engines.py`：加引擎只改注册表，这里不再列第二份 key。
+ENGINE_KEYS = engine_registry.KEYS
+ENGINE_DISPLAY = {spec.key: spec.label for spec in engine_registry.ENGINES}
+# 报告里的历史口径（与设置页的短标签不同，改它会改已归档报告的读法）。
+ENGINE_DISPLAY["qwen"] = "Qwen3-ASR + 逐字对齐"
 
-ENGINE_DISPLAY = {
-    "whisper": "Anime Whisper",
-    "qwen": "Qwen3-ASR + 逐字对齐",
+_ENGINE_OBJECTS = {
+    "whisper": ENGINE,
+    "qwen": QWEN,
+    "sensevoice": SENSEVOICE,
+    "firered": FIRERED,
 }
-
-_ENGINE_OBJECTS = {"whisper": ENGINE, "qwen": QWEN}
 
 
 def resolve_engine(engine_key: str):
@@ -69,9 +81,18 @@ def resolve_engine(engine_key: str):
     return engine
 
 
+def engine_family(engine_key: str) -> str:
+    """引擎所属运行时族（whisper / qwen / sherpa）。
+
+    `core.engines` 是唯一登记处；这里不在 pipeline 里再维护一份白名单，
+    否则加引擎时必然漏改一处。未知 key 抛 ValueError，不静默退回 whisper。
+    """
+    return engine_registry.family_of(engine_key)
+
+
 def output_suffix(engine_key: str) -> str:
-    """Whisper 产物不加后缀，Qwen 加 `.qwen`，避免两个引擎互相覆盖。"""
-    return "" if engine_key == "whisper" else ".qwen"
+    """Whisper 产物不加后缀，其余引擎加 `.key`，避免互相覆盖。"""
+    return "" if engine_key == "whisper" else f".{engine_key}"
 
 
 @dataclass(slots=True)
@@ -90,6 +111,7 @@ class TranscribeRequest:
     keep_absolute_timeline: bool = True
     whisper_config: WhisperVadConfig | None = None
     qwen_config: QwenCtcConfig | None = None
+    sherpa_config: SherpaAsrConfig | None = None
     no_repeat_ngram_size: int = 5
     repetition_penalty: float = 1.15
     use_alignment: bool = True
@@ -198,7 +220,9 @@ def run_transcription(
     """
     media_path = Path(req.media_path)
     engine = engine if engine is not None else resolve_engine(req.engine_key)
-    is_qwen = req.is_qwen
+    family = engine_family(req.engine_key)
+    is_qwen = family == "qwen"
+    is_sherpa = family == "sherpa"
     out_dir = Path(output_dir or OUTPUT_DIR)
     slice_tag, time_slice_desc = plan_slice(req.start_s, req.end_s)
 
@@ -216,7 +240,18 @@ def run_transcription(
         req.output_format,
         req.keep_absolute_timeline,
     )
-    if is_qwen:
+    if is_sherpa:
+        cues = engine.transcribe_file(
+            media_path,
+            progress_cb=cb,
+            config=req.sherpa_config,
+            cancel_event=cancel_event,
+            start_time_s=req.start_s,
+            end_time_s=req.end_s,
+            time_offset=req.time_offset,
+        )
+        stats_note = ""
+    elif is_qwen:
         cues = engine.transcribe_file(
             media_path,
             progress_cb=cb,
@@ -277,12 +312,13 @@ def run_transcription(
             pass
 
     char_count = sum(len(c.text) for c in cues)
-    write_missed_report(media_path, slice_tag, "qwen" if is_qwen else "whisper", missed_spans)
+    write_missed_report(media_path, slice_tag, req.engine_key, missed_spans)
     report_data = build_report_data(
         media_name=media_path.name,
         out_filename=out_filename,
         out_path=str(out_path),
-        engine_name=ENGINE_DISPLAY[req.engine_key],
+        engine_name=ENGINE_DISPLAY.get(req.engine_key, req.engine_key),
+        engine_family=family,
         output_format=req.output_format,
         elapsed_time=elapsed,
         cue_count=len(cues),
@@ -333,7 +369,7 @@ def run_transcription(
         "hidden_missed": _missed_hidden_count(missed_spans),
         "coverage": len(coverage_spans),
     }
-    if not is_qwen:
+    if family == "whisper":
         scanned["dropped"] = int(segment_stats.get("hallucination_drops", 0) or 0)
         scanned["suspect"] = int(segment_stats.get("suspect_cues", 0) or 0)
     audit_payload = make_audit_payload(
@@ -342,7 +378,7 @@ def run_transcription(
         {},
         len(cues),
         _missed_hidden_count(missed_spans),
-        engine="qwen" if is_qwen else "whisper",
+        engine=req.engine_key,
         phase="done",
         scanned=scanned,
         transcribed_at=time.time(),

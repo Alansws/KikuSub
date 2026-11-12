@@ -211,3 +211,47 @@ def test_coverage_spans_reach_audit_payload_and_report(media, tmp_path, monkeypa
     assert result.report_data["quality"]["coverage"] == 1
     assert any(section["id"] == "coverage" for section in result.report_data["sections"])
     assert result.coverage_spans
+
+
+def test_sensevoice_uses_sherpa_dispatch_and_own_suffix(media, tmp_path, monkeypatch):
+    """中文引擎走 sherpa 分支：只拿 config，不拿 qwen 的 use_alignment。"""
+    _patch_dirs(monkeypatch, tmp_path)
+    from core.sherpa_asr import SherpaAsrConfig
+
+    engine = _FakeEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media,
+            engine_key="sensevoice",
+            sherpa_config=SherpaAsrConfig(max_cue_chars=16),
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+
+    assert engine.received["config"].max_cue_chars == 16
+    assert "use_alignment" not in engine.received
+    assert result.out_filename == "episode.sensevoice.srt"
+    assert result.report_data["quality"]["engine_family"] == "sherpa"
+    assert "SenseVoice-Small" in result.report_text
+
+
+def test_firered_output_gets_its_own_suffix(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(media_path=media, engine_key="firered"),
+        output_dir=tmp_path,
+        engine=_FakeEngine(),
+    )
+    assert result.out_filename == "episode.firered.srt"
+    assert "FireRedASR2-AED" in result.report_text
+
+
+def test_engine_family_comes_from_registry(media, tmp_path, monkeypatch):
+    """加引擎不该再写第二份白名单：未知 key 直接拒绝，而不是静默退回 Whisper。"""
+    _patch_dirs(monkeypatch, tmp_path)
+    with pytest.raises(ValueError):
+        pipeline.run_transcription(
+            pipeline.TranscribeRequest(media_path=media, engine_key="sensevoice-pro"),
+            output_dir=tmp_path,
+        )

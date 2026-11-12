@@ -45,6 +45,8 @@ rm -rf "$OUT/dist/$NAME"
   --hidden-import PIL.ImageFont \
   --hidden-import omnivoice \
   --hidden-import omnivoice.models.omnivoice \
+  --hidden-import sherpa_onnx \
+  --collect-all sherpa_onnx \
   --exclude-module matplotlib \
   --exclude-module tkinter \
   --distpath "$OUT/dist" \

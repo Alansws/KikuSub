@@ -16,8 +16,10 @@ from dataclasses import dataclass
 
 WHISPER = "whisper"
 QWEN = "qwen"
+SENSEVOICE = "sensevoice"
+FIRERED = "firered"
 
-ENGINES = (WHISPER, QWEN)
+ENGINES = (WHISPER, QWEN, SENSEVOICE, FIRERED)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +177,134 @@ SPECS: tuple[ParamSpec, ...] = (
         "qwen.cue_pad_s", "字幕前后留白 (s)", QWEN, "float", 0.12,
         group="断句与字幕", minimum=0.0, maximum=0.30, step=0.01,
         config_field=("cue_pad_start_s", "cue_pad_end_s"),
+        help="字幕在画面上停留的舒适缓冲。",
+    ),
+    # ---------------- 中文：SenseVoice-Small ----------------
+    ParamSpec(
+        "sensevoice.enable_loudnorm", "动态响度归一化", SENSEVOICE, "bool", True,
+        group="基础", config_field="enable_loudnorm",
+        help="弱人声增强；会多花一次 ffmpeg 解码。",
+    ),
+    ParamSpec(
+        "sensevoice.use_itn", "标点与数字归一化", SENSEVOICE, "bool", True,
+        group="基础", config_field="use_itn",
+        help="打开后输出带标点、数字转阿拉伯写法；关闭则是一串无标点的字。",
+    ),
+    ParamSpec(
+        "sensevoice.num_threads", "CPU 线程数", SENSEVOICE, "int", 2,
+        group="基础", minimum=1, maximum=8, step=1, config_field="num_threads",
+        help="2–4 在 Apple Silicon 上性价比最高，再高收益递减。",
+    ),
+    ParamSpec(
+        "sensevoice.vad_threshold", "VAD 判定阈值", SENSEVOICE, "float", 0.30,
+        group="VAD", minimum=0.05, maximum=0.80, step=0.01, config_field="vad_threshold",
+        help="调小对低声耳语更灵敏；调大抗噪更强。",
+    ),
+    ParamSpec(
+        "sensevoice.vad_min_speech_ms", "最短语音 (ms)", SENSEVOICE, "int", 100,
+        group="VAD", minimum=0, maximum=500, step=10, config_field="vad_min_speech_ms",
+        help="调小可捕获短叹词；调大过滤短促爆音。",
+    ),
+    ParamSpec(
+        "sensevoice.vad_min_silence_ms", "判定停顿静音 (ms)", SENSEVOICE, "int", 200,
+        group="VAD", minimum=50, maximum=600, step=10, config_field="vad_min_silence_ms",
+        help="调小会频繁切成短句；调大连贯保留长句。",
+    ),
+    ParamSpec(
+        "sensevoice.vad_speech_pad_ms", "首尾留白 (ms)", SENSEVOICE, "int", 150,
+        group="VAD", minimum=0, maximum=400, step=10, config_field="vad_speech_pad_ms",
+        help="调大防止句首辅音或句尾被切断。",
+    ),
+    ParamSpec(
+        "sensevoice.merge_gap_s", "合并间隔 (s)", SENSEVOICE, "float", 0.50,
+        group="VAD", minimum=0.1, maximum=1.5, step=0.05, config_field="merge_gap_s",
+        help="调大把相邻语音段合并成连贯大段送模。",
+    ),
+    ParamSpec(
+        "sensevoice.max_segment_s", "送模音频窗口 (s)", SENSEVOICE, "float", 16.0,
+        group="VAD", minimum=5.0, maximum=25.0, step=1.0, config_field="max_segment_s",
+        help="SenseVoice 适合 10–20 秒窗口；太长会明显变慢。",
+    ),
+    ParamSpec(
+        "sensevoice.min_pause_s", "断句停顿 (s)", SENSEVOICE, "float", 0.20,
+        group="断句与字幕", minimum=0.05, maximum=0.60, step=0.01, config_field="min_pause_s",
+        help="无标点时靠它判断「这里可以换一条字幕」。",
+    ),
+    ParamSpec(
+        "sensevoice.max_cue_dur", "单条目标时长 (s)", SENSEVOICE, "float", 4.3,
+        group="断句与字幕", minimum=2.0, maximum=8.0, step=0.1, config_field="max_cue_dur",
+        help="调小字幕切换紧凑；调大长句整体展示。",
+    ),
+    ParamSpec(
+        "sensevoice.max_cue_chars", "单条最多字数", SENSEVOICE, "int", 18,
+        group="断句与字幕", minimum=8, maximum=35, step=1, config_field="max_cue_chars",
+        help="中文两行字幕通常 14–20 字；超出会按标点或停顿平滑折断。",
+    ),
+    ParamSpec(
+        "sensevoice.cue_pad_s", "字幕前后留白 (s)", SENSEVOICE, "float", 0.10,
+        group="断句与字幕", minimum=0.0, maximum=0.30, step=0.01, config_field="cue_pad_s",
+        help="字幕在画面上停留的舒适缓冲。",
+    ),
+    # ---------------- 中文：FireRedASR2-AED ----------------
+    # 与 SenseVoice 同一套配置 dataclass 字段，只是不做 ITN/语种选择（模型不支持）。
+    ParamSpec(
+        "firered.enable_loudnorm", "动态响度归一化", FIRERED, "bool", True,
+        group="基础", config_field="enable_loudnorm",
+        help="弱人声增强；会多花一次 ffmpeg 解码。",
+    ),
+    ParamSpec(
+        "firered.num_threads", "CPU 线程数", FIRERED, "int", 2,
+        group="基础", minimum=1, maximum=8, step=1, config_field="num_threads",
+        help="2–4 在 Apple Silicon 上性价比最高；AED 解码比轻量模型慢约 5 倍。",
+    ),
+    ParamSpec(
+        "firered.vad_threshold", "VAD 判定阈值", FIRERED, "float", 0.30,
+        group="VAD", minimum=0.05, maximum=0.80, step=0.01, config_field="vad_threshold",
+        help="调小对低声耳语更灵敏；调大抗噪更强。",
+    ),
+    ParamSpec(
+        "firered.vad_min_speech_ms", "最短语音 (ms)", FIRERED, "int", 100,
+        group="VAD", minimum=0, maximum=500, step=10, config_field="vad_min_speech_ms",
+        help="调小可捕获短叹词；调大过滤短促爆音。",
+    ),
+    ParamSpec(
+        "firered.vad_min_silence_ms", "判定停顿静音 (ms)", FIRERED, "int", 200,
+        group="VAD", minimum=50, maximum=600, step=10, config_field="vad_min_silence_ms",
+        help="调小会频繁切成短句；调大连贯保留长句。",
+    ),
+    ParamSpec(
+        "firered.vad_speech_pad_ms", "首尾留白 (ms)", FIRERED, "int", 150,
+        group="VAD", minimum=0, maximum=400, step=10, config_field="vad_speech_pad_ms",
+        help="调大防止句首辅音或句尾被切断。",
+    ),
+    ParamSpec(
+        "firered.merge_gap_s", "合并间隔 (s)", FIRERED, "float", 0.35,
+        group="VAD", minimum=0.1, maximum=1.5, step=0.05, config_field="merge_gap_s",
+        help="该模型不输出逐字时间戳；合并得短一些，字幕时间轴更贴停顿。",
+    ),
+    ParamSpec(
+        "firered.max_segment_s", "送模音频窗口 (s)", FIRERED, "float", 14.0,
+        group="VAD", minimum=5.0, maximum=25.0, step=1.0, config_field="max_segment_s",
+        help="窗口越短、按字分时越准，但上下文更碎。",
+    ),
+    ParamSpec(
+        "firered.min_pause_s", "断句停顿 (s)", FIRERED, "float", 0.24,
+        group="断句与字幕", minimum=0.05, maximum=0.60, step=0.01, config_field="min_pause_s",
+        help="无标点时靠它判断「这里可以换一条字幕」。",
+    ),
+    ParamSpec(
+        "firered.max_cue_dur", "单条目标时长 (s)", FIRERED, "float", 4.3,
+        group="断句与字幕", minimum=2.0, maximum=8.0, step=0.1, config_field="max_cue_dur",
+        help="调小字幕切换紧凑；调大长句整体展示。",
+    ),
+    ParamSpec(
+        "firered.max_cue_chars", "单条最多字数", FIRERED, "int", 18,
+        group="断句与字幕", minimum=8, maximum=35, step=1, config_field="max_cue_chars",
+        help="中文两行字幕通常 14–20 字；超出会按停顿平滑折断。",
+    ),
+    ParamSpec(
+        "firered.cue_pad_s", "字幕前后留白 (s)", FIRERED, "float", 0.10,
+        group="断句与字幕", minimum=0.0, maximum=0.30, step=0.01, config_field="cue_pad_s",
         help="字幕在画面上停留的舒适缓冲。",
     ),
 )

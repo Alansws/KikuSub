@@ -20,7 +20,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .deps import get_session
 from .jobs import TERMINAL_EVENTS, JobConflict, JobManager, JobNotFound
@@ -34,7 +34,9 @@ class TranscribeJobRequest(BaseModel):
     media_id: str
     # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
     kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
-    engine: str = Field(default="whisper", pattern="^(whisper|qwen)$")
+    # 合法值来自 `core.engines` 注册表（见下方 validator）：不要在这里写死引擎名，
+    # 否则新增引擎会在请求层被 422 掉，而 pipeline/设置页都是正常的。
+    engine: str = "whisper"
     output_format: str = Field(default="SRT", pattern="^(SRT|VTT|TXT)$")
     save_beside: bool = False
     start: float | None = None
@@ -45,6 +47,17 @@ class TranscribeJobRequest(BaseModel):
     # 引擎参数直接透传给 dataclass；字段名以 WhisperVadConfig / QwenCtcConfig 为准
     params: dict = Field(default_factory=dict)
 
+    @field_validator("engine")
+    @classmethod
+    def _known_engine(cls, value: str) -> str:
+        from core import engines
+
+        if value not in engines.KEYS:
+            raise ValueError(
+                f"未知的识别引擎：{value}（可选：{', '.join(engines.KEYS)}）"
+            )
+        return value
+
 
 def _manager(request: Request) -> JobManager:
     return request.app.state.jobs
@@ -52,10 +65,12 @@ def _manager(request: Request) -> JobManager:
 
 def _build_request(request: Request, payload: TranscribeJobRequest):
     # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
+    from core import engines as engine_registry
     from core import params as param_specs
     from core import pipeline
     from core import settings as settings_store
     from core.qwen_ctc import QwenCtcConfig
+    from core.sherpa_asr import SherpaAsrConfig
     from core.transcribe import WhisperVadConfig, build_whisper_config
 
     try:
@@ -71,11 +86,21 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     # 参数键用 core.params 的规格键（whisper.vad_threshold 这种），
     # 与预设文件里的键天然一致；缺失补默认、越界夹紧都由 normalize 负责。
     values = dict(payload.params or {})
+    try:
+        family = engine_registry.family_of(payload.engine)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     whisper_config: WhisperVadConfig | None = None
     qwen_config: QwenCtcConfig | None = None
+    sherpa_config: SherpaAsrConfig | None = None
     try:
-        if payload.engine == "qwen":
+        if family == "qwen":
             qwen_config = QwenCtcConfig(**param_specs.config_kwargs("qwen", values))
+        elif family == "sherpa":
+            sherpa_config = SherpaAsrConfig(
+                **param_specs.config_kwargs(payload.engine, values)
+            )
         else:
             whisper_config = build_whisper_config(**param_specs.config_kwargs("whisper", values))
     except (TypeError, ValueError) as exc:
@@ -105,6 +130,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         keep_absolute_timeline=payload.keep_absolute_timeline,
         whisper_config=whisper_config,
         qwen_config=qwen_config,
+        sherpa_config=sherpa_config,
         no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),

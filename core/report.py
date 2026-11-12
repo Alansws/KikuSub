@@ -114,9 +114,15 @@ def _cut_snap_summary(stats: dict | None) -> str:
     return f"{forced} 处强制切分，其中 {snapped} 处吸附到能量谷（累计前移 {shift:.2f}s）"
 
 
-def _align_stats_headline(stats: dict | None, is_qwen: bool) -> str:
-    """【逐字对齐】一行摘要：把"40ms 精度"从宣传语变成可核对的数字。"""
-    if not is_qwen:
+def _align_stats_headline(stats: dict | None, family: str = "whisper") -> str:
+    """【时间轴】一行摘要：把「精确到哪种粒度」从宣传语变成可核对的数字。
+
+    family 决定口径：
+    - whisper：无逐字对齐，句内按字数比例分配；
+    - qwen：CTC 强制对齐的完成/降级段数；
+    - sherpa：模型直接输出 token 时间戳（无需额外对齐），没有时间戳的段如实计降级。
+    """
+    if family == "whisper":
         return "该引擎无逐字对齐，句内时间按字数比例分配"
     if not stats or not stats.get("segments"):
         return "未记录（本次未产出对齐统计）"
@@ -124,6 +130,24 @@ def _align_stats_headline(stats: dict | None, is_qwen: bool) -> str:
         return "逐字对齐已停用（本次按字数比例分配时间）"
 
     total = int(stats.get("segments", 0) or 0)
+    if family == "sherpa":
+        timed = int(stats.get("aligned", 0) or 0)
+        degraded_sherpa = int(stats.get("degraded", 0) or 0)
+        empty_sherpa = int(stats.get("empty", 0) or 0)
+        rate = (timed / total * 100) if total else 0.0
+        parts = [f"共 {total} 段：✅ {timed} 段带 token 时间戳（{rate:.1f}%）"]
+        if empty_sherpa > 0:
+            parts.append(f"✕ 空结果 {empty_sherpa} 段（已计入疑似漏句）")
+        if degraded_sherpa > 0:
+            parts.append(
+                f"⚠️ {degraded_sherpa} 段模型未给时间戳，按字数比例分配"
+            )
+        if timed:
+            tail = "（时间戳来自模型输出，无需 CTC 对齐）"
+        else:
+            tail = "（该模型不输出 token 时间戳，句内时间按字数比例分配）"
+        return "｜".join(parts) + tail
+
     aligned = int(stats.get("aligned", 0) or 0)
     noop = int(stats.get("noop", 0) or 0)
     degraded = int(stats.get("degraded", 0) or 0)
@@ -233,8 +257,29 @@ def param_pairs(
     ngram: int,
     penalty: float,
     use_alignment: bool,
+    engine_family: str | None = None,
 ) -> list[tuple[str, str]]:
     """【执行生效参数清单】的字段对。"""
+    family = engine_family or ("qwen" if is_qwen else "whisper")
+    if family == "sherpa":
+        return [
+            (
+                "识别方案",
+                "SenseVoice-Small / FireRedASR2-AED（sherpa-onnx · ONNX · CPU）",
+            ),
+            ("动态响度归一化 (enable_loudnorm)", "启用" if getattr(config, "enable_loudnorm", True) else "停用"),
+            ("CPU 线程数 (num_threads)", str(getattr(config, "num_threads", 2))),
+            ("VAD 语音检测阈值 (vad_threshold)", getattr(config, "vad_threshold", 0.30)),
+            ("最短语音长度 (vad_min_speech_ms)", f"{getattr(config, 'vad_min_speech_ms', 100)} ms"),
+            ("判定为停顿的静音 (vad_min_silence_ms)", f"{getattr(config, 'vad_min_silence_ms', 200)} ms"),
+            ("切片首尾留白缓冲 (vad_speech_pad_ms)", f"{getattr(config, 'vad_speech_pad_ms', 150)} ms"),
+            ("相邻片段合并间隔 (merge_gap_s)", f"{getattr(config, 'merge_gap_s', 0.5)} s"),
+            ("单次送模音频窗口 (max_segment_s)", f"{getattr(config, 'max_segment_s', 16.0)} s"),
+            ("单条字幕目标时长 (max_cue_dur)", f"{getattr(config, 'max_cue_dur', 4.3)} s"),
+            ("单条字幕最大字数 (max_cue_chars)", f"{getattr(config, 'max_cue_chars', 18)} 字"),
+            ("视为停顿静音长度 (min_pause_s)", f"{getattr(config, 'min_pause_s', 0.2)} s"),
+            ("字幕前后留白 (cue_pad_s)", f"{getattr(config, 'cue_pad_s', 0.1)} s"),
+        ]
     if is_qwen:
         return [
             ("识别方案", "Qwen3-ASR (JA Anime/Galgame) + CTC 对齐"),
@@ -280,6 +325,7 @@ def build_transcription_report(
     is_qwen: bool,
     config: object,
     is_interrupted: bool = False,
+    engine_family: str | None = None,
     time_slice_desc: str = "全片完整转录",
     ngram: int = 5,
     penalty: float = 1.15,
@@ -289,12 +335,15 @@ def build_transcription_report(
     segment_stats: dict | None = None,
     align_stats: dict | None = None,
 ) -> str:
+    family = engine_family or ("qwen" if is_qwen else "whisper")
+    is_qwen = family == "qwen"
+    is_whisper = family == "whisper"
     finish_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     duration_str = format_duration(elapsed_time)
 
     lines = [
         "============================================================",
-        "🎬 日语影片字幕转录任务详报 (Transcription Report)",
+        "🎬 影片字幕转录任务详报 (Transcription Report)",
         "============================================================",
         "【任务概览】",
         *[f"• {label}：{value}" for label, value in overview_pairs(
@@ -314,7 +363,7 @@ def build_transcription_report(
         "【执行生效参数清单】",
         *[f"• {label}：{value}" for label, value in param_pairs(
             is_qwen=is_qwen, config=config, ngram=ngram,
-            penalty=penalty, use_alignment=use_alignment,
+            penalty=penalty, use_alignment=use_alignment, engine_family=family,
         )],
     ]
 
@@ -324,7 +373,9 @@ def build_transcription_report(
     hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
     suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
     hallucination_spans = list((segment_stats or {}).get("hallucination_spans") or [])
-    low_confidence = len(visible_missed) + (0 if is_qwen else hallucination_drops + suspect_cues)
+    low_confidence = len(visible_missed) + (
+        0 if not is_whisper else hallucination_drops + suspect_cues
+    )
 
     # 对用户只保留两个组：漏检（主 VAD 没切到）和低置信（切片内异常）。
     quality_parts = [
@@ -345,10 +396,11 @@ def build_transcription_report(
         lines.append(
             "• 本次没有需要人工试听复核的片段；「🔎 质检待核」仍会保留入口。"
         )
-    if is_qwen:
-        # Qwen 路径没有时间戳复核这一步：明确写「不启用」，避免 0 条被读成「复查过且干净」。
+    if not is_whisper:
+        # 非 Whisper 路径没有时间戳复核这一步：明确写「不启用」，避免 0 条被读成
+        # 「复查过且干净」。两个中文引擎同样如此。
         lines.append(
-            "• 引擎差异：Qwen3-ASR 只执行「🔍 可能漏句」检查；"
+            f"• 引擎差异：{engine_name} 只执行「🔍 可能漏句」检查；"
             "「✂️ 误删待核 / 👂 短句待确认」依赖 Anime Whisper 的时间戳复核，本引擎不启用。"
         )
     lines.append(
@@ -393,8 +445,8 @@ def build_transcription_report(
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
     dropped_rows = _hallucination_rows(hallucination_spans, "dropped")
     suspect_rows = _hallucination_rows(hallucination_spans, "suspect")
-    if is_qwen:
-        # Qwen 路径没有时间戳复核这一步：不写“未发现”，避免读成“复核过且干净”
+    if not is_whisper:
+        # 非 Whisper 路径没有时间戳复核这一步：不写“未发现”，避免读成“复核过且干净”
         lines.append("【幻觉门控】该引擎不启用（仅 Anime Whisper 做时间戳复核）")
     else:
         lines.append(
@@ -418,10 +470,10 @@ def build_transcription_report(
         )
         lines.extend(suspect_rows)
 
-    headline = _align_stats_headline(align_stats, is_qwen)
-    if is_interrupted and is_qwen and align_stats:
+    headline = _align_stats_headline(align_stats, family)
+    if is_interrupted and not is_whisper and align_stats:
         headline += "（统计截至中断处）"
-    lines.append("【逐字对齐】" + headline)
+    lines.append(("【逐字对齐】" if family == "qwen" else "【时间轴】") + headline)
 
     degraded_spans = list((align_stats or {}).get("spans") or [])
     for span in degraded_spans:
@@ -433,7 +485,7 @@ def build_transcription_report(
     total_degraded = int((align_stats or {}).get("degraded", 0) or 0)
     if total_degraded > len(degraded_spans):
         lines.append(f"• … 另有 {total_degraded - len(degraded_spans)} 段降级未列出（仅展示前 50 段）")
-    elif is_qwen and align_stats and align_stats.get("enabled", True) and total_degraded == 0:
+    elif family == "qwen" and align_stats and align_stats.get("enabled", True) and total_degraded == 0:
         lines.append("• 无降级段")
 
     lines.append("============================================================")
@@ -452,6 +504,7 @@ def build_report_data(
     is_qwen: bool,
     config: object,
     is_interrupted: bool = False,
+    engine_family: str | None = None,
     time_slice_desc: str = "全片完整转录",
     ngram: int = 5,
     penalty: float = 1.15,
@@ -470,6 +523,10 @@ def build_report_data(
     字段口径与文本报告完全同源（`overview_pairs` / `param_pairs` / 各 `_xxx` 助手），
     所以不会出现「网页和报告对不上」。
     """
+    family = engine_family or ("qwen" if is_qwen else "whisper")
+    is_qwen = family == "qwen"
+    is_whisper = family == "whisper"
+
     raw_text = build_transcription_report(
         media_name=media_name,
         out_filename=out_filename,
@@ -480,6 +537,7 @@ def build_report_data(
         cue_count=cue_count,
         char_count=char_count,
         is_qwen=is_qwen,
+        engine_family=family,
         config=config,
         is_interrupted=is_interrupted,
         time_slice_desc=time_slice_desc,
@@ -502,7 +560,7 @@ def build_report_data(
     degraded = list((align_stats or {}).get("spans") or [])
     total_degraded = int((align_stats or {}).get("degraded", 0) or 0)
 
-    low_confidence = len(visible_missed) + (0 if is_qwen else dropped + suspect)
+    low_confidence = len(visible_missed) + (0 if not is_whisper else dropped + suspect)
     quality_parts = [
         f"📭 未覆盖空白 {len(coverage)} 处",
         f"🔎 切片内异常 {low_confidence} 处",
@@ -579,7 +637,7 @@ def build_report_data(
         },
     ]
 
-    if is_qwen:
+    if not is_whisper:
         sections.append(
             {
                 "id": "hallucination",
@@ -638,13 +696,13 @@ def build_report_data(
                 }
             )
 
-    align_headline = _align_stats_headline(align_stats, is_qwen)
-    if is_interrupted and is_qwen and align_stats:
+    align_headline = _align_stats_headline(align_stats, family)
+    if is_interrupted and not is_whisper and align_stats:
         align_headline += "（统计截至中断处）"
     sections.append(
         {
             "id": "alignment",
-            "title": "逐字对齐",
+            "title": "逐字对齐" if family == "qwen" else "时间轴精度",
             "headline": align_headline,
             "total_degraded": total_degraded,
             "items": [
@@ -690,6 +748,7 @@ def build_report_data(
                 ngram=ngram,
                 penalty=penalty,
                 use_alignment=use_alignment,
+                engine_family=family,
             )
         ],
         "quality": {
@@ -702,7 +761,9 @@ def build_report_data(
             "suspect": suspect,
             "degraded": total_degraded,
             "has_findings": bool(coverage or len(visible_missed) or dropped or suspect),
-            "qwen_limited": bool(is_qwen),
+            # 该引擎没有「误删 / 短句」两个时间戳复核桶（Qwen 与中文引擎都是）。
+            "qwen_limited": bool(not is_whisper),
+            "engine_family": family,
         },
         "sections": sections,
         "raw_text": raw_text,

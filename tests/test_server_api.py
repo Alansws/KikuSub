@@ -69,7 +69,9 @@ def test_config_reports_device_and_engines(client: TestClient) -> None:
     data = client.get("/api/config", headers=auth()).json()
     # 设备探测在后台预热线程里做；刚启动时可能是 unknown，前端会在几秒后刷新。
     assert data["device"] in {"mps", "cuda", "cpu", "unknown", "unavailable"}
-    assert {e["key"] for e in data["engines"]} == {"whisper", "qwen"}
+    from core import engines
+
+    assert {e["key"] for e in data["engines"]} == set(engines.KEYS)
     assert all("enabled" in e and "installed" in e for e in data["engines"])
 
 
@@ -352,8 +354,11 @@ def _make_two_second_wav(tmp_path: Path) -> Path:
 
 def test_params_endpoint_exposes_groups_and_defaults(client: TestClient) -> None:
     data = client.get("/api/params", headers=auth()).json()
+    from core import params as param_specs
+
     engines = {e["key"]: e for e in data["engines"]}
-    assert set(engines) == {"whisper", "qwen"}
+    assert set(engines) == set(param_specs.ENGINES)
+    assert {"sensevoice", "firered"} <= set(engines)
     keys = {p["key"] for p in engines["whisper"]["groups"][0]["params"]}
     assert "whisper.vad_threshold" in {
         p["key"] for g in engines["whisper"]["groups"] for p in g["params"]

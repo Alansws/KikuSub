@@ -343,14 +343,17 @@ def _audit_coverage(engine: str) -> dict:
 
     · ``missed``  —— VAD 判成语音但识别为空，两个引擎都会产出；
     · ``dropped`` / ``suspect`` —— 依赖 Anime Whisper 的「带时间戳重解码」复核，
-      Qwen 路径没有这一步。这里必须如实标成 False，否则空队列会被误读成
-      「检查过且干净」。
+      Qwen 与两个中文引擎都没有这一步。这里必须如实标成 False，否则空队列会被
+      误读成「检查过且干净」。
+
+    空 engine（idle 态）沿用旧口径标 True：那时还没有任何引擎跑过，不该拿
+    「本引擎不启用」去解释一个空队列。
     """
-    is_qwen = str(engine or "") == "qwen"
+    is_whisper = str(engine or "") in {"", "whisper"}
     return {
         "missed": True,
-        "dropped": not is_qwen,
-        "suspect": not is_qwen,
+        "dropped": is_whisper,
+        "suspect": is_whisper,
     }
 
 
