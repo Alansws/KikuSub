@@ -142,6 +142,7 @@ def test_missing_media_raises(media, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.needs_ffmpeg
 @pytest.mark.skipif(not HAS_FFMPEG, reason="缺少 ffmpeg")
 def test_real_transcode_produces_playable_proxy(tmp_path):
     source = _make_source(tmp_path / "src.mkv")
@@ -173,6 +174,7 @@ def test_real_transcode_produces_playable_proxy(tmp_path):
     assert probe.stdout.strip() == "480"
 
 
+@pytest.mark.needs_ffmpeg
 @pytest.mark.skipif(not HAS_FFMPEG, reason="缺少 ffmpeg")
 def test_second_run_reuses_freshly_built_proxy(tmp_path):
     source = _make_source(tmp_path / "src2.mkv")
@@ -188,6 +190,7 @@ def test_second_run_reuses_freshly_built_proxy(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.needs_ffmpeg
 @pytest.mark.skipif(not HAS_FFMPEG, reason="缺少 ffmpeg")
 def test_api_proxy_job_runs_and_reports(tmp_path):
     from fastapi.testclient import TestClient

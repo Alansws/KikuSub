@@ -10,7 +10,10 @@ import pytest
 
 from core.thumbnails import _frame_has_signal, thumbnail_for
 
-pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="需要 ffmpeg")
+pytestmark = [
+    pytest.mark.needs_ffmpeg,
+    pytest.mark.skipif(not shutil.which("ffmpeg"), reason="需要 ffmpeg"),
+]
 
 
 def make_clip(path: Path) -> Path:

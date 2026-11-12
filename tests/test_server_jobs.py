@@ -14,6 +14,8 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("torch")
 
+pytestmark = pytest.mark.integration
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 from core.pipeline import TranscribeResult  # noqa: E402

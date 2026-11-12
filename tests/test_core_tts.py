@@ -225,6 +225,8 @@ def test_heavy_jobs_release_tts_model(tmp_path: Path) -> None:
     assert calls == []
 
 
+@pytest.mark.needs_model
+@pytest.mark.needs_macos
 @pytest.mark.skipif(
     __import__("os").environ.get("KIKUSUB_TEST_TTS_MODEL") != "1",
     reason="需要 OmniVoice 权重，显式设 KIKUSUB_TEST_TTS_MODEL=1 才跑（约 3GB / 10 秒级）",

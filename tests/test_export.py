@@ -43,6 +43,8 @@ def _cjk_font_available() -> bool:
 
 
 pytestmark = [
+    pytest.mark.needs_ffmpeg,
+    pytest.mark.needs_macos,
     pytest.mark.skipif(not _ffmpeg_available(), reason="需要 ffmpeg/ffprobe"),
     pytest.mark.skipif(not _cjk_font_available(), reason="需要 macOS 中文字体（硬字幕烧录）"),
 ]
