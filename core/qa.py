@@ -3,7 +3,7 @@
 从 `app.py` 的 `qa_apply_action` 原样搬出并去掉 UI 提示：`gr.Warning(...)` 改成结果里的
 `warning` 字段，编辑框更新改成 `focus` 结构，撤回栈交给调用方维护（服务层用 `Session`）。
 
-**行为约束（改之前先读 AGENTS.md §5）**：
+**行为约束（改之前先读 `docs/contracts/review-console.md` 的质检一节）**：
 
 - 所有会改动字幕的动作都走撤回栈，且**只在真的找到对应字幕时**才改——用户在核对台
   尚未设为基线时误删/误插是最容易踩的坑；

@@ -1,7 +1,7 @@
 # KikuSub 桌面外壳（Electron + Svelte）
 
 Electron 主进程 + Svelte 5 渲染层，Python sidecar 提供内核。用户文档见仓库根目录的
-[README.md](../README.md)，实现约束见 [AGENTS.md](../AGENTS.md) 的 §3.4–§3.7。
+[README.md](../README.md)，实现约束见 [AGENTS.md](../AGENTS.md) 的契约索引，正文在 [docs/contracts/](../docs/contracts/)（核对台 / 桌面生命周期 / AI 提案 / 导出与提示词）。
 
 ## 跑起来
 

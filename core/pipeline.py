@@ -10,7 +10,7 @@
 进度怎么呈现（Gradio 的进度卡片 / WebSocket 帧）由调用方决定，这里不关心。
 这样旧界面与服务层跑的是同一份编排，不会出现「网页能取消、桌面端不能」这种分叉。
 
-**取消语义**（见 AGENTS.md §3，不要改）：
+**取消语义**（见 `docs/contracts/review-console.md` §3，不要改）：
 - 取消只发信号（`cancel_event.set()`），槽位由真正停止工作的 worker 在 `finally` 释放；
 - 被打断时已产出的字幕要保存，文件名带 `.part_cancelled`。
 """
