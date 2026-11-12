@@ -69,6 +69,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
 | `core/sherpa_asr.py` | 两个中文引擎的推理外壳（SenseVoice-Small / FireRedASR2-AED，sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
 | `core/text_cues_zh.py` | 中文分句的唯一实现（纯函数，无 torch）：token→字符时间轴、标点/停顿/字数切条。改中文断句口径先改这里的测试。 |
+| `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补；按字符偏移插回原文（不改英文大小写）。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
+| `core/model_fetch.py` | 可选权重的 HF 下载入口（直连失败才走镜像）；SenseVoice / FireRed / FireRedPunc 共用，别再写第二份重试逻辑。 |
 | `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 把界面键映射成引擎 dataclass 字段。新增引擎参数只改这里，前端不用动。 |
 | `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
 | `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |

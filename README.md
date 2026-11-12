@@ -128,15 +128,23 @@
 | | SenseVoice-Small 中文 | FireRedASR2-AED 中文 |
 | --- | --- | --- |
 | 权重来源 | [`csukuangfj/sherpa-onnx-sense-voice-…`](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | [`csukuangfj2/sherpa-onnx-fire-red-asr2-…`](https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26) |
-| 体积 | 约 230 MB（int8） | 约 1.2 GB（int8） |
+| 体积 | 约 230 MB（int8） | 约 1.35 GB（ASR 1.2 GB + FireRedPunc 160 MB） |
 | 语种 | 中 / 英 / 日 / 韩 / 粤 | 中 / 英 + 20 多种方言 |
 | 句内时间轴 | 模型自带 token 时间戳 | **模型不输出时间戳**，句内按字数比例分配 |
-| 断句依据 | 句末标点 → 停顿 → 字数 / 时长 | 停顿 → 字数 / 时长（原始输出没有标点） |
+| 标点 | ITN 直接输出（可选关） | **FireRedPunc 补标点**（默认开，可关） |
+| 断句依据 | 句末标点 → 停顿 → 字数 / 时长 | 标点 → 停顿 → 字数 / 时长 |
 | 速度 | 5–6 秒音频约 0.1 秒 | 5–6 秒音频约 1.5 秒（精度更高） |
 | 适合 | 中文通稿、中文＋日语混合素材 | 中文精修、方言素材 |
 
 两个引擎都走 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（ONNX Runtime / CPU），不依赖 FunASR 的
 PyTorch 实现，也不需要额外装 kaldi——可选装件不该把主包撑大或拖慢启动。速度是本机 M 系列 CPU、2 线程实测。
+
+**为什么 FireRed 要带标点模型**：中文没有空格，也没有日语助词那种断句线索；一段「一口气说
+二三十个字」的识别结果如果完全没有标点，只能按字数硬切，字都对、字幕却难看。FireRedASR2S
+的满血组合就是 VAD + AED + FireRedPunc，这里把最后一块也接上了：标点随 FireRed 一起下载
+（`<模型目录>/punc/`，约 160 MB），在切字幕之前补回逗号/句号；分句时若标点只比字数上限晚
+几个字，会把这一条稍微放长（soft max），避免「特别好」被切成「特 / 别好」。Whisper 与 Qwen 的
+日语输出本来就带标点，断句分别依赖标点正则与日语助词动态规划，不需要这一步。
 
 ## 安装
 

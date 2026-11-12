@@ -128,16 +128,25 @@ download them (about 230 MB / 1.2 GB) from Settings → Engines or the first-run
 | | SenseVoice-Small (Chinese) | FireRedASR2-AED (Chinese) |
 | --- | --- | --- |
 | Weights | [`csukuangfj/sherpa-onnx-sense-voice-…`](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | [`csukuangfj2/sherpa-onnx-fire-red-asr2-…`](https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26) |
-| Size | ~230 MB (int8) | ~1.2 GB (int8) |
+| Size | ~230 MB (int8) | ~1.35 GB (1.2 GB ASR + 160 MB FireRedPunc) |
 | Languages | zh / en / ja / ko / yue | zh / en + 20+ dialects |
 | Timing inside a cue | token timestamps from the model | **no timestamps**; proportional to character count |
-| Segmentation | sentence punctuation → pauses → length / duration | pauses → length / duration (raw output has no punctuation) |
+| Punctuation | ITN output (can be disabled) | **restored by FireRedPunc** (on by default) |
+| Segmentation | sentence punctuation → pauses → length / duration | punctuation → pauses → length / duration |
 | Speed | ~0.1 s for 5–6 s audio | ~1.5 s for 5–6 s audio (more accurate) |
 | Good for | Chinese first drafts, mixed zh/ja material | Chinese fine-tuning, dialect material |
 
 Both run on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (ONNX Runtime / CPU) rather than FunASR's
 PyTorch stack, so an optional engine does not grow the main bundle or slow down startup. Timings are measured
 locally on an Apple Silicon CPU with 2 threads.
+
+**Why FireRed ships a punctuation model**: Chinese has no spaces and no Japanese-style particles to lean on.
+A 30-character unpunctuated transcript can only be cut by character count — the words may be right while the
+subtitles look wrong. FireRedASR2S' full stack is VAD + AED + FireRedPunc, and the last piece is wired in here:
+FireRedPunc is downloaded with the engine (`<models>/punc/`, ~160 MB) and restores commas/periods before cue
+splitting. When a mark sits only a few characters past the cue limit, the cue is allowed to run a little longer
+instead of cutting through a word. Whisper and Qwen already emit punctuation, and rely on punctuation rules and
+Japanese-particle DP respectively, so they do not need this step.
 
 ## Installation
 
