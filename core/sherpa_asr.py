@@ -154,10 +154,6 @@ class _SherpaEngine:
                 f"{self.label} 权重不完整，缺少：{', '.join(missing)}（目录 {self.model_dir}）"
             )
 
-    def ensure_companions(self, progress_cb=None) -> None:
-        """引擎的可选配套模型；默认没有。"""
-        return None
-
     def load(self, progress_cb=None, config: SherpaAsrConfig | None = None) -> None:
         """加载（或按需换配置重建）识别器。
 
