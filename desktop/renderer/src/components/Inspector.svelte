@@ -1131,6 +1131,7 @@
     background: transparent;
     padding: 0;
     font: inherit;
+    font-family: var(--font-cue);
     font-size: 20px;
     font-weight: 600;
     line-height: 29px; /* 20/29：1.45 取整，避免 29.0004 的小数行高 */
@@ -1143,6 +1144,7 @@
     transition: box-shadow var(--dur-fast) var(--ease);
   }
   .cue-text.sub {
+    font-family: var(--font-sans);
     font-size: 16px;
     font-weight: 400;
     line-height: 24px;

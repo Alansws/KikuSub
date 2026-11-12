@@ -318,8 +318,8 @@
     transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
   }
   .recent-del:hover {
-    color: #ff453a;
-    background: rgba(255, 69, 58, 0.08);
+    color: var(--danger);
+    background: var(--danger-soft);
     border-left-color: var(--separator-soft);
   }
   .ri {

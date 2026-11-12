@@ -187,12 +187,12 @@
     line-height: 1.5;
   }
   .warn {
-    color: #b26a00;
-    background: rgba(255, 159, 10, 0.12);
+    color: var(--warn);
+    background: var(--warn-soft);
   }
   .error {
-    color: #c0392b;
-    background: rgba(255, 69, 58, 0.1);
+    color: var(--danger);
+    background: var(--danger-soft);
   }
   code {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;

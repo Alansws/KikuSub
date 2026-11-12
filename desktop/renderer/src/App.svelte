@@ -522,7 +522,7 @@
     font-size: 12.5px;
   }
   .overlay-card.error {
-    color: #ff453a;
+    color: var(--danger);
   }
   .hint {
     color: var(--text-3);

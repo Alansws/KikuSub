@@ -227,7 +227,7 @@
             {:else if app.job.status === 'done'}
               <span>完成 · {app.cues.length} 条字幕</span>
             {:else if app.job.status === 'error'}
-              <span style="color: #ff453a">{app.job.error}</span>
+              <span style="color: var(--danger)">{app.job.error}</span>
             {:else}
               <span>{app.job.status}</span>
             {/if}
@@ -432,7 +432,7 @@
     gap: 4px;
     flex: 0 0 auto;
     font-size: 12px;
-    color: #1c7c36;
+    color: var(--success);
   }
   .saved-path {
     flex: 1;

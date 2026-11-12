@@ -95,7 +95,7 @@
     padding: 0 4px;
     border-radius: 8px;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-size: 12px;
     font-weight: 600;
     display: grid;

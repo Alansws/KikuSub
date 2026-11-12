@@ -2213,6 +2213,8 @@
     background: var(--caption-bg);
     backdrop-filter: blur(6px);
     color: #fff;
+    /* 与表格、检查器同一条字幕字体角色：主题换的是「字幕」，不是「界面」 */
+    font-family: var(--font-cue);
     font-size: 14px;
     line-height: 1.5;
     padding: 5px 13px;
@@ -2543,8 +2545,8 @@
     background: var(--raise);
   }
   .btn.primary.tiny {
-    background: var(--accent);
-    color: #fff;
+    background: var(--btn-primary-bg);
+    color: var(--on-accent);
   }
   .spin {
     width: 9px;
@@ -2580,7 +2582,7 @@
     bottom: 26px;
     transform: translateX(-50%);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-size: 12px;
     line-height: 16px;
     height: 16px;
@@ -2677,7 +2679,7 @@
   }
   .ph-off:hover {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .ph-flag {
     position: absolute;
@@ -2685,7 +2687,7 @@
     left: 50%;
     transform: translateX(-50%);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-size: 12px;
     line-height: 13px;
     padding: 0 4px;
@@ -2757,7 +2759,7 @@
     background: var(--line-2);
   }
   .row.row-match {
-    background: color-mix(in srgb, #ffd60a 16%, transparent);
+    background: var(--hit-row);
   }
   .row.row-sel {
     background: var(--accent-soft);
@@ -2830,6 +2832,7 @@
   }
   .c-text {
     min-width: 0;
+    font-family: var(--font-cue);
     font-size: 15px;
     line-height: 20px;
     color: var(--ink);
@@ -2858,23 +2861,19 @@
     text-overflow: ellipsis;
   }
   .c-text .line.sub {
+    /* 译文轨始终跟界面字体：12px 的明朝在浅底上太细，读起来像印刷品缩印 */
+    font-family: var(--font-sans);
     font-size: 12px;
     line-height: 16px;
     color: var(--text-2);
   }
   .c-text .line.stale {
-    color: #b26a00;
+    color: var(--warn);
   }
   .c-text .text-hit {
-    background: #ffd60a66;
+    background: var(--hit);
     border-radius: 2px;
     color: inherit;
-  }
-  :global(html[data-theme='dark']) .c-text .text-hit {
-    background: #ffd60a4d;
-  }
-  :global(html[data-theme='dark']) .c-text .line.stale {
-    color: #ffb340;
   }
   .c-acts {
     display: flex;

@@ -383,7 +383,7 @@
     gap: 5px;
   }
   .top-act:hover:not(:disabled) {
-    background: var(--line2);
+    background: var(--line-2);
     border-color: transparent;
     color: var(--text);
   }

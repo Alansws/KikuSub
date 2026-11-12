@@ -449,7 +449,7 @@
     color: var(--text-3);
   }
   .link.danger {
-    color: #c0392b;
+    color: var(--danger);
   }
   .desc {
     margin: 0 0 8px;
@@ -570,8 +570,8 @@
     margin-bottom: 10px;
   }
   .note.err {
-    background: rgba(255, 59, 48, 0.08);
-    color: #b3261e;
+    background: var(--danger-soft);
+    color: var(--danger);
   }
   .loading,
   .empty {

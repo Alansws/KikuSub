@@ -423,7 +423,7 @@
   }
 
   .bar b.warn {
-    color: #c77a00;
+    color: var(--warn);
   }
 
   .sep {
@@ -502,13 +502,13 @@
   }
 
   .note.err {
-    background: rgba(255, 59, 48, 0.08);
-    color: #b3261e;
+    background: var(--danger-soft);
+    color: var(--danger);
   }
 
   .note.warn {
-    background: rgba(255, 159, 10, 0.09);
-    color: #8a5a00;
+    background: var(--warn-soft);
+    color: var(--warn);
   }
 
   .paste {
@@ -730,7 +730,7 @@
   .pin.on {
     border-color: transparent;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
 
   .empty {

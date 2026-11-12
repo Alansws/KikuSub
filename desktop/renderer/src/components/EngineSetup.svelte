@@ -380,7 +380,7 @@
     margin-top: 2px;
     width: 14px;
     height: 14px;
-    accent-color: var(--accent);
+    accent-color: var(--control-on);
     flex: 0 0 auto;
   }
   .engine-main {
@@ -412,12 +412,12 @@
     background: var(--accent-soft);
   }
   .tag.ok {
-    color: #1a7f37;
-    background: rgba(52, 199, 89, 0.14);
+    color: var(--success);
+    background: var(--success-soft);
   }
   .tag.bad {
-    color: #c0392b;
-    background: rgba(255, 69, 58, 0.12);
+    color: var(--danger);
+    background: var(--danger-soft);
   }
   .engine-desc {
     margin-top: 3px;
@@ -475,8 +475,8 @@
     border-radius: 8px;
     font-size: 12px;
     line-height: 1.5;
-    color: #c0392b;
-    background: rgba(255, 69, 58, 0.1);
+    color: var(--danger);
+    background: var(--danger-soft);
   }
   .summary {
     margin-top: 14px;

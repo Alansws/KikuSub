@@ -153,7 +153,7 @@
     font-weight: 600;
   }
   .title :global(svg) {
-    color: #ff9f0a;
+    color: var(--warn);
   }
   .total {
     margin-left: auto;
@@ -216,7 +216,7 @@
   .item input {
     flex: 0 0 auto;
     margin: 0;
-    accent-color: var(--accent);
+    accent-color: var(--control-on);
   }
   .name {
     flex: 1;
@@ -246,12 +246,12 @@
     height: 28px;
   }
   .danger-solid {
-    background: #e5484d;
-    color: #fff;
+    background: var(--danger);
+    color: var(--on-accent);
     font-weight: 500;
   }
   .danger-solid:hover:not(:disabled) {
-    background: #d33d42;
+    background: color-mix(in srgb, var(--danger) 88%, #000);
   }
   .tiny {
     height: 20px;

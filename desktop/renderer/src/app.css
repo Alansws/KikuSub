@@ -18,6 +18,8 @@
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
   --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* 字幕正文的字体角色：只有主题会换它（「明朝墨」用明朝），UI 永远跟 --font-sans */
+  --font-cue: var(--font-sans);
 
   /* 字阶：UI 角色 ≤6 种，字幕正文单独一条（见设计规划 §5.2） */
   --fs-display: 22px;
@@ -70,9 +72,21 @@
   --accent-soft: rgba(79, 107, 255, 0.08);
   --accent-ring: rgba(79, 107, 255, 0.35);
   --accent-line: rgba(79, 107, 255, 0.35);
+  /* 主操作（实心按钮）的底色。两套主题都跟强调色一致；留成独立令牌，
+     是为了以后真要做「墨色主按钮」的主题时不必再改组件。
+     不要为了“现在没用到”把它删掉：它同时被 .btn.primary 与组件内的主按钮引用。 */
+  --btn-primary-bg: var(--accent);
+  --btn-primary-hover: var(--accent-hover);
+  /* 开关 / 勾选 / 滑杆的「开」色，同样默认跟强调色一致；主题要统一染色就改这一处 */
+  --control-on: var(--accent);
+  /* 实心强调色上的文字。浅强调色主题必须把它改成深墨，否则白字压不住底 */
+  --on-accent: #fff;
   --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.1);
   --warn: #9a6400;
+  --warn-soft: rgba(154, 100, 0, 0.1);
   --success: #2e7d5b;
+  --success-soft: rgba(46, 125, 91, 0.1);
 
   /* 内容区本身是 paper；--bg-content 留给卡片/输入/浮层（raise） */
   --bg-content: var(--raise);
@@ -94,6 +108,14 @@
 
   --shadow-pop: 0 10px 30px rgba(27, 39, 64, 0.14), 0 1px 3px rgba(27, 39, 64, 0.1);
   --shadow-video: 0 22px 50px rgba(30, 42, 69, 0.16);
+  /* 控件级的两个小阴影：主按钮、分段选中。换墨色的主题要一起换 */
+  --shadow-btn: 0 1px 2px rgba(27, 39, 64, 0.18);
+  --shadow-seg: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
+  --scroll-thumb: rgba(27, 39, 64, 0.18);
+  --scroll-thumb-hover: rgba(27, 39, 64, 0.3);
+  /* 查找命中：荧光笔黄，不属于强调色体系，各主题共用 */
+  --hit: rgba(255, 214, 10, 0.4);
+  --hit-row: rgba(255, 214, 10, 0.16);
   --caption-bg: rgba(13, 20, 36, 0.62);
   --wave: #a3adbe;
 
@@ -109,6 +131,7 @@
 }
 
 html[data-theme='dark'] {
+  color-scheme: dark;
   --canvas: #0a0c10;
   --paper: #111419;
   --raise: #181c23;
@@ -124,8 +147,11 @@ html[data-theme='dark'] {
   --accent-ring: rgba(125, 147, 255, 0.42);
   --accent-line: rgba(125, 147, 255, 0.42);
   --danger: #e6675a;
+  --danger-soft: rgba(230, 103, 90, 0.14);
   --warn: #d9a441;
+  --warn-soft: rgba(217, 164, 65, 0.14);
   --success: #6fbf8b;
+  --success-soft: rgba(111, 191, 139, 0.14);
 
   /* 内容区本身是 paper；--bg-content 留给卡片/输入/浮层（raise） */
   --bg-content: var(--raise);
@@ -148,6 +174,12 @@ html[data-theme='dark'] {
 
   --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.45);
   --shadow-video: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --scroll-thumb: rgba(236, 241, 250, 0.2);
+  --scroll-thumb-hover: rgba(236, 241, 250, 0.32);
+  --hit: rgba(255, 214, 10, 0.3);
+  --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
   --wave: #8f9db5;
 
@@ -157,6 +189,74 @@ html[data-theme='dark'] {
   --cue-block-hover: rgba(236, 241, 250, 0.2);
   --cue-block-active: rgba(125, 147, 255, 0.88);
   --cue-edge: rgba(160, 178, 255, 0.95);
+}
+
+/* ============================================================
+   C「明朝墨」：纸白 + 墨黑结构 + 一点朱红；只有字幕换明朝。
+
+   这是单色主题：没有 dark 变体（用户明确不要第二套暗色）。
+   主进程 nativeTheme 按 scheme='light' 处理，侧栏毛玻璃保持浅色。
+   切到它时 `--font-cue` 是唯一的排版变化，字号/行高/密度全不动，
+   所以核对台的虚拟列表行高、命中判定都不受影响。
+   ============================================================ */
+html[data-theme='mincho'] {
+  color-scheme: light;
+  --canvas: #f1f3f0;
+  --paper: #fafaf8;
+  --raise: #ffffff;
+  --ink: #15181b;
+  --ink-2: #5e6468;
+  --ink-3: #666c70;
+  --line: rgba(21, 24, 27, 0.12);
+  --line-2: rgba(21, 24, 27, 0.06);
+
+  --accent: #c8412d;
+  --accent-hover: #b03524;
+  --accent-soft: rgba(200, 65, 45, 0.07);
+  --accent-ring: rgba(200, 65, 45, 0.32);
+  --accent-line: rgba(200, 65, 45, 0.35);
+  --on-accent: #fff;
+  --danger: #9e2318;
+  --danger-soft: rgba(158, 35, 24, 0.09);
+  --warn: #8a5a00;
+  --warn-soft: rgba(138, 90, 0, 0.1);
+  --success: #2e6b45;
+  --success-soft: rgba(46, 107, 69, 0.09);
+
+  --bg-content: var(--raise);
+  --bg-inspector: var(--paper);
+  --bg-toolbar: rgba(250, 250, 248, 0.86);
+  --bg-status: rgba(250, 250, 248, 0.92);
+  --bg-sidebar: rgba(241, 243, 240, 0.72);
+
+  --text: var(--ink);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+  --separator: var(--line);
+  --separator-soft: var(--line-2);
+
+  --fill: rgba(21, 24, 27, 0.045);
+  --fill-strong: rgba(21, 24, 27, 0.08);
+  --row-hover: rgba(21, 24, 27, 0.03);
+
+  --shadow-pop: 0 10px 30px rgba(21, 24, 27, 0.14), 0 1px 3px rgba(21, 24, 27, 0.1);
+  --shadow-video: 0 22px 50px rgba(21, 24, 27, 0.18);
+  --shadow-btn: 0 1px 2px rgba(21, 24, 27, 0.18);
+  --shadow-seg: 0 1px 2px rgba(21, 24, 27, 0.1), 0 0 0 0.5px rgba(21, 24, 27, 0.04);
+  --scroll-thumb: rgba(21, 24, 27, 0.18);
+  --scroll-thumb-hover: rgba(21, 24, 27, 0.3);
+  --caption-bg: rgba(18, 20, 22, 0.66);
+  --wave: #9aa0a0;
+
+  --cue-lane: rgba(21, 24, 27, 0.05);
+  --cue-wash: rgba(21, 24, 27, 0.03);
+  --cue-block: rgba(21, 24, 27, 0.14);
+  --cue-block-hover: rgba(21, 24, 27, 0.24);
+  --cue-block-active: rgba(200, 65, 45, 0.82);
+  --cue-edge: rgba(200, 65, 45, 0.9);
+
+  /* 唯一的排版差异：字幕用明朝。UI 文案仍是苹方，别把整个界面变成书 */
+  --font-cue: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
 }
 
 * {
@@ -283,15 +383,15 @@ body {
   color: var(--text-3);
 }
 .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--btn-primary-bg);
+  border-color: var(--btn-primary-bg);
+  color: var(--on-accent);
   font-weight: 500;
-  box-shadow: 0 1px 2px rgba(27, 39, 64, 0.18);
+  box-shadow: var(--shadow-btn);
 }
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--btn-primary-hover);
+  border-color: var(--btn-primary-hover);
 }
 .btn.ghost {
   background: transparent;
@@ -340,7 +440,7 @@ body {
 .seg button.on {
   background: var(--raise);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
+  box-shadow: var(--shadow-seg);
   font-weight: 500;
 }
 html[data-theme='dark'] .seg button.on {
@@ -449,28 +549,18 @@ html[data-theme='dark'] .card {
   font-weight: 600;
 }
 .chip.warn {
-  background: rgba(154, 100, 0, 0.1);
+  background: var(--warn-soft);
   color: var(--warn);
 }
 .chip.warn b {
   color: var(--warn);
 }
 .chip.ok {
-  background: rgba(46, 125, 91, 0.1);
+  background: var(--success-soft);
   color: var(--success);
 }
 .chip.ok b {
   color: var(--success);
-}
-html[data-theme='dark'] .chip.warn,
-html[data-theme='dark'] .chip.warn b {
-  color: var(--warn);
-  background: rgba(217, 164, 65, 0.14);
-}
-html[data-theme='dark'] .chip.ok,
-html[data-theme='dark'] .chip.ok b {
-  color: var(--success);
-  background: rgba(111, 191, 139, 0.14);
 }
 
 .dot {
@@ -498,17 +588,13 @@ html[data-theme='dark'] .chip.ok b {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(27, 39, 64, 0.18);
+  background: var(--scroll-thumb);
   border-radius: 4px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(27, 39, 64, 0.3);
-  background-clip: content-box;
-}
-html[data-theme='dark'] ::-webkit-scrollbar-thumb {
-  background: rgba(236, 241, 250, 0.2);
+  background: var(--scroll-thumb-hover);
   background-clip: content-box;
 }
 
@@ -517,7 +603,7 @@ input[type='range'],
 input[type='checkbox'],
 input[type='radio'],
 progress {
-  accent-color: var(--accent);
+  accent-color: var(--control-on);
 }
 
 /* 键盘焦点必须看得见（鼠标点击不显示） */

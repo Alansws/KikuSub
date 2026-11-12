@@ -98,7 +98,7 @@ Everything except the optional AI features is local inference.
 - Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download.
 - Runtime lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
-- Follow the system theme or force light / dark; three waveform heights.
+- Two themes: Clear Sky (light / dark) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch in Settings. Waveform height is draggable from the review stage.
 
 ## The two engines
 

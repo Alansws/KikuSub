@@ -974,10 +974,7 @@
     color: var(--text-3);
   }
   .warn-text {
-    color: #b26a00;
-  }
-  html[data-theme='dark'] .warn-text {
-    color: #ffb340;
+    color: var(--warn);
   }
   .run-card,
   .done-card {
@@ -1058,8 +1055,8 @@
     font-variant-numeric: tabular-nums;
   }
   .done-card {
-    background: rgba(48, 209, 88, 0.07);
-    border-color: rgba(48, 209, 88, 0.28);
+    background: var(--success-soft);
+    border-color: color-mix(in srgb, var(--success) 28%, transparent);
   }
   .done-top {
     display: flex;
@@ -1071,8 +1068,8 @@
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #30d158;
-    color: #fff;
+    background: var(--success);
+    color: var(--on-accent);
     display: grid;
     place-items: center;
     flex: 0 0 18px;
@@ -1109,8 +1106,8 @@
     gap: 7px;
     padding: 10px 12px;
     border-radius: 4px;
-    background: rgba(255, 59, 48, 0.08);
-    color: #b3261e;
+    background: var(--danger-soft);
+    color: var(--danger);
     font-size: 12px;
     line-height: 1.5;
   }
@@ -1240,7 +1237,7 @@
   }
   .slider {
     width: 86px;
-    accent-color: var(--accent);
+    accent-color: var(--control-on);
   }
   .num {
     font-size: 12px;

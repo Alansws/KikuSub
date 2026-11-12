@@ -1328,11 +1328,13 @@ ipcMain.on('window:set-dirty', (_e, dirty) => {
 });
 
 ipcMain.on('window:set-theme', (_e, theme) => {
-  const next = theme === 'dark' ? 'dark' : 'light';
-  applyTheme(next);
-  // 让下次冷启动的窗口在首帧就是正确外观（渲染进程的 localStorage 主进程读不到）
+  // 外观 id 原样存（'light' / 'dark' / 'mincho'）：主进程只关心原生明暗，
+  // 但冷启动的窗口要在首帧就用对 vibrancy，所以把 id 也记下来。
+  const raw = theme === 'cool' ? 'mincho' : theme; // 'cool' 是旧版「明朝墨」的 id
+  const id = raw === 'dark' || raw === 'mincho' ? raw : 'light';
+  applyTheme(id === 'dark' ? 'dark' : 'light');
   try {
-    if (loadPreferences().theme !== next) savePreferences({ theme: next });
+    if (loadPreferences().theme !== id) savePreferences({ theme: id });
   } catch {
     /* 主题写盘失败不影响本次切换 */
   }

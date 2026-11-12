@@ -630,16 +630,10 @@
     display: inline-block;
   }
   .gdot.miss {
-    background: #e0534a;
+    background: var(--danger);
   }
   .gdot.low {
-    background: #c88a1a;
-  }
-  :global(html[data-theme='dark']) .gdot.miss {
-    background: #ff8a80;
-  }
-  :global(html[data-theme='dark']) .gdot.low {
-    background: #e6b450;
+    background: var(--warn);
   }
 
   .tabs {
@@ -688,7 +682,7 @@
     padding: 0 3px;
     border-radius: 999px;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     display: grid;
     place-items: center;
     font-size: 11px;
@@ -827,7 +821,7 @@
     background: var(--raise);
     display: grid;
     place-items: center;
-    color: #fff;
+    color: var(--on-accent);
     padding: 0;
     transition: background var(--dur-fast) var(--ease),
       border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
@@ -839,8 +833,8 @@
     transform: scale(0.92);
   }
   .check.on {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--control-on);
+    border-color: var(--control-on);
   }
 
   .body {
@@ -870,31 +864,21 @@
     white-space: nowrap;
   }
   .k-coverage {
-    background: rgba(224, 83, 74, 0.14);
-    color: #b5342c;
+    background: var(--danger-soft);
+    color: var(--danger);
   }
   .k-missed {
-    background: rgba(200, 138, 26, 0.16);
-    color: #96640e;
+    background: var(--warn-soft);
+    color: var(--warn);
   }
   .k-dropped {
-    background: rgba(224, 83, 74, 0.12);
-    color: #b5342c;
+    background: var(--danger-soft);
+    color: var(--danger);
   }
   .k-suspect {
     background: var(--accent-soft);
     color: var(--accent);
   }
-  :global(html[data-theme='dark']) .k-coverage {
-    color: #ff8a80;
-  }
-  :global(html[data-theme='dark']) .k-missed {
-    color: #e6b450;
-  }
-  :global(html[data-theme='dark']) .k-dropped {
-    color: #ff8a80;
-  }
-
   .time {
     font-family: var(--font-mono);
     color: var(--text-2);
@@ -957,13 +941,13 @@
     opacity: 0.45;
   }
   .act.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
+    background: var(--btn-primary-bg);
+    border-color: var(--btn-primary-bg);
+    color: var(--on-accent);
     font-weight: 500;
   }
   .act.primary:hover:not(:disabled) {
-    background: var(--accent-hover);
+    background: var(--btn-primary-hover);
     border-color: var(--accent-hover);
   }
   .act.primary-ghost {

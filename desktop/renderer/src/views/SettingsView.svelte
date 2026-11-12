@@ -15,7 +15,8 @@
     downloadTtsModel,
     loadSettings,
     loadTtsVoices,
-    setTheme,
+    setMode,
+    setSkin,
     setTtsDefaultKind,
     setTtsDefaultVoiceId,
     settings,
@@ -24,6 +25,7 @@
     tts,
     updateSettings,
   } from '../lib/store.svelte';
+  import { SCHEMES, SKINS, skinOf } from '../lib/themes';
   import { formatBytes } from '../lib/time';
 
   type Diag = Awaited<ReturnType<typeof api.diagnostics>>;
@@ -1271,12 +1273,46 @@
 
     <div class="pref">
       <div>
-        <b>外观</b>
-        <span>跟随你的阅读习惯；工具栏月亮按钮也可以快速切换。</span>
+        <b>主题</b>
+        <span>切换后立即生效，可随时改回。</span>
       </div>
-      <div class="seg">
-        <button class:on={app.theme === 'light'} onclick={() => setTheme('light')}>浅色</button>
-        <button class:on={app.theme === 'dark'} onclick={() => setTheme('dark')}>深色</button>
+      <div class="seg theme">
+        {#each SKINS as skin (skin.id)}
+          <button
+            class:on={skinOf(app.theme) === skin.id}
+            onclick={() => setSkin(skin.id)}
+            title={skin.note}
+          >
+            <i
+              class="swatch"
+              aria-hidden="true"
+              style="--sw-bg:{skin.swatch[0]};--sw-accent:{skin.swatch[1]}"
+            ></i>
+            {skin.name}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="pref">
+      <div>
+        <b>明暗</b>
+        <span>
+          {#if skinOf(app.theme) === 'mincho'}
+            「明朝墨」是单色主题，固定浅色。
+          {:else}
+            青空有浅色与深色两套；深色下侧栏毛玻璃也会跟着变深。
+          {/if}
+        </span>
+      </div>
+      <div class="seg" class:dim={skinOf(app.theme) === 'mincho'}>
+        {#each SCHEMES as scheme (scheme.id)}
+          <button
+            class:on={app.theme === scheme.id}
+            disabled={skinOf(app.theme) === 'mincho'}
+            onclick={() => setMode(scheme.id)}>{scheme.name}</button
+          >
+        {/each}
       </div>
     </div>
 
@@ -1395,7 +1431,7 @@
     flex: 0 0 7px;
   }
   .dot.ready {
-    background: #30d158;
+    background: var(--success);
   }
 
   .enable {
@@ -1446,23 +1482,14 @@
     font-variant-numeric: tabular-nums;
   }
   .status.ok {
-    color: #1c7c36;
+    color: var(--success);
   }
   .status.missing {
-    color: #b26a00;
-  }
-  html[data-theme='dark'] .status.ok {
-    color: #4cd964;
-  }
-  html[data-theme='dark'] .status.missing {
-    color: #ffb340;
+    color: var(--warn);
   }
 
   .notes.warn {
-    color: #b26a00;
-  }
-  html[data-theme='dark'] .notes.warn {
-    color: #ffb340;
+    color: var(--warn);
   }
 
   .notes {
@@ -1511,7 +1538,7 @@
     transition: width 300ms var(--ease);
   }
   .bar.error i {
-    background: #ff453a;
+    background: var(--danger);
   }
 
   .switch {
@@ -1538,7 +1565,7 @@
     transition: transform 160ms var(--ease);
   }
   .switch.on {
-    background: var(--accent);
+    background: var(--control-on);
   }
   .switch.on .knob {
     transform: translateX(12px);
@@ -1801,6 +1828,32 @@
     color: var(--text-3);
     line-height: 1.45;
   }
+  /* 主题选择：实心色点 + 名字，别让用户先点一遍才知道长什么样 */
+  .seg button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--sw-accent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
+    flex: 0 0 auto;
+  }
+  /* 选中态靠一条墨边，不只靠阴影：白胶囊压浅灰轨道只有 1.05:1 */
+  .seg.theme button.on {
+    box-shadow: inset 0 0 0 1px var(--line), var(--shadow-seg);
+  }
+  /* 单色主题下的明暗：整行退成描边 + 常规字色，说明为什么不能点 */
+  .seg.dim {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--separator-soft);
+  }
+  .seg.dim button {
+    color: var(--text-3);
+  }
 
   .warn-box,
   .error-box {
@@ -1808,15 +1861,15 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: #b26a00;
-    background: rgba(255, 159, 10, 0.12);
+    color: var(--warn);
+    background: var(--warn-soft);
     border-radius: 8px;
     padding: 8px 10px;
     margin-top: 10px;
   }
   .error-box {
-    color: #c0392b;
-    background: rgba(255, 69, 58, 0.1);
+    color: var(--danger);
+    background: var(--danger-soft);
   }
   .error-box .btn {
     margin-left: auto;

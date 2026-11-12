@@ -102,7 +102,7 @@ declare global {
       openPath(target: string): Promise<string>;
       setTitle(title: string): void;
       setDocumentEdited(dirty: boolean): void;
-      setTheme(theme: 'light' | 'dark'): void;
+      setTheme(theme: 'light' | 'dark' | 'mincho'): void;
       getSetupState(): Promise<SetupState>;
       completeSetup(modelsDir: string): Promise<{ ok: boolean; modelsDir: string }>;
       pickModelsDir(): Promise<string | null>;

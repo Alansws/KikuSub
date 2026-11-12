@@ -147,7 +147,7 @@
     transition: background var(--dur) var(--ease);
   }
   .switch.on {
-    background: var(--accent);
+    background: var(--control-on);
   }
   .switch .knob {
     display: block;

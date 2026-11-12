@@ -395,8 +395,8 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: #b26a00;
-    background: rgba(255, 159, 10, 0.12);
+    color: var(--warn);
+    background: var(--warn-soft);
     border-radius: 8px;
     padding: 7px 10px;
     margin-bottom: 12px;
@@ -495,42 +495,30 @@
     color: var(--text);
   }
   .chip.ok {
-    background: rgba(48, 209, 88, 0.12);
-    color: #1c7c36;
+    background: var(--success-soft);
+    color: var(--success);
   }
   .chip.ok b {
-    color: #1c7c36;
+    color: var(--success);
   }
   .chip.warn {
-    background: rgba(255, 69, 58, 0.12);
-    color: #c0392b;
+    background: var(--danger-soft);
+    color: var(--danger);
   }
   .chip.warn b {
-    color: #c0392b;
+    color: var(--danger);
   }
   .chip.soft {
-    background: rgba(255, 159, 10, 0.13);
-    color: #b26a00;
+    background: var(--warn-soft);
+    color: var(--warn);
   }
   .chip.soft b {
-    color: #b26a00;
+    color: var(--warn);
   }
   .chip.muted {
     background: transparent;
     color: var(--text-3);
     border: 1px solid var(--separator-soft);
-  }
-  html[data-theme='dark'] .chip.ok,
-  html[data-theme='dark'] .chip.ok b {
-    color: #4cd964;
-  }
-  html[data-theme='dark'] .chip.warn,
-  html[data-theme='dark'] .chip.warn b {
-    color: #ff7b70;
-  }
-  html[data-theme='dark'] .chip.soft,
-  html[data-theme='dark'] .chip.soft b {
-    color: #ffb340;
   }
 
   .sections {
@@ -657,7 +645,7 @@
     align-items: center;
     gap: 4px;
     flex: 0 0 auto;
-    color: #1c7c36;
+    color: var(--success);
   }
   .saved-line .path {
     flex: 1;
