@@ -1,3 +1,7 @@
+---
+created: 2026-11-12 21:26
+updated: 2026-11-13 01:50
+---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
 本文件面向在此仓库中继续开发的智能体与开发者。**注意：它是索引，不是全文。**
@@ -114,16 +118,31 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   完整四步与回滚口径见 [docs/release.md](docs/release.md)。
 - 提交按层拆开：`core,server` / `desktop` / `docs` 各自成 commit，不要把渲染层和内核混成一个包。
 - 改动前 `git status` 必须是干净的（或明确知道自己在改哪几个文件）；不要在混杂工作区上叠加新改动。
-- 验证顺序：`pytest -q`（含 `tests/test_e2e_flow.py` 的主链路 e2e）→ `python -m core.smoke`
-  → `cd desktop && npm run check`（tsc 类型检查）→ `npm run build` → `npm run test:main`
-  → 改了界面再跑 `bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline`（见
-  [tools/shots/README.md](tools/shots/README.md)；单屏取证也可以用 `KIKUSUB_DEV_SEED` + `--screenshot`）。
+- 验证按**改动范围**跑，不必每次全量（见下面「验证时机」表）。全量 `pytest -q` 约 40s，
+  但"改个文档也跑 423 例"会把注意力磨平；环境依赖的用例用 marker 排除
+  （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
 - **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 10 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
 - 规则沉淀：Review 里同一个位置反复出错，就把结论压缩成 1–2 句写进本页「红线」，或写进对应契约；
   能变成测试的（导错、漏 import、样式漂移）优先变成测试——`desktop/test/svelte-imports.test.cjs` 就是范例。
+
+### 验证时机（改什么 → 必跑什么）
+
+| 改动范围 | 每次改完 | 收尾 / 合入 `main` 前 |
+| --- | --- | --- |
+| 纯文档（`docs/`、`AGENTS.md`） | `pytest -q tests/test_docs_health.py` | 同左 |
+| `core/` 算法 | `pytest -q -m "not integration"` | `pytest -q`；改断句/VAD 必须用 `tools/eval/score_srt.py` 跑同一区间 |
+| `server/` 路由 | `pytest -q -m "not needs_ffmpeg"` | `pytest -q` |
+| `desktop/main/`（主进程） | `npm run test:main` | 同上 + 真的启动一次 `npx electron .` |
+| `desktop/renderer/`（`.svelte` / `.ts`） | `npm run check` + `npm run check:svelte` | `npm run build` + 按红线 10 手点（单击/抖动/缩放/保存） |
+| 样式、布局、主题 | 上面两条 | `bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline` |
+| 改了 Python（`core/` `server/`） | 上面 + `bash tools/pack/build_sidecar.sh` | `bash tools/pack/rebuild.sh --no-open` |
+| 发版 | — | `bash tools/release/preflight.sh --with-tests` |
+
+单屏取证也可以用 `KIKUSUB_DEV_SEED` + `--screenshot`，见 [tools/shots/README.md](tools/shots/README.md)。
+
 
 ## 6. 发版
 
