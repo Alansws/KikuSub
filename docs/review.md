@@ -75,10 +75,15 @@
 
 ---
 
-## 4. 合入 `main` 前的最后一步
+## 4. 别把两件事混了
 
-```bash
-bash tools/release/preflight.sh        # 版本/tag/分支/sidecar/图标/快速测试
-```
+- **合入 `main`**：过完上面第 1–3 节就够了。合入本身不要求版本号、tag、sidecar 是最新的
+  ——那不是发版。
+- **发版**：额外满足 `docs/release.md` 的四步，至少先跑
 
-发版相关的完整流程见 [release.md](release.md)；每次发版前额外跑 `--with-tests`。
+  ```bash
+  bash tools/release/preflight.sh --with-tests
+  ```
+
+  它会拦：版本号没 bump（tag 已存在）、还没合入 `main`、sidecar 过期、工作区不干净。
+  改动还没合入 `main` 时它必然报错，这是对的——发版本来就该在 `main` 上做。
