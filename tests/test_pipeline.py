@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from core import audit, pipeline
-from core.transcribe import SubtitleCue
+pytest.importorskip("torch")
+
+from core import audit, pipeline  # noqa: E402
+from core.transcribe import SubtitleCue  # noqa: E402
 
 
 class _FakeStats:

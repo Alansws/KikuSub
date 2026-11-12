@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.transcribe import SubtitleCue
+from core.subtitles import SubtitleCue
 from server.jobs import merge_replace_range
 
 

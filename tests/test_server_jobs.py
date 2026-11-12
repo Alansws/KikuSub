@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("fastapi")
+pytest.importorskip("torch")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
