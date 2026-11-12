@@ -3514,12 +3514,6 @@ export function setAiEdit(i: number, text: string) {
   checkpointAiDraft(`AI 建议：修改第 ${i} 条`, `ai.edit.${i}`);
 }
 
-/** 某一行最终会写进字幕的文本（人工编辑优先于提案）。 */
-export function aiFinalText(i: number, fallback: string): string {
-  const edited = ai.edits[i];
-  return edited !== undefined ? edited : (ai.proposal?.items.find((it) => it.i === i)?.after ?? fallback);
-}
-
 export async function applyAiProposal() {
   if (!ai.proposal || ai.applying) return;
   if (ai.proposal.kind === 'translate') return applyAiTranslation();
@@ -3937,6 +3931,3 @@ export async function downloadEngine(key: string) {
   }
 }
 
-/** 设置页把启用的引擎数量同步给工具栏（工具栏只列 enabled 的）。 */
-export const enabledEngines = (): EngineInfo[] =>
-  (app.config?.engines ?? []).filter((e) => e.enabled);

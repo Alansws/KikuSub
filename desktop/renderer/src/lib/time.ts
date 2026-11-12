@@ -19,11 +19,6 @@ export function tcShort(sec: number): string {
   return `${pad(m)}:${pad(Math.floor(rest))}.${pad(Math.round((rest % 1) * 1000), 3)}`;
 }
 
-/** SRT 风格：00:00:01,250 */
-export function tcSrt(sec: number): string {
-  return tc(sec, true).replace('.', ',');
-}
-
 export function formatBytes(n: number): string {
   if (!n) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];

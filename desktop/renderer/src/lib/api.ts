@@ -288,8 +288,6 @@ export interface TtsVoiceInfo {
 }
 
 /** 兼容旧命名（Inspector/store 都从 TtsVoiceInfo 走）。 */
-export type TtsVoice = TtsVoiceInfo;
-
 export interface TtsDownloadStatus {
   status: 'idle' | 'running' | 'done' | 'error' | string;
   percent: number;
@@ -596,10 +594,6 @@ if (typeof window !== 'undefined') {
     const reason = e.reason as { message?: string; stack?: string } | undefined;
     logEvent('error', 'unhandled-rejection', String(reason?.message ?? reason), reason?.stack);
   });
-}
-
-export function endpoint() {
-  return { base: BASE, token: TOKEN };
 }
 
 /**
