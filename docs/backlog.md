@@ -49,6 +49,8 @@
 
 | 日期 | 项 | 提交 |
 | --- | --- | --- |
+| 2026-11-13 | 新增两个可选装中文引擎：SenseVoice-Small（230 MB，token 时间戳）与 FireRedASR2-AED（1.2 GB，无时间戳按字分时）；走 sherpa-onnx / ONNX / CPU，默认停用、权重按需下载；注册表 + `family` 分派让未知引擎不再静默退回 Whisper | 见 `git log` |
+| 2026-11-13 | 导入页「最近打开」支持图标画廊（列表 / 图标切换、偏好持久化、封面悬停浮层）；顺带修掉冷启动时缩略图请求早于握手、401 后永久消失的 bug | 见 `git log` |
 | 2026-11-13 | 归档过期 AI 开发文档、契约补齐 D-1～D-6 与 A1–A8、清理工作区 | `1767bb4` |
 | 2026-11-13 | 发版四步规范 + `preflight.sh` + CI `release-tag` + 分支模型（`main` 主线） | `cd772d5` |
 | 2026-11-13 | 主链路 e2e、`npm run check`（tsc）、svelte-check 基线、CI `desktop` job、`review.md` + PR 模板 | `2ba5712` `5fd25b0` `7132b41` |

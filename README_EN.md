@@ -104,7 +104,9 @@ Everything except the optional AI features is local inference.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
 - Two themes: Clear Sky (light / dark) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch in Settings. Waveform height is draggable from the review stage.
 
-## The two engines
+## Switchable engines
+
+Two Japanese engines are enabled by default:
 
 | | Anime Whisper | Qwen3-ASR + CTC |
 | --- | --- | --- |
@@ -120,13 +122,30 @@ Two caveats:
 1. CTC resolution is set by acoustic frames. This encoder uses 80 ms frames with 2× upsampling, so the real granularity is **40 ms**; the three decimal places in the SRT are just formatting.
 2. Anime Whisper's intra-cue timing is approximate: boundaries come from VAD and multiple cues inside a segment are split proportionally. Use Qwen3 when you need per-character frames.
 
+There are also **two optional Chinese engines**. They are disabled by default and their weights are not bundled:
+download them (about 230 MB / 1.2 GB) from Settings → Engines or the first-run wizard, then enable them.
+
+| | SenseVoice-Small (Chinese) | FireRedASR2-AED (Chinese) |
+| --- | --- | --- |
+| Weights | [`csukuangfj/sherpa-onnx-sense-voice-…`](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | [`csukuangfj2/sherpa-onnx-fire-red-asr2-…`](https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26) |
+| Size | ~230 MB (int8) | ~1.2 GB (int8) |
+| Languages | zh / en / ja / ko / yue | zh / en + 20+ dialects |
+| Timing inside a cue | token timestamps from the model | **no timestamps**; proportional to character count |
+| Segmentation | sentence punctuation → pauses → length / duration | pauses → length / duration (raw output has no punctuation) |
+| Speed | ~0.1 s for 5–6 s audio | ~1.5 s for 5–6 s audio (more accurate) |
+| Good for | Chinese first drafts, mixed zh/ja material | Chinese fine-tuning, dialect material |
+
+Both run on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (ONNX Runtime / CPU) rather than FunASR's
+PyTorch stack, so an optional engine does not grow the main bundle or slow down startup. Timings are measured
+locally on an Apple Silicon CPU with 2 threads.
+
 ## Installation
 
 ### Requirements
 
 - macOS 12 or newer, Apple Silicon (arm64)
 - `ffmpeg` and `ffprobe` (`brew install ffmpeg`; the app adds Homebrew paths to PATH)
-- Disk: ~6.6 GB for both transcription models plus proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
+- Disk: ~6.6 GB for both Japanese transcription models plus ~1.4 GB for the two optional Chinese engines, proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
 - RAM: 16 GB recommended (Qwen3-ASR weights are ~3.8 GB); the cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
 
 ### Using the packaged .app

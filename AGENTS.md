@@ -1,6 +1,6 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-13 01:50
+updated: 2026-11-13 02:53
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
@@ -23,6 +23,7 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 
 - Anime Whisper：重视自然、连贯的日语对话转写；
 - Qwen3-ASR + CTC：转写后利用自带的 CTC 对齐头取得逐字发声时间，并针对日语分句；
+- SenseVoice-Small / FireRedASR2-AED：两个**可选装**的中文引擎（ONNX / CPU，权重按需下载、默认停用）；
 - Silero VAD 分段、可选动态响度归一化、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
 - 视频 + 波形核对台、质检待核队列、SRT/VTT/TXT 导出、参数预设与完整任务报告；
 - AI 提案（润色 / 翻译平行轨）与随包 Agent 技能。
@@ -65,7 +66,10 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
 | `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配 → 打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
-| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
+| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
+| `core/sherpa_asr.py` | 两个中文引擎的推理外壳（SenseVoice-Small / FireRedASR2-AED，sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
+| `core/text_cues_zh.py` | 中文分句的唯一实现（纯函数，无 torch）：token→字符时间轴、标点/停顿/字数切条。改中文断句口径先改这里的测试。 |
+| `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 把界面键映射成引擎 dataclass 字段。新增引擎参数只改这里，前端不用动。 |
 | `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
 | `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |
 | `core/prompts.py` | 可编辑提示词模板库：默认模板、`{{SRT}}` / `{{LANG}}` 渲染、`prompts.json` 原子读写。 |
@@ -115,6 +119,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
     `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
     变成"先读完 4000 行"。
+12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family`），推理对象与分派进 `core/pipeline.py`；
+    `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护一份引擎 key 白名单
+    （加中文引擎时踩过：`if payload.engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
 
 ## 5. 改动纪律（提交流程）
 

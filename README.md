@@ -43,7 +43,7 @@
 **导入与转写**
 
 - 拖入视频 / 音频 / 字幕即可导入；MKV、HEVC 这类 Chromium 放不出的格式，导入后在后台自动压一份 480p 监看代理
-- 两个可切换的日语引擎（见下表），顶部胶囊随时切换；点开列表能看到每个引擎的用途、就绪状态与体积，后续增加引擎也不会挤占工具栏
+- 四个可切换的引擎（2 个日语 + 2 个可选中文，见下表），顶部胶囊随时切换；点开列表能看到每个引擎的用途、就绪状态与体积，后续增加引擎也不会挤占工具栏
 - 整片转写，或只转一个时间区间（`00:05:00` 或 `300`），可选是否保留原片绝对时间轴
 - VAD 阈值、静音判定、最短语音、合并间隔、单段最长时长等参数全部可在界面调；内置 6 套预设，可另存 / 覆盖 / 删除
 - 可选 FFmpeg `dynaudnorm` 动态响度归一化，压低 BGM、抬高低音量人声
@@ -104,7 +104,9 @@
 - 日志与诊断：`kikusub.log` / `main.log`，14 天 / 64 MB 保留策略；可「清理旧日志」或「清空全部日志」，「复制最近日志 / 精简诊断」限制体积，不会卡死备忘录
 - 外观两套主题：青空（浅色 / 深色）、明朝墨（纸白 + 墨黑 + 一点朱红，字幕用明朝）；在设置页切换，波形高度直接拖动核对台底部调整
 
-## 两个引擎
+## 可切换的引擎
+
+默认启用两个日语引擎：
 
 | | Anime Whisper | Qwen3-ASR + CTC |
 | --- | --- | --- |
@@ -120,13 +122,30 @@
 1. CTC 对齐的时间分辨率由声学帧决定。本项目编码器帧为 80 ms、再经 2 倍上采样，因此逐字时间戳的实际粒度是 **40 ms**，不是毫秒级；字幕里的三位毫秒只是格式化结果。
 2. Anime Whisper 的句内时间是**近似值**：句边界来自 VAD，段内多条字幕按字符数比例切分。需要精确到字的起止帧时请用 Qwen3 引擎。
 
+另有**两个可选装的中文引擎**：默认停用、权重不随包分发，在设置页「引擎与模型」或首启向导里点一下即可下载
+（约 230 MB / 1.2 GB），下载完勾选启用就会出现在顶部切换栏与转写页。
+
+| | SenseVoice-Small 中文 | FireRedASR2-AED 中文 |
+| --- | --- | --- |
+| 权重来源 | [`csukuangfj/sherpa-onnx-sense-voice-…`](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | [`csukuangfj2/sherpa-onnx-fire-red-asr2-…`](https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26) |
+| 体积 | 约 230 MB（int8） | 约 1.2 GB（int8） |
+| 语种 | 中 / 英 / 日 / 韩 / 粤 | 中 / 英 + 20 多种方言 |
+| 句内时间轴 | 模型自带 token 时间戳 | **模型不输出时间戳**，句内按字数比例分配 |
+| 断句依据 | 句末标点 → 停顿 → 字数 / 时长 | 停顿 → 字数 / 时长（原始输出没有标点） |
+| 速度 | 5–6 秒音频约 0.1 秒 | 5–6 秒音频约 1.5 秒（精度更高） |
+| 适合 | 中文通稿、中文＋日语混合素材 | 中文精修、方言素材 |
+
+两个引擎都走 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（ONNX Runtime / CPU），不依赖 FunASR 的
+PyTorch 实现，也不需要额外装 kaldi——可选装件不该把主包撑大或拖慢启动。速度是本机 M 系列 CPU、2 线程实测。
+
 ## 安装
 
 ### 系统要求
 
 - macOS 12 或更高，Apple Silicon（arm64）
 - `ffmpeg` 与 `ffprobe`（`brew install ffmpeg`；应用会把 Homebrew 的路径补进 PATH）
-- 磁盘：两个转写模型合计约 6.6 GB，另留给代理缓存与字幕输出；建议预留 15 GB。
+- 磁盘：两个日语转写模型合计约 6.6 GB，两个中文可选引擎另需约 1.4 GB；再加代理缓存与字幕输出，
+  建议预留 15 GB。
   想用本地克隆音色再留约 3.3 GB（OmniVoice 权重，首次在核对台点「下载克隆模型」才下载）
 - 内存：建议 16 GB 以上（Qwen3-ASR 权重约 3.8 GB）；OmniVoice 克隆按需加载、空闲自动卸载，
   与转写不会同时常驻
@@ -144,8 +163,8 @@ xattr -dr com.apple.quarantine /Applications/KikuSub.app
 ```
 
 **首次启动**分两步：先选模型目录（默认 `~/Library/Application Support/KikuSub/models`），
-再在「配置本地模型」里勾选要下载的引擎——Anime Whisper（推荐）、Qwen3-ASR，以及可选的
-**OmniVoice 音色克隆**。点「一键配置所选」会按顺序下载，也可以「稍后再说」，到
+再在「配置本地模型」里勾选要下载的引擎——Anime Whisper（推荐）、Qwen3-ASR、可选的两个
+中文引擎（SenseVoice-Small / FireRedASR2-AED），以及可选的 **OmniVoice 音色克隆**。点「一键配置所选」会按顺序下载，也可以「稍后再说」，到
 「设置 → 引擎与模型」里再配置。模型不会随包分发；下载源默认走 `hf-mirror.com`，支持断点续传。
 
 默认音色仍是 macOS 系统语音（Kyoko 等）；在设置「TTS 对照」里可以切成克隆音色，OmniVoice 只在你主动选择克隆音色时才会加载。
@@ -207,8 +226,10 @@ cd desktop && npm run test:main   # 主进程：退出清理、密钥存储、�
    │
    ├─ Silero VAD → 语音段 → 按停顿 / 最长时长合并切分
    │
-   ├─ 引擎 A：Anime Whisper          ─→ 文本 → 标点 / 字数分句 → 按比例分配时间
-   └─ 引擎 B：Qwen3-ASR + CTC Head   ─→ 文本 → 强制对齐 → 逐字起止帧 → 动态规划断句
+   ├─ 引擎 A：Anime Whisper              ─→ 文本 → 标点 / 字数分句 → 按比例分配时间
+   ├─ 引擎 B：Qwen3-ASR + CTC Head       ─→ 文本 → 强制对齐 → 逐字起止帧 → 动态规划断句
+   ├─ 引擎 C：SenseVoice-Small（中文）   ─→ token 时间戳 → 标点 / 停顿 / 字数分句
+   └─ 引擎 D：FireRedASR2-AED（中文）    ─→ 文本 → 停顿 / 字数 / 时长分句
    │
    ├─ 字幕自动写入「导出文件夹」，同时进核对台
    │
