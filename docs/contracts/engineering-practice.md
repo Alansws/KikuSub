@@ -25,7 +25,7 @@
 | ② 方案 | 改任何一域前先读对应契约（`review-console` / `desktop-lifecycle` / `ai-proposal` / `export-and-prompt`）；方案要"人能看懂"：界面怎么变、思路与改动范围、特殊情况与取舍、怎么验收 | 读契约 → 写 4 句话方案 → 再动手 |
 | ③ 任务派发 | 主 Agent 定方向，执行方按契约做，不许自由发挥；提交按层拆（`core,server` / `desktop` / `docs`） | 见 [AGENTS.md](../../AGENTS.md) §5 |
 | ④ 测试与取证 | `pytest`（400+ 例，全量约 50s）、`python -m core.smoke`、`npm run test:main`（主进程用例）、`--screenshot` 静默取证、`KIKUSUB_DEV_SEED` 造状态 | 静默截图不抢焦点，可后台跑；像素比对用 PSNR |
-| ⑤ 发版 | `tools/pack/rebuild.sh` 一条命令；`build_app.sh` 会因 sidecar 过期直接退出；连续 2 次启动失败进安全模式（`desktop/main/launchguard.cjs`） | 见 [AGENTS.md](../../AGENTS.md) §6 |
+| ⑤ 发版 | 四步流程写进 [release.md](../release.md)，并落成程序化闸门：`tools/release/preflight.sh`（版本号 / tag 是否已发 / 是否已合入 main / sidecar 新鲜度 / 图标尺寸）、CI `release-tag` job（tag == version、tag 提交必须在 `main` 上）、可选本地钩子 `tools/git-hooks/pre-push`；`build_app.sh` 会因 sidecar 过期直接退出；连续 2 次启动失败进安全模式（`desktop/main/launchguard.cjs`） | 见 [release.md](../release.md) |
 
 ### 静默取证（最容易被忽略的一条）
 
@@ -74,5 +74,6 @@ codex exec --cd . "读 AGENTS.md 与 docs/contracts/，按四个目标审 /tmp/d
   基线冻结但没合并成共享组件；7/9/11/13/14/18/22 这些非刻度值仍在用，需要视觉验收后再决定归并。
 - **大文件拆分**：`store.svelte.ts`（≈3.9k 行）、`ReviewView.svelte`（≈3.9k 行）、`main.cjs`（≈1.5k 行）
   尚未按"纯计算出 Svelte、按面板拆组件"的路径拆开。
-- **发版四步**（合入审查 → 本地实测 → 云端打包 → 官网日志）目前靠人执行，没有写成程序化闸门；
-  CI 已覆盖测试，但"官网版本号没更新不许发"这类检查还没有。
+- **发版四步**已写成规范并落了闸门（2026-11-13，见 [release.md](../release.md)）：
+  本地 `preflight.sh` + CI `release-tag` + 可选 pre-push 钩子。仍靠人的只剩"本地手点实测"
+  与"Release notes 写得好不好"——这两件本来就只有人能做。

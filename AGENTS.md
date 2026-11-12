@@ -109,6 +109,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 ## 5. 改动纪律（提交流程）
 
+- **分支模型**：`main` 是主线（只接收已测试的改动、只在这打发版 tag）；日常开发在 `app/macos`，
+  测试绿了才合入 `main`。**不要直接在 `main` 上改代码**——那会让下次合并变成冲突。
+  完整四步与回滚口径见 [docs/release.md](docs/release.md)。
 - 提交按层拆开：`core,server` / `desktop` / `docs` 各自成 commit，不要把渲染层和内核混成一个包。
 - 改动前 `git status` 必须是干净的（或明确知道自己在改哪几个文件）；不要在混杂工作区上叠加新改动。
 - 验证顺序：`pytest -q` → `python -m core.smoke` → `cd desktop && npm run build` → `npm run test:main`
@@ -119,6 +122,14 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 ## 6. 发版
 
-装配与校验见 `tools/pack/`：`build_sidecar.sh` → `build_app.sh` → `build_dmg.sh`，
-一条命令走完用 `rebuild.sh`。发版前确认：`desktop/package.json` 的 version 与 Git 标签一致、
-`docs/app-icon.png` 未漂移、`build/pack/KikuSub.app` 用内置 sidecar 能起。
+**唯一依据是 [docs/release.md](docs/release.md)**（四步：合入审查 → 本地实测 → 打包分发 → 发布日志）。
+顺序固定：`app/macos` 测试绿 → bump `desktop/package.json` 的 version → 合入 `main` → 在 `main` 上打 tag。
+
+```bash
+bash tools/release/preflight.sh --with-tests   # 程序化闸门：版本/tag/分支/sidecar/图标/测试
+bash tools/pack/rebuild.sh --no-open           # 重打 sidecar + 构建渲染层 + 装配
+bash tools/pack/build_dmg.sh                   # 出 DMG
+```
+
+CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一致、tag 的提交不在 `main` 上。
+本地可选装钩子：`git config core.hooksPath tools/git-hooks`（推发版 tag 前自动跑 preflight）。

@@ -100,6 +100,25 @@ cd desktop && npm run test:main
 - `npm run test:main` 覆盖退出清理、密钥加解密、技能安装与模板导入检查
 - 通了界面才能确认的改动（拖动、缩放、跟随、双语行高）请附截图或录屏，`desktop/README.md` 里有自截图脚本
 
+## 分支与发版
+
+`main` 是**主线**：只接收已经在开发分支上跑过测试的改动，也只有它能打发版 tag。
+日常开发在 `app/macos` 上进行，本地 `pytest -q` 与 CI 都绿了再合入 `main`。
+
+```bash
+# 开发
+git checkout app/macos && git pull
+# …改代码、跑测试…
+git push origin app/macos
+
+# 合入主线（CI 绿之后）
+git checkout main && git merge --no-ff app/macos && git push origin main
+```
+
+发版（四步流程、版本号规则、回滚口径）见 [docs/release.md](docs/release.md)。
+发版前跑 `bash tools/release/preflight.sh --with-tests`——版本号没改、tag 已存在、
+sidecar 过期、工作区不干净都会直接拦住你。
+
 ## 提交与 PR
 
 Commit 前缀用 Conventional Commits 风格：

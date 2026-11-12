@@ -87,3 +87,40 @@ jobs:
       - name: Pytest
         # 需要 OmniVoice 权重的用例自带 importorskip，缺席时 skip。
         run: pytest -q
+
+  release-tag:
+    # 发版闸门（2026-11-13 起）。两个断言都是"程序化硬约束"，写在 docs/release.md §7：
+    #   ① tag 名必须等于 desktop/package.json 的 version —— 否则 About 面板、DMG 文件名
+    #      与 Git 标签三处互相打架；
+    #   ② tag 的提交必须在 main 上 —— main 是主线，开发在 app/macos，发版只能从 main 打 tag。
+    # 只有推 v* tag 时才跑，不影响日常分支的 CI 时长。
+    name: Release tag consistency
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要完整历史 + main 的提交，才能做祖先判断
+          fetch-depth: 0
+
+      - name: tag 必须等于 package.json 的 version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(python3 -c "import json;print(json.load(open('desktop/package.json', encoding='utf-8'))['version'])")"
+          echo "tag=$tag  package.json=$ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::tag v$tag 与 desktop/package.json 的 version $ver 不一致。先改版本号再打 tag。"
+            exit 1
+          fi
+          echo "✅ 版本号一致"
+
+      - name: tag 必须打在主线上
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "✅ tag 提交在 main 上"
+          else
+            echo "::error::该 tag 的提交不在 main 上。main 是主线：先把 app/macos 合入 main，再从 main 打 tag。"
+            exit 1
+          fi

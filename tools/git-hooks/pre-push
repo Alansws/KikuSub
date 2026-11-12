@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# pre-push：只拦「发版 tag」的推送，普通分支推送一律放行。
+#
+# 启用（每个 clone 一次）：
+#   git config core.hooksPath tools/git-hooks
+#
+# 为什么只拦 tag：日常推 app/macos 要快；而 tag 一旦推上去就等于对外发版，
+# 值得多花 2 秒跑一遍 tools/release/preflight.sh。
+# 这层是"早点发现"，硬约束在 CI 的 release-tag job（tag 必须等于 package.json 版本、
+# 且提交必须在 main 上）。绕过它需要 --no-verify，但绕过不了 CI。
+#
+# 规范见 docs/release.md。
+
+set -uo pipefail
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_ref" in
+    refs/tags/v*)
+      echo "→ 要推送发版 tag：${local_ref#refs/tags/}"
+      if ! bash tools/release/preflight.sh; then
+        echo "" >&2
+        echo "❌ 发版前置检查未通过，拒绝推送 tag。" >&2
+        echo "   修好后再推；确实要绕过用 git push --no-verify（CI 仍会拦）。" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
