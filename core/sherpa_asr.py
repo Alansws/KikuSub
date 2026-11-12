@@ -61,6 +61,20 @@ MIRROR_ENDPOINT = "https://hf-mirror.com"
 _LOAD_LOCK = threading.Lock()
 
 
+def _import_sherpa():
+    """延迟导入 sherpa-onnx（原生库）。单独成函数是为了测试能替换掉它。"""
+    import sherpa_onnx
+
+    return sherpa_onnx
+
+
+def _load_vad():
+    """Silero VAD 与日语引擎共用同一份实现（torch 已随包）。"""
+    from silero_vad import load_silero_vad
+
+    return load_silero_vad()
+
+
 @dataclass(slots=True)
 class SherpaAsrConfig:
     """两个中文引擎共用的参数（字段名与 `core/params.py` 的 config_field 对齐）。"""
@@ -151,8 +165,13 @@ class _SherpaEngine:
                 f"{self.label} 权重不完整，缺少：{', '.join(missing)}（目录 {self.model_dir}）"
             )
 
-    def load(self, progress_cb=None) -> None:
-        cfg = self.config
+    def load(self, progress_cb=None, config: SherpaAsrConfig | None = None) -> None:
+        """加载（或按需换配置重建）识别器。
+
+        `config` 必须是**本次调用**的配置：用户在参数面板里改线程数 / ITN 之后，
+        下一次转写要按新值重建 recognizer，不能沿用构造时的默认值。
+        """
+        cfg = config or self.config
         key = (int(cfg.num_threads), str(cfg.language), bool(cfg.use_itn))
         if self._recognizer is not None and self._recognizer_key == key:
             return
@@ -162,12 +181,10 @@ class _SherpaEngine:
             self.ensure_model(progress_cb)
             if progress_cb:
                 progress_cb(0.02, f"正在加载 {self.label}（ONNX / CPU）…")
-            import sherpa_onnx
+            sherpa_onnx = _import_sherpa()
 
             recognizer = self._create_recognizer(sherpa_onnx, cfg)
-            from silero_vad import load_silero_vad
-
-            vad = load_silero_vad()
+            vad = _load_vad()
 
             # 全部成功后再一次性发布，避免半初始化状态被其他线程看到。
             self._recognizer = recognizer
@@ -233,7 +250,7 @@ class _SherpaEngine:
         time_offset: float = 0.0,
     ) -> list[SubtitleCue]:
         cfg = config or self.config
-        self.load(progress_cb=progress_cb)
+        self.load(progress_cb=progress_cb, config=cfg)
         self.last_interrupted = False
         self.last_missed_spans = []
         self.last_coverage_spans = []

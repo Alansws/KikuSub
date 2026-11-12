@@ -145,3 +145,26 @@ def test_report_uses_sherpa_wording():
     sections = {section["id"]: section for section in data["sections"]}
     assert sections["hallucination"].get("disabled") is True
     assert sections["alignment"]["headline"].startswith("共 3 段")
+
+
+def test_load_rebuilds_recognizer_with_the_per_call_config(monkeypatch, tmp_path):
+    """参数面板改了线程数 / ITN 之后，下一次转写必须按新配置重建识别器。"""
+    from core import sherpa_asr
+
+    calls: list[tuple[int, bool]] = []
+
+    class _Dummy(SenseVoiceEngine):
+        def _create_recognizer(self, sherpa_onnx, cfg):
+            calls.append((cfg.num_threads, cfg.use_itn))
+            return object()
+
+    engine = _Dummy(model_dir=tmp_path / "sv")
+    monkeypatch.setattr(engine, "ensure_model", lambda progress_cb=None: None)
+    monkeypatch.setattr(sherpa_asr, "_import_sherpa", lambda: object())
+    monkeypatch.setattr(sherpa_asr, "_load_vad", lambda: object())
+
+    engine.load(config=SherpaAsrConfig(num_threads=2, use_itn=True))
+    engine.load(config=SherpaAsrConfig(num_threads=2, use_itn=True))
+    engine.load(config=SherpaAsrConfig(num_threads=4, use_itn=False))
+
+    assert calls == [(2, True), (4, False)]
