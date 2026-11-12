@@ -42,6 +42,8 @@
   const hasEnabledEngine = $derived(
     (app.config?.engines ?? []).some((e) => e.enabled && e.key === engine),
   );
+  const enabledEngines = $derived((app.config?.engines ?? []).filter((e) => e.enabled));
+  const currentEngine = $derived(enabledEngines.find((e) => e.key === engine) ?? null);
 
   // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
   // 不能每次渲染都覆盖用户手输的内容。
@@ -122,11 +124,25 @@
     <section class="left">
       <div class="form">
         <label for="engine">识别引擎</label>
-        {#if (app.config?.engines ?? []).some((e) => e.enabled)}
-          <div class="seg" style="justify-self:start">
-            {#each (app.config?.engines ?? []).filter((e) => e.enabled) as e (e.key)}
-              <button class:on={engine === e.key} onclick={() => (engine = e.key)}>{e.label}</button>
-            {/each}
+        {#if enabledEngines.length}
+          <!-- 引擎可能到 3–4 个：平铺分段会溢出（4 个中日引擎就放不下），
+               表单里改用下拉。顶栏那个胶囊是全局快捷入口，两者绑同一个值。 -->
+          <div class="engine-pick">
+            <div class="field engine-field">
+              <select id="engine" bind:value={engine}>
+                {#each enabledEngines as e (e.key)}
+                  <option value={e.key}>
+                    {e.label}{e.installed ? '' : `（未下载 · ${e.approx_label}）`}
+                  </option>
+                {/each}
+              </select>
+              <span class="chev"><Icon name="chevron-down" size={11} /></span>
+            </div>
+            {#if currentEngine && !currentEngine.installed}
+              <span class="engine-hint warn">
+                尚未下载 · {currentEngine.approx_label} · 开始转写会先下载
+              </span>
+            {/if}
           </div>
         {:else}
           <div class="no-engine">
@@ -322,6 +338,49 @@
     min-height: 0;
     border-left: 1px solid var(--separator-soft);
     padding-left: 22px;
+  }
+
+  .engine-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .engine-field {
+    width: 190px;
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .engine-field select {
+    appearance: none;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--fs-ui);
+    width: 100%;
+    padding-right: 16px;
+    cursor: default;
+  }
+  .engine-field .chev {
+    position: absolute;
+    right: 8px;
+    color: var(--text-3);
+    pointer-events: none;
+    display: grid;
+    place-items: center;
+  }
+  .engine-hint {
+    font-size: 12px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .engine-hint.warn {
+    color: var(--warn);
   }
 
   .form {

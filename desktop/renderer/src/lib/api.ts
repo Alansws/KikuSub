@@ -38,6 +38,8 @@ export interface EngineInfo {
   min_ram_gb: number;
   notes: string;
   downloadable: boolean;
+  /** 推理运行时族：whisper / qwen / sherpa（服务端注册表给出）。 */
+  family?: string;
   installed: boolean;
   size_bytes: number;
   enabled: boolean;

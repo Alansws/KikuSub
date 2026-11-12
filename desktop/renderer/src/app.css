@@ -447,6 +447,25 @@ html[data-theme='dark'] .seg button.on {
   background: rgba(236, 241, 250, 0.14);
 }
 
+/* 紧凑版：分区标题右侧的小切换（导入页「最近打开」的列表 / 图标）。 */
+.seg.compact {
+  height: 22px;
+  padding: 1px;
+  gap: 1px;
+}
+.seg.compact button {
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.seg button:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
 .field {
   height: var(--ctl-h-lg);
   border-radius: var(--rad-control);
