@@ -45,7 +45,7 @@
 - [ ] 如果新写了一个"通用"函数/组件，先回答：仓库里现成的是哪个？为什么它不够用？
       （答案写进提交信息，不然下一个人会再写第三份。）
 - [ ] 样式：没有新增裸 px（间距走 `var(--sp-N)`）、没有新增裸色值（走令牌）。
-      `bash tools/check/svelte-check.sh` 与 `npm run test:main` 里的 style-drift 用例会盯这两条。
+      `npm run test:main` 里的 style-drift 用例盯裸 px；`npm run check:svelte` 盯 `.svelte` 的类型。
 
 ---
 

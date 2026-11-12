@@ -1,7 +1,7 @@
 {
   "_comment": "svelte-check 类型错误基线（2026-11-13 冻结）。数字只许往下走：每修掉一个就把 errors 调小；调大需要先改这份文件——那正是提醒你「又在界面里加了类型错误」的信号。由 tools/check/svelte-check.sh 读取，npm run check:svelte 触发。改基线时在提交信息里写清理由。",
-  "errors": 33,
-  "warnings": 5,
+  "errors": 10,
+  "warnings": 30,
   "svelteCheck": "4.7.8",
-  "note": "存量错误集中在 .svelte：preload 桥缺 `onQuitting`、菜单命令名（find/shortcuts）不在联合类型里等。第 4 批清零后把 npm run check:svelte 并入 CI。"
+  "note": "2026-11-13 首次接入时缺 svelte.config.js，svelte-check 加载不到 Svelte 配置，对每个 .svelte 各报一次「No Svelte configuration found」，33 个错误里 23 个是这条配置噪声。补上 desktop/svelte.config.js（空配置=默认行为，vite 构建产物字节不变）后，真实错误 10 个：`popIn` 未定义（QaPanel 的 in: 指令指向不存在的函数，编译后是全局查找——基线截图证明不崩，但进场动画是死的）、`TrackMode` 未从 store 导出、preload 桥缺 `onQuitting`、菜单命令名 find/shortcuts 不在联合类型里、`../assets/app-icon.png` 无类型声明等。第 4 批清零后把 npm run check:svelte 并入 CI。"
 }

@@ -118,7 +118,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   → `cd desktop && npm run check`（tsc 类型检查）→ `npm run build` → `npm run test:main`
   → 改了界面再跑 `bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline`（见
   [tools/shots/README.md](tools/shots/README.md)；单屏取证也可以用 `KIKUSUB_DEV_SEED` + `--screenshot`）。
-- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 33 个类型错误已冻结成基线
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 10 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
