@@ -253,37 +253,18 @@ def proposal_from_srt(
     与翻译通道同样只按**顺序**取文本，序号和时间戳一律丢弃；条数不一致整批拒绝。
     时间轴仍由 ``cues`` 提供（D-1 不破）。
     """
-    from .subtitles import srt_to_cues
+    from .proposal_srt import align_model_srt
 
-    parsed = srt_to_cues(srt_text or "")
-    if not parsed:
-        raise client.AiError("没有从粘贴内容里解析到字幕：确认贴的是完整 SRT（含序号与时间戳）")
-    if len(parsed) != len(cues):
-        raise client.AiError(
-            f"条数对不上：解析到 {len(parsed)} 条，当前字幕 {len(cues)} 条。"
-            "常见原因是模型合并/拆分了句子或漏改——请让它按原序号逐条输出"
-        )
-
-    warnings: list[str] = []
-    drift = 0
-    items = []
-    for idx, cue in enumerate(cues, start=1):
-        got = parsed[idx - 1]
-        if abs(got.start - cue.start) > 1.0:
-            drift += 1
-        after = got.text.strip()
-        items.append(
-            {
-                "i": idx,
-                "before": cue.text,
-                "after": after,
-                "note": "手动粘贴" if after != cue.text else "",
-            }
-        )
-    if drift:
-        warnings.append(
-            f"{drift} 条的时间戳与原文对不上（已按顺序采用文本，时间轴仍用原文）"
-        )
+    pairs, warnings = align_model_srt(srt_text, cues, reject_hint="漏改")
+    items = [
+        {
+            "i": idx,
+            "before": before,
+            "after": after,
+            "note": "手动粘贴" if after != before else "",
+        }
+        for idx, (before, after) in enumerate(pairs, start=1)
+    ]
 
     proposal = proposals.build_proposal(
         kind="polish",

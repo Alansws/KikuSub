@@ -29,7 +29,7 @@ from core import settings as settings_store
 from core.subtitles import cues_to_srt
 from core.textio import write_text_atomic
 
-from .deps import get_session
+from .deps import get_session, settings_path
 from .jobs import JobConflict
 from .routes_cues import _media_stem, _snapshot
 from .security import require_token
@@ -105,12 +105,9 @@ def _output_dir(request: Request) -> Path:
     return Path(request.app.state.config.output_dir)
 
 
-def _settings_path(request: Request) -> Path:
-    return Path(getattr(request.app.state, "settings_path", settings_store.SETTINGS_PATH))
-
 
 def _ai_settings(request: Request) -> dict:
-    return settings_store.load_settings(_settings_path(request))
+    return settings_store.load_settings(settings_path(request))
 
 
 def _config_payload(settings: dict) -> dict:
@@ -178,7 +175,7 @@ def patch_config(payload: AiConfigPatch, request: Request) -> dict:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 
     try:
-        settings = settings_store.save_settings(patch, _settings_path(request))
+        settings = settings_store.save_settings(patch, settings_path(request))
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"设置写入失败：{exc}") from exc
     return _config_payload(settings)
@@ -312,12 +309,12 @@ def get_manual_prompt(
             "template_id": "builtin-polish",
             "template_name": "内置润色提示词",
         }
-    settings_path = _settings_path(request)
+    store_path = settings_path(request)
     prompt, template = prompt_store.render_prompt(
         srt,
         ai_translate.lang_name(lang),
         template_id=template_id or None,
-        settings_path=settings_path,
+        settings_path=store_path,
     )
     if template is None:
         raise HTTPException(status_code=500, detail="提示词库为空")

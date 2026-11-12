@@ -25,7 +25,7 @@ from core.logging_setup import clear_logs, prune_logs
 from core.paths import MODELS_DIR, OUTPUT_DIR, PRESETS_PATH
 
 from . import API_VERSION
-from .deps import get_session
+from .deps import get_session, settings_path
 from .jobs import JobConflict, JobManager
 from .security import require_token
 from .sessions import Session
@@ -61,9 +61,6 @@ class ClientLog(BaseModel):
     message: str = ""
     detail: str | int | float | bool | None = None
 
-
-def _settings_path(request: Request) -> Path:
-    return Path(getattr(request.app.state, "settings_path", settings_store.SETTINGS_PATH))
 
 
 def _log_path(request: Request) -> Path:
@@ -113,7 +110,7 @@ def _runtime(request: Request) -> dict:
 
 
 def _export_dir(request: Request, settings: dict | None = None) -> Path:
-    current = settings if settings is not None else settings_store.load_settings(_settings_path(request))
+    current = settings if settings is not None else settings_store.load_settings(settings_path(request))
     return settings_store.resolve_export_dir(
         current,
         Path(getattr(request.app.state.config, "output_dir", OUTPUT_DIR)),
@@ -121,7 +118,7 @@ def _export_dir(request: Request, settings: dict | None = None) -> Path:
 
 
 def _video_export_dir(request: Request, settings: dict | None = None) -> Path:
-    current = settings if settings is not None else settings_store.load_settings(_settings_path(request))
+    current = settings if settings is not None else settings_store.load_settings(settings_path(request))
     return settings_store.resolve_video_export_dir(
         current,
         Path(getattr(request.app.state.config, "output_dir", OUTPUT_DIR)),
@@ -136,7 +133,7 @@ def _paths(request: Request, settings: dict | None = None) -> dict:
         "video_export_dir": str(_video_export_dir(request, settings)),
         "models_dir": str(MODELS_DIR),
         "presets_path": str(PRESETS_PATH),
-        "settings_path": str(_settings_path(request)),
+        "settings_path": str(settings_path(request)),
         "proxy_dir": str(output_dir / "web_proxies"),
         "tts_cache_dir": str(output_dir / "tts_cache"),
         "voices_dir": str(output_dir / "voices"),
@@ -180,7 +177,7 @@ def _payload(request: Request, settings: dict) -> dict:
 
 @router.get("/api/settings")
 def get_settings(request: Request) -> dict:
-    settings = settings_store.load_settings(_settings_path(request))
+    settings = settings_store.load_settings(settings_path(request))
     return _payload(request, settings)
 
 
@@ -202,7 +199,7 @@ def patch_settings(payload: SettingsPatch, request: Request) -> dict:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 
     try:
-        settings = settings_store.save_settings(patch, _settings_path(request))
+        settings = settings_store.save_settings(patch, settings_path(request))
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"设置写入失败：{exc}") from exc
     log.info("设置接口更新 | %s", json.dumps(patch, ensure_ascii=False))
@@ -211,7 +208,7 @@ def patch_settings(payload: SettingsPatch, request: Request) -> dict:
 
 @router.get("/api/engines")
 def list_engines(request: Request) -> dict:
-    settings = settings_store.load_settings(_settings_path(request))
+    settings = settings_store.load_settings(settings_path(request))
     return {
         "engines": engines.describe(
             enabled_keys=settings.get("enabled_engines") or [],
@@ -281,7 +278,7 @@ def client_log(payload: ClientLog, request: Request) -> dict:
 
 @router.get("/api/diagnostics")
 def diagnostics(request: Request, lines: int = 200) -> dict:
-    settings = settings_store.load_settings(_settings_path(request))
+    settings = settings_store.load_settings(settings_path(request))
     log_path = _log_path(request)
     tail = _tail(log_path, max(1, min(lines, MAX_LOG_LINES)))
     errors = [

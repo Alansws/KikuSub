@@ -18,7 +18,7 @@ from core import settings as settings_store
 from core import video_export
 from core.procutil import run_command
 
-from .deps import get_session
+from .deps import get_session, settings_path
 from .jobs import JobConflict, JobManager
 from .media import MediaError
 from .security import require_token
@@ -74,9 +74,6 @@ class StylePreviewRequest(BaseModel):
     style: SubtitleStylePayload = Field(default_factory=SubtitleStylePayload)
 
 
-def _settings_path(request: Request) -> Path:
-    return Path(getattr(request.app.state, "settings_path", settings_store.SETTINGS_PATH))
-
 
 def _out_dir(request: Request, raw: str = "") -> Path:
     text = (raw or "").strip()
@@ -85,7 +82,7 @@ def _out_dir(request: Request, raw: str = "") -> Path:
         if not target.is_absolute():
             raise HTTPException(status_code=422, detail="导出位置必须使用绝对路径")
         return target.resolve()
-    current = settings_store.load_settings(_settings_path(request))
+    current = settings_store.load_settings(settings_path(request))
     return settings_store.resolve_video_export_dir(
         current, Path(request.app.state.config.output_dir)
     )

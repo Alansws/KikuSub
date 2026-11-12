@@ -26,6 +26,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const aikey = require('./aikey.cjs');
+const launchguard = require('./launchguard.cjs');
 const skill = require('./skill.cjs');
 const {
   deleteCleanupCandidates,
@@ -78,6 +79,8 @@ let quitting = false;
 let restartPending = false;
 /** 首次启动向导完成后才拉起 sidecar（模型目录要作为环境变量传进去）。 */
 let firstRunPending = false;
+/** 本次是否已走到建窗（安全模式直接退出时为 false，不能把失败计数清零）。 */
+let startedNormally = false;
 /** 双击文件启动时，open-file 可能早于窗口/内核就绪；先存着，页面加载后再送。 */
 let pendingFile = null;
 /** 退出清理：用户确认前不能真正退出。 */
@@ -223,6 +226,87 @@ function savePreferences(patch) {
   fs.writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, target);
   return merged;
+}
+
+// ---- 启动失败计数与安全模式 ----------------------------------------------
+//
+// 桌面端没有 autoUpdater：发出去的版本如果一开就崩，用户既收不到"修复版已发布"，
+// 也没法判断该重装——只能删 App。这里兜一层：连续打不开就跳过界面与内核，
+// 只给原生对话框（下载页 / 日志目录 / 仍然尝试一次）。判定逻辑是纯函数，
+// 见 desktop/main/launchguard.cjs 与 desktop/test/launchguard.test.cjs。
+
+/** 本次启动先记一笔，返回**之前**连续失败了几次。任何异常都不该挡启动。 */
+function noteLaunchAttempt() {
+  try {
+    const prefs = loadPreferences();
+    const failures = launchguard.readFailureCount(prefs);
+    savePreferences(launchguard.attemptPatch(prefs));
+    if (failures) mainLog(`[launch] previous consecutive failures=${failures}`);
+    return failures;
+  } catch (err) {
+    mainLog(`[launch] 计数失败（忽略）：${err && err.message ? err.message : err}`);
+    return 0;
+  }
+}
+
+function clearLaunchFailures() {
+  try {
+    if (!launchguard.readFailureCount(loadPreferences())) return;
+    savePreferences(launchguard.stablePatch());
+    mainLog('[launch] 启动稳定，失败计数已清零');
+  } catch (err) {
+    mainLog(`[launch] 清零失败（忽略）：${err && err.message ? err.message : err}`);
+  }
+}
+
+/** 安全模式：不建窗口、不启 sidecar。返回 true 表示用户选择"仍然正常启动一次"。 */
+function resolveSafeMode(failures) {
+  mainLog(`[safe-mode] 连续 ${failures} 次启动失败，进入安全模式`);
+  // 自检开关：无头验证时不让原生对话框把进程挂住（等价于用户点了「退出」）
+  if (process.env.KIKUSUB_SAFE_MODE_AUTO === 'quit') {
+    mainLog('[safe-mode] auto:quit');
+    return false;
+  }
+  let choice = 3;
+  try {
+    choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      title: 'KikuSub 启动异常',
+      message: `KikuSub 最近连续 ${failures} 次没能正常打开。`,
+      detail:
+        '为免再次崩溃，本次已跳过界面与转写内核。\n' +
+        '建议先安装修复版；如果只是偶发问题，也可以尝试正常启动一次。\n\n' +
+        `下载页：${launchguard.DOWNLOAD_URL}\n日志目录：${logsDir()}`,
+      buttons: ['尝试正常启动', '打开下载页', '打开日志目录', '退出'],
+      defaultId: 0,
+      cancelId: 3,
+      noLink: true,
+    });
+  } catch (err) {
+    mainLog(`[safe-mode] 对话框失败：${err && err.message ? err.message : err}`);
+    return false;
+  }
+  if (choice === 0) {
+    clearLaunchFailures();
+    return true;
+  }
+  if (choice === 1) {
+    try {
+      shell.openExternal(launchguard.DOWNLOAD_URL);
+    } catch (err) {
+      mainLog(`[safe-mode] 打开下载页失败：${err && err.message ? err.message : err}`);
+    }
+    return false;
+  }
+  if (choice === 2) {
+    try {
+      shell.openPath(logsDir());
+    } catch (err) {
+      mainLog(`[safe-mode] 打开日志目录失败：${err && err.message ? err.message : err}`);
+    }
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -1362,6 +1446,16 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // 安全模式闸门必须排在建窗、起 sidecar、读日志之前：崩在这几步正是要兜底的情况。
+    // 截图/取证模式（--screenshot）不参与：它 5.5s 就 app.exit()，绕过 before-quit，
+    // 连跑几次取证会被误判成"连续打不开"。
+    if (!SHOT_PATH) {
+      const previousFailures = noteLaunchAttempt();
+      if (previousFailures >= launchguard.CRASH_LIMIT && !resolveSafeMode(previousFailures)) {
+        app.quit();
+        return;
+      }
+    }
     // 日志保留策略：过期备份 / 超出总量上限的旧轮转在这里清掉
     try {
       const pruned = pruneLogs(logsDir());
@@ -1398,6 +1492,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     // sidecar 启动失败不能连累窗口：先建窗口，出问题也要能看见界面和日志
     createWindow();
+    startedNormally = true;
     if (!firstRunPending) {
       try {
         startSidecar();
@@ -1407,6 +1502,12 @@ if (!app.requestSingleInstanceLock()) {
       }
     } else {
       mainLog('[setup] waiting for first-run model directory');
+    }
+
+    // 跑够 STABLE_AFTER_MS 才算"起得来"：崩溃基本都发生在这段窗口里（截图模式除外）
+    if (!SHOT_PATH) {
+      const stableTimer = setTimeout(() => clearLaunchFailures(), launchguard.STABLE_AFTER_MS);
+      if (typeof stableTimer.unref === 'function') stableTimer.unref();
     }
 
     app.on('activate', () => {
@@ -1435,6 +1536,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     if (allowQuit) {
       quitting = true;
+      // 安全模式里退出不能清零：下次启动还得提醒用户装修复版
+      if (startedNormally) clearLaunchFailures();
       stopSidecar();
       return;
     }

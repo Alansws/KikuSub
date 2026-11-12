@@ -118,10 +118,14 @@ cp -R desktop/main "$APP/Contents/Resources/app/main"
 cp -R desktop/renderer/dist "$APP/Contents/Resources/app/renderer-dist"
 mkdir -p "$APP/Contents/Resources/app/renderer"
 mv "$APP/Contents/Resources/app/renderer-dist" "$APP/Contents/Resources/app/renderer/dist"
-cat > "$APP/Contents/Resources/app/package.json" <<'JSON'
+# 版本号只有一个来源：desktop/package.json（此前这里硬编码 "0.2.0"，
+# 与 package.json 双写，发版时极容易漂移；build_dmg.sh 也用同一个读法）。
+APP_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' desktop/package.json | head -1)"
+[ -n "$APP_VERSION" ] || { echo "❌ 无法从 desktop/package.json 读到 version" >&2; exit 1; }
+cat > "$APP/Contents/Resources/app/package.json" <<JSON
 {
   "name": "kikusub-desktop",
-  "version": "0.2.0",
+  "version": "$APP_VERSION",
   "private": true,
   "main": "main/main.cjs"
 }

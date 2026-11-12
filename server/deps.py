@@ -10,12 +10,15 @@ cookie 仍然保留作为兜底：万一将来从 http:// 同源页面访问，�
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Request, Response
+
+from core import settings as settings_store
 
 from .sessions import Session, SessionStore
 
 SESSION_COOKIE = "kikusub_sid"
-SESSION_HEADER = "x-kikusub-session"
 SESSION_HEADER = "x-kikusub-session"
 
 
@@ -36,3 +39,12 @@ def get_session(request: Request, response: Response) -> Session:
             path="/",
         )
     return session
+
+
+def settings_path(request: Request) -> Path:
+    """settings.json 的实际路径：优先取测试/嵌入方注入的 `app.state.settings_path`。
+
+    原先 `routes_ai` / `routes_settings` / `routes_export` 各自复制了一份同名函数，
+    三份实现必须永远一致（见 docs/contracts/engineering-practice.md「重复实现」）。
+    """
+    return Path(getattr(request.app.state, "settings_path", settings_store.SETTINGS_PATH))
