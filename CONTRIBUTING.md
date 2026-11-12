@@ -27,6 +27,13 @@ pip install -r requirements-dev.txt      # pytest / ruff
 cd desktop && npm install && npm run build && cd ..
 ```
 
+> **venv 位置与解释器**：约定是仓库根的 `.venv/`。如果仓库放在某个工作区子目录里
+> （例如 `KikuSub/repo/` 而 venv 在 `KikuSub/.venv`），`source .venv/bin/activate` 会失败——
+> 先用 `which python` 确认解释器，别急着重装。
+> **不要另建一个 `.venv` 再装一遍依赖**（torch 一套约 10GB，而且会切出两个环境，后面所有
+> 命令的行为都取决于你激活了哪个）。同理：用 `python -m pytest`，不要用 `python3`——
+> 在 macOS 上 `python3` 常指向 Homebrew 的新版本，通常没装本项目依赖。
+
 启动开发版：
 
 ```bash

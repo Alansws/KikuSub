@@ -15,6 +15,7 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 1. 先读本页「红线」与「改动纪律」；
 2. 按要改的域打开 `docs/contracts/` 里对应的那一份，**别凭记忆改**；
 3. 动手前先让基线变绿：`pytest -q` + `python -m core.smoke`。
+   **用 `python`（3.12，依赖齐全），不要用 `python3`**——本机 `python3` 是 3.14，连 pytest 都没装。
 
 ## 1. 项目定位与运行方式
 
@@ -121,7 +122,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 验证按**改动范围**跑，不必每次全量（见下面「验证时机」表）。全量 `pytest -q` 约 40s，
   但"改个文档也跑 423 例"会把注意力磨平；环境依赖的用例用 marker 排除
   （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
-- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 10 个真实类型错误已冻结成基线
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 9 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
