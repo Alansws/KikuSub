@@ -62,19 +62,47 @@ def test_preflight_takes_version_from_package_json():
     )
 
 
-def test_preflight_has_no_unbraced_multibyte_expansion():
+def test_shell_scripts_have_no_unbraced_multibyte_expansion():
     """bash 在含全角字符的行里会把 `$VAR（` 解析成 `$VAR` + 半个多字节字符。
 
-    2026-11-13 就是这么炸的：`pass "version = $VERSION（tag 应为 ...)"` 报
-    `VERSION<乱码>: unbound variable`。规则：脚本里所有变量展开都写成 `${VAR}`。
+    2026-11-13 连炸两次：`pass "version = $VERSION（tag 应为 ...)"` 报
+    `VERSION<乱码>: unbound variable`；`tools/check/svelte-check.sh` 又踩了一遍。
+    规则：脚本里的变量展开一律写成 `${VAR}`。这里扫全仓的 shell 脚本，不只 preflight。
     """
-    script = PREFLIGHT.read_text(encoding="utf-8")
-    offenders = [
-        line.strip()
-        for line in script.splitlines()
-        if re.search(r"\$[A-Za-z_][A-Za-z0-9_]*[（）：，。；、—]", line)
-    ]
-    assert offenders == [], "存在未加花括号的变量展开（后接全角字符）：\n" + "\n".join(offenders)
+    scripts = sorted(
+        list((REPO_ROOT / "tools").rglob("*.sh"))
+        + [REPO_ROOT / "tools" / "git-hooks" / "pre-push"]
+    )
+    assert scripts, "没找到任何 shell 脚本，检查路径"
+
+    bad: list[str] = []
+    for path in scripts:
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"\$[A-Za-z_][A-Za-z0-9_]*[（）：，。；、—]", line):
+                bad.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()}")
+    assert bad == [], "存在未加花括号的变量展开（后接全角字符）：\n" + "\n".join(bad)
+
+
+def test_desktop_check_scripts_are_wired():
+    """`npm run check`（tsc）与 `check:svelte`（基线守卫）必须都在，且 svelte-check 版本钉死。
+
+    版本漂移会让 svelte-check 的报错口径变化、基线数字变假红，所以这里要求精确版本。
+    """
+    pkg = json.loads((REPO_ROOT / "desktop" / "package.json").read_text(encoding="utf-8"))
+    scripts = pkg.get("scripts", {})
+
+    assert scripts.get("check") == "tsc --noEmit", "npm run check 必须是 tsc --noEmit（CI 的硬闸门）"
+    assert "svelte-check" in scripts.get("check:svelte", ""), "npm run check:svelte 必须调用基线守卫脚本"
+    version = pkg["devDependencies"].get("svelte-check", "")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), (
+        f"svelte-check 必须钉死精确版本（当前 {version!r}），否则基线数字会随版本漂移"
+    )
+
+    baseline = json.loads(
+        (REPO_ROOT / "desktop" / "test" / "svelte-check-baseline.json").read_text(encoding="utf-8")
+    )
+    assert baseline["svelteCheck"] == version, "基线与 devDependencies 的 svelte-check 版本必须一致"
+    assert isinstance(baseline["errors"], int) and baseline["errors"] >= 0
 
 
 def test_pre_push_hook_only_intercepts_release_tags():

@@ -124,3 +124,37 @@ jobs:
             echo "::error::该 tag 的提交不在 main 上。main 是主线：先把 app/macos 合入 main，再从 main 打 tag。"
             exit 1
           fi
+
+  desktop:
+    # 桌面层的 CI（2026-11-13 起）。此前 CI 只覆盖 Python：主进程 1570 行 + 渲染层的
+    # 改动在 CI 里完全不可见，`npm run test:main` 只在人记得的时候跑。
+    name: Desktop (typecheck + build + main-process tests)
+    runs-on: ubuntu-latest
+    env:
+      # CI 不启动 Electron（只做类型检查、vite 构建与 node:test），省掉 ~100MB 的二进制下载
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install (npm ci)
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck（tsc --noEmit）
+        working-directory: desktop
+        run: npm run check
+
+      - name: Build renderer
+        working-directory: desktop
+        run: npm run build
+
+      - name: Main-process tests
+        working-directory: desktop
+        run: npm run test:main

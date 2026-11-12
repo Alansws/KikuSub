@@ -42,7 +42,7 @@ for arg in "$@"; do
 done
 
 if [ ! -d "$APP" ]; then
-  echo "❌ 缺少 $APP：先运行 bash tools/pack/rebuild.sh --no-open" >&2
+  echo "❌ 缺少 ${APP}：先运行 bash tools/pack/rebuild.sh --no-open" >&2
   exit 1
 fi
 
@@ -81,7 +81,7 @@ if [ -f "$ICON_SRC" ]; then
   cp "$ICNS" "$STAGE/.VolumeIcon.icns"
   HAVE_VOLICON=1
 else
-  echo "⚠️ 缺少 $ICON_SRC，dmg 会退回通用磁盘图标" >&2
+  echo "⚠️ 缺少 ${ICON_SRC}，dmg 会退回通用磁盘图标" >&2
 fi
 
 echo "== 3/4 生成读写镜像并写入卷图标 =="

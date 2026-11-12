@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check": "tsc --noEmit",
+    "check:svelte": "bash ../tools/check/svelte-check.sh",
     "test:main": "node --test test/",
     "start": "vite build && electron .",
     "shot": "vite build && electron . --screenshot"
@@ -17,6 +19,7 @@
     "electron": "^45.2.3",
     "electron-builder": "^25.1.8",
     "svelte": "^5.19.0",
+    "svelte-check": "4.7.8",
     "typescript": "^5.7.3",
     "vite": "^6.0.11"
   },

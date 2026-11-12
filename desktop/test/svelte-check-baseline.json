@@ -1,0 +1,7 @@
+{
+  "_comment": "svelte-check 类型错误基线（2026-11-13 冻结）。数字只许往下走：每修掉一个就把 errors 调小；调大需要先改这份文件——那正是提醒你「又在界面里加了类型错误」的信号。由 tools/check/svelte-check.sh 读取，npm run check:svelte 触发。改基线时在提交信息里写清理由。",
+  "errors": 33,
+  "warnings": 5,
+  "svelteCheck": "4.7.8",
+  "note": "存量错误集中在 .svelte：preload 桥缺 `onQuitting`、菜单命令名（find/shortcuts）不在联合类型里等。第 4 批清零后把 npm run check:svelte 并入 CI。"
+}

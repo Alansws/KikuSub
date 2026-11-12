@@ -22,7 +22,7 @@ NAME="sidecar_probe"
 OUT="build/pack"
 
 if [[ ! -x "$PYTHON" ]]; then
-  echo "找不到 Python：$PYTHON（可用 PYTHON=/path/to/python 覆盖）" >&2
+  echo "找不到 Python：${PYTHON}（可用 PYTHON=/path/to/python 覆盖）" >&2
   exit 1
 fi
 
