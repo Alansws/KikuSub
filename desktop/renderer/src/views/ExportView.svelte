@@ -721,13 +721,13 @@
   }
   .sec {
     border-top: 1px solid var(--separator-soft);
-    padding: 18px 0 8px;
+    padding: 18px 0 var(--sp-2);
   }
   .sec-head {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-3);
   }
   .sec-title {
     font-size: 14px;
@@ -752,7 +752,7 @@
   .sub-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
   .seg {
@@ -784,7 +784,7 @@
   .select {
     font: inherit;
     font-size: 12px;
-    padding: 4px 7px;
+    padding: var(--sp-1) 7px;
     border-radius: 4px;
     border: 1px solid var(--separator);
     background: var(--bg-content);
@@ -812,7 +812,7 @@
     flex-direction: column;
     align-items: center;
     gap: 9px;
-    padding: 44px 20px;
+    padding: 44px var(--sp-5);
     border: 1px dashed var(--separator);
     border-radius: 12px;
     color: var(--text-2);
@@ -822,7 +822,7 @@
     border: 1px solid var(--separator);
     border-radius: 12px;
     background: var(--bg-content);
-    padding: 16px 17px 14px;
+    padding: var(--sp-4) 17px 14px;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   }
   .row {
@@ -843,13 +843,13 @@
     flex: 0 0 58px;
     font-size: 12px;
     color: var(--text-3);
-    padding-top: 4px;
+    padding-top: var(--sp-1);
     white-space: nowrap;
   }
   .mode-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: var(--sp-2);
     flex: 1;
     min-width: 0;
   }
@@ -893,7 +893,7 @@
   .presets {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    gap: var(--sp-2);
     flex: 1;
     min-width: 0;
   }
@@ -903,7 +903,7 @@
     border: 1px solid var(--separator);
     border-radius: 4px;
     background: var(--bg-content);
-    padding: 8px 9px;
+    padding: var(--sp-2) 9px;
     color: var(--text);
     font: inherit;
     display: flex;
@@ -940,7 +940,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    padding-top: 4px;
+    padding-top: var(--sp-1);
   }
   .chk {
     display: inline-flex;
@@ -959,7 +959,7 @@
   }
   .metrics {
     display: flex;
-    gap: 12px;
+    gap: var(--sp-3);
     flex-wrap: wrap;
     font-size: 12px;
     color: var(--text-3);
@@ -978,9 +978,9 @@
   }
   .run-card,
   .done-card {
-    margin-top: 12px;
+    margin-top: var(--sp-3);
     border-radius: 8px;
-    padding: 12px 13px;
+    padding: var(--sp-3) 13px;
     border: 1px solid var(--separator);
   }
   .run-card {
@@ -989,7 +989,7 @@
   .run-top {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     font-size: 12px;
   }
   .run-top b {
@@ -1049,7 +1049,7 @@
   .run-meta {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--sp-3);
     font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
@@ -1100,11 +1100,11 @@
     flex-wrap: wrap;
   }
   .err-card {
-    margin-top: 12px;
+    margin-top: var(--sp-3);
     display: flex;
     align-items: flex-start;
     gap: 7px;
-    padding: 10px 12px;
+    padding: 10px var(--sp-3);
     border-radius: 4px;
     background: var(--danger-soft);
     color: var(--danger);
@@ -1116,7 +1116,7 @@
     align-items: flex-end;
     gap: 14px;
     margin-top: 14px;
-    padding-top: 12px;
+    padding-top: var(--sp-3);
     border-top: 1px solid var(--separator-soft);
   }
   .why {
@@ -1143,7 +1143,7 @@
     flex: 0 0 auto;
   }
   .style-section {
-    padding: 12px 0 10px;
+    padding: var(--sp-3) 0 10px;
     border-bottom: 1px solid var(--separator-soft);
   }
   .style-head {
@@ -1160,7 +1160,7 @@
   .style-body {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 340px;
-    gap: 16px;
+    gap: var(--sp-4);
     align-items: start;
   }
   .style-controls {
@@ -1178,7 +1178,7 @@
     border: 1px solid var(--separator);
     border-radius: 8px;
     background: var(--bg-content);
-    padding: 7px 8px;
+    padding: 7px var(--sp-2);
     color: var(--text);
     font: inherit;
     display: flex;
@@ -1212,7 +1212,7 @@
   .style-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     flex-wrap: wrap;
     padding: 7px 0 0;
     font-size: 12px;
@@ -1232,7 +1232,7 @@
   }
   .seg.small button {
     height: 20px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
     font-size: 12px;
   }
   .slider {
@@ -1266,7 +1266,7 @@
   .preview-head {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
   }
   .preview-head .style-label {
     font-size: 12px;
@@ -1315,7 +1315,7 @@
   .preview-text {
     font: inherit;
     font-size: 12px;
-    padding: 4px 7px;
+    padding: var(--sp-1) 7px;
     border-radius: 4px;
     border: 1px solid var(--separator);
     background: var(--bg-content);
@@ -1324,7 +1324,7 @@
   .preview-foot {
     display: flex;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--sp-2);
     font-size: 12px;
     color: var(--text-3);
   }

@@ -603,7 +603,7 @@
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);
-    padding: 20px 26px;
+    padding: var(--sp-5) 26px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -642,7 +642,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: var(--sp-2);
     color: var(--accent);
     font-size: 15px;
     font-weight: 500;
@@ -695,7 +695,7 @@
     background: rgba(30, 30, 32, 0.94);
     color: #fff;
     font-size: 12.5px;
-    padding: 8px 14px;
+    padding: var(--sp-2) 14px;
     border-radius: 8px;
     box-shadow: var(--shadow-pop);
     z-index: 250;

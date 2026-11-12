@@ -34,7 +34,7 @@
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 20px;
+    gap: var(--sp-5);
   }
   .page-head-copy {
     min-width: 0;
@@ -57,7 +57,7 @@
   .page-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     flex: 0 0 auto;
     padding-top: 3px;
   }

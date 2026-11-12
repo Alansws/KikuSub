@@ -195,7 +195,7 @@
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: 14px 14px 12px 16px;
+    padding: 14px 14px var(--sp-3) var(--sp-4);
     border-bottom: 1px solid var(--separator);
   }
   .sc-mark {
@@ -245,10 +245,10 @@
 
   .sc-body {
     overflow-y: auto;
-    padding: 10px 14px 12px 16px;
+    padding: 10px 14px var(--sp-3) var(--sp-4);
   }
   .sc-group + .sc-group {
-    margin-top: 12px;
+    margin-top: var(--sp-3);
     padding-top: 10px;
     border-top: 1px solid var(--separator-soft);
   }
@@ -261,7 +261,7 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 4px 12px;
+    gap: var(--sp-1) var(--sp-3);
     min-height: 34px;
     padding: 2px;
     border-radius: 6px;
@@ -289,7 +289,7 @@
   .sc-inline-warn {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     margin-top: 2px;
     font-size: 11px;
     line-height: 15px;
@@ -301,7 +301,7 @@
     align-items: center;
     gap: 5px;
     margin: 2px 0 3px;
-    padding: 4px 7px;
+    padding: var(--sp-1) 7px;
     border-radius: 5px;
     background: var(--warn-soft);
     color: var(--warn);
@@ -353,8 +353,8 @@
   .sc-foot {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 14px 12px 16px;
+    gap: var(--sp-2);
+    padding: 10px 14px var(--sp-3) var(--sp-4);
     border-top: 1px solid var(--separator);
     background: var(--bg-inspector);
   }

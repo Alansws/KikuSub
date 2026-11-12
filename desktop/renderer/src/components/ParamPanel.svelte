@@ -78,7 +78,7 @@
     gap: 14px;
     min-height: 0;
     overflow-y: auto;
-    padding-right: 4px;
+    padding-right: var(--sp-1);
   }
 
   .head {
@@ -101,7 +101,7 @@
   .small {
     height: 22px;
     font-size: 12px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
   }
 
   .group-title {
@@ -115,7 +115,7 @@
   .grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px 18px;
+    gap: var(--sp-2) 18px;
   }
 
   .switch-row {
@@ -172,7 +172,7 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 8px;
+    gap: var(--sp-2);
   }
   .value {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;

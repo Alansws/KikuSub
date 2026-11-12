@@ -410,7 +410,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 14px;
+    padding: var(--sp-2) 14px;
     border-bottom: 1px solid var(--separator);
   }
 
@@ -419,7 +419,7 @@
   }
 
   .bar {
-    gap: 8px;
+    gap: var(--sp-2);
     font-size: 12px;
     color: var(--text-2);
     background: var(--bg-inspector);
@@ -464,7 +464,7 @@
     color: var(--text-2);
     font: inherit;
     font-size: 12px;
-    padding: 4px 12px;
+    padding: var(--sp-1) var(--sp-3);
     border-radius: 4px;
     cursor: pointer;
   }
@@ -522,7 +522,7 @@
   .paste {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--sp-2);
     padding: 10px 14px;
     border-bottom: 1px solid var(--separator);
     background: var(--bg-inspector);
@@ -542,7 +542,7 @@
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 12px;
     line-height: 1.5;
-    padding: 8px 10px;
+    padding: var(--sp-2) 10px;
     border-radius: 8px;
     border: 1px solid var(--separator);
     background: var(--bg-content);
@@ -558,7 +558,7 @@
   .paste-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
   }
 
   .paste-hint {
@@ -592,7 +592,7 @@
     font: inherit;
     font-size: 12px;
     cursor: pointer;
-    padding: 2px 4px;
+    padding: 2px var(--sp-1);
   }
 
   .link:disabled {
@@ -680,7 +680,7 @@
 
   .right {
     border-radius: 4px;
-    padding: 1px 4px;
+    padding: 1px var(--sp-1);
     margin: -1px -4px;
     cursor: text;
     min-height: 18px;
@@ -748,7 +748,7 @@
     align-items: center;
     justify-content: center;
     gap: 9px;
-    padding: 40px 24px;
+    padding: var(--sp-10) var(--sp-6);
     text-align: center;
     color: var(--text-2);
   }
@@ -761,7 +761,7 @@
     place-items: center;
     background: var(--accent-soft);
     color: var(--accent);
-    margin-bottom: 4px;
+    margin-bottom: var(--sp-1);
   }
 
   .et {
@@ -787,14 +787,14 @@
 
   .es code {
     font-size: 12px;
-    padding: 1px 4px;
+    padding: 1px var(--sp-1);
     border-radius: 4px;
     background: var(--fill);
   }
 
   .ea {
     display: flex;
-    gap: 8px;
+    gap: var(--sp-2);
     margin-top: 6px;
   }
 </style>

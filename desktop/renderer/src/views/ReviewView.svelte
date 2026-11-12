@@ -2902,13 +2902,13 @@
   }
 
   .notice .btn {
-    margin-left: 4px;
+    margin-left: var(--sp-1);
     flex: 0 0 auto;
   }
   .notice-actions {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     flex: 0 0 auto;
   }
   .notice-actions .btn {
@@ -3043,7 +3043,7 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     height: 30px;
     flex: 0 0 30px;
     margin-top: 3px;
@@ -3051,7 +3051,7 @@
   .zoom-group {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
   }
   .zbtn {
     width: 20px;
@@ -3135,7 +3135,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
     border: 0;
     border-radius: 4px;
     background: transparent;
@@ -3352,7 +3352,7 @@
     color: var(--on-accent);
     font-size: 12px;
     line-height: 13px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
     height: 13px;
     border-radius: 3px;
     font-variant-numeric: tabular-nums;
@@ -3465,13 +3465,13 @@
     .thead,
     .row {
       grid-template-columns: 30px 88px 88px 48px minmax(0, 1fr) 38px;
-      column-gap: 4px;
+      column-gap: var(--sp-1);
     }
     .thead {
-      padding: 0 8px;
+      padding: 0 var(--sp-2);
     }
     .row {
-      padding: 0 8px;
+      padding: 0 var(--sp-2);
     }
   }
 
@@ -3558,7 +3558,7 @@
   .c-acts {
     display: flex;
     justify-content: flex-end;
-    gap: 4px;
+    gap: var(--sp-1);
     opacity: 0;
     transition: opacity 120ms var(--ease);
   }
@@ -3604,7 +3604,7 @@
     /* 桌面宽度下宁可让两个输入框收缩，也不要让关闭按钮掉到第二行 */
     flex-wrap: nowrap;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     padding: 5px 14px;
     flex: 0 0 auto;
     border-bottom: 1px solid var(--separator-soft);
@@ -3699,14 +3699,14 @@
   }
   .ctx-sep {
     height: 1px;
-    margin: 3px 4px;
+    margin: 3px var(--sp-1);
     background: var(--separator-soft);
   }
   .ctx-menu {
     position: fixed;
     z-index: 71;
     width: 244px;
-    padding: 4px;
+    padding: var(--sp-1);
     border-radius: 4px;
     background: var(--bg-content);
     border: 1px solid var(--separator);
@@ -3716,8 +3716,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 4px 7px 5px;
+    gap: var(--sp-2);
+    padding: var(--sp-1) 7px 5px;
     margin-bottom: 3px;
     border-bottom: 1px solid var(--separator-soft);
     font-size: 12px;
@@ -3779,7 +3779,7 @@
     top: 50%;
     transform: translate(-50%, -50%);
     width: min(340px, calc(100vw - 48px));
-    padding: 14px 16px 12px;
+    padding: 14px var(--sp-4) var(--sp-3);
     border-radius: 8px;
     background: var(--bg-content);
     border: 1px solid var(--separator);
@@ -3810,7 +3810,7 @@
   .vd-field {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--sp-1);
     font-size: 11px;
     color: var(--text-3);
   }
@@ -3842,7 +3842,7 @@
   .vd-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     padding-top: 2px;
   }
   .vd-spacer {
@@ -3861,7 +3861,7 @@
       overflow-y: auto;
     }
     .stage {
-      padding: 12px 16px 0;
+      padding: var(--sp-3) var(--sp-4) 0;
     }
     /* 200% 下保持 592×333 会把播放条推出首屏：按「视频 + 播放行 + 工具行」
        正好占满一屏可用高度来定宽，波形与表格往下滚一屏即可。 */
@@ -3869,12 +3869,12 @@
       width: min(640px, 100%, calc((100vh - 170px) * 16 / 9));
     }
     .timeline {
-      padding: 6px 16px 0;
+      padding: 6px var(--sp-4) 0;
     }
     .table-area {
       flex: 0 0 auto;
       height: clamp(200px, 52vh, 300px);
-      margin: 6px 16px 16px;
+      margin: 6px var(--sp-4) var(--sp-4);
     }
     .transport,
     .tl-tools {
@@ -3915,8 +3915,8 @@
     .thead,
     .row {
       grid-template-columns: 30px 78px minmax(0, 1fr) 36px;
-      column-gap: 4px;
-      padding: 0 8px;
+      column-gap: var(--sp-1);
+      padding: 0 var(--sp-2);
     }
     .thead > :nth-child(3),
     .thead > :nth-child(4),

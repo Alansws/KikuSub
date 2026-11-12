@@ -331,7 +331,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
   }
   .hint {
     color: var(--text-3);
@@ -340,7 +340,7 @@
 
   .empty-export {
     margin-top: 18px;
-    padding: 12px 14px;
+    padding: var(--sp-3) 14px;
     border: 1px solid var(--separator-soft);
     border-radius: 8px;
     max-width: 520px;
@@ -372,7 +372,7 @@
   .rh-actions {
     margin-left: auto;
     display: flex;
-    gap: 4px;
+    gap: var(--sp-1);
     flex: 0 0 auto;
   }
   .report-h h2 {
@@ -399,7 +399,7 @@
     background: var(--warn-soft);
     border-radius: 8px;
     padding: 7px 10px;
-    margin-bottom: 12px;
+    margin-bottom: var(--sp-3);
   }
 
   .grid {
@@ -419,7 +419,7 @@
   .kv {
     display: flex;
     gap: 10px;
-    padding: 4px 0;
+    padding: var(--sp-1) 0;
     font-size: 12px;
     border-bottom: 1px solid var(--separator-soft);
     min-width: 0;
@@ -447,7 +447,7 @@
     display: flex;
     align-items: baseline;
     gap: 10px;
-    margin: 18px 0 8px;
+    margin: 18px 0 var(--sp-2);
   }
   .sec-h {
     font-size: 12px;
@@ -486,7 +486,7 @@
     color: var(--text-2);
     background: var(--fill);
     border-radius: 8px;
-    padding: 4px 9px;
+    padding: var(--sp-1) 9px;
   }
   .chip b {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -541,7 +541,7 @@
     display: flex;
     align-items: baseline;
     gap: 10px;
-    padding: 8px 14px;
+    padding: var(--sp-2) 14px;
     font-size: 12.5px;
     cursor: default;
     list-style: none;
@@ -582,13 +582,13 @@
     line-height: 1.5;
   }
   .items {
-    padding: 0 14px 8px;
+    padding: 0 14px var(--sp-2);
   }
   .item {
     display: flex;
     align-items: baseline;
     gap: 9px;
-    padding: 4px 0;
+    padding: var(--sp-1) 0;
     border-top: 1px solid var(--separator-soft);
     font-size: 12px;
     min-width: 0;
@@ -643,7 +643,7 @@
   .saved-ok {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     flex: 0 0 auto;
     color: var(--success);
   }

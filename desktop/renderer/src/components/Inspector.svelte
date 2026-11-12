@@ -1082,7 +1082,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 12px 20px 16px;
+    padding: var(--sp-3) var(--sp-5) var(--sp-4);
   }
   .insp-tabs {
     flex: 0 0 auto;
@@ -1090,7 +1090,7 @@
     align-items: center;
     gap: 2px;
     min-height: 40px;
-    padding: 0 12px;
+    padding: 0 var(--sp-3);
     border-bottom: 1px solid var(--line-2);
     background: var(--paper);
   }
@@ -1122,7 +1122,7 @@
   .insp-tab b {
     min-width: 16px;
     height: 15px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
     border-radius: 999px;
     background: var(--accent);
     color: var(--on-accent);
@@ -1150,7 +1150,7 @@
   .display-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     /* 页签底边已经是一条分隔线，这里不再叠一层 12px 的空白。 */
     margin-top: 0;
   }
@@ -1179,8 +1179,8 @@
   .track-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 8px;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
     font-size: 12px;
     line-height: 16px;
     color: var(--ink-3);
@@ -1215,12 +1215,12 @@
 
   /* 当前句：全屏最大的字，也是唯一带蓝左线的卡片 */
   .cue-card {
-    margin-top: 16px;
+    margin-top: var(--sp-4);
     background: var(--raise);
     border: 1px solid var(--line-2);
     border-left: 2px solid var(--accent);
     border-radius: 8px;
-    padding: 16px;
+    padding: var(--sp-4);
   }
   .cue-tc {
     font-family: var(--font-mono);
@@ -1234,7 +1234,7 @@
   .cue-text {
     display: block;
     width: 100%;
-    margin-top: 8px;
+    margin-top: var(--sp-2);
     border: 0;
     border-radius: 4px;
     background: transparent;
@@ -1265,7 +1265,7 @@
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .edit-label {
-    margin: 12px 0 0;
+    margin: var(--sp-3) 0 0;
     font-size: 12px;
     line-height: 16px;
     color: var(--ink-3);
@@ -1276,7 +1276,7 @@
     color: var(--warn);
   }
   .cue-empty {
-    padding-top: 8px;
+    padding-top: var(--sp-2);
     font-size: 12.5px;
     line-height: 1.6;
     color: var(--ink-3);
@@ -1285,8 +1285,8 @@
   .actions {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 16px;
+    gap: var(--sp-2);
+    margin-top: var(--sp-4);
   }
   .actions .btn.primary {
     flex: 1;
@@ -1300,18 +1300,18 @@
   }
 
   .tts-block {
-    margin-top: 16px;
-    padding: 12px 0 0;
+    margin-top: var(--sp-4);
+    padding: var(--sp-3) 0 0;
     border-top: 1px solid var(--line-2);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--sp-2);
   }
   .tts-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--sp-2);
     min-width: 0;
   }
   .tts-head b {
@@ -1336,7 +1336,7 @@
   }
   .mini {
     height: 26px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
     font-size: 12px;
   }
   .mini.on {
@@ -1353,7 +1353,7 @@
     color: var(--ink-2);
     font: inherit;
     font-size: 12px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
   }
   .tts-sel.rate {
     flex: 0 0 56px;
@@ -1366,7 +1366,7 @@
   .tts-tools {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     flex-wrap: wrap;
     padding-bottom: 10px;
   }
@@ -1421,11 +1421,11 @@
     font-size: 11px;
     line-height: 15px;
     color: var(--text-3);
-    margin-bottom: 8px;
+    margin-bottom: var(--sp-2);
   }
   .voice-panel {
     margin: 2px 0 10px;
-    padding: 8px 9px 9px;
+    padding: var(--sp-2) 9px 9px;
     border: 1px solid var(--separator);
     border-radius: 6px;
     background: var(--bg-inset, var(--raise));
@@ -1437,7 +1437,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--sp-2);
     font-size: 11px;
     line-height: 15px;
     color: var(--text-3);
@@ -1466,7 +1466,7 @@
     color: var(--ink-2);
     font: inherit;
     font-size: 12px;
-    padding: 4px 6px;
+    padding: var(--sp-1) 6px;
     resize: vertical;
   }
   .vp-actions {
@@ -1498,7 +1498,7 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 3px 4px 3px 7px;
+    padding: 3px var(--sp-1) 3px 7px;
     border-bottom: 1px solid var(--separator-soft);
   }
   .voice-row:last-child {
@@ -1544,8 +1544,8 @@
   }
 
   .meta-sec {
-    margin-top: 12px;
-    padding: 12px 0 0;
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) 0 0;
     border-top: 1px solid var(--line-2);
   }
   .meta-h {
@@ -1596,7 +1596,7 @@
     color: var(--accent);
     font: inherit;
     font-size: 12px;
-    padding: 4px 0 0;
+    padding: var(--sp-1) 0 0;
     display: inline-flex;
     align-items: center;
     gap: 1px;
@@ -1621,7 +1621,7 @@
   /* 常驻保存区：固定在右侧栏底部，内容单独滚动 */
   .save-dock {
     flex: 0 0 auto;
-    padding: 10px 20px 12px;
+    padding: 10px var(--sp-5) var(--sp-3);
     border-top: 1px solid var(--line);
     background: var(--paper);
     box-shadow: 0 -10px 20px -18px rgba(27, 39, 64, 0.35);
@@ -1633,7 +1633,7 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--sp-2);
     min-width: 0;
   }
   .sd-title {

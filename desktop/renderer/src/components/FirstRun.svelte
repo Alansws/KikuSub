@@ -108,7 +108,7 @@
     z-index: 320;
     display: grid;
     place-items: center;
-    padding: 32px;
+    padding: var(--sp-8);
     background: var(--bg-content);
     -webkit-app-region: drag;
   }
@@ -129,7 +129,7 @@
     text-transform: uppercase;
   }
   h1 {
-    margin: 8px 0 8px;
+    margin: var(--sp-2) 0 var(--sp-2);
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.02em;
@@ -143,7 +143,7 @@
   .path-box {
     border: 1px solid var(--separator);
     border-radius: 8px;
-    padding: 11px 12px;
+    padding: 11px var(--sp-3);
     background: var(--fill);
   }
   .path-head {
@@ -180,8 +180,8 @@
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    margin-top: 12px;
-    padding: 8px 10px;
+    margin-top: var(--sp-3);
+    padding: var(--sp-2) 10px;
     border-radius: 8px;
     font-size: 12px;
     line-height: 1.5;
@@ -198,13 +198,13 @@
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
     background: var(--fill-strong);
     border-radius: 4px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
   }
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    margin-top: 20px;
+    gap: var(--sp-2);
+    margin-top: var(--sp-5);
   }
   .actions .btn {
     height: 30px;

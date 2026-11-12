@@ -691,8 +691,8 @@
   .qa-head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 10px 9px 12px;
+    gap: var(--sp-2);
+    padding: 10px 10px 9px var(--sp-3);
     flex: 0 0 auto;
     cursor: default;
   }
@@ -765,7 +765,7 @@
   .progress {
     height: 3px;
     flex: 0 0 3px;
-    margin: 0 12px;
+    margin: 0 var(--sp-3);
     border-radius: 999px;
     background: var(--fill);
     overflow: hidden;
@@ -786,8 +786,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    padding: 9px 10px 8px 12px;
+    gap: var(--sp-2);
+    padding: 9px 10px var(--sp-2) var(--sp-3);
     flex: 0 0 auto;
     box-shadow: inset 0 -1px 0 var(--separator-soft);
   }
@@ -808,11 +808,11 @@
     line-height: 16px;
     color: var(--text-2);
     height: 22px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
     border-radius: 4px;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     white-space: nowrap;
   }
   .groups button:hover {
@@ -875,7 +875,7 @@
     border-radius: 4px;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     position: relative;
     white-space: nowrap;
   }
@@ -914,7 +914,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 2px 0 4px;
+    padding: 2px 0 var(--sp-1);
   }
 
   /* 浮窗右下角的缩放手柄：只存在于 floating 模式。 */
@@ -932,7 +932,7 @@
   }
 
   .empty {
-    padding: 24px 20px 22px;
+    padding: var(--sp-6) var(--sp-5) 22px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -973,7 +973,7 @@
     gap: 6px;
     max-width: 100%;
     margin-top: 3px;
-    padding: 3px 8px;
+    padding: 3px var(--sp-2);
     border-radius: 6px;
     background: var(--fill);
     font-size: 12px;
@@ -993,20 +993,20 @@
     white-space: nowrap;
   }
   .empty-cta {
-    margin-top: 8px;
+    margin-top: var(--sp-2);
   }
 
   .coverage {
     display: flex;
     gap: 6px;
-    margin-top: 8px;
+    margin-top: var(--sp-2);
     flex-wrap: wrap;
     justify-content: center;
   }
   .cov {
     font-size: 11.5px;
     line-height: 16px;
-    padding: 2px 8px;
+    padding: 2px var(--sp-2);
     border-radius: 999px;
     background: var(--accent-soft);
     color: var(--accent);
@@ -1023,7 +1023,7 @@
   .item {
     display: flex;
     gap: 9px;
-    padding: 11px 13px 10px 12px;
+    padding: 11px 13px 10px var(--sp-3);
     position: relative;
     transition: background var(--dur-fast) var(--ease);
     animation: qaItemIn 180ms var(--ease) both;

@@ -80,6 +80,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关 | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关 |
 | AI 提案、润色、翻译平行轨、随包技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest、结构校验、`apply_polish()`、D-1～D-6 |
 | 提示词模板、成片导出、手动代理、媒体 Range | [docs/contracts/export-and-prompt.md](docs/contracts/export-and-prompt.md) | 导出设置必须走 `setExport*`、代理写 `*.part.mp4` 再 rename |
+| 想理解「为什么这么定规矩」/接手这套流程 | [docs/contracts/engineering-practice.md](docs/contracts/engineering-practice.md) | 五类失控的对照、五道护栏落点、规则→测试的三级升级、多模型协作 |
 | （历史参考）已移除的 Gradio 面板 | [docs/archive/gradio-legacy.md](docs/archive/gradio-legacy.md) | **禁止照它改代码** |
 
 ## 4. 红线（改之前先确认没踩）

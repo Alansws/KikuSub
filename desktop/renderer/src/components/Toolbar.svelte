@@ -372,7 +372,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 0 16px;
+    padding: 0 var(--sp-4);
     /* 发丝线用 inset shadow 而不是 border：border 会吃掉 1px 内容高度，
        52 高工具栏里的 18px 标题就会落在 16.5px 上（半像素发虚）。 */
     box-shadow: inset 0 -1px 0 var(--separator);
@@ -424,7 +424,7 @@
     align-items: center;
     gap: 6px;
     height: 24px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
     border-radius: 6px;
     background: var(--accent-soft);
     color: var(--accent);
@@ -495,7 +495,7 @@
     right: 0;
     z-index: 61;
     width: 232px;
-    padding: 4px;
+    padding: var(--sp-1);
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -521,11 +521,11 @@
     font-size: 12.5px;
     width: 100%;
     height: 30px;
-    padding: 0 8px;
+    padding: 0 var(--sp-2);
     border-radius: 4px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     text-align: left;
     cursor: default;
   }
@@ -550,7 +550,7 @@
   }
   .mi-sep {
     height: 1px;
-    margin: 4px 6px;
+    margin: var(--sp-1) 6px;
     background: var(--separator-soft);
   }
 
@@ -596,8 +596,8 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 8px;
-    padding: 10px 12px 8px;
+    gap: var(--sp-2);
+    padding: 10px var(--sp-3) var(--sp-2);
     font-size: 12.5px;
     font-weight: 600;
     border-bottom: 1px solid var(--separator-soft);
@@ -610,7 +610,7 @@
   }
   .hist-list {
     overflow-y: auto;
-    padding: 4px;
+    padding: var(--sp-1);
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -670,13 +670,13 @@
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   }
   .hist-empty {
-    padding: 18px 12px;
+    padding: 18px var(--sp-3);
     text-align: center;
     font-size: 12.5px;
     color: var(--text-3);
   }
   .hist-foot {
-    padding: 8px 12px 9px;
+    padding: var(--sp-2) var(--sp-3) 9px;
     border-top: 1px solid var(--separator-soft);
     font-size: 12px;
     color: var(--text-3);

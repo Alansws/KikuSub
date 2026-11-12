@@ -135,7 +135,7 @@
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);
-    padding: 18px 20px 16px;
+    padding: 18px var(--sp-5) var(--sp-4);
   }
   .head {
     display: flex;
@@ -162,7 +162,7 @@
     font-variant-numeric: tabular-nums;
   }
   .desc {
-    margin: 10px 0 12px;
+    margin: 10px 0 var(--sp-3);
     font-size: 12px;
     line-height: 1.55;
     color: var(--text-2);
@@ -188,13 +188,13 @@
     flex: 1;
     min-height: 80px;
     overflow-y: auto;
-    padding-top: 4px;
+    padding-top: var(--sp-1);
   }
   .group {
     position: sticky;
     top: 0;
     background: var(--bg-content);
-    padding: 8px 2px 4px;
+    padding: var(--sp-2) 2px var(--sp-1);
     font-size: 12px;
     font-weight: 600;
     color: var(--text-3);
@@ -237,9 +237,9 @@
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
+    gap: var(--sp-2);
     padding-top: 13px;
-    margin-top: 8px;
+    margin-top: var(--sp-2);
     border-top: 1px solid var(--separator-soft);
   }
   .actions .btn {

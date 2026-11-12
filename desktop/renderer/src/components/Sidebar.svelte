@@ -71,8 +71,8 @@
   .sb-brand {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 8px 14px;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2) 14px;
     color: var(--text);
   }
   .brand-mark {
@@ -101,7 +101,7 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--text-2);
-    padding: 10px 8px 4px;
+    padding: 10px var(--sp-2) var(--sp-1);
     letter-spacing: 0.02em;
   }
 
@@ -112,8 +112,8 @@
     height: 30px;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 0 8px;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-2);
     border-radius: var(--rad-control);
     color: var(--text);
     font: inherit;
@@ -178,7 +178,7 @@
     .sb-brand {
       justify-content: center;
       gap: 0;
-      padding: 4px 0 12px;
+      padding: var(--sp-1) 0 var(--sp-3);
     }
     .brand-name,
     .brand-sub {

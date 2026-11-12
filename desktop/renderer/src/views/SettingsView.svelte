@@ -1479,8 +1479,8 @@
   .sec-head {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 12px;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-3);
   }
   .sec-title {
     font-size: var(--fs-heading);
@@ -1516,7 +1516,7 @@
   .engine {
     border: 1px solid var(--separator-soft);
     border-radius: 8px;
-    padding: 13px 15px 12px;
+    padding: 13px 15px var(--sp-3);
     background: var(--bg-content);
     transition: opacity 160ms var(--ease), border-color 160ms var(--ease);
   }
@@ -1531,7 +1531,7 @@
   .eng-name {
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    gap: var(--sp-2);
     min-width: 0;
   }
   .eng-name b {
@@ -1564,7 +1564,7 @@
   }
 
   .eng-desc {
-    margin: 7px 0 8px;
+    margin: 7px 0 var(--sp-2);
     font-size: 12.5px;
     color: var(--text-2);
     line-height: 1.5;
@@ -1579,7 +1579,7 @@
   .pill {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     height: 19px;
     padding: 0 7px;
     border-radius: 4px;
@@ -1641,7 +1641,7 @@
     justify-content: space-between;
     font-size: 12px;
     color: var(--text-2);
-    margin-bottom: 4px;
+    margin-bottom: var(--sp-1);
     font-variant-numeric: tabular-nums;
   }
   .dl.error .dl-top {
@@ -1725,7 +1725,7 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
-    padding: 8px 12px;
+    padding: var(--sp-2) var(--sp-3);
     border-bottom: 1px solid var(--separator-soft);
     font-size: 12px;
   }
@@ -1782,7 +1782,7 @@
     flex-wrap: wrap;
   }
   .log-tail {
-    margin: 8px 0 0;
+    margin: var(--sp-2) 0 0;
     max-height: 180px;
     overflow: auto;
     background: var(--fill);
@@ -1802,7 +1802,7 @@
     color: var(--text-3);
   }
   .tail {
-    margin-top: 8px;
+    margin-top: var(--sp-2);
   }
   .tail summary {
     font-size: 12px;
@@ -1819,14 +1819,14 @@
 
   .skill-box {
     margin-top: 14px;
-    padding-top: 12px;
+    padding-top: var(--sp-3);
     border-top: 1px solid var(--separator-soft);
   }
   .skill-head {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
   }
   .skill-head .muted {
     font-size: 12px;
@@ -1835,7 +1835,7 @@
   .skill-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
   .skill-path {
@@ -1853,14 +1853,14 @@
     display: flex;
     flex-direction: column;
     gap: 9px;
-    padding: 12px 0;
+    padding: var(--sp-3) 0;
     border-top: 1px solid var(--separator-soft);
   }
   .ai-form label,
   .ai-key label {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--sp-1);
     flex: 1;
     min-width: 0;
   }
@@ -1898,7 +1898,7 @@
   .ai-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
   }
   .ai-key {
     flex-direction: row;
@@ -1912,7 +1912,7 @@
   .pref {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: var(--sp-4);
     padding: 11px 0;
     border-bottom: 1px solid var(--separator-soft);
   }
@@ -1971,7 +1971,7 @@
     color: var(--warn);
     background: var(--warn-soft);
     border-radius: 8px;
-    padding: 8px 10px;
+    padding: var(--sp-2) 10px;
     margin-top: 10px;
   }
   .error-box {
@@ -1984,7 +1984,7 @@
   .loading {
     font-size: 12px;
     color: var(--text-3);
-    padding: 16px 2px;
+    padding: var(--sp-4) 2px;
   }
   .footnote {
     font-size: 12px;
@@ -1996,7 +1996,7 @@
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
     background: var(--fill);
     border-radius: 4px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
   }
   .about {
     margin-top: 26px;

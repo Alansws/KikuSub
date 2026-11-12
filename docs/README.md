@@ -9,6 +9,7 @@
 | --- | --- |
 | [AI 优化与翻译-开发文档-2026-11.md](AI优化与翻译-开发文档-2026-11.md) | 改 AI 提案 / 润色 / 翻译 / 技能之前必读。契约、冻结决定（D-1～D-6）、验收标准都在这里。 |
 | [../AGENTS.md](../AGENTS.md) | **索引**：项目定位、仓库结构、红线与改动纪律、契约索引（2026-11-13 起瘦身为索引，正文拆到 `contracts/`）。 |
+| [contracts/engineering-practice.md](contracts/engineering-practice.md) | **方法论**：长期项目的五类失控与五道护栏在本仓库的落点、规则→测试的升级路径、多模型协作命令。新接手先读这份。 |
 | [contracts/](contracts/) | **分域契约正文**：`review-console.md`（核对台/内核边界/历史/主题）、`desktop-lifecycle.md`（启动/日志/退出清理）、`ai-proposal.md`（AI 提案与平行轨）、`export-and-prompt.md`（提示词/成片导出/代理）。改哪块先读哪份。 |
 | [../README.md](../README.md) · [../README_EN.md](../README_EN.md) | 用户安装与使用说明。 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | 开发环境、测试与提交流程。 |

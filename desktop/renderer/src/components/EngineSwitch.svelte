@@ -167,7 +167,7 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 0 8px 0 9px;
+    padding: 0 var(--sp-2) 0 9px;
     border: 1px solid var(--separator-soft);
     border-radius: 8px;
     background: var(--fill);
@@ -248,7 +248,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 4px;
+    padding: var(--sp-1);
     background: var(--raise);
     border: 1px solid var(--line);
     border-radius: 10px;
@@ -267,7 +267,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--sp-2);
     padding: 6px 7px 7px;
     font-size: 11px;
     font-weight: 600;
@@ -284,7 +284,7 @@
     font-size: 11px;
     letter-spacing: 0;
     text-transform: none;
-    padding: 2px 4px;
+    padding: 2px var(--sp-1);
     border-radius: 4px;
     cursor: default;
   }
@@ -311,7 +311,7 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    padding: 6px 8px;
+    padding: 6px var(--sp-2);
     border-radius: 7px;
     text-align: left;
     cursor: default;
@@ -365,7 +365,7 @@
   }
 
   .ec-foot {
-    padding: 7px 8px 5px;
+    padding: 7px var(--sp-2) 5px;
     margin-top: 3px;
     border-top: 1px solid var(--separator-soft);
     font-size: 11px;

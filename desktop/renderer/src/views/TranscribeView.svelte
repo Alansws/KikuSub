@@ -302,7 +302,7 @@
   .cols {
     display: grid;
     grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-    gap: 32px;
+    gap: var(--sp-8);
     width: 100%;
     max-width: 1120px;
     margin: 0 auto;
@@ -312,13 +312,13 @@
 
   .left {
     overflow-y: auto;
-    padding-right: 4px;
+    padding-right: var(--sp-1);
   }
 
   .right {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: var(--sp-3);
     min-height: 0;
     border-left: 1px solid var(--separator-soft);
     padding-left: 22px;
@@ -327,7 +327,7 @@
   .form {
     display: grid;
     grid-template-columns: 72px 1fr;
-    gap: 10px 12px;
+    gap: 10px var(--sp-3);
     align-items: center;
   }
   label {
@@ -359,7 +359,7 @@
 
   .actions {
     display: flex;
-    gap: 8px;
+    gap: var(--sp-2);
     align-items: center;
   }
   /* 原文 / 译文导入做成两张小文件卡：比一个“导入字幕…”按钮更明确，
@@ -367,13 +367,13 @@
   .subtitle-imports {
     grid-column: 1 / -1;
     display: flex;
-    gap: 12px;
+    gap: var(--sp-3);
     margin-top: 6px;
     align-items: flex-start;
   }
   .si-label {
     flex: 0 0 72px;
-    padding-top: 12px;
+    padding-top: var(--sp-3);
     text-align: right;
     font-size: 12.5px;
     color: var(--text-2);
@@ -381,7 +381,7 @@
   .si-row {
     flex: 1;
     display: flex;
-    gap: 8px;
+    gap: var(--sp-2);
     min-width: 0;
   }
   .si-btn {
@@ -390,7 +390,7 @@
     height: 46px;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     padding: 0 9px;
     border: 1px solid var(--separator-soft);
     border-radius: 8px;
@@ -451,7 +451,7 @@
   .apply-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
   .no-engine {
@@ -459,7 +459,7 @@
     color: var(--text-3);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
   }
   .hint {
     font-size: 12px;
@@ -475,13 +475,13 @@
     margin-top: 18px;
     border: 1px solid var(--separator-soft);
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: var(--sp-3) 14px;
   }
   .pc-top {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin-bottom: 8px;
+    margin-bottom: var(--sp-2);
   }
   .pc-stage {
     font-size: 12.5px;
@@ -509,7 +509,7 @@
   .pc-meta {
     display: flex;
     gap: 14px;
-    margin-top: 8px;
+    margin-top: var(--sp-2);
     font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
@@ -527,7 +527,7 @@
   .saved-ok {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     flex: 0 0 auto;
     font-size: 12px;
     color: var(--success);
@@ -565,7 +565,7 @@
     color: var(--text);
     font: inherit;
     font-size: 12.5px;
-    padding: 0 22px 0 8px;
+    padding: 0 22px 0 var(--sp-2);
     max-width: 190px;
     background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
       linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
@@ -583,11 +583,11 @@
   @media (max-width: 900px) {
     .pane {
       overflow-y: auto;
-      padding: 20px 16px 24px;
+      padding: var(--sp-5) var(--sp-4) var(--sp-6);
     }
     .cols {
       grid-template-columns: minmax(0, 1fr);
-      gap: 20px;
+      gap: var(--sp-5);
       flex: 0 0 auto;
     }
     .left {
@@ -598,7 +598,7 @@
       border-left: 0;
       border-top: 1px solid var(--separator-soft);
       padding-left: 0;
-      padding-top: 16px;
+      padding-top: var(--sp-4);
     }
     .form {
       grid-template-columns: 64px minmax(0, 1fr);

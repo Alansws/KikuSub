@@ -65,7 +65,7 @@
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--sp-3);
     min-width: 0;
   }
   .qa {
@@ -76,7 +76,7 @@
     font-size: 12px;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     color: var(--text-2);
     padding: 2px 6px;
     border-radius: 4px;
@@ -92,7 +92,7 @@
   .count {
     min-width: 16px;
     height: 16px;
-    padding: 0 4px;
+    padding: 0 var(--sp-1);
     border-radius: 8px;
     background: var(--accent);
     color: var(--on-accent);

@@ -353,7 +353,7 @@
   .hint code {
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: 12px;
-    padding: 1px 4px;
+    padding: 1px var(--sp-1);
     border-radius: 4px;
     background: var(--fill);
   }
@@ -371,7 +371,7 @@
     border: 1px solid var(--line-2);
     border-radius: 12px;
     background: var(--raise);
-    padding: 16px 16px 12px;
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
     display: flex;
     flex-direction: column;
     min-height: 220px;
@@ -398,8 +398,8 @@
   .card-top {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
   }
   .card-name {
     display: flex;
@@ -433,7 +433,7 @@
   .card-ops {
     margin-left: auto;
     display: flex;
-    gap: 8px;
+    gap: var(--sp-2);
     flex: 0 0 auto;
   }
   .link {
@@ -452,7 +452,7 @@
     color: var(--danger);
   }
   .desc {
-    margin: 0 0 8px;
+    margin: 0 0 var(--sp-2);
     font-size: 13px;
     line-height: 1.7;
     color: var(--text-2);
@@ -513,7 +513,7 @@
   .editor label {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--sp-1);
   }
   .editor label > span {
     font-size: 12px;
@@ -564,7 +564,7 @@
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    padding: 8px 10px;
+    padding: var(--sp-2) 10px;
     border-radius: 8px;
     font-size: 12px;
     margin-bottom: 10px;
@@ -579,16 +579,16 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 60px 20px;
+    gap: var(--sp-2);
+    padding: 60px var(--sp-5);
     color: var(--text-2);
     font-size: 12px;
   }
   .empty .btn {
-    margin-top: 4px;
+    margin-top: var(--sp-1);
   }
   .footnote {
-    margin-top: 16px;
+    margin-top: var(--sp-4);
     font-size: 12px;
     color: var(--text-3);
     line-height: 1.6;

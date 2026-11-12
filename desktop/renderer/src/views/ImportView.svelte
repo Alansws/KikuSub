@@ -193,8 +193,8 @@
     width: 100%;
     border: 1.5px dashed var(--separator);
     border-radius: var(--rad-panel);
-    padding: 48px 20px;
-    margin-top: 4px;
+    padding: var(--sp-12) var(--sp-5);
+    margin-top: var(--sp-1);
     text-align: center;
     background: transparent;
     color: inherit;
@@ -219,7 +219,7 @@
     display: block;
     font-size: var(--fs-heading);
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: var(--sp-1);
   }
   .dz-sub {
     display: block;
@@ -230,7 +230,7 @@
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
     font-size: 12px;
     background: var(--fill);
-    padding: 1px 4px;
+    padding: 1px var(--sp-1);
     border-radius: 4px;
   }
 
@@ -240,7 +240,7 @@
     gap: 10px;
     border: 1px solid var(--separator-soft);
     border-radius: 8px;
-    padding: 10px 12px;
+    padding: 10px var(--sp-3);
     background: var(--bg-content);
   }
   .ec-ico {
@@ -300,7 +300,7 @@
     align-items: center;
     gap: 10px;
     height: 52px;
-    padding: 0 4px 0 12px;
+    padding: 0 var(--sp-1) 0 var(--sp-3);
     text-align: left;
     cursor: default;
   }

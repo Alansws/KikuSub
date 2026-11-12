@@ -293,7 +293,7 @@
     z-index: 320;
     display: grid;
     place-items: center;
-    padding: 32px;
+    padding: var(--sp-8);
     background: var(--bg-content);
     -webkit-app-region: drag;
     overflow-y: auto;
@@ -304,7 +304,7 @@
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);
-    padding: 26px 28px 20px;
+    padding: 26px 28px var(--sp-5);
     -webkit-app-region: no-drag;
   }
   .logo {
@@ -315,13 +315,13 @@
     text-transform: uppercase;
   }
   h1 {
-    margin: 8px 0 7px;
+    margin: var(--sp-2) 0 7px;
     font-size: 21px;
     font-weight: 600;
     letter-spacing: -0.02em;
   }
   .lead {
-    margin: 0 0 16px;
+    margin: 0 0 var(--sp-4);
     font-size: 12.5px;
     line-height: 1.6;
     color: var(--text-2);
@@ -329,8 +329,8 @@
   .loading {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 22px 4px;
+    gap: var(--sp-2);
+    padding: 22px var(--sp-1);
     font-size: 12.5px;
     color: var(--text-3);
   }
@@ -350,13 +350,13 @@
   .engine-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--sp-2);
   }
   .engine-row {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: 11px 12px;
+    padding: 11px var(--sp-3);
     border: 1px solid var(--separator);
     border-radius: 8px;
     background: var(--fill);
@@ -433,14 +433,14 @@
   }
   .engine-size {
     flex: 0 0 auto;
-    padding-left: 8px;
+    padding-left: var(--sp-2);
     font-size: 11.5px;
     color: var(--text-3);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
   .download {
-    margin-top: 12px;
+    margin-top: var(--sp-3);
   }
   .download-top {
     display: flex;
@@ -469,9 +469,9 @@
   .error-box {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 12px;
-    padding: 8px 10px;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+    padding: var(--sp-2) 10px;
     border-radius: 8px;
     font-size: 12px;
     line-height: 1.5;
@@ -487,8 +487,8 @@
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    margin-top: 12px;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
   }
   .actions .btn {
     height: 30px;
@@ -498,7 +498,7 @@
     color: var(--text-2);
   }
   .fine {
-    margin-top: 12px;
+    margin-top: var(--sp-3);
     font-size: 11px;
     line-height: 1.5;
     color: var(--text-3);
