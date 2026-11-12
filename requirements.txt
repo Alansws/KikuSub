@@ -20,6 +20,8 @@ Pillow>=10
 # 的 PyTorch 代码，但原生库必须随 sidecar 一起打包（见 tools/pack/build_sidecar.sh）。
 # 权重不随包分发：设置页里点「下载模型」再下（约 230 MB / 1.2 GB）。
 sherpa-onnx>=1.12.27,<3
+# FireRedPunc 标点恢复走 ONNX Runtime（不额外拉 torch 模型；权重 162 MB 按需下载）
+onnxruntime>=1.31,<2
 
 # 本地零样本克隆 TTS（Apache-2.0，日语 + Apple Silicon MPS）。
 # 权重不随包分发：首次在界面点「下载克隆模型」下到 models/omnivoice（约 3.3GB）。

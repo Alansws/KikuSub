@@ -319,6 +319,7 @@ def run_transcription(
         out_path=str(out_path),
         engine_name=ENGINE_DISPLAY.get(req.engine_key, req.engine_key),
         engine_family=family,
+        engine_key=req.engine_key,
         output_format=req.output_format,
         elapsed_time=elapsed,
         cue_count=len(cues),

@@ -33,8 +33,10 @@ from pathlib import Path
 import numpy as np
 
 from .coverage import find_coverage_spans
+from .model_fetch import snapshot_download_files
 from .paths import MODELS_DIR
 from .procutil import CommandCancelled
+from .punctuation import PunctuationModel, needs_punctuation
 from .text_cues_zh import (
     TimedChar,
     build_timed_chars,
@@ -55,9 +57,6 @@ log = logging.getLogger(__name__)
 
 SENSEVOICE_REPO = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
 FIRERED_REPO = "csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26"
-# 国内网络直连 huggingface.co 经常断；仅在用户没显式设 HF_ENDPOINT 时作为重试兜底。
-MIRROR_ENDPOINT = "https://hf-mirror.com"
-
 _LOAD_LOCK = threading.Lock()
 
 
@@ -97,11 +96,16 @@ class SherpaAsrConfig:
     language: str = "auto"
     # SenseVoice 的逆文本归一化（数字、标点）；关掉输出就是无标点的一串字。
     use_itn: bool = True
+    # FireRedASR2 没有标点；开启后用 FireRedPunc 补（ONNX，约 160 MB，随引擎一起下载）。
+    use_punc: bool = True
 
 
 class _SherpaEngine:
     """sherpa-onnx 离线识别器的共用外壳。"""
 
+    # 只有没有 token 时间戳、且原始输出无标点的引擎（FireRed）才需要标点恢复。
+    # SenseVoice 用 `use_itn` 直接输出标点，再跑一遍 punc 反而会多出符号。
+    supports_punc = False
     key = ""
     label = ""
     repo_id = ""
@@ -123,6 +127,7 @@ class _SherpaEngine:
         self._recognizer = None
         self._recognizer_key: tuple | None = None
         self._vad = None
+        self._punc: PunctuationModel | None = None
 
     @property
     def ready(self) -> bool:
@@ -136,34 +141,22 @@ class _SherpaEngine:
         """下载（或补齐）ONNX 权重。只取 int8 与 token 表，不拉 fp32 副本。"""
         if self.model_available:
             return
-        self.model_dir.mkdir(parents=True, exist_ok=True)
-        if progress_cb:
-            progress_cb(0.005, f"正在下载 {self.label} 权重（{self.approx_label}）…")
-        from huggingface_hub import snapshot_download
-
-        kwargs = {
-            "repo_id": self.repo_id,
-            "local_dir": str(self.model_dir),
-            "allow_patterns": list(self.allow_patterns),
-            "max_workers": 2,
-        }
-        try:
-            snapshot_download(**kwargs)
-        except Exception:
-            if os.environ.get("HF_ENDPOINT"):
-                raise
-            log.warning("HuggingFace 直连失败，改用镜像重试 | repo=%s", self.repo_id, exc_info=True)
-            os.environ["HF_ENDPOINT"] = MIRROR_ENDPOINT
-            import huggingface_hub.constants as hub_constants
-
-            hub_constants.HF_ENDPOINT = MIRROR_ENDPOINT
-            snapshot_download(**kwargs)
-
+        snapshot_download_files(
+            repo_id=self.repo_id,
+            dest=self.model_dir,
+            allow_patterns=self.allow_patterns,
+            progress_cb=progress_cb,
+            label=self.label,
+        )
         missing = [name for name in self.required_files if not (self.model_dir / name).is_file()]
         if missing:
             raise RuntimeError(
                 f"{self.label} 权重不完整，缺少：{', '.join(missing)}（目录 {self.model_dir}）"
             )
+
+    def ensure_companions(self, progress_cb=None) -> None:
+        """引擎的可选配套模型；默认没有。"""
+        return None
 
     def load(self, progress_cb=None, config: SherpaAsrConfig | None = None) -> None:
         """加载（或按需换配置重建）识别器。
@@ -287,6 +280,9 @@ class _SherpaEngine:
         timed_segments = 0
         degraded: list[dict] = []
         char_count = 0
+        punc_applied = 0
+        punc_failed = 0
+        punc_warned = False
 
         if not total:
             if progress_cb:
@@ -330,6 +326,30 @@ class _SherpaEngine:
                 log.exception("中文引擎解码失败 | engine=%s | 第 %s 段", self.key, index)
                 text, tokens, timestamps = "", [], []
 
+            # FireRed 的原始输出没有标点：在切字幕之前补，切点才有标点可依。
+            if (
+                self.supports_punc
+                and self._punc is not None
+                and cfg.use_punc
+                and text
+                and needs_punctuation(text)
+            ):
+                try:
+                    restored = self._punc.restore(text)
+                except Exception as exc:  # noqa: BLE001 - 标点是可选增强，不能拖垮转写
+                    punc_failed += 1
+                    if not punc_warned:
+                        punc_warned = True
+                        log.warning(
+                            "标点模型不可用，本次输出保持无标点 | engine=%s | %s",
+                            self.key,
+                            exc,
+                        )
+                else:
+                    if restored != text:
+                        text = restored
+                        punc_applied += 1
+
             if _is_blank(text):
                 if cancel_event and cancel_event.is_set():
                     self.last_interrupted = True
@@ -364,6 +384,9 @@ class _SherpaEngine:
             cues.extend(seg_cues)
 
         empty = len(self.last_missed_spans)
+        if self.supports_punc:
+            self.last_segment_stats["punc_applied"] = punc_applied
+            self.last_segment_stats["punc_failed"] = punc_failed
         self.last_align_stats = {
             "enabled": True,
             "segments": total,
@@ -456,7 +479,13 @@ class SenseVoiceEngine(_SherpaEngine):
 
 
 class FireRedAsrEngine(_SherpaEngine):
+    supports_punc = True
     key = "firered"
+
+    def __init__(self, model_dir=None, config=None) -> None:
+        super().__init__(model_dir, config)
+        # 标点权重跟 ASR 权重放同一个目录：设置页的体积、下载进度、清理都是一体的。
+        self._punc = PunctuationModel(self.model_dir / "punc")
     label = "FireRedASR2-AED"
     repo_id = FIRERED_REPO
     dir_name = "fireredasr2-aed"
@@ -464,6 +493,20 @@ class FireRedAsrEngine(_SherpaEngine):
     allow_patterns = ("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt", "README.md")
     required_files = ("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")
     approx_label = "约 1.2 GB"
+
+    def ensure_model(self, progress_cb=None) -> None:
+        """FireRed 的安装包含 ASR + FireRedPunc（约 160 MB）。
+
+        标点模型下载失败不让整次安装失败：ASR 可用，只是输出没有标点；
+        用户之后可以用设置页的「校验 / 补齐」再补。
+        """
+        super().ensure_model(progress_cb)
+        try:
+            self._punc.ensure_model(progress_cb)
+        except Exception as exc:  # noqa: BLE001 - 配套模型失败不阻塞主引擎
+            log.warning("FireRedPunc 下载失败，FireRed 仍可用 | %s", exc, exc_info=True)
+            if progress_cb:
+                progress_cb(0.995, "标点模型下载失败：FireRed 仍可转写，但输出没有标点")
 
     def _create_recognizer(self, sherpa_onnx, cfg: SherpaAsrConfig):
         return sherpa_onnx.OfflineRecognizer.from_fire_red_asr(

@@ -258,6 +258,7 @@ def param_pairs(
     penalty: float,
     use_alignment: bool,
     engine_family: str | None = None,
+    engine_key: str = "",
 ) -> list[tuple[str, str]]:
     """【执行生效参数清单】的字段对。"""
     family = engine_family or ("qwen" if is_qwen else "whisper")
@@ -269,6 +270,16 @@ def param_pairs(
             ),
             ("动态响度归一化 (enable_loudnorm)", "启用" if getattr(config, "enable_loudnorm", True) else "停用"),
             ("CPU 线程数 (num_threads)", str(getattr(config, "num_threads", 2))),
+            *(
+                [
+                    (
+                        "标点恢复 (FireRedPunc)",
+                        "启用" if getattr(config, "use_punc", True) else "停用",
+                    )
+                ]
+                if engine_key == "firered"
+                else []
+            ),
             ("VAD 语音检测阈值 (vad_threshold)", getattr(config, "vad_threshold", 0.30)),
             ("最短语音长度 (vad_min_speech_ms)", f"{getattr(config, 'vad_min_speech_ms', 100)} ms"),
             ("判定为停顿的静音 (vad_min_silence_ms)", f"{getattr(config, 'vad_min_silence_ms', 200)} ms"),
@@ -326,6 +337,7 @@ def build_transcription_report(
     config: object,
     is_interrupted: bool = False,
     engine_family: str | None = None,
+    engine_key: str = "",
     time_slice_desc: str = "全片完整转录",
     ngram: int = 5,
     penalty: float = 1.15,
@@ -364,6 +376,7 @@ def build_transcription_report(
         *[f"• {label}：{value}" for label, value in param_pairs(
             is_qwen=is_qwen, config=config, ngram=ngram,
             penalty=penalty, use_alignment=use_alignment, engine_family=family,
+            engine_key=engine_key,
         )],
     ]
 
@@ -505,6 +518,7 @@ def build_report_data(
     config: object,
     is_interrupted: bool = False,
     engine_family: str | None = None,
+    engine_key: str = "",
     time_slice_desc: str = "全片完整转录",
     ngram: int = 5,
     penalty: float = 1.15,
@@ -528,6 +542,7 @@ def build_report_data(
     is_whisper = family == "whisper"
 
     raw_text = build_transcription_report(
+        engine_key=engine_key,
         media_name=media_name,
         out_filename=out_filename,
         out_path=out_path,
@@ -749,6 +764,7 @@ def build_report_data(
                 penalty=penalty,
                 use_alignment=use_alignment,
                 engine_family=family,
+                engine_key=engine_key,
             )
         ],
         "quality": {

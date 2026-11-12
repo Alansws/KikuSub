@@ -117,3 +117,20 @@ def test_no_cue_starts_with_punctuation():
     for cue in cues:
         assert not cue.text.startswith(("。", "，", "、", "！", "？")), [c.text for c in cues]
     assert "".join(cue.text for cue in cues) == text
+
+
+def test_soft_max_reaches_punctuation_just_past_the_limit():
+    """标点只比字数上限晚 3 个字时，宁可这一条多 3 个字，也别把「特别」劈开。"""
+    text = "在嘞个就是在情节里面就是感觉戏演得特别好，就是好像"
+    chars = _chars(text, step=0.16)
+
+    cues = split_cues(
+        chars,
+        seg_start=0.0,
+        seg_end=0.16 * len(text),
+        max_cue_chars=18,
+    )
+
+    assert cues
+    assert "特别好，" in cues[0].text, [cue.text for cue in cues]
+    assert len(cues[0].text) <= 18 + 6

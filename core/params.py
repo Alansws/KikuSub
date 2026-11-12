@@ -253,6 +253,12 @@ SPECS: tuple[ParamSpec, ...] = (
         help="弱人声增强；会多花一次 ffmpeg 解码。",
     ),
     ParamSpec(
+        "firered.use_punc", "标点恢复 (FireRedPunc)", FIRERED, "bool", True,
+        group="基础", config_field="use_punc",
+        help="FireRed 的原始输出没有标点；开启后用 FireRedPunc 在切字幕前补齐句读。"
+        "首次启用会在下载引擎时一并下载标点模型（约 160 MB）。",
+    ),
+    ParamSpec(
         "firered.num_threads", "CPU 线程数", FIRERED, "int", 2,
         group="基础", minimum=1, maximum=8, step=1, config_field="num_threads",
         help="2–4 在 Apple Silicon 上性价比最高；AED 解码比轻量模型慢约 5 倍。",

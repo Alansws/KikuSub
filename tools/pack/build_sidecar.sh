@@ -47,6 +47,8 @@ rm -rf "$OUT/dist/$NAME"
   --hidden-import omnivoice.models.omnivoice \
   --hidden-import sherpa_onnx \
   --collect-all sherpa_onnx \
+  --hidden-import onnxruntime \
+  --collect-all onnxruntime \
   --exclude-module matplotlib \
   --exclude-module tkinter \
   --distpath "$OUT/dist" \

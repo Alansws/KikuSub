@@ -192,11 +192,36 @@ def _pick_cut(
         if score > best_score or (score == best_score and position > best_position):
             best_score = score
             best_position = position
-    if best_position:
-        return best_position
+    return best_position
 
-    # 硬切：从 limit 往回找最近的空格，避免把英文单词切成两半；
-    # 也不要把标点甩到下一行开头。
+
+def _extend_to_marks(
+    chars: list[TimedChar],
+    start: int,
+    limit: int,
+    *,
+    extra_chars: int = 6,
+    max_duration: float = 0.0,
+) -> int:
+    """窗口里没有切点、但标点就在后面几个字时，把这一条稍微放长。
+
+    真实案例（FireRed + FireRedPunc）：一句 21 字的话，逗号在第 21 个字后，
+    而 ``max_cue_chars=18``；硬切会切出「戏演得特 / 别好，」这种把词劈开的字幕。
+    宁可这一条多 3 个字，也要停在逗号上。
+    """
+    stop = min(len(chars), start + max(limit, 0) + max(1, extra_chars))
+    for position in range(limit + 1, stop + 1):
+        if position <= start + 1:
+            continue
+        if max_duration > 0 and (chars[position - 1].end - chars[start].start) > max_duration:
+            break
+        if _cut_score(chars, position, pause_floor=1e9) >= 1.0:
+            return position
+    return 0
+
+
+def _hard_cut(chars: list[TimedChar], start: int, limit: int) -> int:
+    """实在没有标点/空格可用时的兜底：从 limit 往回找最近的空格，避免劈英文。"""
     for position in range(limit, start + 1, -1):
         if position >= len(chars):
             continue
@@ -267,6 +292,14 @@ def split_cues(
             end_index = _pick_strong_cut(chars, start_index) or total
         else:
             end_index = _pick_cut(chars, start_index, limit, min_chars, pause_floor)
+            if not end_index:
+                end_index = _extend_to_marks(
+                    chars,
+                    start_index,
+                    limit,
+                    extra_chars=max(4, max_chars // 3),
+                    max_duration=max_dur * 1.5,
+                ) or _hard_cut(chars, start_index, limit)
 
         # 不要留「点。」这种只有 1–2 个字的尾巴：宁可让当前条稍微超一点时长。
         # 中文句末常是一个数字 + 量词/标点，模型给标点的时间戳又偏晚，最容易踩。
