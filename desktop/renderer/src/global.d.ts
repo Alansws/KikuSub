@@ -110,6 +110,8 @@ declare global {
       onMenu(cb: (ev: MenuEvent) => void): () => void;
       onQuitPrompt(cb: (payload: { files: CleanupFile[] }) => void): () => void;
       onQuitCancelled(cb: () => void): () => void;
+      /** 主进程已在退出：之后的 sidecar:down 是收尾，不是内核崩溃（preload.cjs 的 app:quitting） */
+      onQuitting(cb: () => void): () => void;
       getQuitPrompt(): Promise<{ files: CleanupFile[] } | null>;
       confirmQuit(keepPaths: string[]): Promise<{ ok: boolean; removed: number; failed: number }>;
       cancelQuit(): Promise<void>;
