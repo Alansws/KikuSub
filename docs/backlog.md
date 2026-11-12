@@ -27,13 +27,10 @@
 
 | # | 项 | 出处 | 验收 |
 | --- | --- | --- | --- |
-| 1 | 布局语义块合并：`.actions` 6 份、`.empty` 6 份、`.sec-head` 3 份、`.sec` 3 份 | `desktop/test/style-baseline.json` | 每合并一处就把基线数字调小，最终到 1 |
-| 2 | 主题色裸值 → 令牌：`ExportView.svelte:1029` `#8fa6ff`、`:1281` `#14161c`，以及 `themes.ts` 的 swatch 与 `app.css` 双写 | 审计 P2-3 | `style-drift.test.cjs` 增加"组件内不得出现 hex"规则并绿 |
-| 3 | 大文件拆分：`store.svelte.ts` 3942 行、`ReviewView.svelte` 3933 行、`SettingsView.svelte` 2056 行、`main.cjs` 1570 行 | engineering-practice §5 | 先拆纯函数到 `lib/*.ts` 并补单测；每次只拆一块，跑完 `npm run check` |
-| 4 | 覆盖率报告（先不设门槛） | 审计 P2-6 | `pytest --cov` 出报告；能看到"哪块没人管" |
-| 5 | 未使用的导出：`lib/time.ts: tcSrt`、`lib/api.ts: endpoint`、疑似 `TtsVoice` / `aiFinalText` / `enabledEngines` | 审计 P2-5 | 删除或补用途，别让下个会话当"现有基建"复用错 |
-| 6 | `docs/images/shots/current/` 未被 gitignore；baseline 只冻结 3 屏（矩阵支持 6 屏） | 审计 P2-4 | 跑完矩阵 `git status` 干净；baseline 补到 6 屏 |
-| 7 | 机械化测试清理：81 个单断言用例抽检过，多数合理 | 审计 P2-… | 扫一遍删掉"删了没人疼"的用例 |
+| 1 | 布局语义块合并：`.actions` 6 份、`.empty` 6 份、`.sec-head` 3 份、`.sec` 3 份 | `desktop/test/style-baseline.json` | 每合并一处就把基线数字调小，最终到 1。**⏸ 暂缓（2026-11-13）：动正在跑的界面，需单独一轮 + 截图 PSNR + 手点** |
+| 2 | 主题色裸值 → 令牌：`ExportView.svelte:1029` `#8fa6ff`、`:1281` `#14161c`，以及 `themes.ts` 的 swatch 与 `app.css` 双写 | 审计 P2-3 | `style-drift.test.cjs` 增加"组件内不得出现 hex"规则并绿。**⏸ 暂缓（2026-11-13）：同上** |
+| 3 | 大文件拆分：`store.svelte.ts` 3937 行、`ReviewView.svelte` 3933 行、`SettingsView.svelte` 2056 行、`main.cjs` 1570 行 | engineering-practice §5 | 先拆纯函数到 `lib/*.ts` 并补单测；每次只拆一块，跑完 `npm run check`。**⏸ 暂缓（2026-11-13）：同上，先拆纯函数再谈组件** |
+| 4 | 机械化测试清理：81 个单断言用例抽检过，多数合理 | 审计 P2-… | 扫一遍删掉"删了没人疼"的用例 |
 
 ---
 
@@ -57,3 +54,6 @@
 | 2026-11-13 | 主链路 e2e、`npm run check`（tsc）、svelte-check 基线、CI `desktop` job、`review.md` + PR 模板 | `2ba5712` `5fd25b0` `7132b41` |
 | 2026-11-13 | 补 `svelte.config.js`（此前 svelte-check 根本没在查），基线 33 → 10 | `7b3b1a9` |
 | 2026-11-13 | 文档巡检测试、待办单一入口、方案模板、验证时机矩阵、pytest marker | 见 `git log` |
+| 2026-11-13 | 删掉 5 个死导出（`tcSrt` / `endpoint` / `TtsVoice` / `aiFinalText` / `enabledEngines`——后两个各有一份**活的**内联实现） | 见 `git log` |
+| 2026-11-13 | 静默截图当次产出进 gitignore（`docs/images/shots/current/`） | 见 `git log` |
+| 2026-11-13 | 覆盖率报告：`tools/check/coverage.sh` + `pytest-cov`；当前 core+server 73%（不设门槛，见脚本头注释） | 见 `git log` |

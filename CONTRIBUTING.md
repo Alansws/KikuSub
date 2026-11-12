@@ -97,6 +97,11 @@ cd desktop && npm run test:main
 ```
 
 - Python 用例覆盖内核、服务层、AI 提案与译文轨；不涉及推理的用例不需要模型
+- 想看"哪块没人管"：`bash tools/check/coverage.sh`（HTML 明细在 `build/coverage/index.html`）；
+  **不设覆盖率门槛**——模型推理 / ffmpeg 子进程 / Electron 主进程这些路径在测试里根本跑不到，
+  硬设百分比只会逼人写没意义的测试
+- 环境依赖的用例带 marker（`needs_ffmpeg` / `needs_macos` / `needs_model` / `integration`），
+  本机缺什么就 `-m "not needs_macos"` 排除，详见 `pytest.ini`
 - `npm run test:main` 覆盖退出清理、密钥加解密、技能安装与模板导入检查
 - 通了界面才能确认的改动（拖动、缩放、跟随、双语行高）请附截图或录屏，`desktop/README.md` 里有自截图脚本
 
