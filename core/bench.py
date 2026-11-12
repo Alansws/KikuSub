@@ -54,7 +54,6 @@ def _time(fn, repeats: int = REPEATS) -> float:
 def run(count: int = DEFAULT_CUES) -> dict:
     cues = _make_cues(count)
     srt = cues_to_srt(cues)
-    texts = [c.text for c in cues]
     results: dict[str, float] = {}
 
     results["srt_to_cues"] = _time(lambda: srt_to_cues(srt))
