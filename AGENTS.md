@@ -139,30 +139,30 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 ### 3.4.2 历史、TTS、查找替换与手动补字幕（2026-11 新增）
 
-- **20 步可回溯历史**：`Session.history` 是「起始状态 + 每一步操作后的完整快照」的时间线，
-  `history_cursor` 指向当前状态。**不要再退回 undo_stack/redo_stack 双栈**：界面要列出
-  「这一步做了什么」并允许点任意一步跳过去，双栈没有中间态可展示。
-  - 所有编辑都必须带操作说明：`replace_review(cues, label=...)`、`update_cue(..., label=...)`；
-    新增写字幕的路径时也要传 label，否则历史里会出现「编辑字幕」这种无信息条目。
-  - 上限是 **20 步操作**（`HISTORY_LIMIT`，另加一条起始状态）；超出后从最旧的操作开始丢。
-  - `POST /api/cues/history/jump` 只移动 cursor、不产生新历史；跳转后后面的步骤仍可重做。
-  - 没有实际变化的 PATCH 不压历史（`routes_cues.patch_cue` 已做相等判断）。
-  - 前端 `cueHistory` 下拉在工具栏撤销/重做右侧；点条目走 `jumpCueHistory()`。
-- **全局撤销：字幕 + 导出设置（2026-11 扩展）**：只在核对台里撤销不够——导出页调
-  字号/描边/预设/形式/分辨率这些动作以前按了没反应，用户明确报过。
-  - `store.svelte.ts` 的 `uiHistory` 是**渲染层本地**时间线（起始状态 + 每步完整快照，
-    同样 20 步）；导出面板的字号/字重/预设/形式/字幕轨/分辨率/码率/位置写进这里。
-    **禁止**在 `ExportView.svelte` 里直接写 `exporter.size = ...` 之类：一律走
-    `setExportMode / setExportTrack / setExportResolution / setExportQuality / setExportSrt /
-    setExportOutDir / updateExportStyle / applyExportStylePreset / resetExportStyle`，
-    否则动作不会进历史。滑杆 `input` 由 `editExportUi()` 按 1.2 秒窗口合并成一步。
-  - 服务端快照带 `undo_at` / `redo_at`（`Session.undo_timestamp()` / `redo_timestamp()`）；
-    `nextUndo()/nextRedo()` 取**时间更近**的一边，所以 ⌘Z 撤回的是最近一次操作，
-    不会永远先撤字幕。
-  - 工具栏的撤销/重做/历史按钮对所有视图可见；历史面板分「字幕编辑」「导出设置」两组，
-    各自可点任意一步跳回。⌘Z 在滑杆/复选框聚焦时也要生效（`App.svelte` 的 `onKey`
-    对滑杆放行、只给文本输入框保留原生逐字撤销）。
-  - 换片（`openMedia`）时 `resetExportUiHistory()`：上一部的字号快照不该在新片上被 ⌘Z 抬回来。
+- **50 步统一工作区历史（2026-11 重构，替换旧的「字幕 + 导出设置」双时间线）**：
+  `Session.history` 是「起始状态 + 每一步操作后的完整 **WorkspaceState**」的时间线，
+  `history_cursor` 指向当前状态。**不要再按域拆历史，也不要用双栈**：
+  - 一份快照包含 `cues / translations / review_source / qa_payload / export_ui / ai_draft`。
+    字幕、译文、质检状态、导出设置、AI diff 草稿都在同一条时间线上，⌘Z 永远退回最近一步。
+  - 上限 **50 步操作**（`HISTORY_LIMIT`，另加一条起始状态）。超出后从最旧的操作开始丢。
+  - 所有编辑都必须带操作说明：`replace_review(..., label=...)`、`update_cue(..., label=...)`、
+    `set_translation(..., label=...)`、`session.record(label)`；缺 label 的历史条目不可接受。
+  - `_record(label, coalesce=...)` 支持 1.2 秒窗口合并：同一根滑杆、同一行 AI 建议的连续
+    调整只算一步。`POST /api/cues/history/jump` 只移动 cursor、不产生新历史。
+  - `undo/redo/jump` 调 `_apply_state()` 一次性恢复全部域；若 `qa_payload` 变化，必须同时
+    把 `.qa.json` 写回磁盘，否则面板状态会跟字幕对不上。
+  - **导出设置与 AI diff 草稿是渲染层状态**：通过 `POST /api/history/checkpoint`
+    （`{label, export_ui, ai_draft, coalesce, record}`）并进服务端快照。导出面板严禁直接写
+    `exporter.size = ...`；一律走 `setExportMode / setExportTrack / setExportResolution /
+    setExportQuality / setExportSrt / setExportOutDir / updateExportStyle /
+    applyExportStylePreset / resetExportStyle`，否则不会进历史。切 AI 上下文用
+    `record=false` 同步、不产生步骤。
+  - 换片时 `reset_for_media()` 清空这些状态；`openMedia` 用 `syncClientState(false)` 把新片
+    的默认导出设置写进基线，但不要记成一次编辑。
+  - 工具栏历史面板只有**一组**条目（不再分「字幕编辑 / 导出设置」）；`undo_at/redo_at`
+    仍随快照返回，但只用于显示，**禁止**再拿它做“谁更近”的分域判断。
+  - 文本框内保留原生逐字撤销；提交（失焦 / ⌘↩）后由 `updateCue` 记一步。⌘Z 在滑杆 /
+    复选框聚焦时也要生效（`App.svelte` 的 `onKey` 对滑杆放行）。
 - **聚焦倍率固定 69×**：`ReviewView` 的 `FOCUS_ZOOM=69`，工具栏「聚焦」、选区「聚焦」、
   右栏「聚焦」、质检定位全部走 `duration/69`。**禁止**再使用「当前 viewSpan / 6」这类
   会随已有缩放叠加的公式（用户报过 145× 再点一次变 415×）。
@@ -171,10 +171,25 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   `play.selectNonce` 用于绕开 `lastRevealed` 去重；只改 `play.selected` 会遇到
   「新句下标没变 → 表格不滚」的旧 bug。**转写选区不得改视窗缩放**：不要再在这里调
   `focusRange()`（它会把波形放大，用户明确要求保持当前聚焦状态）。
-- **⌘F 查找与替换（只处理原文）**：`findState` 在 store 里；`ReviewView` 负责匹配计数、
-  高亮与跳转，`replaceAllInCues()` 走一次 `replaceCues`（整表提交，历史里只有一步）。
-  替换文本必须用函数替换（`() => replacement`），不能把 `$&` / `$1` 当正则替换模式。
-  菜单 `查找与替换…` 与渲染层快捷键都要能打开；输入框聚焦时也要生效。
+- **⌘F 查找与替换（覆盖原文 / 译文 / 双语）**：`findState` 在 store 里；`ReviewView`
+  按当前显示模式决定搜索轨——原文只搜原文、译文只搜译文、双语两条都搜。命中必须带
+  `track`（source / target），高亮与替换才能改对表。「全部替换」走
+  `replaceAllInTracks()` → `POST /api/cues/replace-all`：客户端算好原文与译文两份完整
+  数组，服务端只压**一步**历史，双语模式下 ⌘Z 一次就能退干净。单条替换仍分别走
+  `replaceInCue()` / `replaceInTranslation()`。替换文本必须用函数替换
+  （`() => replacement`），不能把 `$&` / `$1` 当正则替换模式。菜单 `查找与替换…` 与
+  渲染层快捷键都要能打开；输入框聚焦时也要生效。
+  **逐处决策（2026-11）**：单处替换成功后必须 `jumpToCue(next)`，让表格选中列、滚动与
+  底部字幕轨道跟到下一处——只改文本会让“替换在往后走、高亮却不跟”。查找栏里的「跳过」
+  只把当前命中记进本轮的 `findSkipped` 锚点（cue / track / start），不写字幕、不进历史；
+  改查找词、切显示模式或关掉查找栏即清空。同一句里更靠前的命中被替换/删除时，必须调
+  `shiftFindAnchors()` 平移后面跳过的起点，否则被跳过的逗号会“复活”。上一处 / 下一处 /
+  替换 / 跳过都只走**未跳过**的命中；当前这一处用 accent 单独点亮，跳过的命中加删除线。
+  「全部替换」也要尊重跳过：把 `skippedFindKeys` 传给 `replaceAllInTracks(..., skip)`，
+  只替换未跳过的命中（按钮文案此时是「替换剩余」），同轨整批替换后用
+  `reseatSkippedAfterReplaceAll()` 平移剩余锚点；双语下仍只压一步历史。
+  快捷键 `review.findPrev` / `review.findNext` 的 `scope` 是 `'find'`，只在查找栏打开时
+  参与匹配（默认 ⌘G / ⇧⌘G），避免用户改键后把方向键从正文编辑里抢走。
 - **右键手动补字幕**：音轨 `contextmenu` → 「添加字幕」→ `insertCueAt(t)` 在光标处居中插入
   **0.8 秒空字幕**（贴片尾时自动前移），随后 `play.editNonce` 让右侧检查器文本框拿到焦点。
   这是给气声 / 模型识别为空 / 只想手打「啊」的场景用的，不要试图自动跑识别。
@@ -192,12 +207,17 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   - 服务端的插入 / 删除 / 切割 / 合并都要经 `Session` 的结构性方法调整 `translations`，
     **禁止**只改 `review_cues` 让译文轨自己错位。`HistoryState` 现在连译文轨一起快照，
     ⌘Z 才能把字幕与译文成对恢复。
-- **可自定义快捷键（2026-11 新增）**：`desktop/renderer/src/lib/shortcuts.svelte.ts` 是唯一映射，
+- **可自定义快捷键（2026-11 修订）**：`desktop/renderer/src/lib/shortcuts.svelte.ts` 是唯一映射，
   ⌘K 打开面板录制新组合（该快捷键本身也可改）。默认值：Enter 删除当前字幕（底部多选时一起删）、
-  Space 播放 / 暂停、↑↓ 上下句、⌘F 查找、⌘↩ 添加空字幕、⌘1/⌘2 在 AI 优化台切润色 / 翻译。
-  **菜单里不再给播放 / 上下句 / 视图 / 查找绑固定 accelerator**：否则用户改键后旧键仍然生效，
-  且 AI 优化台的 ⌘1/⌘2 会被「显示 → 导入 / 转写」抢先。视图切换仍在菜单里可点，但按键走渲染层。
-  输入框内只有 allowInTyping 的动作（视图切换 / AI 标签 / 查找 / 打开面板）生效。
+  Space 播放 / 暂停、↑↓ 上下句、⌘F 查找、⌘↩ 添加空字幕、**⌘G / ⇧⌘G 查找下一处 / 上一处**
+  （`scope: 'find'`，只在查找栏打开时生效，见 §3.4.2）；视图键固定为
+  **⌘1 导入 / ⌘2 转写 / ⌘3 核对台 / ⌘4 AI 优化 / ⌘5 导出**。**AI 优化台内部的润色 / 翻译
+  不再有独立快捷键**（同一页里的页签），提示词库与任务详报也不占键；设置页走系统惯例 ⌘,
+  （侧栏「设置」右侧显示提示），它和 ⌘Z/⇧⌘Z、⌘O、⌘E、⌘Q 等一起列在面板「固定快捷键」组，
+  录制时会被判为冲突并拒绝。
+  **菜单里不再给播放 / 上下句 / 视图 / 查找绑固定 accelerator**：否则用户改键后旧键仍然生效。
+  视图切换仍在菜单里可点，但按键走渲染层。视图菜单补上「AI 优化」；核对入口统一叫「核对台」。
+  输入框内只有 allowInTyping 的动作（视图切换 / 查找 / 打开面板）生效。
 - **本机 TTS（2026-11 升级：系统 say → 本地零样本克隆）**：
   - 引擎分两层，都在 `core/tts/`：`mac_say.py`（零显存兜底，`say -v ?` 的日语列表）与
     `clone_engine.py`（OmniVoice，Apache-2.0，0.6B，官方建议 3–10 秒参考音频）。
@@ -234,6 +254,24 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   - **降级是硬要求**：没装 `omnivoice`、没下模型、MPS 失败（回退 CPU）都必须只让克隆
     引擎不可用，系统语音与界面不能卡死；合成失败返回可读的 502/503，前端弹 toast。
 
+
+### 3.4.3 质检面板：停靠页签 + 可选浮窗（2026-11 重构）
+
+- **默认不再浮在画面上**：`Inspector.svelte` 顶部有「当前条目 / 质检待核」两个页签，
+  `QaPanel` 以 `mode="docked"` 填满 348px 的右栏；不再遮挡预览、底部字幕或右侧按钮。
+  这是用户明确要求的「不管怎么放都挡一块」的解决方案。
+- **浮窗是显式选项**：页签内点「弹出为浮窗」后 `QaPanel mode="floating"` 才用
+  `position: fixed` + `left/top/width/height`；可拖标题栏、拖右下角改大小、双击标题栏或
+  点「归位」恢复默认位置和大小，点「停靠」回到检查器页签。位置/尺寸存
+  `localStorage['kikusub.qaPanel.v2']`。
+- **拖动必须用 window 级 pointermove/pointerup**：旧实现把 move/up 挂在标题栏上，
+  面板一旦移出指针下方就收不到后续事件（用户报过「拖 100px 只动 10px、位置不落盘」），
+  而且 `bottom = startBottom + dy` 的垂直方向是反的。新实现只记录起点，在 window 上算
+  位移并 clamp 到可视区；禁止改回标题栏级 capture。
+- `qa.floating` 持久化；`setView` 离开核对屏时关闭停靠面板（浮窗例外）。
+  `StatusBar` 的「质检」按钮对两种模式都走 `toggleQaPanel()`；从其他页面打开会先切回核对屏。
+- 质检动作（mark / skip / delete_cue / restore）现在也进统一历史；`focus` 不记。
+  `_apply_state` 恢复 `qa_payload` 时必须写回媒体同名 `.qa.json`。
 
 ## 3.5 日志与诊断（2026-11 新增）
 
@@ -293,6 +331,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   另存一份到 localStorage；必须走现有 `restoreDraft` / `openSubtitle` 链路，来源标记、
   质检解耦与 ⌘Z 才不会和真实会话不一致。
 
+- **顶部引擎切换（2026-11 改版）**：工具栏不再平铺分段，`components/EngineSwitch.svelte`
+  用「当前引擎胶囊 + 可滚动列表」；列表项显示用途、就绪圆点与体积，3–4 个引擎也不会挤占
+  工具栏。`ProgressBar.svelte` 是模型下载 / OmniVoice 校验的统一轨道：`percent=null` 走
+  不确定进度，确定进度只改 `transform: scaleX()`，完成态转绿。改这两块时保留
+  `bind:engine` 契约与 `prefers-reduced-motion` 降级。
+
 ### 快捷键
 
 - **⌘,（Ctrl+,）** 打开设置。菜单 `设置…` 已绑 accelerator，渲染层 `onKey` 还要再兜一层：
@@ -300,6 +344,10 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - **⌘K** 打开「键盘快捷键」面板（`ShortcutsDialog.svelte`）；面板里的组合存
   `localStorage['kikusub.shortcuts.v1']`，菜单里也有「键盘快捷键…」入口。用户自定义优先，
   不要再把播放 / 删除 / 视图切换写死回菜单 accelerator。
+- **冲突必须当场说清楚**：录制新组合时如果与另一个动作或固定快捷键重复，消息要显示在
+  正在录制的那一行下面（不能只放在面板底部，用户看不到），并保留原键不保存；已保存映射
+  里的重复也要在该行标红。旧版 `view.export=mod+4 / view.report=mod+5` 只在仍是旧默认值
+  时迁移到新的 `⌘5`，用户自定义过的键不覆盖。
 
 ### 退出前清理（⌘Q / 关窗）
 
@@ -381,8 +429,11 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 - 译文**永远不写进** `review_cues.text`（D-3）。它存在 `Session.translations[lang]`，
   与 `review_cues` **逐条对齐**，并带一份 `base`（生成时的原文快照）用来算过期。
-- 写轨只有两条路：`POST /api/translations`（应用一整版）与草稿恢复。两者都**只动轨**，
-  不进 `review_cues` 的撤销栈；译文有自己的 `translation_undo[lang]`（上限 20 版）。
+- 写轨只有两条路：`POST /api/translations`（应用一整版）与草稿恢复。两者都**只动轨**。
+  译文编辑现在与字幕共用**统一工作区历史**（`set_translation` / `patch_translation` /
+  `drop_translation` / 整轨替换都 `_record`），⌘Z 会按时间退回到对应状态。
+  `translation_undo[lang]` 仅保留给检查器里的「撤销译文」按钮（一次退回上一版），
+  不再是全局 ⌘Z 的存储。
 - 条数必须相等、`i` 必须连续、digest 必须匹配；**不通过就整批拒绝**，
   绝不落一份对不齐的轨（`test_server_translations.py`）。
 - 双语分两种排版，**不能混用**（D-4，2026-11 修订）：
@@ -413,6 +464,13 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   上一部片的译文永远占着、软件不可用」的修复。核对台右栏也提供「删除译文」。
 - **切回三态要定位**：`ReviewView` 监听 `app.track/trackLang`，变化时把 `play.selected` 落到
   当前时间的字幕并 `revealRow()`；双语是双行高，必须等 DOM 更新后再滚。
+- **原文轨 / 译文轨分别导入（2026-11 新增）**：原文走 `POST /api/cues/import`；译文走
+  `POST /api/translations/import`（`path` + `lang`），只换 `translations[lang]`，时间轴仍取自
+  当前原文。条数相同时按顺序对齐；条数不同时用 `core.subtitles.align_translation_texts()`
+  按时间重叠挂回（「仅译文」导出会跳过空译文，天然少条），挂不上就整批 422。
+  删除原文用 `POST /api/cues/clear`（连同无法再对齐的译文轨，一步历史）；删除译文仍走
+  `DELETE /api/translations/{lang}`。转写页两张文件卡、核对台「⋯」与检查器译文区都复用
+  这三个入口，不要再各写一套导入逻辑。
 ### 3.7.3 Agent 技能（2026-11 M4）
 
 - 技能包在 `desktop/resources/skill/kikusub-subtitle/`，装到 `~/.agents/skills/`（DSH 会扫描的
@@ -495,6 +553,11 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   （`container` / `codec` / `bitrate`）。`needs_proxy` 在码率 ≥25 Mbps 时也为真。
 - 自动压制仍由 `auto_proxy` 控制；核对台工具栏与画面提示都提供手动
   「压制代理」，不依赖自动判定。代理任务仍走 `/api/jobs` 的 `kind=proxy`。
+- **已有代理可直接挂载（2026-11 新增）**：`POST /api/media/{id}/proxy`（`path`）交给
+  `MediaStore.attach_proxy()` → `core.proxy.install_existing_proxy()`：优先硬链接，跨盘用
+  符号链接，最后才复制；写进标准 `web_proxies/` 路径并原子 rename，重启后仍会被识别为
+  已就绪。`openMedia()` 看到 `proxy_ready` 时不再自动起压制任务。物理文件不存在/太小、
+  音频文件或原片本身都会被拒绝。
 - 高码率 H.264 的提示文案要说明「能播但拖动卡」，不要写成「无法解码」。
 
 ### 3.8.3.1 媒体 Range（2026-11 修复）

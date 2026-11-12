@@ -35,7 +35,7 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **AI polish / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. Translations live in a parallel track and export as source, target or bilingual.
 - **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
 - **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
-- **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality all go into the history; ⌘Z undoes whichever domain (subtitles or export settings) changed most recently, and the history panel lists both groups.
+- **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality share one history with subtitles, translations, QA state and AI suggestion edits; ⌘Z always undoes the most recent step, and the history panel is a single list.
 - **Subtitle styles** — burned-in subtitles come with fansub-style presets (standard, heavy outline, rounded anime, movie serif, Japanese broadcast, light) plus per-field control over font, weight, size, outline, shadow and position. The preview renders with the real video frame and offers full-frame and font close-up views.
 
 Everything except the optional AI features is local inference.
@@ -45,11 +45,12 @@ Everything except the optional AI features is local inference.
 **Import & transcribe**
 
 - Drag in video, audio or subtitles. MKV and HEVC — which Chromium cannot decode — get a 480p preview proxy built in the background.
-- Two switchable Japanese engines (see below).
+- Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
 - All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. Six built-in presets, plus save / overwrite / delete.
 - Optional FFmpeg `dynaudnorm` to push down BGM and lift quiet dialogue.
 - Cancel mid-run and keep what finished (`*.part_cancelled.srt`).
+- **Import source and target tracks separately**: the Transcribe page's “existing subtitles” cards can load a source SRT/VTT or a target SRT/VTT aligned to the current source; the Review desk “⋯” menu can delete either track independently, so a restart no longer forces a full re-transcription just to restore translations.
 - Hallucination gate: segments transcribed but re-checked as empty are dropped, suspicious short cues are marked, and the per-segment details go into the task report.
 
 **Review desk**
@@ -64,9 +65,10 @@ Everything except the optional AI features is local inference.
 - Source / target / bilingual display; bilingual shows the source line above the target line.
 - The inspector always carries **Save draft / Export**: drafts autosave with a 0.9 s debounce, export writes the deliverable.
 - Importing another subtitle (or restoring a draft) switches the inspector to the current source and cue count; stale QA overview and transcription params are hidden, and the QA queue pauses so old items cannot delete cues from the new table.
-- **20-step rewindable history** next to undo / redo: every entry names the operation, and clicking one jumps straight back (later steps can still be redone); covers delete, update, insert, clear, import, append and batch replace.
+- **50-step unified history** next to undo / redo: subtitles, translations, QA state, export settings and AI suggestion edits share one timeline; every entry names the operation, and clicking one jumps straight back (later steps can still be redone).
 - **TTS comparison** in the current-cue card: the macOS Japanese voice works instantly with zero VRAM, and Settings can switch the default to a cloned voice. Upload a reference clip (defaults to the last upload folder / current video folder; multi-select creates one voice per clip), use **Extract from current line**, or right-click any cue → **New voice from this line…** to cut a 3–10 s reference. Saved voices stay in the voice library, where you can audition, set a default, rename, edit the reference transcript and delete them. OmniVoice is zero-shot, runs on the Apple GPU, downloads on demand and unloads after 5 idle minutes.
-- **⌘F find & replace** in the cue table: search the source text, jump between hits, replace one or replace all (a batch replace is a single history step).
+- **⌘F find & replace** in the cue table: searches the currently shown track (source, translation, or both lines in bilingual mode), jumps between hits, and replaces one or all (a batch replace is a single history step). After a single replace the current hit and table scroll follow to the next one; **Skip** marks the current hit as ignored for this session (no subtitle edit, no history, text left untouched). With skipped hits, the batch button becomes **Replace remaining** and leaves them as-is. The previous/next hit shortcuts are configurable in ⌘K (default ⌘G / ⇧⌘G).
+- **The QA panel no longer covers the picture**: it docks into a "QA" tab in the right inspector by default; click "pop out" when you want it beside the source, then drag/resize it, reset it, or dock it back.
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
 - **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
 - The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action (play/pause, prev/next, view switching, AI polish/translate tabs).
@@ -97,7 +99,7 @@ Everything except the optional AI features is local inference.
 
 ![Settings: engines, AI options, agent skill, appearance](docs/images/settings-ai.jpg)
 
-- Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download.
+- Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download. Anime Whisper / Qwen3 / OmniVoice share one progress track for **Verify / Fill gaps**: verification uses an indeterminate sweep, downloads use real percentages, and completion briefly turns green before collapsing.
 - Runtime lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
 - Two themes: Clear Sky (light / dark) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch in Settings. Waveform height is draggable from the review stage.
@@ -237,7 +239,7 @@ In development, output, logs and proxies live in the repository's `outputs/`, ma
 ## FAQ
 
 **Black screen after importing MKV?**
-Chromium cannot decode some MKV / HEVC files. A 480p proxy is built in the background and swapped in automatically; the playhead still moves while it is being made.
+Chromium cannot decode some MKV / HEVC files. A 480p proxy is built in the background and swapped in automatically; the toolbar shows live progress such as “Proxy 42%”. You can also start one from the Transcribe page. If a finished proxy already exists, use **Import proxy…** in the review notice or the “⋯” menu to attach it without re-encoding. The playhead still moves while it is being made.
 
 **Model download is slow or fails?**
 The default endpoint is `hf-mirror.com`. Set `HF_ENDPOINT` back to the official Hugging Face endpoint for the sidecar, or pre-download the weights with `huggingface-cli`.
