@@ -29,6 +29,10 @@ class ImportRequest(BaseModel):
     path: str = Field(min_length=1, description="本地绝对路径（桌面端拖入/文件对话框得到）")
 
 
+class ImportProxyRequest(BaseModel):
+    path: str = Field(min_length=1, description="用户已有的代理视频本地绝对路径")
+
+
 def _store(request: Request) -> MediaStore:
     return request.app.state.media
 
@@ -90,6 +94,20 @@ def get_media(media_id: str, request: Request) -> dict:
     前端靠它决定要不要把 `<video>` 切到代理。"""
     _info_or_400(request, media_id)
     return _store(request).describe(media_id)
+
+
+@router.post("/api/media/{media_id}/proxy", dependencies=[Depends(require_token)])
+def import_proxy(media_id: str, payload: ImportProxyRequest, request: Request) -> dict:
+    """挂载用户已有的代理文件，跳过重复压制。
+
+    代理写进标准 `web_proxies/` 路径（硬链接优先），之后 ``?proxy=1`` 与
+    重启后的自动检测都会把它当成正常代理产物。
+    """
+    try:
+        info = _store(request).attach_proxy(media_id, payload.path)
+    except MediaError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _store(request).describe(info.id)
 
 
 @router.delete("/api/media/{media_id}", dependencies=[Depends(require_token)])

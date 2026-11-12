@@ -16,9 +16,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core import settings as settings_store
+from core.audit import load_audit_payload
 from core.i18n import bilingual_entries, target_cues
 from core.subtitles import (
     SubtitleCue,
+    cues_from_subtitle_file,
     cues_to_srt,
     cues_to_txt,
     cues_to_vtt,
@@ -77,6 +79,26 @@ class HistoryJumpRequest(BaseModel):
     index: int
 
 
+class CheckpointRequest(BaseModel):
+    """渲染层本地状态（导出设置 / AI diff 草稿）的一次历史提交。"""
+
+    label: str = ""
+    export_ui: dict | None = None
+    ai_draft: dict | None = None
+    coalesce: str = ""
+    # record=False 用于「切换 AI 上下文」这类只同步状态、不算编辑的动作
+    record: bool = True
+
+
+class ReplaceAllRequest(BaseModel):
+    """双语状态下的「全部替换」：原文 + 译文一次提交，只压一步历史。"""
+
+    label: str = ""
+    cues: list[Cue] | None = None
+    lang: str = ""
+    texts: list[str] | None = None
+
+
 class ExportRequest(BaseModel):
     format: str = "SRT"
     save_beside: bool = False
@@ -93,8 +115,15 @@ def _to_dicts(cues: list[SubtitleCue]) -> list[dict]:
     return [{"start": c.start, "end": c.end, "text": c.text} for c in cues]
 
 
-def _snapshot(session: Session) -> dict:
-    return {
+def _cache_disk_qa(session: Session) -> None:
+    """导入 / 恢复草稿会换整张表；先把磁盘上的质检队列读进会话缓存，
+    这样撤销这次导入时还能把原来的待核状态一起带回来。"""
+    if session.media_path:
+        session.set_qa_payload(load_audit_payload(session.media_path))
+
+
+def _snapshot(session: Session, *, include_client_state: bool = False) -> dict:
+    data = {
         "cues": _to_dicts(session.review_cues),
         "count": len(session.review_cues),
         "can_undo": session.can_undo,
@@ -102,13 +131,18 @@ def _snapshot(session: Session) -> dict:
         # 工具栏按钮的 title 直接显示「下一步会撤回/重做什么」
         "undo_label": session.undo_label(),
         "redo_label": session.redo_label(),
-        # 与渲染层「导出设置」的本地历史比先后，决定全局 ⌘Z 撤回哪一边
         "undo_at": session.undo_timestamp(),
         "redo_at": session.redo_timestamp(),
         # 当前核对表来自哪里（转写 / 导入字幕 / 暂存草稿）。检查器据此判断
         # 能不能引用最近一次转写的质检与参数。
         "review_source": dict(session.review_source),
     }
+    if include_client_state:
+        # 只有撤销 / 重做 / 历史跳转才回传渲染层本地状态；普通编辑的响应
+        # 不回传，否则会用稍旧的导出设置覆盖用户刚在本地改好的值。
+        data["export_ui"] = dict(session.export_ui)
+        data["ai_draft"] = dict(session.ai_draft)
+    return data
 
 
 def _validate(start: float, end: float) -> None:
@@ -208,29 +242,10 @@ def import_cues(payload: ImportPathRequest, session: Session = Depends(get_sessi
         raise HTTPException(status_code=422, detail=f"只支持 .srt / .vtt：{path.suffix}")
 
     try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        cues = cues_from_subtitle_file(path)
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"读取失败：{exc}") from exc
 
-    # VTT 的 WEBVTT 头 / NOTE 块不是字幕行；时间戳格式与 SRT 兼容（解析器认 . 和 ,）
-    if path.suffix.lower() == ".vtt":
-        body: list[str] = []
-        skipping = False
-        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-            stripped = line.strip()
-            if stripped.upper().startswith("WEBVTT"):
-                continue
-            if stripped.upper().startswith(("NOTE", "STYLE", "REGION")):
-                skipping = True
-                continue
-            if skipping:
-                if not stripped:
-                    skipping = False
-                continue
-            body.append(line)
-        text = "\n".join(body)
-
-    cues = srt_to_cues(text)
     if not cues:
         raise HTTPException(status_code=422, detail="没有从该文件里解析出字幕")
     # 旧版双语交付文件：同一条 cue 里两行。拆成同时间轴的两条，与官方双语 SRT 一致。
@@ -238,9 +253,11 @@ def import_cues(payload: ImportPathRequest, session: Session = Depends(get_sessi
         cues, exploded = split_multiline_cues(cues)
         if exploded:
             log.info("导入双语字幕：按行拆分 | file=%s | cues=%d", path.name, len(cues))
+    label = f"导入字幕（{len(cues)} 条）"
+    _cache_disk_qa(session)
     session.replace_review(
         cues,
-        label=f"导入字幕（{len(cues)} 条）",
+        label=label,
         source={
             "kind": "import",
             "name": path.name,
@@ -248,13 +265,16 @@ def import_cues(payload: ImportPathRequest, session: Session = Depends(get_sessi
             "job_id": "",
             "at": time.time(),
         },
+        record=False,
     )
     # 导入会整表替换：与旧表条数对不上的译文轨已经无法逐条对齐，直接丢弃，
     # 否则核对台会继续显示上一版的译文，看起来像“新字幕的译文”。
+    # 先清理再压历史，保证这一步快照里的轨与当前状态一致。
     for lang in list(session.translations):
         if len(session.translations[lang].texts) != len(cues):
-            session.drop_translation(lang)
+            session.drop_translation(lang, record=False)
             log.info("导入字幕时丢弃错位的译文轨 | lang=%s", lang)
+    session.record(label)
     return {**_snapshot(session), "source": str(path)}
 
 
@@ -312,6 +332,7 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
         raise HTTPException(status_code=400, detail=f"读取暂存草稿失败：{exc}") from exc
     if not cues:
         raise HTTPException(status_code=422, detail="暂存草稿里没有解析出字幕")
+    _cache_disk_qa(session)
     session.replace_review(
         cues,
         label="恢复暂存草稿",
@@ -322,12 +343,13 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
             "job_id": "",
             "at": time.time(),
         },
+        record=False,
     )
 
     # 换了整张表，任何条数对不上的旧轨都已经无法对齐，先丢掉（不留一份错位的轨）
     for lang in list(session.translations):
         if len(session.translations[lang].texts) != len(cues):
-            session.drop_translation(lang)
+            session.drop_translation(lang, record=False)
             log.info("恢复草稿时丢弃错位的译文轨 | lang=%s", lang)
 
     # 译文轨跟着恢复；文件不存在/损坏就跳过（不允许挡住字幕恢复）
@@ -346,8 +368,9 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
                 raw.setdefault("lang", lang)
                 track = TranslationTrack.from_dict(raw)
                 if len(track.texts) == len(cues):
-                    # 走 set_translation：同步历史快照，之后删字幕按 ⌘Z 才能带回译文
-                    session.set_translation(track)
+                    # 「恢复草稿」已经在 replace_review 里记了一步；这里只写轨，
+                    # 不再为每个语种各压一步。
+                    session.set_translation(track, record=False, remember=False)
                     restored_langs.append(track.lang)
                 else:
                     # 条数对不上就丢弃，宁可让用户重翻，也不给一份错位的轨
@@ -358,14 +381,96 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
                         len(cues),
                     )
 
+    # 字幕 + 被丢弃的错位轨 + 恢复的译文轨都落定后，再压唯一的一步历史。
+    session.record("恢复暂存草稿")
     return {**_snapshot(session), "source": str(path), "translations": sorted(restored_langs)}
 
 
+@router.post("/api/cues/replace-all")
+def replace_all(
+    payload: ReplaceAllRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """双语「全部替换」：原文与译文在同一步里提交。
+
+    客户端已经算好两份完整数组（发现匹配与替换规则只在渲染层实现），这里只做
+    结构校验与一次快照。拆成两次请求会让用户在双语模式下按两次 ⌘Z 才退干净。
+    """
+    if payload.cues is None and payload.texts is None:
+        raise HTTPException(status_code=422, detail="没有要替换的内容")
+    label = (payload.label or "").strip()[:120] or "查找替换"
+
+    # 先把两份输入都校验完再动会话：任何一份不合法都不能留下「改了字幕但没记历史」
+    # 的半完成状态。
+    new_cues: list[SubtitleCue] | None = None
+    if payload.cues is not None:
+        new_cues = []
+        for item in payload.cues:
+            _validate(item.start, item.end)
+            new_cues.append(SubtitleCue(start=item.start, end=item.end, text=item.text))
+
+    lang = ""
+    track = None
+    texts: list[str] | None = None
+    if payload.texts is not None:
+        lang = (payload.lang or "").strip()
+        track = session.translations.get(lang)
+        if track is None:
+            raise HTTPException(status_code=404, detail=f"没有 {lang} 译文轨")
+        texts = [str(t or "") for t in payload.texts]
+        expected = len(new_cues) if new_cues is not None else len(track.texts)
+        if len(texts) != expected:
+            raise HTTPException(
+                status_code=422,
+                detail=f"译文条数不符：{len(texts)} 条译文 / 轨道 {expected} 条",
+            )
+
+    session.ensure_baseline()
+    if new_cues is not None:
+        session.replace_review(new_cues, label=label, record=False)
+    if texts is not None and track is not None:
+        session.set_translation(
+            TranslationTrack(
+                lang=lang,
+                texts=texts,
+                base=[cue.text for cue in session.review_cues],
+                created_at=track.created_at,
+                entry=track.entry,
+            ),
+            label=label,
+            record=False,
+            remember=False,
+        )
+    session.record(label)
+    return _snapshot(session)
+
+
 # ---------------------------------------------------------------------------
-# 可回溯历史（20 步）
+# 可回溯历史（50 步，所有工作区动作共用一条时间线）
 #
 # 放在 `/api/cues/{index}` 之前：未来若新增 GET 详情路由，"history" 不能被当成 index。
 # ---------------------------------------------------------------------------
+
+
+@router.post("/api/history/checkpoint")
+def history_checkpoint(
+    payload: CheckpointRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """把导出设置 / AI 草稿并进统一工作区历史。
+
+    这两块只存在于渲染层。以前它们各有自己的撤销栈，导致 ⌘Z 要先猜「最近
+    一次」属于哪一边；现在统一记在服务端时间线上，和其他动作共用一个 cursor。
+    """
+    label = (payload.label or "调整").strip()[:120] or "调整"
+    session.checkpoint(
+        label,
+        export_ui=payload.export_ui,
+        ai_draft=payload.ai_draft,
+        coalesce=payload.coalesce,
+        record=payload.record,
+    )
+    return _snapshot(session, include_client_state=True)
 
 
 @router.get("/api/cues/history")
@@ -395,7 +500,7 @@ def cue_history_jump(
     label = session.jump_history(payload.index)
     if label is None:
         raise HTTPException(status_code=422, detail=f"历史位置 {payload.index} 不存在")
-    return {**_snapshot(session), "label": label, "index": payload.index}
+    return {**_snapshot(session, include_client_state=True), "label": label, "index": payload.index}
 
 
 @router.post("/api/cues/merge")
@@ -478,7 +583,7 @@ def undo(session: Session = Depends(get_session)) -> dict:
     label = session.undo()
     if label is None:
         raise HTTPException(status_code=409, detail="没有可撤回的操作")
-    return {**_snapshot(session), "undone": label}
+    return {**_snapshot(session, include_client_state=True), "undone": label}
 
 
 @router.post("/api/cues/redo")
@@ -486,7 +591,7 @@ def redo(session: Session = Depends(get_session)) -> dict:
     label = session.redo()
     if label is None:
         raise HTTPException(status_code=409, detail="没有可重做的操作")
-    return {**_snapshot(session), "redone": label}
+    return {**_snapshot(session, include_client_state=True), "redone": label}
 
 
 @router.post("/api/cues/clear")

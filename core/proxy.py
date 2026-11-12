@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,55 @@ def get_existing_proxy(media_path: Path, output_dir: Path | None = None) -> Path
             continue
     legacy.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return legacy[0] if legacy else None
+
+
+def install_existing_proxy(
+    media_path: Path,
+    source_path: Path,
+    output_dir: Path | None = None,
+) -> Path:
+    """把用户已有的代理文件挂到当前片源的代理路径上，避免再压一遍。
+
+    优先硬链接（同盘、零拷贝），跨盘时用符号链接；两者都不可用时才退回复制。
+    正式文件由临时名原子 rename，半成品不会被 ``get_existing_proxy()`` 当成成片。
+    目标路径已存在且大小正常时直接复用，不覆盖用户已有的代理。
+    """
+    media_path = Path(media_path)
+    source = Path(source_path).expanduser()
+    try:
+        source = source.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"代理文件不存在：{source_path}") from exc
+    if not source.is_file():
+        raise ValueError(f"不是普通文件：{source}")
+
+    standard, _ = proxy_paths(media_path, output_dir)
+    if standard.exists() and standard.stat().st_size > MIN_PROXY_BYTES:
+        return standard
+    if source == standard:
+        if standard.exists() and standard.stat().st_size > 1024:
+            return standard
+        raise ValueError("代理文件为空或过小，无法作为监看画面")
+
+    standard.parent.mkdir(parents=True, exist_ok=True)
+    temp = standard.with_name(f"{standard.stem}.importing{standard.suffix}")
+    drop_broken_proxy(temp)
+    try:
+        try:
+            os.link(source, temp)
+        except OSError:
+            try:
+                os.symlink(source, temp)
+            except OSError:
+                shutil.copyfile(source, temp)
+        os.replace(temp, standard)
+    finally:
+        drop_broken_proxy(temp)
+
+    if standard.stat().st_size <= 1024:
+        drop_broken_proxy(standard)
+        raise ValueError("代理文件为空或过小，无法作为监看画面")
+    return standard
 
 
 def build_streaming_cmd(media_path: Path, dest: Path) -> tuple[list[str], str, str]:

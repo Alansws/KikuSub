@@ -128,6 +128,115 @@ def test_apply_requires_existing_cues(tmp_path: Path):
     assert res.status_code == 409
 
 
+# --------------------------------------------------------------------------- 导入
+
+
+def _write_srt(path: Path, texts: list[str]) -> Path:
+    blocks = []
+    for i, text in enumerate(texts, start=1):
+        blocks.append(
+            f"{i}\n00:00:0{i - 1},000 --> 00:00:0{i},000\n{text}\n"
+        )
+    path.write_text("\n".join(blocks), encoding="utf-8")
+    return path
+
+
+def test_import_translation_srt_replaces_track_only(ctx, tmp_path: Path):
+    client, _ = ctx
+    srt = _write_srt(tmp_path / "episode.zh-Hans.srt", ZH)
+    res = client.post(
+        "/api/translations/import",
+        headers=AUTH,
+        json={"path": str(srt), "lang": "zh-Hans"},
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["texts"] == ZH
+    assert res.json()["entry"] == "import"
+
+    # 原文与时间轴不被导入改动
+    cues = client.get("/api/cues", headers=AUTH).json()["cues"]
+    assert [c["text"] for c in cues] == TEXTS
+    assert client.get("/api/translations", headers=AUTH).json()["items"][0]["stale"] == []
+
+
+def test_import_translation_accepts_vtt_and_aligns_partial_export(ctx, tmp_path: Path):
+    client, _ = ctx
+    vtt = tmp_path / "episode.zh-Hant.vtt"
+    vtt.write_text(
+        "WEBVTT\n\nNOTE 说明\n随便写\n\n00:00:00.000 --> 00:00:01.000\n早安\n\n"
+        "00:00:01.000 --> 00:00:02.000\n今天下雨\n\n"
+        "00:00:02.000 --> 00:00:03.000\n再見\n",
+        encoding="utf-8",
+    )
+    ok = client.post(
+        "/api/translations/import",
+        headers=AUTH,
+        json={"path": str(vtt), "lang": "zh-Hant"},
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["texts"] == ["早安", "今天下雨", "再見"]
+
+    # 「仅译文」导出会跳过空译文；按时间挂回去，中间空条保留占位
+    partial = tmp_path / "partial.srt"
+    partial.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\n早安\n\n"
+        "2\n00:00:02,000 --> 00:00:03,000\n再見\n",
+        encoding="utf-8",
+    )
+    aligned = client.post(
+        "/api/translations/import",
+        headers=AUTH,
+        json={"path": str(partial), "lang": "zh-Hans"},
+    )
+    assert aligned.status_code == 201, aligned.text
+    assert aligned.json()["texts"] == ["早安", "", "再見"]
+
+    # 完全落在原文时间轴之外的译文不能硬塞
+    elsewhere = tmp_path / "elsewhere.srt"
+    elsewhere.write_text(
+        "1\n00:00:10,000 --> 00:00:11,000\n不在这一版\n",
+        encoding="utf-8",
+    )
+    bad = client.post(
+        "/api/translations/import",
+        headers=AUTH,
+        json={"path": str(elsewhere), "lang": "zh-Hans"},
+    )
+    assert bad.status_code == 422
+    assert "无法与当前原文对齐" in bad.json()["detail"]
+
+
+def test_import_translation_requires_existing_cues(tmp_path: Path):
+    client = TestClient(
+        create_app(ServerConfig(token=TOKEN, output_dir=tmp_path, settings_path=tmp_path / "s.json"))
+    )
+    media = tmp_path / "e.mkv"
+    media.write_bytes(b"x")
+    mid = client.post("/api/media", headers=AUTH, json={"path": str(media)}).json()["id"]
+    client.post("/api/session/bind", headers=AUTH, json={"media_id": mid})
+    srt = _write_srt(tmp_path / "any.zh-Hans.srt", ["早上好"])
+    res = client.post(
+        "/api/translations/import",
+        headers=AUTH,
+        json={"path": str(srt), "lang": "zh-Hans"},
+    )
+    assert res.status_code == 409
+
+
+def test_clear_cues_drops_translations_and_source(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    cleared = client.post("/api/cues/clear", headers=AUTH)
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["cues"] == []
+    assert cleared.json()["review_source"] == {}
+    assert client.get("/api/translations", headers=AUTH).json()["count"] == 0
+
+    undone = client.post("/api/cues/undo", headers=AUTH)
+    assert undone.status_code == 200
+    assert [c["text"] for c in undone.json()["cues"]] == TEXTS
+
+
 # --------------------------------------------------------------------------- 过期
 
 
@@ -441,3 +550,47 @@ def test_patch_does_not_touch_other_languages(ctx):
     items = {t["lang"]: t for t in client.get("/api/translations", headers=AUTH).json()["items"]}
     assert items["en"]["texts"] == ["a", "b", "c"]
     assert items["zh-Hans"]["texts"][0] == "早安"
+
+
+# --------------------------------------------------------------------------- 查找替换
+
+
+def test_replace_translation_texts_bulk(ctx):
+    client, _ = ctx
+    assert (
+        client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH}).status_code
+        == 201
+    )
+    res = client.post(
+        "/api/translations/zh-Hans/replace",
+        headers=AUTH,
+        json={"texts": ["早安", "今天下雨", "再会"]},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["texts"] == ["早安", "今天下雨", "再会"]
+    # 批量替换基于当前原文，不应被标成过期
+    assert body["stale"] == []
+    # 原文时间轴没有被改动
+    cues = client.get("/api/cues", headers=AUTH).json()["cues"]
+    assert [c["text"] for c in cues] == TEXTS
+
+
+def test_replace_translation_texts_rejects_count_and_missing_track(ctx):
+    client, _ = ctx
+    assert (
+        client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH}).status_code
+        == 201
+    )
+    bad = client.post(
+        "/api/translations/zh-Hans/replace",
+        headers=AUTH,
+        json={"texts": ["只剩一条"]},
+    )
+    assert bad.status_code == 422
+    missing = client.post(
+        "/api/translations/en/replace",
+        headers=AUTH,
+        json={"texts": ["a", "b", "c"]},
+    )
+    assert missing.status_code == 404

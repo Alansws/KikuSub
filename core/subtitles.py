@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 @dataclass
 class SubtitleCue:
@@ -122,6 +123,80 @@ def srt_to_cues(srt_text: str) -> list[SubtitleCue]:
             cues.append(SubtitleCue(curr_start, curr_end, text_content))
 
     return cues
+
+
+def strip_webvtt(text: str) -> str:
+    """去掉 WEBVTT 头与 NOTE / STYLE / REGION 块，只留 cue 正文。
+
+    VTT 的时间戳格式与 SRT 兼容（解析器同时认 `.` 和 `,`），所以去掉元数据后
+    可以直接复用 ``srt_to_cues()``。这些块都是「块头一行 + 可选正文 + 空行」，
+    遇到空行就结束跳过，不能整段吞掉后面的字幕。
+    """
+    body: list[str] = []
+    skipping = False
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = line.strip()
+        if stripped.upper().startswith("WEBVTT"):
+            continue
+        if stripped.upper().startswith(("NOTE", "STYLE", "REGION")):
+            skipping = True
+            continue
+        if skipping:
+            if not stripped:
+                skipping = False
+            continue
+        body.append(line)
+    return "\n".join(body)
+
+
+def cues_from_subtitle_file(path: str | Path) -> list[SubtitleCue]:
+    """读取本地 .srt / .vtt 并解析成 cue；文件读失败会抛 ``OSError``。
+
+    原文轨与译文轨导入共用这一个解析入口，避免两个接口的 VTT 处理悄悄分叉。
+    """
+    file = Path(path)
+    text = file.read_text(encoding="utf-8-sig", errors="replace")
+    if file.suffix.lower() == ".vtt":
+        text = strip_webvtt(text)
+    return srt_to_cues(text)
+
+
+def align_translation_texts(
+    base_cues: list[SubtitleCue],
+    incoming: list[SubtitleCue],
+) -> list[str] | None:
+    """把译文 cue 逐条对到原文时间轴上，返回与原文等长的文本数组。
+
+    - 条数相同时直接按顺序对齐（机器翻译常见：只换文本，时间轴不动）。
+    - 条数不同时按时间重叠匹配：导出的「仅译文」SRT 会跳过空译文，
+      条数天然少于原文；按区间挂回去，空条保留空串，不丢中间位置。
+    - 有任何一条挂不上、或两条译文抢同一原文时返回 ``None``（整批拒绝）。
+    """
+    if len(base_cues) == len(incoming):
+        return [cue.text.strip() for cue in incoming]
+    if not incoming:
+        return None
+
+    out = [""] * len(base_cues)
+    used: set[int] = set()
+    for cue in incoming:
+        best = -1
+        best_key: tuple[float, float] | None = None
+        for index, base in enumerate(base_cues):
+            if index in used:
+                continue
+            overlap = min(cue.end, base.end) - max(cue.start, base.start)
+            if overlap <= 0:
+                continue
+            key = (overlap, -abs(cue.start - base.start))
+            if best_key is None or key > best_key:
+                best = index
+                best_key = key
+        if best < 0:
+            return None
+        used.add(best)
+        out[best] = cue.text.strip()
+    return out
 
 
 def split_multiline_cues(cues: list[SubtitleCue]) -> tuple[list[SubtitleCue], int]:

@@ -9,18 +9,22 @@
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core.subtitles import SubtitleCue
 
-# 可回溯历史：最多保留 20 步**操作**（另加一条「起始状态」）。
-# 用户明确要求历史列表能看 20 步；撤销/重做、点击任意一步跳转都共用这份时间线。
-HISTORY_LIMIT = 20
+# 可回溯历史：最多保留 50 步**操作**（另加一条「起始状态」）。
+# 统一历史把字幕、译文、质检、导出设置与 AI 草稿都算进来，20 步会显得很短。
+HISTORY_LIMIT = 50
 # 兼容旧名字：曾经叫 UNDO_LIMIT，语义相同。
 UNDO_LIMIT = HISTORY_LIMIT
+# 同一类连续调整（拖动字号滑杆 / 同一行 AI 建议反复改）在这个窗口内合并成一步。
+COALESCE_SECONDS = 1.2
 # 会话空闲多久回收（秒）。桌面端通常只有一个会话，这里防的是频繁开关窗口。
 SESSION_TTL_S = 12 * 3600
 
@@ -103,17 +107,16 @@ class TranslationTrack:
 
 @dataclass
 class HistoryState:
-    """时间线上的一个状态：字幕快照 + 来源 + 产生它的操作说明。
+    """时间线上的一个**完整工作区状态**。
 
-    标签挂在「操作产生后的状态」上：撤回时返回的就是这个标签，历史列表里
-    用户看到的是「这一步做了什么」。``at`` 用于界面显示时间。
+    统一撤销的唯一真源：字幕、全部译文轨、质检队列、导出设置与 AI diff 草稿
+    都在这份快照里，所以一次 ⌘Z 不会只撤回其中一块。标签挂在「操作产生后的
+    状态」上：撤回时返回的就是这个标签，历史列表里用户看到的是「这一步做了什么」。
 
     ``source`` 必须和字幕一起回滚：导入一份别的字幕后再 ⌘Z，右侧检查器要
     恢复成「这次转写」，而不是继续把当前表当导入文件。
 
-    ``translations`` 也跟着快照：删除 / 切割 / 合并会同步搬动译文轨，撤销时必须
-    把轨搬回去，否则恢复的字幕与译文会错位一条。应用整版译文本身仍不进这里，
-    它有每个语种自己的撤销栈。
+    ``coalesce`` 是服务端合并连续调整用的键（例如 ``style.size``），不参与回滚。
     """
 
     cues: list[SubtitleCue]
@@ -121,6 +124,10 @@ class HistoryState:
     at: float = field(default_factory=time.time)
     source: dict = field(default_factory=dict)
     translations: dict[str, TranslationTrack] = field(default_factory=dict)
+    qa_payload: str = ""
+    export_ui: dict = field(default_factory=dict)
+    ai_draft: dict = field(default_factory=dict)
+    coalesce: str = ""
 
 
 @dataclass
@@ -145,11 +152,33 @@ class Session:
     # 「列表一半是旧结果一半是新结果」这种撕裂。
     # 译文平行轨：lang -> track。**绝不写进 review_cues.text**（D-3）。
     translations: dict[str, TranslationTrack] = field(default_factory=dict)
-    # 每个语种自己的撤回栈（只存整轨快照，足够覆盖"应用了一版译文"这种批量操作）
+    # 每个语种自己的撤回栈：只服务检查器里的「撤销译文」按钮（一次退回上一版），
+    # 不再是全局 ⌘Z 的存储；全局撤销统一走 history 快照。
     translation_undo: dict[str, list[TranslationTrack]] = field(default_factory=dict)
+    # 当前媒体路径：撤销质检状态时要按它把 .qa.json 写回磁盘。
+    media_path: str = ""
+    # 质检队列的当前整份 payload（会话缓存）；随历史快照一起回滚。
+    qa_payload: str = ""
+    # 导出面板的完整 UI 状态（表单/样式）；由渲染层通过 checkpoint 写回。
+    export_ui: dict = field(default_factory=dict)
+    # AI 优化台里人工改过的 diff 草稿；应用提案前也属于工作区状态。
+    ai_draft: dict = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     # -- 历史 ---------------------------------------------------------------
+
+    def _state(self, label: str, coalesce: str = "") -> HistoryState:
+        """把当前全部可编辑状态拍成一份快照。调用方必须已持有锁。"""
+        return HistoryState(
+            _copy(self.review_cues),
+            label,
+            source=dict(self.review_source),
+            translations=_copy_tracks(self.translations),
+            qa_payload=self.qa_payload,
+            export_ui=copy.deepcopy(self.export_ui),
+            ai_draft=copy.deepcopy(self.ai_draft),
+            coalesce=coalesce,
+        )
 
     def _ensure_baseline(self) -> None:
         """第一次编辑前把当前内容记为「起始状态」。
@@ -158,37 +187,116 @@ class Session:
         等到第一次真正要改的时候记，才能保证 ⌘Z 能退回导入前的样子。
         """
         if not self.history:
-            self.history = [
-                HistoryState(
-                    _copy(self.review_cues),
-                    "起始状态",
-                    source=dict(self.review_source),
-                    translations=_copy_tracks(self.translations),
-                )
-            ]
+            self.history = [self._state("起始状态")]
             self.history_cursor = 0
 
-    def _record(self, label: str) -> None:
+    def record(self, label: str, coalesce: str = "") -> None:
+        """公开入口：把当前状态记成时间线上的一步。"""
+        self._record(label, coalesce=coalesce)
+
+    def ensure_baseline(self) -> None:
+        """在**改动之前**先固定「起始状态」。
+
+        译文 / 质检 / 导出设置这类路径是「先改状态再 record」，如果不提前
+        建基线，第一次改动会被并进起始状态，⌘Z 就退不回去。
+        """
         with self.lock:
             self._ensure_baseline()
+
+    def _record(self, label: str, coalesce: str = "") -> None:
+        with self.lock:
+            self._ensure_baseline()
+            now = time.time()
+            text = (label or "编辑").strip()[:120] or "编辑"
+            # 同一类连续调整（滑杆 / 同一行 AI 建议）在窗口内合并成一步：
+            # 拖一次字号不应该塞进几十条历史。
+            if (
+                coalesce
+                and self.history_cursor > 0
+                and self.history_cursor == len(self.history) - 1
+            ):
+                top = self.history[-1]
+                if top.coalesce == coalesce and now - top.at <= COALESCE_SECONDS:
+                    merged = self._state(text, coalesce)
+                    merged.at = now
+                    self.history[-1] = merged
+                    self.updated_at = now
+                    return
             # 从历史中间编辑：截断后面的分支，与普通编辑器语义一致
             if self.history_cursor < len(self.history) - 1:
                 del self.history[self.history_cursor + 1 :]
-            text = (label or "编辑字幕").strip()[:120] or "编辑字幕"
-            self.history.append(
-                HistoryState(
-                    _copy(self.review_cues),
-                    text,
-                    source=dict(self.review_source),
-                    translations=_copy_tracks(self.translations),
-                )
-            )
+            self.history.append(self._state(text, coalesce))
             self.history_cursor = len(self.history) - 1
             overflow = len(self.history) - (HISTORY_LIMIT + 1)
             if overflow > 0:
                 del self.history[:overflow]
                 self.history_cursor -= overflow
+            self.updated_at = now
+
+    def _apply_state(self, state: HistoryState) -> None:
+        """把一份快照写回会话；撤销 / 重做 / 跳转共用。"""
+        previous_qa = self.qa_payload
+        self.review_cues = _copy(state.cues)
+        self.review_source = dict(state.source)
+        self.translations = _copy_tracks(state.translations)
+        self.qa_payload = state.qa_payload or ""
+        self.export_ui = copy.deepcopy(state.export_ui)
+        self.ai_draft = copy.deepcopy(state.ai_draft)
+        if self.media_path and self.qa_payload != previous_qa:
+            # 质检状态也属于工作区：撤销一次「删除此句」时，待核列表必须跟着回去。
+            from core.audit import empty_audit_payload, write_audit_payload
+
+            payload = self.qa_payload or empty_audit_payload(Path(self.media_path).name)
+            write_audit_payload(self.media_path, payload)
+        self.updated_at = time.time()
+
+    def set_qa_payload(self, payload: str | None) -> None:
+        """更新质检队列缓存（读盘 / 动作后都走这里）。"""
+        with self.lock:
+            self.qa_payload = str(payload or "")
             self.updated_at = time.time()
+
+    def set_client_state(
+        self,
+        *,
+        export_ui: dict | None = None,
+        ai_draft: dict | None = None,
+    ) -> None:
+        """同步渲染层本地状态（导出设置 / AI 草稿），不产生历史步骤。"""
+        with self.lock:
+            if export_ui is not None:
+                self.export_ui = copy.deepcopy(export_ui)
+            if ai_draft is not None:
+                self.ai_draft = copy.deepcopy(ai_draft)
+            self.updated_at = time.time()
+
+    def checkpoint(
+        self,
+        label: str,
+        *,
+        export_ui: dict | None = None,
+        ai_draft: dict | None = None,
+        coalesce: str = "",
+        record: bool = True,
+    ) -> None:
+        """记一步「渲染层本地状态」的改动。
+
+        导出设置与 AI diff 草稿只存在于渲染层；这里把它们并进同一个工作区快照，
+        保证 ⌘Z 与字幕 / 译文 / 质检共用一条时间线。``record=False`` 用于切换
+        AI 上下文这类「同步状态但不算编辑」的动作。
+        """
+        with self.lock:
+            if record:
+                # 先建基线，再写入新状态；否则第一次改导出设置会被并进「起始状态」。
+                self._ensure_baseline()
+            if export_ui is not None:
+                self.export_ui = copy.deepcopy(export_ui)
+            if ai_draft is not None:
+                self.ai_draft = copy.deepcopy(ai_draft)
+            if record:
+                self._record(label, coalesce=coalesce)
+            else:
+                self.updated_at = time.time()
 
     @property
     def can_undo(self) -> bool:
@@ -211,10 +319,10 @@ class Session:
         return self.history[self.history_cursor + 1].label
 
     def undo_timestamp(self) -> float:
-        """下一次 ⌘Z 会撤回的那一步是在什么时候记录的。
+        """下一次 ⌘Z 会撤回的那一步是在什么时候记录的（显示用）。
 
-        界面用它和本地「导出设置」历史比先后：全局 ⌘Z 必须撤回**最近一次**操作，
-        而不是永远先撤回字幕。没有可撤回步骤时返回 0。
+        统一历史已经不再按域比较先后；保留这个字段只是让工具栏 / 历史面板显示
+        「这一步发生在什么时候」。没有可撤回步骤时返回 0。
         """
         if not self.can_undo:
             return 0.0
@@ -234,11 +342,7 @@ class Session:
                 return None
             label = self.history[self.history_cursor].label
             self.history_cursor -= 1
-            state = self.history[self.history_cursor]
-            self.review_cues = _copy(state.cues)
-            self.review_source = dict(state.source)
-            self.translations = _copy_tracks(state.translations)
-            self.updated_at = time.time()
+            self._apply_state(self.history[self.history_cursor])
             return label
 
     def redo(self) -> str | None:
@@ -248,10 +352,7 @@ class Session:
                 return None
             self.history_cursor += 1
             state = self.history[self.history_cursor]
-            self.review_cues = _copy(state.cues)
-            self.review_source = dict(state.source)
-            self.translations = _copy_tracks(state.translations)
-            self.updated_at = time.time()
+            self._apply_state(state)
             return state.label
 
     def jump_history(self, index: int) -> str | None:
@@ -265,10 +366,7 @@ class Session:
                 return None
             self.history_cursor = index
             state = self.history[index]
-            self.review_cues = _copy(state.cues)
-            self.review_source = dict(state.source)
-            self.translations = _copy_tracks(state.translations)
-            self.updated_at = time.time()
+            self._apply_state(state)
             return state.label
 
     def history_items(self) -> list[dict]:
@@ -301,6 +399,7 @@ class Session:
         label: str = "替换全部字幕",
         *,
         source: dict | None = None,
+        record: bool = True,
     ) -> None:
         """整表替换；``source`` 非空时同步改写这张表的来源。
 
@@ -317,7 +416,10 @@ class Session:
             if source is not None:
                 self.review_source = dict(source)
             self._drop_misaligned_translations()
-            self._record(label)
+            if record:
+                self._record(label)
+            else:
+                self.updated_at = time.time()
 
     def _drop_misaligned_translations(self) -> None:
         """删掉条数已与字幕对不上的译文轨，绝不让错位的轨继续存在。"""
@@ -478,6 +580,9 @@ class Session:
         with self.lock:
             self._ensure_baseline()
             self.review_cues = []
+            # 字幕清空后旧来源（哪次转写 / 哪个导入文件）已经无意义；
+            # 检查器不该继续展示那份报告或参数。
+            self.review_source = {}
             self.translations.clear()
             self.translation_undo.clear()
             self._record(label)
@@ -490,53 +595,58 @@ class Session:
             self.translations.clear()
             self.translation_undo.clear()
             self.review_source = {}
+            self.qa_payload = ""
+            self.export_ui = {}
+            self.ai_draft = {}
             self.history = []
             self.history_cursor = -1
             self.updated_at = time.time()
 
     # -- 译文轨 -------------------------------------------------------------
 
-    def _sync_history_translations(self, lang: str) -> None:
-        """把最新的译文轨写回历史快照里条数相同的状态。
+    def set_translation(
+        self,
+        track: TranslationTrack,
+        label: str = "应用译文",
+        *,
+        record: bool = True,
+        remember: bool = True,
+    ) -> None:
+        """整轨替换；默认压一步统一历史。
 
-        应用/修改译文本身不进字幕撤销栈，但之后若因删除字幕按 ⌘Z，撤回的
-        「删除前状态」必须带着当时已经应用的译文；否则会把译文一起撤回、
-        留下字幕恢复了但译文消失的假象。条数对不上的旧状态不能硬塞，直接清掉。
+        ``record=False`` 只用于「恢复草稿」这类已经在别处记过一步的批处理；
+        ``remember=False`` 避免草稿恢复把旧版本塞进「撤销译文」按钮的栈。
         """
-        track = self.translations.get(lang)
-        for state in self.history:
-            if track is not None and len(state.cues) == len(track.texts):
-                state.translations[lang] = track.copy()
-            else:
-                state.translations.pop(lang, None)
-
-    def set_translation(self, track: TranslationTrack) -> None:
-        """整轨替换，并保留上一版供撤销。"""
         with self.lock:
+            if record:
+                self._ensure_baseline()
             previous = self.translations.get(track.lang)
-            if previous is not None:
+            if previous is not None and remember:
                 stack = self.translation_undo.setdefault(track.lang, [])
                 stack.append(previous.copy())
                 if len(stack) > TRACK_UNDO_LIMIT:
                     stack.pop(0)
             self.translations[track.lang] = track
-            self._sync_history_translations(track.lang)
-            self.updated_at = time.time()
+            if record:
+                self._record(label)
+            else:
+                self.updated_at = time.time()
 
     def undo_translation(self, lang: str) -> bool:
+        """把该语种退回到上一版译文；这次退回本身也记一步，⌘Z 可再回来。"""
         with self.lock:
             stack = self.translation_undo.get(lang) or []
             if not stack:
                 return False
+            self._ensure_baseline()
             self.translations[lang] = stack.pop()
             if not stack:
                 self.translation_undo.pop(lang, None)
-            self._sync_history_translations(lang)
-            self.updated_at = time.time()
+            self._record(f"撤回上一版 {lang} 译文")
             return True
 
-    def patch_translation(self, lang: str, index: int, text: str) -> bool:
-        """改某一条译文（不动原文、不动时间轴），并留一步撤销。
+    def patch_translation(self, lang: str, index: int, text: str, label: str = "") -> bool:
+        """改某一条译文（不动原文、不动时间轴），并压一步统一历史。
 
         人工改完译文就算「已同步」：把 ``base[index]`` 更新成当前原文，
         这样「原文改过了，译文可能需要同步」的提示会随这一次保存消失。
@@ -545,27 +655,34 @@ class Session:
             track = self.translations.get(lang)
             if track is None or not 0 <= index < len(track.texts):
                 return False
+            text = str(text or "")
+            if track.texts[index] == text:
+                return True
+            self._ensure_baseline()
             stack = self.translation_undo.setdefault(lang, [])
             stack.append(track.copy())
             if len(stack) > TRACK_UNDO_LIMIT:
                 stack.pop(0)
-            track.texts[index] = str(text or "")
+            track.texts[index] = text
             while len(track.base) < len(track.texts):
                 track.base.append("")
             if 0 <= index < len(self.review_cues):
                 track.base[index] = self.review_cues[index].text
-            self._sync_history_translations(lang)
-            self.updated_at = time.time()
+            self._record(label or f"修改 {lang} 译文第 {index + 1} 条")
             return True
 
-    def drop_translation(self, lang: str) -> bool:
+    def drop_translation(self, lang: str, label: str = "", *, record: bool = True) -> bool:
         with self.lock:
-            if self.translations.pop(lang, None) is None:
+            if lang not in self.translations:
                 return False
+            if record:
+                self._ensure_baseline()
+            self.translations.pop(lang, None)
             self.translation_undo.pop(lang, None)
-            for state in self.history:
-                state.translations.pop(lang, None)
-            self.updated_at = time.time()
+            if record:
+                self._record(label or f"删除 {lang} 译文")
+            else:
+                self.updated_at = time.time()
             return True
 
     def stale_translation(self, lang: str) -> list[int]:

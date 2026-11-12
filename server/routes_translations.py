@@ -10,16 +10,21 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from core import ai_proposal as proposals
+from core.subtitles import align_translation_texts, cues_from_subtitle_file
 
 from .deps import get_session
 from .security import require_token
 from .sessions import Session, TranslationTrack
 
 router = APIRouter(tags=["translations"], dependencies=[Depends(require_token)])
+log = logging.getLogger(__name__)
 
 
 class ApplyTranslationRequest(BaseModel):
@@ -29,12 +34,23 @@ class ApplyTranslationRequest(BaseModel):
     proposal: dict | None = None
 
 
+class ImportTranslationRequest(BaseModel):
+    path: str = Field(min_length=1, description="本地译文 SRT / VTT 绝对路径")
+    lang: str = Field(min_length=1, description="译文语种，例如 zh-Hans / en")
+
+
 class LangRequest(BaseModel):
     lang: str = Field(min_length=1)
 
 
 class PatchTextRequest(BaseModel):
     text: str = ""
+
+
+class ReplaceTextsRequest(BaseModel):
+    """整轨替换文本：查找替换「全部替换」一次提交，避免逐条压历史。"""
+
+    texts: list[str] = Field(default_factory=list)
 
 
 def track_payload(session: Session, lang: str) -> dict:
@@ -74,6 +90,64 @@ def translations_payload(session: Session) -> dict:
 @router.get("/api/translations")
 def list_translations(session: Session = Depends(get_session)) -> dict:
     return translations_payload(session)
+
+
+@router.post("/api/translations/import", status_code=201)
+def import_translation(
+    payload: ImportTranslationRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """按路径导入一份译文 SRT / VTT。
+
+    译文轨**只替换文本**，时间轴始终取自当前原文：条数必须与核对台一致，
+    否则整批拒绝——宁可让用户重新导出对齐的译文，也不落一份错位的轨。
+    这是「已经翻译好、只是重开应用后没有入口」的补录通道，与 AI 提案互不影响。
+    """
+    lang = (payload.lang or "").strip()
+    if not lang:
+        raise HTTPException(status_code=422, detail="必须指定译文语种")
+
+    cues = session.review_cues
+    if not cues:
+        raise HTTPException(status_code=409, detail="当前没有原文字幕，请先导入原文轨")
+
+    path = Path(payload.path).expanduser()
+    try:
+        path = path.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail=f"文件不存在：{payload.path}") from exc
+    if path.suffix.lower() not in {".srt", ".vtt"}:
+        raise HTTPException(status_code=422, detail=f"只支持 .srt / .vtt：{path.suffix}")
+    try:
+        imported = cues_from_subtitle_file(path)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"读取失败：{exc}") from exc
+
+    if not imported:
+        raise HTTPException(status_code=422, detail="没有从该文件里解析出字幕")
+    texts = align_translation_texts(cues, imported)
+    if texts is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"译文无法与当前原文对齐：译文 {len(imported)} 条 / 原文 {len(cues)} 条。"
+                "请导出与当前原文时间轴一致的译文字幕，或先删掉原文轨再重新导入。"
+            ),
+        )
+
+    session.set_translation(
+        TranslationTrack(
+            lang=lang,
+            texts=texts,
+            base=[cue.text for cue in cues],
+            entry="import",
+        ),
+        label=f"导入 {lang} 译文（{len(texts)} 条）",
+    )
+    log.info(
+        "导入译文字幕 | lang=%s | file=%s | cues=%d", lang, path.name, len(texts)
+    )
+    return {**track_payload(session, lang), "path": str(path)}
 
 
 @router.post("/api/translations", status_code=201)
@@ -118,7 +192,47 @@ def apply_translation(
             texts=texts,
             base=[c.text for c in cues],
             entry=entry,
+        ),
+        label=f"应用 {lang} 译文（{len(texts)} 条）",
+    )
+    return track_payload(session, lang)
+
+
+# 注意：这条必须声明在 `/api/translations/{lang}/{index}` 之前。FastAPI 按声明顺序
+# 匹配，否则 "replace" 会先被当成 index 解析并回 422。
+@router.post("/api/translations/{lang}/replace")
+def replace_translation_texts(
+    lang: str,
+    payload: ReplaceTextsRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """整轨替换文本（查找替换 - 全部替换走这里，一次提交）。
+
+    与逐条 PATCH 的区别：不改变轨道版本来源，也不会产生 N 步撤销；前端先算好
+    整份文本数组再提交。条数必须与当前轨道一致，否则整批拒绝。
+    """
+    track = session.translations.get(lang)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"没有 {lang} 译文轨")
+    texts = [str(t or "") for t in payload.texts]
+    if len(texts) != len(track.texts):
+        raise HTTPException(
+            status_code=422,
+            detail=f"译文条数不符：{len(texts)} 条译文 / 轨道 {len(track.texts)} 条",
         )
+    if texts == track.texts:
+        return track_payload(session, lang)
+    replaced = sum(1 for a, b in zip(track.texts, texts) if a != b)
+    session.set_translation(
+        TranslationTrack(
+            lang=lang,
+            texts=texts,
+            # 批量替换是基于当前原文做的，直接视为已同步，避免整轨被标成过期。
+            base=[cue.text for cue in session.review_cues],
+            created_at=track.created_at,
+            entry=track.entry,
+        ),
+        label=f"替换 {lang} 译文（{replaced} 处）",
     )
     return track_payload(session, lang)
 
@@ -146,5 +260,5 @@ def undo_translation(payload: LangRequest, session: Session = Depends(get_sessio
 
 @router.delete("/api/translations/{lang}")
 def delete_translation(lang: str, session: Session = Depends(get_session)) -> dict:
-    removed = session.drop_translation(lang)
+    removed = session.drop_translation(lang, label=f"删除 {lang} 译文")
     return {"lang": lang, "removed": removed, "count": len(session.translations)}

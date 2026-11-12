@@ -99,6 +99,23 @@ def test_ignores_tiny_broken_proxy(media, tmp_path):
     assert proxy.get_existing_proxy(media, tmp_path) is None
 
 
+def test_install_existing_proxy_links_into_standard_path(media, tmp_path):
+    source = _make(tmp_path / "outside" / "my-preview.mp4")
+    standard = proxy.install_existing_proxy(media, source, tmp_path)
+    assert standard == proxy.proxy_paths(media, tmp_path)[0]
+    assert standard.stat().st_size == source.stat().st_size
+    assert proxy.get_existing_proxy(media, tmp_path) == standard
+
+
+def test_install_existing_proxy_reuses_broken_target(media, tmp_path):
+    standard, _ = proxy.proxy_paths(media, tmp_path)
+    _make(standard, size=1024)
+    source = _make(tmp_path / "outside" / "my-preview.mp4")
+    installed = proxy.install_existing_proxy(media, source, tmp_path)
+    assert installed == standard
+    assert installed.stat().st_size == source.stat().st_size
+
+
 def test_drop_broken_proxy_removes_file(media, tmp_path):
     _, partial = proxy.proxy_paths(media, tmp_path)
     _make(partial)

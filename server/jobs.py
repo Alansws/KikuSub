@@ -707,9 +707,16 @@ class JobManager:
                 label = f"追加转写（{len(fresh)} 条）"
             else:
                 label = f"整片转写（{len(merged)} 条）"
+            job_result = getattr(job, "result", None) or {}
+            # 整片 / 追加转写会写一份新的质检队列；在压历史之前先把新 payload
+            # 放进会话，重做这一步时才能把「同一份待核清单」一起恢复。
+            # 局部修正（replace_range）刻意保留原队列，不能覆盖。
+            if apply != "replace_range" and getattr(request, "write_audit", False):
+                audit_payload = str(job_result.get("audit_payload") or "")
+                if audit_payload:
+                    session.set_qa_payload(audit_payload)
             source = None
             if apply != "replace_range" and job is not None:
-                job_result = getattr(job, "result", None) or {}
                 source = {
                     "kind": "transcription",
                     "name": Path(str(job_result.get("out_filename") or "")).name,

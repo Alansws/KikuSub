@@ -28,6 +28,10 @@ MEDIA_SUFFIXES = {
 # Chromium 能直接解的视频容器；其余走代理（阶段 4 接上自动压制）。
 WEB_SAFE_SUFFIXES = {".mp4", ".m4v", ".webm"}
 WEB_SAFE_CODECS = {"h264", "vp8", "vp9", "av1"}
+# 手动导入的代理必须是视频容器；音频文件挂上去只会得到一块黑屏。
+VIDEO_SUFFIXES = {
+    ".mkv", ".mp4", ".mov", ".m4v", ".webm", ".avi", ".ts", ".flv", ".wmv", ".mpg", ".mpeg", ".ogv",
+}
 # 高于这个码率即使容器/编码都能播，拖动也会很卡（典型蓝光 H.264 原盘）。
 # 它不是「能不能播」的判断，而是「要不要建议压一份监看代理」的阈值；界面仍可手动压制。
 HIGH_BITRATE_BPS = 25_000_000
@@ -218,6 +222,31 @@ class MediaStore:
             return proxy.get_existing_proxy(info.path, self._output_dir)
         except Exception:
             return None
+
+    def attach_proxy(self, media_id: str, source_path: str | Path) -> MediaInfo:
+        """把用户已有的代理文件挂到当前媒体上。
+
+        写进标准代理路径后，``proxy_path()`` / ``?proxy=1`` / 重启后的导入
+        都会像自动压制产物一样识别它，不需要在会话里额外维护一份指针。
+        """
+        info = self.get(media_id)
+        source = Path(source_path).expanduser()
+        try:
+            source = source.resolve(strict=True)
+        except OSError as exc:
+            raise MediaError(f"代理文件不存在：{source_path}") from exc
+        if not source.is_file():
+            raise MediaError(f"不是普通文件：{source}")
+        if source == info.path:
+            raise MediaError("不能把原片本身当作代理导入")
+        if source.suffix.lower() not in VIDEO_SUFFIXES:
+            raise MediaError(f"代理必须是视频文件：{source.suffix or '（无扩展名）'}")
+        try:
+            proxy.install_existing_proxy(info.path, source, self._output_dir)
+        except (OSError, ValueError) as exc:
+            raise MediaError(f"导入代理失败：{exc}") from exc
+        info.proxy_ready = self.proxy_path(info) is not None
+        return info
 
     def describe(self, media_id: str) -> dict:
         """对外描述：带上实时的 proxy_ready。"""

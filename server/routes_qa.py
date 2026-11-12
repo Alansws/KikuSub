@@ -78,6 +78,30 @@ def _media_path(request: Request, session: Session) -> str:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _qa_label(payload: QaActionRequest) -> str:
+    """历史列表里的可读说明：用户要能一眼看出这一步在质检面板做了什么。"""
+    if payload.action == "delete_cue":
+        return "质检：删除字幕"
+    if payload.action == "restore":
+        return "质检：恢复原句"
+    if payload.action == "skip":
+        return "质检：跳过这一条"
+    if payload.action == "mark":
+        if payload.status == "pending":
+            return "质检：放回待核"
+        resolution = {
+            "kept": "保留",
+            "confirmed": "确认删除",
+            "not-speech": "不是台词",
+            "filled": "补录",
+            "restored": "恢复",
+            "deleted": "删除",
+            "skipped": "跳过",
+        }.get(payload.resolution or "", "标记已核对")
+        return f"质检：{resolution}"
+    return "质检：更新"
+
+
 def _parse(text: str) -> dict:
     try:
         return json.loads(text)
@@ -97,7 +121,11 @@ def get_qa(request: Request, session: Session = Depends(get_session)) -> dict:
     path = _media_path(request, session)
     if _is_detached(session):
         return _detached_payload(session, path)
-    return _parse(load_audit_payload(path))
+    payload_text = load_audit_payload(path)
+    # 缓存到会话：之后任何一步字幕 / 译文 / 导出操作的工作区快照都要带上
+    # 当时的质检状态，⌘Z 才能把「删除此句」和它的待核状态一起退回。
+    session.set_qa_payload(payload_text)
+    return _parse(payload_text)
 
 
 @router.post("/api/qa/action")
@@ -113,20 +141,24 @@ def post_qa_action(
             detail=_detached_reason(session) or "当前字幕不是转写结果，质检队列不可用",
         )
     payload_text = load_audit_payload(path)
+    # 基线必须包含动作之前的队列；否则第一次质检动作会把「空队列」当成
+    # 起始状态，撤销时把 .qa.json 写空。
+    session.set_qa_payload(payload_text)
 
+    # 质检动作会先改状态再 record；先固定「起始状态」，第一次质检动作才能撤销。
+    if payload.action != "focus":
+        session.ensure_baseline()
     cmd = payload.model_dump(exclude_none=True)
     res = qa.apply_action(cmd, session.review_cues, path, payload_text)
+    session.set_qa_payload(res.qa_payload or payload_text)
 
-    if res.cues_changed:
-        # replace_review 内部会记一步历史，服务端仍是唯一真源
-        action_label = {
-            "mark": "标记",
-            "skip": "跳过",
-            "delete_cue": "删除字幕",
-            "restore": "恢复字幕",
-            "focus": "定位",
-        }.get(payload.action, payload.action)
-        session.replace_review(res.cues, label=f"质检：{action_label}")
+    # 质检动作只有 mark / skip / delete_cue / restore 会改变工作区；focus 只定位。
+    if res.ok and payload.action != "focus":
+        label = _qa_label(payload)
+        if res.cues_changed:
+            # 先只换字幕，不压历史；下面统一记一步，把字幕与质检状态放在同一条快照。
+            session.replace_review(res.cues, label=label, record=False)
+        session.record(label)
 
     return {
         "ok": res.ok,

@@ -122,6 +122,31 @@ def test_peaks_are_normalised(client: TestClient) -> None:
     assert max(peaks) > 0.5, "归一化后峰值应接近 1"
 
 
+def test_import_existing_proxy_marks_media_ready(client: TestClient, tmp_path: Path) -> None:
+    media = tmp_path / "episode.mkv"
+    media.write_bytes(b"x" * 100)
+    media_id = client.post("/api/media", headers=auth(), json={"path": str(media)}).json()["id"]
+    assert client.get(f"/api/media/{media_id}", headers=auth()).json()["proxy_ready"] is False
+
+    proxy_file = tmp_path / "my-proxy.mp4"
+    proxy_file.write_bytes(b"0" * (60 * 1024))
+    resp = client.post(
+        f"/api/media/{media_id}/proxy",
+        headers=auth(),
+        json={"path": str(proxy_file)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["proxy_ready"] is True
+
+    # 原片本身不能当代理挂载
+    reject = client.post(
+        f"/api/media/{media_id}/proxy",
+        headers=auth(),
+        json={"path": str(media)},
+    )
+    assert reject.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # 字幕
 # ---------------------------------------------------------------------------
