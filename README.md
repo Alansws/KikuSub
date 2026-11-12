@@ -271,7 +271,7 @@ tools/      评测台、打包脚本、验收小工具
 docs/       开发文档与历史记录
 ```
 
-架构与实现约束写在 [AGENTS.md](AGENTS.md)，AI 这条线的契约写在 [AI 优化与翻译开发文档](docs/AI优化与翻译-开发文档-2026-11.md)。
+架构与实现约束写在 [AGENTS.md](AGENTS.md)，AI 这条线的契约写在 [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md)。
 
 ## 许可
 

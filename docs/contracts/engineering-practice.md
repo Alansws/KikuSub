@@ -24,7 +24,7 @@
 | ① 选型 | `docs/contracts/` 只记录已定的技术选择与理由（Electron + sidecar、原生而非跨端、令牌体系） | 要换技术栈时先看这里有没有反向约束 |
 | ② 方案 | 改任何一域前先读对应契约（`review-console` / `desktop-lifecycle` / `ai-proposal` / `export-and-prompt`）；方案要"人能看懂"：界面怎么变、思路与改动范围、特殊情况与取舍、怎么验收 | 读契约 → 写 4 句话方案 → 再动手 |
 | ③ 任务派发 | 主 Agent 定方向，执行方按契约做，不许自由发挥；提交按层拆（`core,server` / `desktop` / `docs`） | 见 [AGENTS.md](../../AGENTS.md) §5 |
-| ④ 测试与取证 | `pytest`（412 例）、`python -m core.smoke`、`npm run test:main`（28 例）、`--screenshot` 静默取证、`KIKUSUB_DEV_SEED` 造状态 | 静默截图不抢焦点，可后台跑；像素比对用 PSNR |
+| ④ 测试与取证 | `pytest`（400+ 例，全量约 50s）、`python -m core.smoke`、`npm run test:main`（主进程用例）、`--screenshot` 静默取证、`KIKUSUB_DEV_SEED` 造状态 | 静默截图不抢焦点，可后台跑；像素比对用 PSNR |
 | ⑤ 发版 | `tools/pack/rebuild.sh` 一条命令；`build_app.sh` 会因 sidecar 过期直接退出；连续 2 次启动失败进安全模式（`desktop/main/launchguard.cjs`） | 见 [AGENTS.md](../../AGENTS.md) §6 |
 
 ### 静默取证（最容易被忽略的一条）
@@ -65,6 +65,10 @@ codex exec --cd . "读 AGENTS.md 与 docs/contracts/，按四个目标审 /tmp/d
 本身难做——考虑砍需求或绕路，而不是让 AI 继续硬修（硬修出来的东西上线后维护成本极高）。
 
 ## 5. 还没做的（别当成现状）
+
+> 本节只列与方法论直接相关的三条。**完整缺口清单、优先级与迭代顺序见
+> [audits/2026-11-13-长期开发规范排查.md](../audits/2026-11-13-长期开发规范排查.md)**——
+> 那份报告过期后按历史记录对待，不要拿它当现状。
 
 - **布局语义块仍有副本**：`.sec / .sec-head / .actions / .empty` 还在 3–6 个文件里各写一套，
   基线冻结但没合并成共享组件；7/9/11/13/14/18/22 这些非刻度值仍在用，需要视觉验收后再决定归并。

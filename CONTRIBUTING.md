@@ -57,7 +57,7 @@ python -m server --port 0
 
 旧 Gradio 界面（`app.py` / `static/`）已移出仓库，归档在标签 `v0.9-gradio` 与本机 `~/Downloads/kikusub_gardio`；本仓库只维护桌面端。
 
-更细的约束（哪些实现绝对不能改、为什么）写在 [AGENTS.md](AGENTS.md) 与 [AI 优化与翻译开发文档](docs/AI优化与翻译-开发文档-2026-11.md)。
+更细的约束（哪些实现绝对不能改、为什么）写在 [AGENTS.md](AGENTS.md) 与 [docs/contracts/](docs/contracts/) 的分域契约里——AI 这条线是 [ai-proposal.md](docs/contracts/ai-proposal.md)（含冻结决定 D-1～D-6 与验收断言 A1–A8）。
 
 ## 改动约定
 

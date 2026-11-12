@@ -264,7 +264,7 @@ tools/      evaluation harness, packaging scripts, small acceptance tools
 docs/       development documents and history
 ```
 
-Architecture and implementation contracts live in [AGENTS.md](AGENTS.md); the AI contract is in the [AI polish & translation design doc](docs/AI优化与翻译-开发文档-2026-11.md) (Chinese).
+Architecture and implementation contracts live in [AGENTS.md](AGENTS.md); the AI contract is in [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) (Chinese).
 
 ## License
 

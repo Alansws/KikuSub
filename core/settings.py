@@ -40,7 +40,7 @@ DEFAULTS: dict = {
     # 密钥**不在这里**：它由桌面端 `desktop/main/aikey.cjs` 用本机主密钥做 AES-256-GCM
     # 加密后存在 `preferences.json` 的 `aik1:` 密文里（主密钥 `{dataDir}/.ai-key`，0600），
     # 渲染进程每次请求经 `X-AI-Key` 头带一次；服务层既不读取也不落盘、不写日志
-    # （见 `docs/AI优化与翻译-开发文档-2026-11.md` §11.4：不用 safeStorage）。
+    # （三方案对比见归档件 `docs/archive/AI优化与翻译-开发文档-2026-11.md` §11.4：不用 safeStorage）。
     "ai_enabled": False,
     "ai_base_url": DEFAULT_AI_BASE_URL,
     "ai_model": "deepseek-flash",
