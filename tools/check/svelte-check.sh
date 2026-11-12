@@ -4,7 +4,7 @@
 #   cd desktop && npm run check:svelte      # 等价于 bash tools/check/svelte-check.sh
 #
 # 为什么是"基线"而不是"必须 0 错"：Svelte 单文件组件在 2026-11-13 之前从来没有被
-# 类型检查过，存量有 10 个真实类型错误（例如 `popIn` 未定义、preload 桥的 `onQuitting` 没写进 `window.kikusub`
+# 类型检查过，存量有 9 个真实类型错误（例如 `popIn` 未定义、preload 桥的 `onQuitting` 没写进 `window.kikusub`
 # 的类型、菜单命令名 `find`/`shortcuts` 不在联合类型里）。一口气全修会动到正在跑的界面，
 # 风险大于收益；但"继续往上加"必须立刻被拦住。所以冻结当前数字，**只许降**。
 #
