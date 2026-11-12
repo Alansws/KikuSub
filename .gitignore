@@ -102,5 +102,8 @@ desktop/.userdata*/
 # Electron dev profile (fixed userData for single-instance lock)
 .dev-userdata/
 
+# 静默截图矩阵的当次产出（基线在 docs/images/shots/baseline/，需要时手工覆盖过去）
+docs/images/shots/current/
+
 # 开发期 sidecar 的 pid / stdout（含一次性 token，绝不入库）
 .runtime/

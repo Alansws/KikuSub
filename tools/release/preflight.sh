@@ -33,12 +33,13 @@ pass() { printf '  ✅ %s\n' "$1"; }
 warn() { printf '  ⚠️  %s\n' "$1"; }
 fail() { printf '  ❌ %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
-# 优先用工作区根的 venv（本项目约定：venv 在工作区根，不在 repo/ 里）
-if [ -x "../.venv/bin/python" ]; then
-  PY="../.venv/bin/python"
-else
-  PY="$(command -v python3 || true)"
-fi
+# venv 位置：仓库根 `.venv/`（新 clone 的默认）或工作区根 `../.venv/`（本机现状：
+# 仓库放在 KikuSub/repo/ 子目录里，venv 在上层）。两者都认，最后退回系统 python3。
+PY=""
+for cand in "$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/../.venv/bin/python"; do
+  if [ -x "${cand}" ]; then PY="${cand}"; break; fi
+done
+[ -n "${PY}" ] || PY="$(command -v python3 || true)"
 
 echo "== 发版前置检查（$(basename "${REPO_ROOT}")）=="
 

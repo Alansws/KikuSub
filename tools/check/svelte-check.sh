@@ -24,9 +24,12 @@ if [ ! -x node_modules/.bin/svelte-check ]; then
   exit 2
 fi
 
-# 工作区根的 venv 在 repo/../.venv；本机 python3 可能是 3.14，所以优先用 venv
-PY="${REPO_ROOT}/../.venv/bin/python"
-[ -x "${PY}" ] || PY="$(command -v python3 || true)"
+# venv 可能在仓库根（新 clone）或工作区根（本机现状）；本机 python3 可能是 3.14，优先用 venv
+PY=""
+for cand in "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/../.venv/bin/python"; do
+  if [ -x "${cand}" ]; then PY="${cand}"; break; fi
+done
+[ -n "${PY}" ] || PY="$(command -v python3 || true)"
 [ -n "${PY}" ] || { echo "找不到 python3" >&2; exit 2; }
 
 BASE_ERRORS="$("${PY}" - "${BASELINE}" <<'PY'

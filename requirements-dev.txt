@@ -1,3 +1,5 @@
 # 开发/测试依赖（运行产品本身不需要）
 pytest>=8.0
 ruff>=0.5
+# 覆盖率报告：bash tools/check/coverage.sh（不设门槛，只为可见）
+pytest-cov>=5.0
