@@ -17,6 +17,7 @@
     qa,
     qaAction,
     refreshQa,
+    setQaFloating,
     setView,
     toggleQaPanel,
     toast,
@@ -24,148 +25,174 @@
   } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
   import { cubicOut } from 'svelte/easing';
+  import { untrack } from 'svelte';
 
-  const POS_KEY = 'kikusub.qaPanelPos.v1';
+  let { mode = 'docked' }: { mode?: 'docked' | 'floating' } = $props();
 
-  function loadSavedPos(): { right: number; bottom: number } | null {
-    try {
-      const raw = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
-      if (raw && Number.isFinite(raw.right) && Number.isFinite(raw.bottom)) {
-        return { right: Number(raw.right), bottom: Number(raw.bottom) };
-      }
-    } catch {
-      /* 手改坏：回到默认停靠 */
-    }
-    return null;
+  const FLOAT_KEY = 'kikusub.qaPanel.v2';
+  const MIN_W = 320;
+  const MIN_H = 240;
+  const MARGIN = 8;
+
+  interface FloatBox {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
   }
 
-  let panelEl = $state<HTMLElement | null>(null);
-  let savedPos = $state<{ right: number; bottom: number } | null>(loadSavedPos());
-  let dragging = $state(false);
-  let dragPos:
-    | {
-        startX: number;
-        startY: number;
-        startRight: number;
-        startBottom: number;
-        parentW: number;
-        parentH: number;
-        width: number;
-        height: number;
-      }
-    | null = null;
+  function viewport(): { w: number; h: number } {
+    if (typeof window === 'undefined') return { w: 1440, h: 900 };
+    return { w: window.innerWidth, h: window.innerHeight };
+  }
 
-  /** 核对台且检查器展开时，默认停靠在检查器左侧，而不是盖住右栏。 */
-  const dockInspector = $derived(app.view === 'review' && app.inspectorOpen && !app.compact);
+  /** 默认浮窗位置：右下角，留出状态栏；尺寸比旧浮窗小一号，不抢画面。 */
+  function defaultFloatBox(): FloatBox {
+    const { w: vw, h: vh } = viewport();
+    const w = Math.min(420, Math.max(MIN_W, vw - 32));
+    const h = Math.min(500, Math.max(MIN_H, vh - 120));
+    return {
+      // 默认落在内容区左下（避开 236px 侧栏，也不压右侧检查器按钮）；
+      // 用户拖到别处后位置会记住，「归位」再回到这里。
+      x: Math.max(MARGIN, Math.min(252, vw - w - MARGIN)),
+      y: Math.max(MARGIN, vh - h - 46),
+      w,
+      h,
+    };
+  }
+
+  function clampBox(box: FloatBox): FloatBox {
+    const { w: vw, h: vh } = viewport();
+    const w = Math.min(Math.max(box.w, MIN_W), Math.max(MIN_W, vw - MARGIN * 2));
+    const h = Math.min(Math.max(box.h, MIN_H), Math.max(MIN_H, vh - MARGIN * 2));
+    return {
+      w,
+      h,
+      x: Math.min(Math.max(box.x, MARGIN), Math.max(MARGIN, vw - w - MARGIN)),
+      y: Math.min(Math.max(box.y, MARGIN), Math.max(MARGIN, vh - h - MARGIN)),
+    };
+  }
+
+  function loadFloatBox(): FloatBox {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FLOAT_KEY) || 'null');
+      if (
+        raw &&
+        Number.isFinite(raw.x) &&
+        Number.isFinite(raw.y) &&
+        Number.isFinite(raw.w) &&
+        Number.isFinite(raw.h)
+      ) {
+        return clampBox({ x: raw.x, y: raw.y, w: raw.w, h: raw.h });
+      }
+    } catch {
+      /* 手改坏：回默认位置 */
+    }
+    return defaultFloatBox();
+  }
+
+  let floatBox = $state<FloatBox>(loadFloatBox());
+  /** 拖动 / 缩放都只记录起点，真正的计算放在 window 级监听里。 */
+  let dragState = $state<{ sx: number; sy: number; x: number; y: number } | null>(null);
+  let resizeState = $state<{ sx: number; sy: number; w: number; h: number } | null>(null);
+  const dragging = $derived(Boolean(dragState));
+  const resizing = $derived(Boolean(resizeState));
   const panelStyle = $derived(
-    savedPos && !app.compact
-      ? `right:${savedPos.right}px;bottom:${savedPos.bottom}px;`
+    mode === 'floating'
+      ? `left:${floatBox.x}px;top:${floatBox.y}px;width:${floatBox.w}px;height:${floatBox.h}px;`
       : '',
   );
 
-  function persistPos() {
+  function persistFloat() {
     try {
-      if (savedPos) localStorage.setItem(POS_KEY, JSON.stringify(savedPos));
-      else localStorage.removeItem(POS_KEY);
+      localStorage.setItem(FLOAT_KEY, JSON.stringify(floatBox));
     } catch {
       /* 忽略 */
     }
   }
 
+  /** 一键归位：恢复默认右下角位置与默认大小。 */
+  function resetFloatPosition() {
+    floatBox = defaultFloatBox();
+    persistFloat();
+  }
+
   function onHeadPointerDown(e: PointerEvent) {
-    if (!panelEl) return;
+    if (mode !== 'floating') return;
     const target = e.target as HTMLElement | null;
     if (target?.closest('button')) return;
-    const parent = panelEl.offsetParent as HTMLElement | null;
-    if (!parent) return;
     e.preventDefault();
-    const pr = parent.getBoundingClientRect();
-    const r = panelEl.getBoundingClientRect();
-    dragPos = {
-      startX: e.clientX,
-      startY: e.clientY,
-      startRight: pr.right - r.right,
-      startBottom: pr.bottom - r.bottom,
-      parentW: pr.width,
-      parentH: pr.height,
-      width: r.width,
-      height: r.height,
-    };
-    dragging = true;
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    } catch {
-      /* ignore */
-    }
+    dragState = { sx: e.clientX, sy: e.clientY, x: floatBox.x, y: floatBox.y };
   }
 
-  function onHeadPointerMove(e: PointerEvent) {
-    if (!dragPos) return;
-    const dx = e.clientX - dragPos.startX;
-    const dy = e.clientY - dragPos.startY;
-    const maxRight = Math.max(8, dragPos.parentW - dragPos.width - 8);
-    const maxBottom = Math.max(8, dragPos.parentH - dragPos.height - 8);
-    const right = Math.max(8, Math.min(maxRight, dragPos.startRight - dx));
-    const bottom = Math.max(8, Math.min(maxBottom, dragPos.startBottom + dy));
-    savedPos = { right: Math.round(right), bottom: Math.round(bottom) };
+  function onHeaderDblClick(e: MouseEvent) {
+    if (mode !== 'floating') return;
+    if ((e.target as HTMLElement | null)?.closest('button')) return;
+    resetFloatPosition();
   }
 
-  function onHeadPointerUp(e: PointerEvent) {
-    if (!dragPos) return;
-    dragPos = null;
-    dragging = false;
-    persistPos();
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-    } catch {
-      /* ignore */
-    }
+  function onResizePointerDown(e: PointerEvent) {
+    if (mode !== 'floating') return;
+    e.preventDefault();
+    e.stopPropagation();
+    resizeState = { sx: e.clientX, sy: e.clientY, w: floatBox.w, h: floatBox.h };
   }
 
-  /** 双击标题栏回到默认停靠位置（检查器左侧）。 */
-  function resetPanelPosition() {
-    savedPos = null;
-    persistPos();
-  }
-
-  // 窗口缩小 / 检查器展开后，上次保存的位置可能已经跑到工作区外：拉回可视范围。
+  // 关键修复：拖动 / 缩放不依赖标题栏自己的 pointer capture。
+  // 旧实现只要面板移出指针下方，后续 pointermove / pointerup 就收不到，
+  // 表现为「拖 100px 只动 10px、位置也不落盘」。window 级监听没有这个问题。
   $effect(() => {
-    if (!panelEl || !savedPos || app.compact) return;
-    const parent = panelEl.offsetParent as HTMLElement | null;
-    if (!parent) return;
-    const pr = parent.getBoundingClientRect();
-    const r = panelEl.getBoundingClientRect();
-    const maxRight = Math.max(8, pr.width - r.width - 8);
-    const maxBottom = Math.max(8, pr.height - r.height - 8);
-    if (savedPos.right > maxRight || savedPos.bottom > maxBottom) {
-      savedPos = {
-        right: Math.min(savedPos.right, maxRight),
-        bottom: Math.min(savedPos.bottom, maxBottom),
-      };
-    }
+    if (!dragState && !resizeState) return;
+    const move = (e: PointerEvent) => {
+      // untrack：拖动过程中 floatBox 每帧都在变，但不应该让 effect 重装监听。
+      const box = untrack(() => floatBox);
+      if (dragState) {
+        const x = Math.min(
+          Math.max(MARGIN, dragState.x + e.clientX - dragState.sx),
+          Math.max(MARGIN, window.innerWidth - box.w - MARGIN),
+        );
+        const y = Math.min(
+          Math.max(MARGIN, dragState.y + e.clientY - dragState.sy),
+          Math.max(MARGIN, window.innerHeight - box.h - MARGIN),
+        );
+        floatBox = { ...box, x, y };
+      } else if (resizeState) {
+        const w = Math.min(
+          Math.max(MIN_W, resizeState.w + e.clientX - resizeState.sx),
+          Math.max(MIN_W, window.innerWidth - box.x - MARGIN),
+        );
+        const h = Math.min(
+          Math.max(MIN_H, resizeState.h + e.clientY - resizeState.sy),
+          Math.max(MIN_H, window.innerHeight - box.y - MARGIN),
+        );
+        floatBox = { ...box, w, h };
+      }
+    };
+    const up = () => {
+      dragState = null;
+      resizeState = null;
+      persistFloat();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
   });
 
-  /**
-   * 浮层从右下角「弹」出来：10px 上移 + 0.985→1 的轻微放大，
-   * 比单纯淡入更接近 macOS popover 的手感；收起时反向收回。
-   */
-  function popIn(_node: HTMLElement, { duration }: { duration: number }) {
-    return {
-      duration,
-      easing: cubicOut,
-      css: (t: number) =>
-        `opacity:${t};transform:translateY(${(1 - t) * 10}px) scale(${0.985 + 0.015 * t});`,
+  // 窗口缩小 / 分辨率变化：把浮窗拉回可视范围。
+  $effect(() => {
+    if (mode !== 'floating') return;
+    const onResize = () => {
+      floatBox = clampBox(floatBox);
+      persistFloat();
     };
-  }
-
-  function popOut(_node: HTMLElement, { duration }: { duration: number }) {
-    return {
-      duration,
-      easing: cubicOut,
-      css: (t: number) =>
-        `opacity:${t};transform:translateY(${(1 - t) * 8}px) scale(${0.985 + 0.015 * t});`,
-    };
-  }
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  });
 
   /**
    * 当前核对表不是转写结果时（导入字幕 / 恢复草稿），媒体同名的质检队列
@@ -358,29 +385,29 @@
   }
 </script>
 
-{#if qa.open}
-  <aside
+{#if mode === 'docked' || qa.open}
+  <section
     class="qa-panel"
-    bind:this={panelEl}
+    class:docked={mode === 'docked'}
+    class:floating={mode === 'floating'}
     class:detached
-    class:dock-inspector={dockInspector}
     class:dragging={dragging}
+    class:resizing={resizing}
     style={panelStyle}
     aria-label="质检待核队列"
-    in:popIn={motion ? { duration: 220 } : { duration: 0 }}
-    out:popOut={motion ? { duration: 130 } : { duration: 0 }}
+    in:popIn={mode === 'floating' && motion ? { duration: 220 } : { duration: 0 }}
   >
     <header
       class="qa-head"
       class:bare={detached || !items.length}
+      class:grabbable={mode === 'floating'}
       role="group"
-      aria-label="质检面板标题栏，可拖动"
-      title="拖动标题栏移动面板；双击复位到检查器左侧"
-      onpointerdown={onHeadPointerDown}
-      onpointermove={onHeadPointerMove}
-      onpointerup={onHeadPointerUp}
-      onpointercancel={onHeadPointerUp}
-      ondblclick={resetPanelPosition}
+      aria-label={mode === 'floating' ? '质检浮窗标题栏，可拖动' : '质检面板标题栏'}
+      title={mode === 'floating'
+        ? '拖动标题栏移动浮窗；双击恢复默认位置和大小'
+        : '质检队列停靠在右侧检查器'}
+      onpointerdown={mode === 'floating' ? onHeadPointerDown : undefined}
+      ondblclick={onHeaderDblClick}
     >
       <span class="qa-mark" class:off={detached}>
         <Icon name={detached ? 'doc' : 'search'} size={12} />
@@ -409,11 +436,38 @@
       <button class="icon-btn" onclick={() => refreshQa()} title="刷新队列" aria-label="刷新队列">
         <Icon name="undo" size={11} />
       </button>
+      {#if mode === 'floating'}
+        <button
+          class="icon-btn"
+          onclick={() => setQaFloating(false)}
+          title="停靠到右侧检查器"
+          aria-label="停靠到右侧检查器"
+        >
+          <Icon name="sidebar" size={11} />
+        </button>
+        <button
+          class="icon-btn"
+          onclick={resetFloatPosition}
+          title="归位（恢复默认位置和大小）"
+          aria-label="归位"
+        >
+          <Icon name="target" size={11} />
+        </button>
+      {:else}
+        <button
+          class="icon-btn"
+          onclick={() => setQaFloating(true)}
+          title="弹出为浮窗（可拖到任意位置）"
+          aria-label="弹出为浮窗"
+        >
+          <Icon name="export" size={11} />
+        </button>
+      {/if}
       <button
         class="icon-btn"
         onclick={() => toggleQaPanel(false)}
-        title="收起（Esc）"
-        aria-label="收起质检面板"
+        title={mode === 'floating' ? '关闭浮窗（Esc）' : '收起（Esc）'}
+        aria-label={mode === 'floating' ? '关闭质检浮窗' : '收起质检面板'}
       >
         <Icon name="close" size={11} />
       </button>
@@ -589,36 +643,49 @@
         {/each}
       {/if}
     </div>
-  </aside>
+    {#if mode === 'floating'}
+      <div
+        class="qa-resize"
+        role="separator"
+        aria-label="拖动调整质检浮窗大小"
+        title="拖动调整大小"
+        onpointerdown={onResizePointerDown}
+      ></div>
+    {/if}
+  </section>
 {/if}
 
 <style>
   .qa-panel {
-    position: absolute;
-    right: 14px;
-    bottom: 40px;
-    width: 438px;
-    max-height: min(68vh, 620px);
     background: var(--raise);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  /* 停靠：填满右侧检查器的「质检待核」页签，不再覆盖画面 / 表格 / 侧栏。 */
+  .qa-panel.docked {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--paper);
+    z-index: auto;
+  }
+  /* 浮窗：用户主动弹出时才出现；fixed + 可拖到任意位置。 */
+  .qa-panel.floating {
+    position: fixed;
+    z-index: 70;
     border: 1px solid var(--line);
     border-radius: 14px;
     box-shadow: var(--shadow-pop);
-    display: flex;
-    flex-direction: column;
-    z-index: 60;
-    overflow: hidden;
     transform-origin: 100% 100%;
   }
-  /* 默认停在检查器左侧（348px）外，避免盖住字幕编辑框和朗读按钮。
-     窗口不够宽时退到最左，仍可拖动到任意位置。 */
-  .qa-panel.dock-inspector {
-    right: max(14px, min(362px, calc(100% - 452px)));
-  }
-  .qa-panel.dragging {
+  .qa-panel.dragging,
+  .qa-panel.resizing {
     user-select: none;
-  }
-  .qa-panel.dragging .qa-head {
-    cursor: grabbing;
   }
 
   .qa-head {
@@ -627,8 +694,14 @@
     gap: 8px;
     padding: 10px 10px 9px 12px;
     flex: 0 0 auto;
+    cursor: default;
+  }
+  .qa-head.grabbable {
     cursor: grab;
     touch-action: none;
+  }
+  .qa-panel.dragging .qa-head {
+    cursor: grabbing;
   }
   .qa-head.bare {
     box-shadow: inset 0 -1px 0 var(--separator-soft);
@@ -838,8 +911,24 @@
   }
 
   .qa-body {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 2px 0 4px;
+  }
+
+  /* 浮窗右下角的缩放手柄：只存在于 floating 模式。 */
+  .qa-resize {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 18px;
+    height: 18px;
+    cursor: nwse-resize;
+    touch-action: none;
+    background:
+      linear-gradient(135deg, transparent 0 46%, var(--line) 46% 54%, transparent 54% 100%),
+      linear-gradient(135deg, transparent 0 66%, var(--line-2) 66% 74%, transparent 74% 100%);
   }
 
   .empty {

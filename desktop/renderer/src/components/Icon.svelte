@@ -35,6 +35,7 @@
     close: '<path d="M4.2 4.2 11.8 11.8"/><path d="M11.8 4.2 4.2 11.8"/>',
     'chevron-left': '<path d="M10 3.5 5.5 8 10 12.5"/>',
     'chevron-right': '<path d="M6 3.5 10.5 8 6 12.5"/>',
+    'chevron-down': '<path d="M3.5 6 8 10.5 12.5 6"/>',
     target:
       '<circle cx="8" cy="8" r="5.2"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/>',
     sparkle:

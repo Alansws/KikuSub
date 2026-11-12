@@ -1,12 +1,13 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import QaPanel from './QaPanel.svelte';
   import {
     app,
     deleteCue,
     exportCues,
     focusRange,
     cloneEngineReady,
-    deleteTranslation,
+    importTranslationFromExport,
     deleteTtsVoice,
     downloadTtsModel,
     extractTtsVoiceFromCue,
@@ -19,12 +20,14 @@
     restoreDraft,
     reviewDraft,
     renameTtsVoice,
+    removeTranslationTrack,
     saveDraft,
     isTranslationStale,
     setTrackLang,
     setTrackMode,
     setTtsDefaultVoiceId,
     setTtsSpeed,
+    setInspectorTab,
     setTtsVoiceId,
     setView,
     speakCue,
@@ -32,6 +35,7 @@
     stopTts,
     toast,
     translationAt,
+    qa,
     tts,
     ttsVoice,
     undoTranslation,
@@ -46,6 +50,7 @@
   import { tick } from 'svelte';
 
   const cue = $derived(app.cues[play.selected] ?? null);
+  const qaPending = $derived(Number(qa.payload?.counts?.pending ?? 0));
 
   /**
    * 当前核对表的来源决定右侧信息能不能引用「最近一次转写」：
@@ -449,30 +454,45 @@
   async function removeTranslation() {
     const lang = app.trackLang;
     if (!lang || !app.translations[lang]) return;
-    if (!window.confirm(`删除 ${lang} 译文？原文与时间轴不受影响，可用「撤销译文」找回上一版。`)) {
-      return;
-    }
-    await deleteTranslation(lang);
-    if (app.track !== 'source' && !app.translations[lang]) setTrackMode('source');
+    await removeTranslationTrack(lang);
   }
 </script>
 
 <aside class="inspector" class:hidden={!app.inspectorOpen}>
-  <div class="ins-scroll">
-  <div class="insp-head">
-    <span>当前条目</span>
-    <div class="head-right">
-      <b>{app.cues.length ? `#${play.selected + 1}` : '—'}</b>
-      <button
-        class="ins-close"
-        onclick={() => (app.inspectorOpen = false)}
-        title="收起检查器（Esc）"
-        aria-label="收起检查器"
-      >
-        <Icon name="close" size={11} />
-      </button>
-    </div>
+  <div class="insp-tabs" role="tablist" aria-label="右侧面板">
+    <button
+      class="insp-tab"
+      class:on={app.inspectorTab === 'cue'}
+      role="tab"
+      aria-selected={app.inspectorTab === 'cue'}
+      onclick={() => setInspectorTab('cue')}
+    >当前条目</button>
+    <button
+      class="insp-tab"
+      class:on={app.inspectorTab === 'qa'}
+      role="tab"
+      aria-selected={app.inspectorTab === 'qa'}
+      onclick={() => setInspectorTab('qa')}
+      title="质检待核队列"
+    >
+      质检待核
+      {#if qaPending}<b>{qaPending}</b>{/if}
+    </button>
+    <div class="tabs-spacer"></div>
+    {#if app.inspectorTab === 'cue'}
+      <b class="tabs-index">{app.cues.length ? `#${play.selected + 1}` : '—'}</b>
+    {/if}
+    <button
+      class="ins-close"
+      onclick={() => (app.inspectorOpen = false)}
+      title="收起检查器（Esc）"
+      aria-label="收起检查器"
+    >
+      <Icon name="close" size={11} />
+    </button>
   </div>
+  {#if app.inspectorTab === 'cue'}
+  <div class="ins-scroll">
   <div class="display-row">
     <div class="seg">
       <button class:on={app.track === 'source'} onclick={() => setTrackMode('source')}>原文</button>
@@ -511,8 +531,21 @@
       {:else}
         <span class="ok">全部同步</span>
       {/if}
+      <button class="link" onclick={() => importTranslationFromExport()}>导入译文</button>
       <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
       <button class="link danger" onclick={removeTranslation}>删除译文</button>
+    </div>
+  {:else}
+    <div class="track-meta empty">
+      <span>还没有译文字幕</span>
+      <button
+        class="link"
+        onclick={() => importTranslationFromExport()}
+        disabled={!app.cues.length}
+        title="选择与当前原文逐条对齐的译文 SRT / VTT"
+      >
+        导入译文…
+      </button>
     </div>
   {/if}
 
@@ -1028,6 +1061,9 @@
       </div>
     {/if}
   </div>
+  {:else}
+    <QaPanel mode="docked" />
+  {/if}
 </aside>
 
 <style>
@@ -1046,28 +1082,65 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 16px 20px 16px;
+    padding: 12px 20px 16px;
   }
-  .insp-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-    font-size: 12px;
-    line-height: 16px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    color: var(--ink-2);
-  }
-  .insp-head b {
-    font-family: var(--font-mono);
-    font-weight: 400;
-    color: var(--ink-3);
-  }
-  .head-right {
+  .insp-tabs {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 2px;
+    min-height: 40px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line-2);
+    background: var(--paper);
+  }
+  .insp-tab {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 16px;
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .insp-tab:hover {
+    background: var(--fill);
+    color: var(--ink-2);
+  }
+  .insp-tab.on {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .insp-tab b {
+    min-width: 16px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    display: grid;
+    place-items: center;
+    font-size: 10.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .tabs-spacer {
+    flex: 1;
+  }
+  .tabs-index {
+    font-family: var(--font-mono);
+    font-weight: 400;
+    font-size: 12px;
+    color: var(--ink-3);
+    margin-right: 2px;
   }
   /* 只有紧凑模式的抽屉才需要显式的关闭入口（桌面由工具栏开关控制） */
   .ins-close {
@@ -1078,7 +1151,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 12px;
+    /* 页签底边已经是一条分隔线，这里不再叠一层 12px 的空白。 */
+    margin-top: 0;
   }
   .seg {
     height: 26px;
@@ -1129,6 +1203,11 @@
   }
   .track-meta .link + .link {
     margin-left: 2px;
+  }
+  .track-meta .link:disabled {
+    color: var(--text-3);
+    opacity: 0.55;
+    cursor: default;
   }
   .track-meta .link.danger {
     color: var(--danger);

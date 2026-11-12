@@ -6,7 +6,7 @@
   const items: { view: View; icon: string; label: string }[] = [
     { view: 'import', icon: 'tray', label: '导入' },
     { view: 'transcribe', icon: 'wave', label: '转写' },
-    { view: 'review', icon: 'listcheck', label: '核对' },
+    { view: 'review', icon: 'listcheck', label: '核对台' },
     { view: 'ai', icon: 'sparkle', label: 'AI 优化' },
     { view: 'export', icon: 'export', label: '导出' },
   ];
@@ -57,11 +57,12 @@
     class="sb-item"
     class:active={app.view === 'settings'}
     onclick={() => setView('settings')}
-    title="设置：引擎与模型、文件夹路径、日志与诊断"
-    aria-label="设置"
+    title="设置：引擎与模型、文件夹路径、日志与诊断（⌘,）"
+    aria-label="设置（⌘,）"
   >
     <span class="ico"><Icon name="gear" /></span>
     <span>设置</span>
+    <kbd class="sb-key" aria-hidden="true">⌘,</kbd>
   </button>
 
 </aside>
@@ -156,6 +157,21 @@
     flex: 1;
   }
 
+  /* 设置项的固定快捷键提示：⌘, 是 macOS 惯例，不属于可自定义表。 */
+  .sb-key {
+    margin-left: auto;
+    flex: 0 0 auto;
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    line-height: 16px;
+    color: var(--text-3);
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .sb-item.active .sb-key {
+    color: var(--accent);
+  }
+
   /* 紧凑模式（≤900px）：56px 图标轨。标签的显隐在 app.css（全局骨架）里，
      品牌文字在这里收起——组件样式排在 app.css 之后，同一份规则放这里才生效。 */
   @media (max-width: 900px) {
@@ -166,6 +182,9 @@
     }
     .brand-name,
     .brand-sub {
+      display: none;
+    }
+    .sb-key {
       display: none;
     }
   }

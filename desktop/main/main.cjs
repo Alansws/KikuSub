@@ -974,10 +974,12 @@ function buildMenu() {
     {
       label: '显示',
       submenu: [
-        // ⌘1–⌘5 由渲染层处理：AI 优化台里 ⌘1/⌘2 要优先切润色 / 翻译。
+        // ⌘1–⌘5 由渲染层处理（导入 / 转写 / 核对台 / AI 优化 / 导出）。
+        // 菜单不绑 accelerator：用户改键后旧键不能仍然生效。
         { label: '导入', click: send('menu:view', 'import') },
         { label: '转写', click: send('menu:view', 'transcribe') },
-        { label: '核对', click: send('menu:view', 'review') },
+        { label: '核对台', click: send('menu:view', 'review') },
+        { label: 'AI 优化', click: send('menu:view', 'ai') },
         { label: '导出', click: send('menu:view', 'export') },
         { label: '任务详报', click: send('menu:view', 'report') },
         { type: 'separator' },

@@ -30,6 +30,7 @@
     extractTtsVoiceFromCue,
     findState,
     focusRange,
+    importProxyFromFile,
     insertCueAt,
     isTranslationStale,
     jumpToCue,
@@ -37,16 +38,19 @@
     play,
     previewRange,
     rememberPlayhead,
-    replaceAllInCues,
+    replaceAllInTracks,
     replaceInCue,
+    replaceInTranslation,
     seekTo,
     splitCueAt,
     startProxyJob,
     toast,
     translationAt,
+    translationTextAt,
     transcribeRange,
     tts,
   } from '../lib/store.svelte';
+  import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
@@ -134,6 +138,7 @@
     app.jobKind === 'proxy' &&
       (app.job?.status === 'running' || app.job?.status === 'queued'),
   );
+  const proxyPct = $derived(app.jobKind === 'proxy' ? (app.job?.percent ?? 0) : 0);
 
   // 当前播放到的字幕。双语 SRT 的两行区间完全相同，必须一起显示。
   const captionLines = $derived.by(() => {
@@ -1463,32 +1468,132 @@
     if (doSeek) seek(app.cues[i].start + 0.02);
   }
 
-  // ---------------- 查找与替换（⌘F，只作用于原文） ----------------
+  // ---------------- 查找与替换（⌘F，覆盖原文 / 译文 / 双语） ----------------
   let findInput = $state<HTMLInputElement | null>(null);
+  /** 正在提交单处替换：挡住连点，避免两个 patch 请求把 pos 抢乱。 */
+  let findBusy = $state(false);
+
+  type FindTrack = 'source' | 'target';
+  interface FindHit {
+    cue: number;
+    track: FindTrack;
+    start: number;
+    end: number;
+  }
+
+  /**
+   * 本轮查找里被「跳过」的命中点。
+   *
+   * 只认 (条 / 轨 / 起点)，不写字幕、不进历史。替换掉同一句里更靠前的命中时，
+   * `shiftFindAnchors()` 会把后面这些锚点一起平移，跳过标记不会因为字符前移而失效。
+   * 改查找词、切原文/译文模式或重开查找都会清空——「本轮」仅指这一次查找。
+   */
+  interface FindSkipAnchor {
+    cue: number;
+    track: FindTrack;
+    start: number;
+  }
+  let findSkipped = $state<FindSkipAnchor[]>([]);
+
+  /**
+   * 搜索范围跟随当前显示模式：原文只搜原文、译文只搜译文、双语两条都搜。
+   * 双语里同一个词可能同时命中上下两行，所以命中记录必须带 track，替换时
+   * 才能改对那张表（原文进 review_cues，译文进 translations[lang]）。
+   */
+  const findTracks = $derived<FindTrack[]>(
+    app.track === 'target' ? ['target'] : app.track === 'both' ? ['source', 'target'] : ['source'],
+  );
 
   function escapeRe(text: string) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  /** 所有匹配：记录属于第几条、在文本里的起止，用于计数、跳转与高亮。 */
-  const findMatches = $derived.by(() => {
+  function findHitKey(hit: { cue: number; track: FindTrack; start: number }) {
+    return `${hit.cue}:${hit.track}:${hit.start}`;
+  }
+
+  /** 所有命中（含已跳过）：记录属于第几条 / 哪条轨 / 在文本里的起止。 */
+  const rawFindMatches = $derived.by(() => {
     const query = findState.query;
-    const hits: { cue: number; start: number; end: number }[] = [];
+    const hits: FindHit[] = [];
     if (!query) return hits;
     const flags = findState.caseSensitive ? 'g' : 'gi';
     const source = escapeRe(query);
+    const tracks = findTracks;
     app.cues.forEach((cue, index) => {
-      const re = new RegExp(source, flags);
-      let found: RegExpExecArray | null;
-      while ((found = re.exec(cue.text)) !== null) {
-        hits.push({ cue: index, start: found.index, end: found.index + found[0].length });
-        if (found[0].length === 0) re.lastIndex += 1;
+      for (const track of tracks) {
+        const text = track === 'source' ? cue.text : translationTextAt(index);
+        if (!text) continue;
+        const re = new RegExp(source, flags);
+        let found: RegExpExecArray | null;
+        while ((found = re.exec(text)) !== null) {
+          hits.push({
+            cue: index,
+            track,
+            start: found.index,
+            end: found.index + found[0].length,
+          });
+          if (found[0].length === 0) re.lastIndex += 1;
+        }
       }
     });
     return hits;
   });
 
-  const matchedCueSet = $derived(new Set(findMatches.map((hit) => hit.cue)));
+  const skippedFindKeys = $derived(new Set(findSkipped.map((anchor) => findHitKey(anchor))));
+  /** 待处理命中：跳过的不再参与上一处/下一处/替换，本轮到它就直接略过。 */
+  const findMatches = $derived.by(() =>
+    rawFindMatches.filter((hit) => !skippedFindKeys.has(findHitKey(hit))),
+  );
+  const skippedHitCount = $derived.by(() => {
+    if (!findSkipped.length) return 0;
+    let count = 0;
+    for (const hit of rawFindMatches) {
+      if (skippedFindKeys.has(findHitKey(hit))) count += 1;
+    }
+    return count;
+  });
+
+  /** 某一轨里被跳过的起点，渲染删除线用；单行字幕与原文下标一致。 */
+  const skippedStarts = $derived.by(() => {
+    const map = new Map<string, Set<number>>();
+    for (const anchor of findSkipped) {
+      const key = `${anchor.cue}:${anchor.track}`;
+      let starts = map.get(key);
+      if (!starts) {
+        starts = new Set();
+        map.set(key, starts);
+      }
+      starts.add(anchor.start);
+    }
+    return map;
+  });
+
+  const matchedCueSet = $derived(
+    new Set((findState.open ? findMatches : []).map((hit) => hit.cue)),
+  );
+
+  /** 当前这一处（未跳过的）在原始命中里的序号，用来只点亮同一个词里的那一处。 */
+  const currentFind = $derived.by(() => {
+    if (!findState.open) return null;
+    const hit = findMatches[findState.pos];
+    if (!hit) return null;
+    let ordinal = 0;
+    for (const raw of rawFindMatches) {
+      if (raw.cue !== hit.cue || raw.track !== hit.track) continue;
+      if (raw.start === hit.start) break;
+      ordinal += 1;
+    }
+    return { ...hit, ordinal };
+  });
+
+  const findPrevKey = $derived(formatCombo(comboOf('review.findPrev')));
+  const findNextKey = $derived(formatCombo(comboOf('review.findNext')));
+
+  function resetFindSession() {
+    findSkipped = [];
+    findState.pos = 0;
+  }
 
   $effect(() => {
     const nonce = findState.focusNonce;
@@ -1500,7 +1605,22 @@
     });
   });
 
-  // 替换后匹配数会变少：把当前位置拉回合法范围
+  // 关掉查找栏就结束「本轮」：下次重开时不记得上一轮跳过过谁。
+  $effect(() => {
+    if (!findState.open && findSkipped.length) findSkipped = [];
+  });
+
+  // 原文 / 译文 / 双语切换会改变搜索范围，旧的跳过锚点不再对应同一批命中。
+  let lastFindTracksKey = '';
+  $effect(() => {
+    const key = findTracks.join(',');
+    if (key === lastFindTracksKey) return;
+    const firstRun = !lastFindTracksKey;
+    lastFindTracksKey = key;
+    if (!firstRun) resetFindSession();
+  });
+
+  // 替换 / 跳过之后匹配数会变少：把当前位置拉回合法范围
   $effect(() => {
     const total = findMatches.length;
     if (total === 0) {
@@ -1510,46 +1630,216 @@
     if (findState.pos >= total) findState.pos = 0;
   });
 
+  /**
+   * 替换掉某条字幕里的一处命中后，同一轨后面那些跳过锚点的起点会整体左/右移。
+   * 不平移的话，被跳过的逗号会因为前一个逗号被删掉而“复活”。
+   */
+  function shiftFindAnchors(
+    cue: number,
+    track: FindTrack,
+    at: number,
+    removed: number,
+    inserted: number,
+  ) {
+    if (!findSkipped.length) return;
+    const delta = inserted - removed;
+    if (!delta) return;
+    let changed = false;
+    const next = findSkipped.map((anchor) => {
+      if (anchor.cue !== cue || anchor.track !== track) return anchor;
+      if (anchor.start <= at) return anchor;
+      changed = true;
+      return { ...anchor, start: Math.max(at, anchor.start + delta) };
+    });
+    if (changed) findSkipped = next;
+  }
+
+  function revealFindHit(hit: FindHit | undefined) {
+    if (!hit) return;
+    jumpToCue(hit.cue);
+  }
+
+  /**
+   * 整批替换未跳过的命中以后，同一轨里被跳过的字符会随前面的删/插整体平移。
+   * 按替换前的未跳过命中累计位移，把跳过锚点搬到新位置，删除线才不会消失。
+   */
+  function reseatSkippedAfterReplaceAll(hits: FindHit[], inserted: number) {
+    if (!findSkipped.length) return;
+    const byTrack = new Map<string, FindHit[]>();
+    for (const hit of hits) {
+      const key = `${hit.cue}:${hit.track}`;
+      let list = byTrack.get(key);
+      if (!list) {
+        list = [];
+        byTrack.set(key, list);
+      }
+      list.push(hit);
+    }
+    findSkipped = findSkipped.map((anchor) => {
+      let shift = 0;
+      for (const hit of byTrack.get(`${anchor.cue}:${anchor.track}`) ?? []) {
+        if (hit.start < anchor.start) shift += inserted - (hit.end - hit.start);
+      }
+      return shift ? { ...anchor, start: Math.max(0, anchor.start + shift) } : anchor;
+    });
+  }
+
   function findGo(delta: number) {
+    if (findBusy) return;
     const total = findMatches.length;
     if (!total) {
-      toast('没有找到匹配的文本', 'warn');
+      toast(
+        rawFindMatches.length
+          ? '本轮匹配都已跳过，改一下查找词可以重新开始'
+          : '没有找到匹配的文本',
+        'warn',
+      );
       return;
     }
     findState.pos = (findState.pos + delta + total) % total;
-    jumpToCue(findMatches[findState.pos].cue);
+    revealFindHit(findMatches[findState.pos]);
   }
 
   async function findReplaceCurrent() {
-    if (!findState.query) return;
+    if (!findState.query || findBusy) return;
     const total = findMatches.length;
     if (!total) {
-      toast('没有可替换的匹配', 'warn');
+      toast(
+        rawFindMatches.length
+          ? '本轮匹配都已跳过，改一下查找词可以重新开始'
+          : '没有可替换的匹配',
+        'warn',
+      );
       return;
     }
     const hit = findMatches[Math.min(findState.pos, total - 1)];
-    const ok = await replaceInCue(
-      hit.cue,
-      findState.query,
-      findState.replacement,
-      findState.caseSensitive,
-      hit.start,
-    );
-    if (ok) toast('已替换 1 处');
+    if (!hit) return;
+    const posBefore = findState.pos;
+    const query = findState.query;
+    const replacement = findState.replacement;
+    const caseSensitive = findState.caseSensitive;
+    const removed = hit.end - hit.start;
+    findBusy = true;
+    try {
+      const ok =
+        hit.track === 'source'
+          ? await replaceInCue(hit.cue, query, replacement, caseSensitive, hit.start)
+          : await replaceInTranslation(hit.cue, query, replacement, caseSensitive, hit.start);
+      if (!ok) return;
+      const where = hit.track === 'source' ? '原文' : '译文';
+      // 请求期间用户把查找栏关了：替换照常生效，但不要再抢选中/滚动。
+      if (!findState.open) {
+        toast(`已替换 1 处${where}`);
+        return;
+      }
+      // 请求期间用户改了查找条件：替换已经发生，但不要拿旧位置继续前进。
+      if (findState.query !== query || findState.caseSensitive !== caseSensitive) {
+        toast(`已替换 1 处${where}`);
+        return;
+      }
+      // 被替换的命中已经从数组消失，后面的跳过锚点要跟着平移。
+      shiftFindAnchors(hit.cue, hit.track, hit.start, removed, replacement.length);
+      const left = findMatches.length;
+      if (!left) {
+        findState.pos = 0;
+        // 还有没被替换的命中，说明它们都已经标记跳过了，不能因为“没得替换”就清标记。
+        if (!rawFindMatches.length) findSkipped = [];
+        toast(
+          rawFindMatches.length
+            ? '已替换完最后一处待处理匹配，其余都已跳过'
+            : '已替换最后一处，本轮没有待处理匹配了',
+        );
+        return;
+      }
+      let wrapped = false;
+      if (posBefore >= left) {
+        findState.pos = 0;
+        wrapped = true;
+      } else {
+        findState.pos = Math.min(posBefore, left - 1);
+      }
+      revealFindHit(findMatches[findState.pos]);
+      toast(`已替换 1 处${where}${wrapped ? '，已回到第一处' : ''}`);
+    } finally {
+      findBusy = false;
+    }
+  }
+
+  /** 跳过当前这一处：不写字幕、不进历史，本轮不再回到它。 */
+  function findSkip() {
+    if (!findState.query || findBusy) return;
+    const total = findMatches.length;
+    if (!total) {
+      toast(
+        rawFindMatches.length
+          ? '本轮匹配都已跳过，改一下查找词可以重新开始'
+          : '没有可跳过的匹配',
+        'warn',
+      );
+      return;
+    }
+    const hit = findMatches[Math.min(findState.pos, total - 1)];
+    if (!hit) return;
+    const posBefore = findState.pos;
+    const key = findHitKey(hit);
+    if (!skippedFindKeys.has(key)) {
+      findSkipped = [...findSkipped, { cue: hit.cue, track: hit.track, start: hit.start }];
+    }
+    const left = findMatches.length;
+    if (!left) {
+      toast('已跳过最后一处，本轮没有待处理匹配了');
+      return;
+    }
+    let wrapped = false;
+    if (posBefore >= left) {
+      findState.pos = 0;
+      wrapped = true;
+    } else {
+      findState.pos = Math.min(posBefore, left - 1);
+    }
+    revealFindHit(findMatches[findState.pos]);
+    toast(`已跳过 1 处，本轮剩余 ${left} 处${wrapped ? '（已回到第一处）' : ''}`);
   }
 
   async function findReplaceAll() {
-    if (!findState.query) return;
-    const count = await replaceAllInCues(
-      findState.query,
-      findState.replacement,
-      findState.caseSensitive,
-    );
-    if (count) {
+    if (!findState.query || findBusy) return;
+    const query = findState.query;
+    const replacement = findState.replacement;
+    const caseSensitive = findState.caseSensitive;
+    const activeBefore = findMatches.slice();
+    findBusy = true;
+    try {
+      // 原文 + 译文一次提交：双语模式下只压一步历史，⌘Z 一次退干净。
+      const counts = await replaceAllInTracks(
+        query,
+        replacement,
+        caseSensitive,
+        findTracks,
+        skippedFindKeys,
+      );
+      const count = counts.source + counts.target;
+      if (!count) {
+        toast(
+          skippedHitCount ? '剩余命中都已跳过，没有可替换的' : '没有找到匹配的文本',
+          'warn',
+        );
+        return;
+      }
       findState.pos = 0;
-      toast(`已替换 ${count} 处（⌘Z 可一次撤回）`);
-    } else {
-      toast('没有找到匹配的文本', 'warn');
+      // 请求期间用户改了查找条件：跳过集合已经被重置，不要再用旧位移去搬。
+      if (findState.query === query && findState.caseSensitive === caseSensitive) {
+        reseatSkippedAfterReplaceAll(activeBefore, replacement.length);
+      }
+      const kept = skippedHitCount;
+      const detail =
+        counts.source && counts.target
+          ? `（原文 ${counts.source} / 译文 ${counts.target}）`
+          : counts.target
+            ? '（译文）'
+            : '';
+      toast(`已替换 ${count} 处${detail}${kept ? `，跳过 ${kept} 处保持原样` : ''}`);
+    } finally {
+      findBusy = false;
     }
   }
 
@@ -1570,22 +1860,68 @@
     return captionTextLines(text).join(' / ');
   }
 
-  /** 把一条字幕文本切成「命中 / 未命中」片段，交给表格渲染 <span>。 */
-  function highlightSegments(text: string) {
+  interface FindSegment {
+    text: string;
+    hit: boolean;
+    /** 当前正在处理的这一处（仅一处为 true）。 */
+    cur: boolean;
+    /** 本轮已跳过。 */
+    skipped: boolean;
+  }
+
+  function plainSegment(text: string): FindSegment {
+    return { text, hit: false, cur: false, skipped: false };
+  }
+
+  /**
+   * 把一条字幕文本切成「命中 / 未命中」片段，交给表格渲染 <span>。
+   *
+   * track 决定这条文本是否在当前搜索范围内：原文模式下不点亮译文行，
+   * 译文模式下不点亮原文行，双语两条都点亮。
+   *
+   * `currentOrdinal` 是当前命中在这条轨里的第几个（按显示文本数），只点亮那一处；
+   * `skipped` 是本轮跳过的起点集合，用于给它们加删除线。
+   */
+  function highlightSegments(
+    text: string,
+    track: FindTrack = 'source',
+    currentOrdinal = -1,
+    skipped?: Set<number>,
+  ): FindSegment[] {
     const query = findState.query;
-    if (!findState.open || !query) return [{ text, hit: false }];
+    if (!findState.open || !query || !findTracks.includes(track)) {
+      return [plainSegment(text)];
+    }
     const re = new RegExp(escapeRe(query), findState.caseSensitive ? 'g' : 'gi');
-    const parts: { text: string; hit: boolean }[] = [];
+    const parts: FindSegment[] = [];
     let last = 0;
+    let ordinal = 0;
     let found: RegExpExecArray | null;
     while ((found = re.exec(text)) !== null) {
-      if (found.index > last) parts.push({ text: text.slice(last, found.index), hit: false });
-      parts.push({ text: found[0], hit: true });
+      if (found.index > last) parts.push(plainSegment(text.slice(last, found.index)));
+      parts.push({
+        text: found[0],
+        hit: true,
+        cur: ordinal === currentOrdinal,
+        skipped: skipped?.has(found.index) ?? false,
+      });
+      ordinal += 1;
       last = found.index + found[0].length;
       if (found[0].length === 0) re.lastIndex += 1;
     }
-    if (last < text.length) parts.push({ text: text.slice(last), hit: false });
-    return parts.length ? parts : [{ text, hit: false }];
+    if (last < text.length) parts.push(plainSegment(text.slice(last)));
+    return parts.length ? parts : [plainSegment(text)];
+  }
+
+  /** 当前命中在这条 cue / 这条轨里的序号；不是当前行返回 -1。 */
+  function currentOrdinalFor(index: number, track: FindTrack): number {
+    const cur = currentFind;
+    if (!cur || cur.cue !== index || cur.track !== track) return -1;
+    return cur.ordinal;
+  }
+
+  function skippedStartsFor(index: number, track: FindTrack): Set<number> | undefined {
+    return skippedStarts.get(`${index}:${track}`);
   }
 
   async function retranscribeRow(i: number) {
@@ -1774,6 +2110,12 @@
   export function api_focus() {
     focusPlayhead();
   }
+
+  /** 供 App 的「查找：上一处 / 下一处」快捷键调用。 */
+  export function api_findStep(delta: number) {
+    if (!findState.open) return;
+    findGo(delta);
+  }
 </script>
 
 <div class="review">
@@ -1816,7 +2158,18 @@
             {#if app.media?.proxy_ready}
               Chromium 无法解码这个容器，代理已就绪但播放失败——请查看日志
             {:else if proxyBusy}
-              正在后台压制 480p 监看代理，完成后会自动切换；可以先让它在后台跑
+              <span>正在后台压制 480p 监看代理 · {proxyPct}%</span>
+              <div
+                class="notice-bar"
+                role="progressbar"
+                aria-label="代理压制进度"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={proxyPct}
+              >
+                <i style="width:{Math.max(2, proxyPct)}%"></i>
+              </div>
+              <span class="notice-sub">完成后会自动切换；可以先让它在后台跑</span>
             {:else if app.media?.needs_proxy}
               {app.media.proxy_reason === 'bitrate'
                 ? `源视频码率约 ${((app.media.video_bitrate ?? 0) / 1_000_000).toFixed(1)} Mbps，直接拖进度条可能很卡`
@@ -1827,13 +2180,24 @@
             {/if}
           </div>
           {#if !app.media?.proxy_ready}
-            <button
-              class="btn tiny"
-              onclick={() => startProxyJob()}
-              disabled={proxyBusy}
-            >
-              {proxyBusy ? '压制中…' : '压制代理'}
-            </button>
+            <div class="notice-actions">
+              <button
+                class="btn tiny"
+                onclick={() => startProxyJob()}
+                disabled={proxyBusy}
+              >
+                {proxyBusy ? `压制中 ${proxyPct}%` : '压制代理'}
+              </button>
+              {#if !proxyBusy}
+                <button
+                  class="btn tiny ghost"
+                  onclick={() => importProxyFromFile()}
+                  title="已经有压好的代理文件？直接挂到当前媒体，不再重新压制"
+                >
+                  导入代理…
+                </button>
+              {/if}
+            </div>
           {/if}
         </div>
       {/if}
@@ -1873,7 +2237,7 @@
     </div>
 
     <!-- 第二行只放「看时间轴」的工具：缩放、全景、聚焦、跟随。
-         AI 优化 / 导出在顶栏，压制代理 / 导入字幕在「⋯」里。 -->
+         AI 优化 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
     <div class="tl-tools">
       <div class="zoom-group">
         <button class="zbtn" onclick={() => zoomAt(play.time, 1.5)} title="缩小波形" aria-label="缩小波形">
@@ -2065,7 +2429,7 @@
           bind:this={findInput}
           class="find-input"
           bind:value={findState.query}
-          oninput={() => (findState.pos = 0)}
+          oninput={resetFindSession}
           onkeydown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -2075,26 +2439,57 @@
               closeFind();
             }
           }}
-          placeholder="查找原文…"
+          placeholder={app.track === 'target'
+            ? '查找译文…'
+            : app.track === 'both'
+              ? '查找原文 / 译文…'
+              : '查找原文…'}
           spellcheck="false"
         />
         <span class="find-count">
           {#if findState.query}
-            {findMatches.length ? `${findState.pos + 1} / ${findMatches.length}` : '无结果'}
+            {#if findMatches.length}
+              {findState.pos + 1} / {findMatches.length}
+            {:else if rawFindMatches.length}
+              已全部跳过
+            {:else}
+              无结果
+            {/if}
           {:else}
             0
           {/if}
         </span>
-        <button class="btn icon ghost" onclick={() => findGo(-1)} title="上一个（⇧Enter）">
+        {#if skippedHitCount}
+          <span
+            class="find-skipped"
+            title="本轮已跳过 {skippedHitCount} 处；改查找词或重开查找可恢复"
+          >
+            跳过 {skippedHitCount}
+          </span>
+        {/if}
+        <button
+          class="btn icon ghost"
+          onclick={() => findGo(-1)}
+          disabled={!findMatches.length}
+          title={`上一处（${findPrevKey} / ⇧Enter）`}
+        >
           <Icon name="chevron-left" size={11} />
         </button>
-        <button class="btn icon ghost" onclick={() => findGo(1)} title="下一个（Enter）">
+        <button
+          class="btn icon ghost"
+          onclick={() => findGo(1)}
+          disabled={!findMatches.length}
+          title={`下一处（${findNextKey} / Enter）`}
+        >
           <Icon name="chevron-right" size={11} />
         </button>
         <button
           class="find-case"
           class:on={findState.caseSensitive}
-          onclick={() => (findState.caseSensitive = !findState.caseSensitive)}
+          onclick={() => {
+            findState.caseSensitive = !findState.caseSensitive;
+            resetFindSession();
+          }}
           title="区分大小写"
         >
           Aa
@@ -2115,8 +2510,27 @@
           placeholder="替换为（可留空）"
           spellcheck="false"
         />
-        <button class="btn tiny" onclick={findReplaceCurrent}>替换</button>
-        <button class="btn tiny primary" onclick={findReplaceAll}>全部替换</button>
+        <button class="btn tiny" onclick={findReplaceCurrent} disabled={!findMatches.length || findBusy}>
+          替换
+        </button>
+        <button
+          class="btn tiny"
+          onclick={findSkip}
+          disabled={!findMatches.length || findBusy}
+          title="跳过这一处，本轮不再回到它（不修改文本）"
+        >
+          跳过
+        </button>
+        <button
+          class="btn tiny primary"
+          onclick={findReplaceAll}
+          disabled={!findMatches.length || findBusy}
+          title={skippedHitCount
+            ? `替换本轮未跳过的 ${findMatches.length} 处（已跳过 ${skippedHitCount} 处保持原样）`
+            : '替换全部匹配'}
+        >
+          {skippedHitCount ? '替换剩余' : '全部替换'}
+        </button>
         <div class="tl-spacer"></div>
         <button class="btn icon ghost" onclick={closeFind} title="关闭（Esc）">
           <Icon name="close" size={11} />
@@ -2145,6 +2559,7 @@
             class:dual={app.track === 'both'}
             class:row-sel={play.selected === i}
             class:row-match={matchedCueSet.has(i)}
+            class:row-cur={currentFind?.cue === i}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
             onclick={() => selectCue(i)}
@@ -2161,21 +2576,65 @@
             <div class="c-text" class:dual={app.track === 'both'}>
               {#if app.track === 'target'}
                 <span class="line" class:stale={isTranslationStale(i)}>
-                  {translationAt(i) || '（这条还没有译文）'}
+                  {#if translationAt(i)}
+                    {#each highlightSegments(
+                      cueDisplayText(translationAt(i)),
+                      'target',
+                      currentOrdinalFor(i, 'target'),
+                      skippedStartsFor(i, 'target'),
+                    ) as part}
+                      <span
+                        class:text-hit={part.hit}
+                        class:cur={part.cur}
+                        class:skipped={part.skipped}>{part.text}</span
+                      >
+                    {/each}
+                  {:else}
+                    （这条还没有译文）
+                  {/if}
                 </span>
               {:else if app.track === 'both'}
                 <span class="line">
-                  {#each highlightSegments(cueDisplayText(cue.text)) as part}
-                    <span class:text-hit={part.hit}>{part.text}</span>
+                  {#each highlightSegments(
+                    cueDisplayText(cue.text),
+                    'source',
+                    currentOrdinalFor(i, 'source'),
+                    skippedStartsFor(i, 'source'),
+                  ) as part}
+                    <span
+                      class:text-hit={part.hit}
+                      class:cur={part.cur}
+                      class:skipped={part.skipped}>{part.text}</span
+                    >
                   {/each}
                 </span>
                 <span class="line sub" class:stale={isTranslationStale(i)}>
-                  {cueDisplayText(translationAt(i))}
+                  {#each highlightSegments(
+                    cueDisplayText(translationAt(i)),
+                    'target',
+                    currentOrdinalFor(i, 'target'),
+                    skippedStartsFor(i, 'target'),
+                  ) as part}
+                    <span
+                      class:text-hit={part.hit}
+                      class:cur={part.cur}
+                      class:skipped={part.skipped}>{part.text}</span
+                    >
+                  {/each}
                 </span>
               {:else}
                 <span class="line">
-                  {#each highlightSegments(cueDisplayText(cue.text)) as part}
-                    <span class:text-hit={part.hit}>{part.text}</span>
+                  {#each highlightSegments(
+                    cueDisplayText(cue.text),
+                    'source',
+                    currentOrdinalFor(i, 'source'),
+                    skippedStartsFor(i, 'source'),
+                  ) as part}
+                    <span
+                      class:text-hit={part.hit}
+                      class:cur={part.cur}
+                      class:skipped={part.skipped}>{part.text}</span
+                    >
                   {/each}
                 </span>
               {/if}
@@ -2445,6 +2904,29 @@
   .notice .btn {
     margin-left: 4px;
     flex: 0 0 auto;
+  }
+  .notice-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+  }
+  .notice-actions .btn {
+    margin-left: 0;
+  }
+  .notice-bar {
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.22);
+    overflow: hidden;
+    margin-top: 2px;
+  }
+  .notice-bar > i {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: #fff;
+    transition: width 320ms var(--ease);
   }
 
   .transport {
@@ -2958,6 +3440,11 @@
     color: var(--accent);
     font-weight: 600;
   }
+  /* 查找当前项：即使播放头把选中行带走了，序号仍指出正在处理哪一条 */
+  .row.row-cur .c-idx {
+    color: var(--accent);
+    font-weight: 600;
+  }
   .row.playing .c-text {
     font-weight: 500;
   }
@@ -3055,6 +3542,19 @@
     border-radius: 2px;
     color: inherit;
   }
+  /* 当前正在处理的这一处：比普通命中更深，同一句里有多处也能一眼分清 */
+  .c-text .text-hit.cur {
+    background: var(--accent);
+    color: var(--on-accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  /* 本轮已跳过：仍在文本里，但本轮不再回来处理 */
+  .c-text .text-hit.skipped {
+    background: transparent;
+    color: var(--text-3);
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+  }
   .c-acts {
     display: flex;
     justify-content: flex-end;
@@ -3101,7 +3601,8 @@
   /* ---------------- 查找与替换 ---------------- */
   .find-bar {
     display: flex;
-    flex-wrap: wrap;
+    /* 桌面宽度下宁可让两个输入框收缩，也不要让关闭按钮掉到第二行 */
+    flex-wrap: nowrap;
     align-items: center;
     gap: 4px;
     padding: 5px 14px;
@@ -3111,9 +3612,9 @@
   }
   .find-input {
     height: 24px;
-    width: 190px;
+    width: 160px;
     min-width: 96px;
-    flex: 0 1 190px;
+    flex: 0 1 160px;
     border-radius: 4px;
     border: 1px solid var(--separator);
     background: var(--bg-content);
@@ -3128,8 +3629,8 @@
     box-shadow: 0 0 0 2px var(--accent-soft);
   }
   .find-input.replace {
-    width: 160px;
-    flex-basis: 160px;
+    width: 130px;
+    flex-basis: 130px;
   }
   .find-count {
     min-width: 58px;
@@ -3139,6 +3640,23 @@
     font-variant-numeric: tabular-nums;
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
     white-space: nowrap;
+  }
+  .find-skipped {
+    height: 18px;
+    padding: 0 5px;
+    border: 1px solid var(--separator);
+    border-radius: 3px;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--text-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  /* 1280 以下查找栏已经很挤：跳过数量不单列徽标，靠删除线和计数变化判断 */
+  @media (max-width: 1280px) {
+    .find-skipped {
+      display: none;
+    }
   }
   .find-case {
     appearance: none;
@@ -3367,6 +3885,7 @@
     .find-bar {
       padding: 5px 6px;
       gap: 3px;
+      flex-wrap: wrap;
     }
     .find-input {
       width: auto;
@@ -3380,6 +3899,10 @@
     }
     .find-count {
       min-width: 42px;
+    }
+    /* 窄窗口优先保住「替换 / 跳过 / 全部替换」一行；跳过数量靠删除线判断 */
+    .find-skipped {
+      display: none;
     }
     .find-case,
     .find-sep {

@@ -1,19 +1,20 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import EngineSwitch from './EngineSwitch.svelte';
   import {
     app,
+    clearOriginalTrack,
     cueHistory,
+    importProxyFromFile,
     importSubtitleFromExport,
+    importTranslationFromExport,
     jumpCueHistory,
-    jumpExportUiHistory,
-    nextRedo,
-    nextUndo,
     redo,
+    removeTranslationTrack,
     setView,
     startProxyJob,
     toggleCueHistory,
     toggleTheme,
-    uiHistory,
     undo,
   } from '../lib/store.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
@@ -39,16 +40,18 @@
   const jobBusy = $derived(
     app.job?.status === 'running' || app.job?.status === 'queued',
   );
+  const proxyPct = $derived(app.jobKind === 'proxy' ? (app.job?.percent ?? 0) : 0);
   const proxyLabel = $derived(
-    proxyBusy ? '压制中…' : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
+    proxyBusy ? `压制中 ${proxyPct}%` : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
   );
   const proxyHint = $derived(
     proxyBusy
-      ? '正在后台压制 480p 监看代理'
+      ? `正在后台压制 480p 监看代理（${proxyPct}%）`
       : app.media?.proxy_ready
         ? '480p 监看代理已就绪，无需再压'
         : '为高码率 / 特殊编码视频压制 480p 监看代理，拖动进度条更流畅',
   );
+  const hasTranslation = $derived(Boolean(app.translations[app.trackLang]));
 
   function runProxy() {
     moreOpen = false;
@@ -60,13 +63,36 @@
     void importSubtitleFromExport();
   }
 
-  // 全局撤销：字幕编辑（服务端）与导出设置（本地）按时间取更近的一边。
-  const undoInfo = $derived(nextUndo());
-  const redoInfo = $derived(nextRedo());
+  function importTranslation() {
+    moreOpen = false;
+    void importTranslationFromExport();
+  }
+
+  function importProxy() {
+    moreOpen = false;
+    void importProxyFromFile();
+  }
+
+  function deleteOriginal() {
+    moreOpen = false;
+    void clearOriginalTrack();
+  }
+
+  function deleteTranslation() {
+    moreOpen = false;
+    void removeTranslationTrack();
+  }
+
+  function manageEngines() {
+    setView('settings');
+  }
+
+  // 统一历史：字幕 / 译文 / 质检 / 导出设置 / AI 草稿共用一个 cursor。
+  const undoInfo = $derived({ label: app.canUndo ? app.undoLabel || '上一步' : '' });
+  const redoInfo = $derived({ label: app.canRedo ? app.redoLabel || '下一步' : '' });
   const cueSteps = $derived(Math.max(0, cueHistory.cursor));
-  const uiSteps = $derived(Math.max(0, uiHistory.cursor));
-  const exportSteps = $derived(
-    uiHistory.steps.map((step, index) => ({ step, index })).reverse(),
+  const historyRows = $derived(
+    cueHistory.items.map((item) => ({ item, index: item.id })).reverse(),
   );
 
   // 设置页可以停用引擎；工具栏只显示启用的那几个，引擎变多也不会挤爆。
@@ -106,21 +132,28 @@
   <div class="tb-sep tb-sep-lead"></div>
 
   {#if engines.length}
-    <div class="seg">
-      {#each engines as e (e.key)}
-        <button
-          class:on={engine === e.key}
-          onclick={() => (engine = e.key)}
-          title={e.desc ?? e.description}
-        >
-          {e.short_label ?? e.label}
-        </button>
-      {/each}
-    </div>
+    <EngineSwitch bind:engine {engines} onmanage={manageEngines} />
   {:else}
-    <button class="btn ghost" onclick={() => (app.view = 'settings')}>
+    <button class="btn ghost" onclick={() => setView('settings')}>
       <Icon name="warn" size={12} />没有启用的引擎
     </button>
+  {/if}
+
+  {#if proxyBusy}
+    <div
+      class="proxy-chip"
+      title={proxyHint}
+      role="progressbar"
+      aria-label="代理压制进度"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow={proxyPct}
+    >
+      <Icon name="film" size={11} />
+      <span class="pc-label">代理</span>
+      <div class="pc-track"><i style="width:{Math.max(2, proxyPct)}%"></i></div>
+      <b>{proxyPct}%</b>
+    </div>
   {/if}
 
   <div class="tb-spacer"></div>
@@ -149,7 +182,7 @@
         class:on={moreOpen}
         aria-label="更多"
         aria-expanded={moreOpen}
-        title="更多：压制代理 / 导入字幕"
+        title="更多：代理 / 原文轨 / 译文轨"
         onclick={() => (moreOpen = !moreOpen)}
         >⋯</button
       >
@@ -174,13 +207,63 @@
           <button
             class="menu-item"
             role="menuitem"
-            onclick={importSubtitle}
-            disabled={jobBusy}
-            title="从导出文件夹选择上次转写的字幕，导入核对台作为基线"
+            onclick={importProxy}
+            disabled={jobBusy || Boolean(app.media?.proxy_ready) || !app.media}
+            title="选择已经压好的代理文件，直接挂到当前媒体，不再重新压制"
           >
             <Icon name="tray" size={12} />
-            <span class="mi-label">导入字幕</span>
-            <span class="mi-sub">从导出文件夹</span>
+            <span class="mi-label">导入代理…</span>
+            <span class="mi-sub">已有文件</span>
+          </button>
+
+          <div class="mi-sep" role="separator"></div>
+
+          <button
+            class="menu-item"
+            role="menuitem"
+            onclick={importSubtitle}
+            disabled={jobBusy}
+            title="从导出文件夹选择原文字幕，导入核对台作为基线"
+          >
+            <Icon name="doc" size={12} />
+            <span class="mi-label">导入原文字幕…</span>
+            <span class="mi-sub">SRT / VTT</span>
+          </button>
+          <button
+            class="menu-item"
+            role="menuitem"
+            onclick={importTranslation}
+            disabled={jobBusy || !app.cues.length}
+            title="选择与当前原文逐条对齐的译文 SRT / VTT，原文与时间轴不动"
+          >
+            <Icon name="quote" size={12} />
+            <span class="mi-label">导入译文字幕…</span>
+            <span class="mi-sub">逐条对齐</span>
+          </button>
+
+          <div class="mi-sep" role="separator"></div>
+
+          <button
+            class="menu-item"
+            role="menuitem"
+            onclick={deleteOriginal}
+            disabled={jobBusy || !app.cues.length}
+            title="删除全部原文字幕与时间轴；所有译文轨会一起清空，⌘Z 可撤回"
+          >
+            <Icon name="trash" size={12} />
+            <span class="mi-label">删除原文字幕</span>
+            <span class="mi-sub">{app.cues.length} 条</span>
+          </button>
+          <button
+            class="menu-item"
+            role="menuitem"
+            onclick={deleteTranslation}
+            disabled={jobBusy || !hasTranslation}
+            title="只删除当前语种的译文轨，原文与时间轴保留"
+          >
+            <Icon name="trash" size={12} />
+            <span class="mi-label">删除译文字幕</span>
+            <span class="mi-sub">{hasTranslation ? app.trackLang : '当前语种无译文'}</span>
           </button>
         </div>
       {/if}
@@ -212,7 +295,7 @@
       class:on={cueHistory.open}
       aria-pressed={cueHistory.open}
       onclick={() => toggleCueHistory()}
-      title="撤销 / 重做历史（字幕 20 步 + 导出设置 20 步，可点任意一步跳回）"
+      title="撤销 / 重做历史（所有操作共用一条时间线，可点任意一步跳回）"
     >
       <Icon name="history" size={14} />
     </button>
@@ -226,82 +309,39 @@
       <div class="hist-panel" role="dialog" aria-label="撤销与重做历史">
         <div class="hist-head">
           <span>撤销 / 重做历史</span>
-          <span class="hist-sub">字幕 {cueSteps}/20 · 导出 {uiSteps}/20</span>
+          <span class="hist-sub">全部操作 {cueSteps}/50</span>
         </div>
         <div class="hist-list">
-          {#if !cueHistory.items.length && !uiHistory.steps.length}
-            <div class="hist-empty">还没有可回溯的操作</div>
-          {/if}
-
-          {#if cueHistory.items.length}
-            <div class="hist-group">
-              <span>字幕编辑</span>
-              <span class="hist-group-sub">{cueSteps} / 20 步</span>
+          {#if !cueHistory.items.length}
+            <div class="hist-empty">
+              {cueHistory.loading ? '正在读取历史…' : '还没有可回溯的操作'}
             </div>
-            {#each [...cueHistory.items].reverse() as item (item.id)}
-              <button
-                class="hist-item"
-                class:current={item.state === 'current'}
-                class:undone={item.state === 'undone'}
-                onclick={() => jumpCueHistory(item.id)}
-                title={item.state === 'current'
-                  ? '当前状态'
-                  : item.state === 'undone'
-                    ? '点击重做到这一步'
-                    : '点击回到这一步'}
-              >
-                <span class="hist-icon">
-                  {#if item.state === 'current'}
-                    <Icon name="check" size={10} />
-                  {:else if item.state === 'undone'}
-                    <Icon name="redo" size={10} />
-                  {:else}
-                    <Icon name="undo" size={10} />
-                  {/if}
-                </span>
-                <span class="hist-label">{item.label}</span>
-                <span class="hist-time">{clock(item.at)}</span>
-              </button>
-            {/each}
-          {:else if cueHistory.loading}
-            <div class="hist-empty">正在读取历史…</div>
-          {:else}
-            <div class="hist-empty">还没有字幕编辑</div>
           {/if}
-
-          <div class="hist-group">
-            <span>导出设置</span>
-            <span class="hist-group-sub">{uiSteps} / 20 步</span>
-          </div>
-          {#if exportSteps.length}
-            {#each exportSteps as row (row.index)}
-              <button
-                class="hist-item"
-                class:current={row.index === uiHistory.cursor}
-                class:undone={row.index > uiHistory.cursor}
-                onclick={() => jumpExportUiHistory(row.index)}
-                title={row.index === uiHistory.cursor
-                  ? '当前状态'
-                  : row.index > uiHistory.cursor
-                    ? '点击重做到这一步'
-                    : '点击回到这一步'}
-              >
-                <span class="hist-icon">
-                  {#if row.index === uiHistory.cursor}
-                    <Icon name="check" size={10} />
-                  {:else if row.index > uiHistory.cursor}
-                    <Icon name="redo" size={10} />
-                  {:else}
-                    <Icon name="undo" size={10} />
-                  {/if}
-                </span>
-                <span class="hist-label">{row.step.label}</span>
-                <span class="hist-time">{clock(row.step.at)}</span>
-              </button>
-            {/each}
-          {:else}
-            <div class="hist-empty">还没有调整导出设置</div>
-          {/if}
+          {#each historyRows as row (row.index)}
+            <button
+              class="hist-item"
+              class:current={row.item.state === 'current'}
+              class:undone={row.item.state === 'undone'}
+              onclick={() => jumpCueHistory(row.item.id)}
+              title={row.item.state === 'current'
+                ? '当前状态'
+                : row.item.state === 'undone'
+                  ? '点击重做到这一步'
+                  : '点击回到这一步'}
+            >
+              <span class="hist-icon">
+                {#if row.item.state === 'current'}
+                  <Icon name="check" size={10} />
+                {:else if row.item.state === 'undone'}
+                  <Icon name="redo" size={10} />
+                {:else}
+                  <Icon name="undo" size={10} />
+                {/if}
+              </span>
+              <span class="hist-label">{row.item.label}</span>
+              <span class="hist-time">{clock(row.item.at)}</span>
+            </button>
+          {/each}
         </div>
         <div class="hist-foot">点任意一步回到该状态；⌘Z 撤回最近一次操作</div>
       </div>
@@ -341,7 +381,10 @@
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     -webkit-app-region: drag;
   }
-  .toolbar > * {
+  /* 用 :global 才能命中子组件（EngineSwitch 等）的根节点；Svelte 会把普通
+     `.toolbar > *` 编译成带本组件作用域哈希的选择器，子组件根节点匹配不上，
+     那个区域的点击就会被系统当成拖动窗口。 */
+  .toolbar > :global(*) {
     -webkit-app-region: no-drag;
   }
 
@@ -373,6 +416,44 @@
   }
   .tb-spacer {
     flex: 1;
+  }
+
+  /* 代理压制在后台跑：工具栏常驻一条紧凑进度条，切换到别的页面也能看到。 */
+  .proxy-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11.5px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .pc-label {
+    font-weight: 600;
+  }
+  .pc-track {
+    width: 42px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--fill-strong);
+    overflow: hidden;
+  }
+  .pc-track > i {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+    transition: width 320ms var(--ease);
+  }
+  .proxy-chip b {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    min-width: 30px;
+    text-align: right;
   }
 
   /* 核对台主路径：文字按钮，不抢图标按钮的安静感 */
@@ -467,6 +548,11 @@
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
+  .mi-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--separator-soft);
+  }
 
   .history-wrap {
     position: relative;
@@ -528,28 +614,6 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-  }
-  .hist-group {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 7px 7px 3px;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text-3);
-    border-top: 1px solid var(--separator-soft);
-    margin-top: 2px;
-  }
-  .hist-list > .hist-group:first-child {
-    border-top: 0;
-    margin-top: 0;
-    padding-top: 4px;
-  }
-  .hist-group-sub {
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
   }
   .hist-item {
     appearance: none;
@@ -642,11 +706,7 @@
     }
   }
   @media (max-width: 760px) {
-    /* 引擎在设置页仍可切换；这里让 540 宽的视口留出主路径的位置 */
-    .toolbar .seg {
-      display: none;
-    }
-    /* 分段收起后，标题后面的分隔线就失去了分隔对象 */
+    /* 引擎胶囊已经比平铺分段省空间；只收起标题后的分隔线，给主路径让位 */
     .tb-sep-lead {
       display: none;
     }

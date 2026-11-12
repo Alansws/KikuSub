@@ -30,11 +30,11 @@
     saveAiProposalAs,
     setAiEdit,
     setAiKind,
+    setAiLang,
     setAllAiAccept,
     setView,
     toggleAiAccept,
   } from '../lib/store.svelte';
-  import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -120,10 +120,6 @@
     node.select();
   }
 
-  function changeLang() {
-    ai.loadedFor = '';
-    void loadAiProposal(true);
-  }
 </script>
 
 <div class="ai">
@@ -134,7 +130,7 @@
         aria-selected={ai.kind === 'polish'}
         class="seg"
         class:on={ai.kind === 'polish'}
-        title={`润色（${formatCombo(comboOf('ai.polish'))}）`}
+        title="润色：按全片语境修正识别错误"
         onclick={() => setAiKind('polish')}>润色</button
       >
       <button
@@ -142,7 +138,7 @@
         aria-selected={ai.kind === 'translate'}
         class="seg"
         class:on={ai.kind === 'translate'}
-        title={`翻译（${formatCombo(comboOf('ai.translate'))}）`}
+        title="翻译：生成与原文逐条对齐的译文平行轨"
         onclick={() => setAiKind('translate')}>翻译</button
       >
     </div>
@@ -151,7 +147,12 @@
       <span class="dim" title="当前使用的提示词模板；可在「提示词库」里切换或编辑">
         模板：{prompts.items.find((p) => p.id === prompts.selected)?.name ?? '—'}
       </span>
-      <select class="lang" bind:value={ai.lang} onchange={changeLang} title="目标语种">
+      <select
+        class="lang"
+        value={ai.lang}
+        onchange={(e) => setAiLang(e.currentTarget.value)}
+        title="目标语种"
+      >
         <option value="zh-Hans">简体中文</option>
         <option value="zh-Hant">繁體中文</option>
         <option value="en">English</option>
@@ -215,7 +216,7 @@
       <div class="tb-div"></div>
       <button
         class="btn ghost"
-        onclick={() => loadAiProposal(true)}
+        onclick={() => void loadAiProposal(true)}
         disabled={ai.loading || ai.generating}
       >
         重新加载

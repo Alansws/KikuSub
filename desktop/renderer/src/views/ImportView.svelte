@@ -123,8 +123,8 @@
       <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
         打开文件夹
       </button>
-      <button class="btn tiny primary" onclick={importFromExport} title="从导出文件夹选择字幕并导入核对台">
-        <Icon name="export" size={10} />导入字幕…
+      <button class="btn tiny primary" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台">
+        <Icon name="export" size={10} />导入原文…
       </button>
     </div>
   {/if}

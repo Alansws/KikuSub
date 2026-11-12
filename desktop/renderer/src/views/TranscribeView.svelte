@@ -7,7 +7,8 @@
     applyPreset,
     cancelJob,
     deletePreset,
-    openSubtitle,
+    importSubtitleFromExport,
+    importTranslationFromExport,
     savePresetAs,
     setView,
     startTranscribe,
@@ -113,17 +114,6 @@
   function revealSaved() {
     if (app.lastSavedPath) window.kikusub.revealInFinder(app.lastSavedPath);
   }
-
-  /** 上次转写完成后 app 退出了？直接从导出文件夹挑字幕回核对台，不必重跑。 */
-  async function importSubtitleFromExport() {
-    const dir = app.config?.export_dir || app.config?.output_dir || '';
-    if (!dir) {
-      toast('还没有可用的导出文件夹，请先到设置里选择', 'warn');
-      return;
-    }
-    const file = await window.kikusub.pickSubtitle(dir);
-    if (file) await openSubtitle(file);
-  }
 </script>
 
 <div class="pane">
@@ -199,16 +189,38 @@
             >
               <Icon name="play" size={12} />开始转写
             </button>
+            <span class="hint">
+              {app.media ? '结果写入导出文件夹' : '先导入媒体，再开始转写'}
+            </span>
+          {/if}
+        </div>
+
+        <!-- 已有字幕走独立入口：原文轨与译文轨可以分别导入，
+             不必为了补一份译文重新跑一次转写。 -->
+        <div class="subtitle-imports">
+          <span class="si-label">已有字幕</span>
+          <div class="si-row">
             <button
-              class="btn ghost"
+              class="si-btn"
               onclick={importSubtitleFromExport}
               disabled={!app.connected || running}
-              title="从导出文件夹选择上次转写的字幕，导入核对台（不重新转写）"
+              title="从导出文件夹选择原文字幕，导入核对台（不重新转写）"
             >
-              <Icon name="folder" size={11} />导入字幕…
+              <span class="si-icon"><Icon name="doc" size={13} /></span>
+              <span class="si-text"><b>导入原文</b><em>SRT / VTT</em></span>
             </button>
-            <span class="hint">⌘R</span>
-          {/if}
+            <button
+              class="si-btn"
+              onclick={importTranslationFromExport}
+              disabled={!app.connected || running || !app.cues.length}
+              title={app.cues.length
+                ? '选择与当前原文逐条对齐的译文 SRT / VTT，原文与时间轴不动'
+                : '先导入原文字幕，再导入译文字幕'}
+            >
+              <span class="si-icon"><Icon name="quote" size={13} /></span>
+              <span class="si-text"><b>导入译文</b><em>逐条对齐</em></span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -349,6 +361,92 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+  /* 原文 / 译文导入做成两张小文件卡：比一个“导入字幕…”按钮更明确，
+     也不会和主操作「开始转写」抢同一层视觉。 */
+  .subtitle-imports {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+    align-items: flex-start;
+  }
+  .si-label {
+    flex: 0 0 72px;
+    padding-top: 12px;
+    text-align: right;
+    font-size: 12.5px;
+    color: var(--text-2);
+  }
+  .si-row {
+    flex: 1;
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+  }
+  .si-btn {
+    flex: 1;
+    min-width: 0;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 9px;
+    border: 1px solid var(--separator-soft);
+    border-radius: 8px;
+    background: var(--bg-content);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: default;
+    transition:
+      border-color var(--dur) var(--ease),
+      background var(--dur) var(--ease),
+      box-shadow var(--dur) var(--ease);
+  }
+  .si-btn:hover:not(:disabled) {
+    border-color: var(--accent-ring);
+    background: var(--accent-soft);
+    box-shadow: var(--shadow-seg);
+  }
+  .si-btn:disabled {
+    opacity: 0.48;
+  }
+  .si-icon {
+    width: 25px;
+    height: 25px;
+    flex: 0 0 25px;
+    border-radius: 6px;
+    background: var(--fill);
+    color: var(--text-2);
+    display: grid;
+    place-items: center;
+    transition:
+      color var(--dur) var(--ease),
+      background var(--dur) var(--ease);
+  }
+  .si-btn:hover:not(:disabled) .si-icon {
+    color: var(--accent);
+    background: var(--bg-content);
+  }
+  .si-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .si-text b {
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 16px;
+    white-space: nowrap;
+  }
+  .si-text em {
+    font-style: normal;
+    font-size: 10.5px;
+    line-height: 13px;
+    color: var(--text-3);
+    white-space: nowrap;
   }
   .apply-row {
     display: flex;
@@ -504,6 +602,9 @@
     }
     .form {
       grid-template-columns: 64px minmax(0, 1fr);
+    }
+    .si-label {
+      flex-basis: 64px;
     }
     .preset-bar {
       flex-wrap: wrap;

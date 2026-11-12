@@ -7,17 +7,33 @@
    */
   import Icon from './Icon.svelte';
   import {
+    FIXED_SHORTCUTS,
     SHORTCUT_DEFS,
     comboFromEvent,
     comboOf,
     conflictingShortcut,
     formatCombo,
     resetShortcuts,
+    savedConflict,
     setShortcut,
     shortcuts,
   } from '../lib/shortcuts.svelte';
 
-  const groups = ['全局', '核对台', 'AI 优化台', '视图'];
+  const groups = ['全局', '核对台', '查找', '视图'];
+
+  /** 已经保存的映射里有没有重复（旧版本 / 手改 localStorage 也可能留下）。 */
+  const savedConflicts = $derived.by(() => {
+    const map: Record<string, string> = {};
+    for (const def of SHORTCUT_DEFS) {
+      const conflict = savedConflict(def.id);
+      if (conflict) {
+        map[def.id] = conflict.fixed
+          ? `与「${conflict.label}」重复（${conflict.reason ?? '系统'}固定）`
+          : `与「${conflict.label}」重复`;
+      }
+    }
+    return map;
+  });
 
   function groupDefs(group: string) {
     return SHORTCUT_DEFS.filter((def) => def.group === group);
@@ -49,7 +65,9 @@
 
     const conflict = conflictingShortcut(shortcuts.capturing, combo);
     if (conflict) {
-      shortcuts.conflict = `与「${conflict.label}」重复，换一个组合`;
+      shortcuts.conflict = conflict.fixed
+        ? `与「${conflict.label}」快捷键重复；它由${conflict.reason ?? '系统'}固定，不能占用`
+        : `与「${conflict.label}」快捷键重复，请换一个组合`;
       return;
     }
     setShortcut(shortcuts.capturing, combo);
@@ -71,7 +89,7 @@
       <span class="sc-mark"><Icon name="listcheck" size={14} /></span>
       <div class="sc-title">
         <b>键盘快捷键</b>
-        <span>点击右侧按键，然后按下新的组合；输入框内不会触发播放 / 删除等编辑动作</span>
+        <span>点击右侧按键，然后按下新的组合；与已有功能重复时会直接提示并保留原键</span>
       </div>
       <button class="sc-close" onclick={close} title="关闭（Esc）" aria-label="关闭">
         <Icon name="close" size={12} />
@@ -83,10 +101,19 @@
         <div class="sc-group">
           <div class="sc-group-head">{group}</div>
           {#each groupDefs(group) as def (def.id)}
-            <div class="sc-row" class:capturing={shortcuts.capturing === def.id}>
+            <div
+              class="sc-row"
+              class:capturing={shortcuts.capturing === def.id}
+              class:has-conflict={Boolean(savedConflicts[def.id])}
+            >
               <span class="sc-label">
                 {def.label}
                 {#if def.note}<span class="sc-note">{def.note}</span>{/if}
+                {#if savedConflicts[def.id] && shortcuts.capturing !== def.id}
+                  <span class="sc-inline-warn">
+                    <Icon name="warn" size={10} />{savedConflicts[def.id]}
+                  </span>
+                {/if}
               </span>
               <button
                 class="sc-key"
@@ -96,15 +123,28 @@
               >
                 {shortcuts.capturing === def.id ? '按下新快捷键…' : formatCombo(comboOf(def.id))}
               </button>
+              {#if shortcuts.capturing === def.id && shortcuts.conflict}
+                <div class="sc-row-warn" role="alert">
+                  <Icon name="warn" size={11} />{shortcuts.conflict}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
       {/each}
-      {#if shortcuts.conflict}
-        <div class="sc-conflict">
-          <Icon name="warn" size={11} />{shortcuts.conflict}
-        </div>
-      {/if}
+
+      <div class="sc-group">
+        <div class="sc-group-head">固定快捷键（菜单 / 系统）</div>
+        {#each FIXED_SHORTCUTS as fixed (fixed.id)}
+          <div class="sc-row">
+            <span class="sc-label">
+              {fixed.label}
+              <span class="sc-note">{fixed.reason} · 不可修改</span>
+            </span>
+            <span class="sc-key fixed">{formatCombo(fixed.combo)}</span>
+          </div>
+        {/each}
+      </div>
     </div>
 
     <footer class="sc-foot">
@@ -220,13 +260,17 @@
   .sc-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
     min-height: 34px;
-    padding: 0 2px;
+    padding: 2px;
     border-radius: 6px;
   }
   .sc-row.capturing {
     background: var(--accent-soft);
+  }
+  .sc-row.has-conflict {
+    background: color-mix(in srgb, var(--warn) 8%, transparent);
   }
   .sc-label {
     flex: 1;
@@ -241,6 +285,28 @@
   .sc-note {
     font-size: 11px;
     color: var(--text-3);
+  }
+  .sc-inline-warn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--warn);
+  }
+  .sc-row-warn {
+    flex: 1 0 100%;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 2px 0 3px;
+    padding: 4px 7px;
+    border-radius: 5px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-size: 11.5px;
+    line-height: 16px;
   }
   .sc-key {
     appearance: none;
@@ -266,6 +332,15 @@
     background: var(--accent-soft);
     animation: scPulse 900ms var(--ease) infinite alternate;
   }
+  .sc-key.fixed {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-style: dashed;
+    color: var(--text-3);
+    background: transparent;
+    cursor: default;
+  }
   @keyframes scPulse {
     from {
       opacity: 0.72;
@@ -273,19 +348,6 @@
     to {
       opacity: 1;
     }
-  }
-
-  .sc-conflict {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 10px;
-    padding: 6px 9px;
-    border-radius: 6px;
-    background: var(--warn-soft);
-    color: var(--warn);
-    font-size: 11.5px;
-    line-height: 16px;
   }
 
   .sc-foot {

@@ -33,7 +33,6 @@
     restoreLastSession,
     qa,
     redo,
-    setAiKind,
     setView,
     toast,
     toggleQaPanel,
@@ -49,6 +48,7 @@
     api_step: (d: number) => void;
     api_focus: () => void;
     api_deleteSelected: () => void;
+    api_findStep: (d: number) => void;
   } | undefined = $state();
   let dragging = $state(false);
   /** 紧凑模式（≤900px CSS 视口）：检查器变成抽屉，内容区拿回整宽。 */
@@ -337,16 +337,14 @@
       case 'review.find':
         openFind();
         return;
+      case 'review.findPrev':
+        if (app.view === 'review') review?.api_findStep(-1);
+        return;
+      case 'review.findNext':
+        if (app.view === 'review') review?.api_findStep(1);
+        return;
       case 'review.toggleQa':
         void toggleQaPanel();
-        return;
-      case 'ai.polish':
-        setView('ai');
-        setAiKind('polish');
-        return;
-      case 'ai.translate':
-        setView('ai');
-        setAiKind('translate');
         return;
       case 'view.import':
         setView('import');
@@ -357,11 +355,11 @@
       case 'view.review':
         setView('review');
         return;
+      case 'view.ai':
+        setView('ai');
+        return;
       case 'view.export':
         setView('export');
-        return;
-      case 'view.report':
-        setView('report');
         return;
     }
   }
@@ -435,7 +433,7 @@
     }
 
     // 用户自定义的快捷键：输入框聚焦时只有 allowInTyping 的动作生效。
-    const action = resolveShortcut(e, app.view);
+    const action = resolveShortcut(e, app.view, { findOpen: findState.open });
     if (action) {
       // 快捷键面板是模态：只有「再按一次打开键」能关闭，其余按键不穿透到核对台。
       if (shortcuts.open && action.id !== 'shortcuts.open') return;
@@ -526,7 +524,9 @@
         <Inspector />
       {/if}
 
-      <QaPanel />
+      {#if qa.floating}
+        <QaPanel mode="floating" />
+      {/if}
     </div>
 
     <StatusBar {engine} />

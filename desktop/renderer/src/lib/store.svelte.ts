@@ -65,6 +65,8 @@ export const app = $state({
   /** 外观 id（不是 scss 类名）：'light' / 'dark' 属于青空，'mincho' 是明朝墨。 */
   theme: 'light' as ThemeId,
   inspectorOpen: true,
+  /** 右侧检查器当前页签：当前条目 / 质检待核。 */
+  inspectorTab: 'cue' as 'cue' | 'qa',
   /** 紧凑模式（≤900px CSS 视口）：检查器是抽屉，切页/换片时默认收起。 */
   compact: false,
   /** 当前识别引擎；工具栏切换时同步，核对台局部重转与质检补录都读它。 */
@@ -91,7 +93,7 @@ export const app = $state({
   /** 下一步 ⌘Z / ⇧⌘Z 会做什么（服务端历史标签，用于按钮提示）。 */
   undoLabel: '',
   redoLabel: '',
-  /** 服务端「下一步撤销/重做」那一步的记录时间；与导出设置的本地历史比先后。 */
+  /** 服务端「下一步撤销/重做」那一步的记录时间（显示用）。 */
   undoAt: 0,
   redoAt: 0,
   /** 核对台显示哪条轨：原文 / 译文 / 双语（双语 = 每行两行文字） */
@@ -172,8 +174,18 @@ export function previewRange(start: number, end: number) {
   seekTo(start + 0.02, { stopAt: end, play: true });
 }
 
+function applyHistoryMeta(data: CueSnapshot) {
+  app.canUndo = data.can_undo;
+  app.canRedo = data.can_redo;
+  if (data.undo_label !== undefined) app.undoLabel = data.undo_label;
+  if (data.redo_label !== undefined) app.redoLabel = data.redo_label;
+  if (data.undo_at !== undefined) app.undoAt = data.undo_at;
+  if (data.redo_at !== undefined) app.redoAt = data.redo_at;
+  if (cueHistory.open) void loadCueHistory();
+}
+
 /** 把服务端返回的字幕快照统一写回状态（含撤销/重做按钮的说明）。 */
-function applyCueSnapshot(data: CueSnapshot) {
+function applyCueSnapshot(data: CueSnapshot, opts: { applyClientState?: boolean } = {}) {
   app.cues = data.cues;
   app.cuesRevision += 1;
   app.canUndo = data.can_undo;
@@ -186,6 +198,12 @@ function applyCueSnapshot(data: CueSnapshot) {
   if (data.redo_label !== undefined) app.redoLabel = data.redo_label;
   if (data.undo_at !== undefined) app.undoAt = data.undo_at;
   if (data.redo_at !== undefined) app.redoAt = data.redo_at;
+  // 只有撤销 / 重做 / 历史跳转的回包带本地状态；普通编辑不能用稍旧的快照
+  // 覆盖用户刚在导出面板 / AI 优化台改好的值。
+  if (opts.applyClientState) {
+    if (data.export_ui) applyServerExportUi(data.export_ui);
+    if (data.ai_draft) applyAiDraft(data.ai_draft);
+  }
   if (cueHistory.open) void loadCueHistory();
 }
 
@@ -241,9 +259,10 @@ export async function toggleCueHistory(open?: boolean) {
 
 /** 点历史里的任意一步，直接回到那个状态。 */
 export async function jumpCueHistory(index: number) {
+  exportCoalesce = null;
   try {
     const data = await api.jumpCueHistory(index);
-    applyCueSnapshot(data);
+    applyCueSnapshot(data, { applyClientState: true });
     await loadTranslations();
     // 历史里可能从「导入字幕」跳回「转写结果」：质检队列的可用性跟着来源变。
     await refreshQa();
@@ -290,37 +309,6 @@ function escapeRegExp(text: string) {
 }
 
 /**
- * 一键替换全部匹配（只作用于原文）。整表提交一次 → 历史里只有一步。
- * 返回替换了多少处。
- */
-export async function replaceAllInCues(
-  query: string,
-  replacement: string,
-  caseSensitive: boolean,
-): Promise<number> {
-  if (!query) return 0;
-  const pattern = new RegExp(escapeRegExp(query), caseSensitive ? 'g' : 'gi');
-  let total = 0;
-  const next = app.cues.map((cue) => {
-    const text = cue.text.replace(pattern, () => {
-      total += 1;
-      return replacement;
-    });
-    return { start: cue.start, end: cue.end, text };
-  });
-  if (!total) return 0;
-  try {
-    const data = await api.replaceCues(next, `查找替换（${total} 处）`);
-    applyCueSnapshot(data);
-    scheduleDraftSave();
-    return total;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return 0;
-  }
-}
-
-/**
  * 只替换某一条里的**当前**匹配。
  *
  * `at` 是 ReviewView 算出来的匹配起点；没有它时退回替换该条的第一处。
@@ -356,6 +344,126 @@ export async function replaceInCue(
   } catch (err) {
     toast((err as Error).message, 'error');
     return false;
+  }
+}
+
+/** 把服务端返回的单条 / 整轨译文写回当前语种。 */
+function applyTranslationTrack(track: TranslationTrack) {
+  app.translations = { ...app.translations, [track.lang]: track };
+  app.translationsRevision += 1;
+  // 每次写译文都会在服务端压一步统一历史；刷新撤销按钮的标签。
+  void loadCueHistory();
+}
+
+/** 当前语种下第 i 条译文（不受「原文 / 译文 / 双语」显示模式影响，查找用）。 */
+export function translationTextAt(index: number): string {
+  return app.translations[app.trackLang]?.texts[index] ?? '';
+}
+
+/**
+ * 替换某一条译文里的**当前**匹配（核对台「译文 / 双语」下的查找替换）。
+ *
+ * 与原文替换分开：译文不写进 review_cues，改的是 `translations[lang].texts`；
+ * `at` 用于一条译文里出现多次同一词时只替换当前那一处。
+ */
+export async function replaceInTranslation(
+  index: number,
+  query: string,
+  replacement: string,
+  caseSensitive: boolean,
+  at = -1,
+): Promise<boolean> {
+  const lang = app.trackLang;
+  const track = app.translations[lang];
+  const text = track?.texts[index] ?? '';
+  if (!track || !query) return false;
+  let nextText: string;
+  if (at >= 0 && at + query.length <= text.length) {
+    const hitText = text.slice(at, at + query.length);
+    if (caseSensitive ? hitText !== query : hitText.toLowerCase() !== query.toLowerCase()) {
+      return false;
+    }
+    nextText = text.slice(0, at) + replacement + text.slice(at + query.length);
+  } else {
+    const pattern = new RegExp(escapeRegExp(query), caseSensitive ? '' : 'i');
+    if (!pattern.test(text)) return false;
+    nextText = text.replace(pattern, () => replacement);
+  }
+  try {
+    applyTranslationTrack(await api.patchTranslation(lang, index, nextText));
+    scheduleDraftSave();
+    return true;
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return false;
+  }
+}
+
+/**
+ * 双语「全部批量替换」：原文与译文一次提交。
+ *
+ * 拆成两次请求时，双语模式下一次「全部替换」会压两步历史，用户要按两次 ⌘Z
+ * 才退干净；这里把两份完整数组交给 `/api/cues/replace-all`，服务端只记一步。
+ *
+ * `skip` 是查找栏「本轮已跳过」的命中（键为 `cue:track:start`）。给了它以后
+ * 只替换未跳过的命中——用户明确标了「这一轮不动它」的字符必须原样保留。
+ */
+export async function replaceAllInTracks(
+  query: string,
+  replacement: string,
+  caseSensitive: boolean,
+  tracks: ('source' | 'target')[],
+  skip?: Set<string>,
+): Promise<{ source: number; target: number }> {
+  const empty = { source: 0, target: 0 };
+  if (!query) return empty;
+  const pattern = () => new RegExp(escapeRegExp(query), caseSensitive ? 'g' : 'gi');
+  /** 正则 replacer 的倒数第二个参数是本次命中的起点（无捕获组时就是第 2 个）。 */
+  const matchStart = (args: unknown[]) => Number(args[args.length - 2]);
+  let sourceCount = 0;
+  let nextCues: Cue[] | undefined;
+  if (tracks.includes('source')) {
+    nextCues = app.cues.map((cue, index) => {
+      const text = cue.text.replace(pattern(), (match, ...args) => {
+        if (skip?.has(`${index}:source:${matchStart(args)}`)) return match;
+        sourceCount += 1;
+        return replacement;
+      });
+      return { start: cue.start, end: cue.end, text };
+    });
+    if (!sourceCount) nextCues = undefined;
+  }
+  let targetCount = 0;
+  let nextTexts: string[] | undefined;
+  const lang = app.trackLang;
+  const track = app.translations[lang];
+  if (track && tracks.includes('target')) {
+    nextTexts = track.texts.map((text, index) =>
+      text.replace(pattern(), (match, ...args) => {
+        if (skip?.has(`${index}:target:${matchStart(args)}`)) return match;
+        targetCount += 1;
+        return replacement;
+      }),
+    );
+    if (!targetCount) nextTexts = undefined;
+  }
+  if (!sourceCount && !targetCount) return empty;
+  const total = sourceCount + targetCount;
+  try {
+    const data = await api.replaceAll({
+      label: `查找替换（${total} 处）`,
+      cues: nextCues,
+      lang: nextTexts ? lang : '',
+      texts: nextTexts,
+    });
+    applyCueSnapshot(data);
+    await loadTranslations();
+    void loadCueHistory();
+    scheduleDraftSave();
+    return { source: sourceCount, target: targetCount };
+  } catch (err) {
+    toast((err as Error).message, 'error');
+    return empty;
   }
 }
 
@@ -861,50 +969,12 @@ export const exporter = $state({
   optionsLoaded: false,
 });
 
-/**
- * 「导出设置」的本地撤销历史。
- *
- * 字幕编辑的历史在服务端 `Session.history`；导出面板的字号 / 描边 / 预设只存在
- * 本机（`localStorage`），服务端看不见，所以必须另有一份。两者都带时间戳，
- * 全局 ⌘Z 撤回的是**最近一次**操作，而不是永远先撤字幕（见 nextUndo/nextRedo）。
- *
- * 与字幕历史一样是「起始状态 + 每一步操作后的完整快照」：界面要能列出
- * 「这一步调了什么」并点任意一步跳回去，双栈没有中间态可展示。
- */
-export type ExportUiState = {
-  mode: 'burn' | 'soft' | 'copy';
-  track: 'source' | 'target' | 'both';
-  lang: string;
-  resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
-  preset: 'small' | 'balanced' | 'high' | 'ultra';
-  exportSrt: boolean;
-  outDir: string;
-  style: SubtitleStylePayload;
-};
-
-export interface ExportUiStep {
-  /** 动作类型；连续拖动同一根滑杆会合并成一步。 */
-  kind: string;
-  label: string;
-  at: number;
-  state: ExportUiState;
-}
-
-/** 与字幕历史保持一致：20 步操作（另加一条起始状态）。 */
-const UI_HISTORY_LIMIT = 20;
-/** 同一根滑杆 / 颜色盘连续输入多久算「一次调整」。 */
-const UI_COALESCE_SECONDS = 1.2;
-
-export const uiHistory = $state({
-  steps: [] as ExportUiStep[],
-  cursor: -1,
-  coalesceKind: '',
-  coalesceAt: 0,
-});
-
 /** 质检队列（浮标面板用）。 */
 export const qa = $state({
   open: false,
+  /** false = 停靠在右侧检查器「质检待核」页签；true = 独立浮窗。 */
+  floating:
+    typeof localStorage !== 'undefined' && localStorage.getItem('kikusub.qaFloating') === '1',
   payload: null as Record<string, any> | null,
   loading: false,
 });
@@ -1138,6 +1208,12 @@ export function setView(view: View) {
   // 检查器只属于「核对」屏（已确认的设计决定）
   // 紧凑模式里检查器是抽屉：切到核对屏不主动盖住画面，由用户点开关打开
   app.inspectorOpen = view === 'review' && !app.compact;
+  // 停靠的质检面板属于核对屏：离开时关掉，状态栏的开关与看不见的面板
+  // 才不会互相矛盾；浮窗模式例外，切页后仍然保留。
+  if (view !== 'review' && !qa.floating) {
+    qa.open = false;
+    app.inspectorTab = 'cue';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1181,6 +1257,7 @@ export async function applyDevSeed(seed: {
     if (seed.qa) {
       qa.payload = seed.qa;
       qa.open = seed.qaOpen !== false;
+      if (qa.open) app.inspectorTab = 'qa';
     }
     setView('review');
   } catch (err) {
@@ -1302,12 +1379,15 @@ export async function openMedia(
     const info = await api.importMedia(path);
     app.media = info;
     await api.bindSession(info.id);
-    resetExportPanel();
-    // 换片后旧的导出设置快照已经对不上新片，别让 ⌘Z 把上一部的字号抬回来
-    resetExportUiHistory();
+    // 换片：不把「重置导出面板」记成一次编辑；新会话的起始状态由下面的
+    // 静默同步建立。
+    resetExportPanel({ record: false });
     exporter.outDir = defaultVideoExportDir();
+    // 让服务端基线记住新片的默认导出设置，第一次调字号之前 ⌘Z 才有正确的起点。
+    void syncClientState(false);
     app.view = 'review';
     app.inspectorOpen = !app.compact;
+    app.inspectorTab = 'cue';
     app.report = null;
     app.lastSavedPath = '';
     app.lastExportPath = '';
@@ -1364,8 +1444,9 @@ export async function openMedia(
       size: info.size,
     });
 
-    // MKV / HEVC 在 Chromium 里放不出来：后台压代理，不挡用户操作
-    if (info.needs_proxy && (app.settings?.auto_proxy ?? true)) {
+    // MKV / HEVC 在 Chromium 里放不出来：后台压代理，不挡用户操作。
+    // 已经有代理（包括刚挂载的）时不再重复压。
+    if (info.needs_proxy && !info.proxy_ready && (app.settings?.auto_proxy ?? true)) {
       startProxyJob(info.id);
     }
   } catch (err) {
@@ -1422,6 +1503,38 @@ export async function importSubtitleFromExport() {
 }
 
 /**
+ * 从导出文件夹挑一份译文 SRT / VTT，挂到当前原文的平行轨上。
+ *
+ * 与原文导入不同：**不动时间轴与 review_cues**，只换 `translations[lang]`；
+ * 条数对不上时服务端按时间重叠对齐，仍挂不上就整批拒绝。
+ */
+export async function importTranslationFromExport(lang = app.trackLang) {
+  if (!app.cues.length) {
+    toast('请先导入或转写原文字幕，再挂译文', 'warn');
+    return;
+  }
+  const dir = app.config?.export_dir || app.config?.output_dir || '';
+  const file = await window.kikusub.pickSubtitle(dir);
+  if (!file) return;
+  app.busy = true;
+  try {
+    logEvent('info', 'translation-import', `${lang} | ${file}`);
+    const res = await api.importTranslation(file, lang);
+    await loadTranslations();
+    setTrackLang(res.lang || lang);
+    setTrackMode('both');
+    // 导入译文本身会压一步统一历史；刷新 can_undo / undo_label。
+    await refreshCues();
+    scheduleDraftSave();
+    toast(`已导入 ${res.count} 条译文（${res.lang || lang}）`);
+  } catch (err) {
+    toast(`导入译文失败：${(err as Error).message}`, 'error');
+  } finally {
+    app.busy = false;
+  }
+}
+
+/**
  * 压制 480p 监看代理。
  *
  * 除了导入时自动触发，核对台也提供手动入口：高码率 H.264 在原格式里能播，
@@ -1431,6 +1544,10 @@ export async function startProxyJob(mediaId?: string, notify = true) {
   const id = mediaId || app.media?.id || '';
   if (!id) {
     if (notify) toast('请先导入媒体', 'warn');
+    return false;
+  }
+  if (!mediaId && app.media?.proxy_ready) {
+    if (notify) toast('当前媒体已经有代理，无需再压', 'warn');
     return false;
   }
   if (app.job && (app.job.status === 'running' || app.job.status === 'queued')) {
@@ -1445,6 +1562,45 @@ export async function startProxyJob(mediaId?: string, notify = true) {
   } catch (err) {
     if (notify) toast(`压制代理失败：${(err as Error).message}`, 'error');
     return false;
+  }
+}
+
+/**
+ * 把用户已有的 480p 代理挂到当前媒体上，跳过重新压制。
+ *
+ * 写进标准代理路径后，`<video>` 会在 `refreshMedia()` 后自动切到代理流；
+ * 重启应用再导入同一片源时也会被当作已就绪的代理。
+ */
+export async function importProxyFromFile() {
+  if (!app.media) {
+    toast('请先导入媒体', 'warn');
+    return;
+  }
+  if (
+    app.job &&
+    (app.job.status === 'running' || app.job.status === 'queued') &&
+    app.jobKind === 'proxy'
+  ) {
+    toast('已经有一个代理任务在跑，等它完成或先打断', 'warn');
+    return;
+  }
+  if (app.media.proxy_ready) {
+    toast('当前媒体已经有代理，无需重复导入', 'warn');
+    return;
+  }
+  const mediaId = app.media.id;
+  const file = await window.kikusub.pickMedia();
+  if (!file) return;
+  app.busy = true;
+  try {
+    logEvent('info', 'proxy-import', file);
+    await api.attachProxy(mediaId, file);
+    await refreshMedia();
+    toast('代理已导入，监看画面会切换到该文件');
+  } catch (err) {
+    toast(`导入代理失败：${(err as Error).message}`, 'error');
+  } finally {
+    app.busy = false;
   }
 }
 
@@ -1487,6 +1643,9 @@ export async function loadExportStyles(force = false) {
       const fallback = data.fonts.find((item) => item.available);
       if (fallback) exporter.style.font = fallback.key;
     }
+    // 样式默认值来自后端（字体可用性 / 预设），让服务端基线也知道当前值，
+    // 第一次调字号时 ⌘Z 才能退回正确的起点。
+    syncClientState(false);
   } catch (err) {
     exporter.styleError = (err as Error).message;
   }
@@ -1547,9 +1706,31 @@ export function resetExportStyle() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// 导出设置的本地撤销历史
-// ---------------------------------------------------------------------------
+/**
+ * 导出面板的完整可编辑状态。
+ *
+ * 它不再单独维护撤销栈：每次改动通过 `/api/history/checkpoint` 记进服务端的
+ * **统一工作区时间线**，与字幕 / 译文 / 质检 / AI 草稿共用一个 cursor。
+ */
+export type ExportUiState = {
+  mode: 'burn' | 'soft' | 'copy';
+  track: 'source' | 'target' | 'both';
+  lang: string;
+  resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
+  preset: 'small' | 'balanced' | 'high' | 'ultra';
+  exportSrt: boolean;
+  outDir: string;
+  style: SubtitleStylePayload;
+};
+
+/** 同一根滑杆 / 颜色盘连续输入多久算「一次调整」。 */
+const UI_COALESCE_SECONDS = 1.2;
+
+/**
+ * 本地「拖动起点」快照：滑杆连续 input 时，历史说明要写成
+ * 「字号 42 → 48」而不是「字号 47 → 48」。服务端按 coalesce 键合并步骤。
+ */
+let exportCoalesce: { kind: string; base: ExportUiState; at: number } | null = null;
 
 function currentExportUiState(): ExportUiState {
   return {
@@ -1568,38 +1749,58 @@ function exportUiStatesEqual(a: ExportUiState, b: ExportUiState): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** 恢复一份快照。只写状态，不再压历史（撤销/跳转本身不是编辑）。 */
-function applyExportUiState(state: ExportUiState) {
-  exporter.mode = state.mode;
-  exporter.track = state.track;
-  exporter.lang = state.lang;
-  exporter.resolution = state.resolution;
-  exporter.preset = state.preset;
-  exporter.exportSrt = state.exportSrt;
-  exporter.outDir = state.outDir;
-  exporter.style = { ...state.style };
-  uiHistory.coalesceKind = '';
-  uiHistory.coalesceAt = 0;
+/** 撤销 / 重做 / 历史跳转时恢复导出面板；只写状态，不再压历史。 */
+function applyServerExportUi(raw: Record<string, any> | null | undefined) {
+  if (!raw || typeof raw !== 'object') return;
+  if (['burn', 'soft', 'copy'].includes(raw.mode)) exporter.mode = raw.mode;
+  if (['source', 'target', 'both'].includes(raw.track)) exporter.track = raw.track;
+  if (typeof raw.lang === 'string' && raw.lang) exporter.lang = raw.lang;
+  if (['source', '2160p', '1440p', '1080p', '720p', '480p'].includes(raw.resolution)) {
+    exporter.resolution = raw.resolution;
+  }
+  if (['small', 'balanced', 'high', 'ultra'].includes(raw.preset)) exporter.preset = raw.preset;
+  if (typeof raw.exportSrt === 'boolean') exporter.exportSrt = raw.exportSrt;
+  if (typeof raw.outDir === 'string') exporter.outDir = raw.outDir;
+  if (raw.style && typeof raw.style === 'object') {
+    exporter.style = { ...exporter.style, ...raw.style };
+  }
+  exportCoalesce = null;
   saveExportStyle();
   scheduleStylePreview(0);
 }
 
-/** 第一次改动前把当时的样子记成「起始状态」，⌘Z 才能退回调整前。 */
-function ensureExportUiBaseline() {
-  if (uiHistory.steps.length) return;
-  uiHistory.steps = [
-    {
-      kind: 'baseline',
-      label: '起始状态',
-      at: Date.now() / 1000,
-      state: currentExportUiState(),
-    },
-  ];
-  uiHistory.cursor = 0;
+/** 静默同步渲染层本地状态（导出设置 / AI 草稿）到服务端，不产生历史步骤。 */
+export function syncClientState(record = false, label = "同步工作区状态") {
+  if (!app.connected) return;
+  void api
+    .historyCheckpoint({
+      label,
+      export_ui: currentExportUiState(),
+      ai_draft: currentAiDraft(),
+      record,
+    })
+    .catch(() => {
+      /* 同步失败不影响本地编辑；下一次动作会再带上完整状态 */
+    });
+}
+
+/** 把一次导出设置改动记进统一历史。请求不阻塞界面；服务端负责合并连续滑动。 */
+function checkpointExportUi(label: string, kind: string) {
+  void api
+    .historyCheckpoint({
+      label,
+      export_ui: currentExportUiState(),
+      ai_draft: currentAiDraft(),
+      coalesce: kind,
+    })
+    .then(applyHistoryMeta)
+    .catch(() => {
+      /* 历史提交失败不挡住导出设置本身；下一动会再提交一次完整状态 */
+    });
 }
 
 /**
- * 执行一次导出设置改动并压入历史。
+ * 执行一次导出设置改动并记入统一历史。
  *
  * `labeler(from, to)` 用改动前后的完整快照生成「这一步做了什么」。同一根滑杆的
  * 连续 `input` 事件会在 1.2 秒内合并成一步，否则拖一次字号会塞进二三十条历史。
@@ -1609,7 +1810,6 @@ function editExportUi(
   labeler: (from: ExportUiState, to: ExportUiState) => string,
   mutate: () => void,
 ) {
-  ensureExportUiBaseline();
   const before = currentExportUiState();
   mutate();
   const after = currentExportUiState();
@@ -1617,92 +1817,16 @@ function editExportUi(
   if (exportUiStatesEqual(before, after)) return;
 
   const now = Date.now() / 1000;
-  // 从历史中间调整：截断后面的分支，与普通编辑器语义一致
-  if (uiHistory.cursor < uiHistory.steps.length - 1) {
-    uiHistory.steps.splice(uiHistory.cursor + 1);
-  }
-  const top = uiHistory.steps[uiHistory.cursor];
-  const merge =
-    uiHistory.cursor > 0 &&
-    top &&
-    top.kind === kind &&
-    uiHistory.coalesceKind === kind &&
-    now - uiHistory.coalesceAt <= UI_COALESCE_SECONDS;
-  if (merge) {
-    // 合并到这次拖动开始前的那一步：说明也按「起点 → 终点」重算
-    const base = uiHistory.steps[uiHistory.cursor - 1].state;
-    uiHistory.steps[uiHistory.cursor] = {
-      kind,
-      label: labeler(base, after),
-      at: now,
-      state: after,
-    };
+  if (
+    !exportCoalesce ||
+    exportCoalesce.kind !== kind ||
+    now - exportCoalesce.at > UI_COALESCE_SECONDS
+  ) {
+    exportCoalesce = { kind, base: before, at: now };
   } else {
-    uiHistory.steps.push({ kind, label: labeler(before, after), at: now, state: after });
-    uiHistory.cursor = uiHistory.steps.length - 1;
+    exportCoalesce.at = now;
   }
-  uiHistory.coalesceKind = kind;
-  uiHistory.coalesceAt = now;
-
-  const overflow = uiHistory.steps.length - (UI_HISTORY_LIMIT + 1);
-  if (overflow > 0) {
-    uiHistory.steps.splice(0, overflow);
-    uiHistory.cursor -= overflow;
-  }
-}
-
-export function canUndoUi(): boolean {
-  return uiHistory.cursor > 0;
-}
-
-export function canRedoUi(): boolean {
-  return uiHistory.cursor >= 0 && uiHistory.cursor < uiHistory.steps.length - 1;
-}
-
-export function uiUndoLabel(): string {
-  return canUndoUi() ? uiHistory.steps[uiHistory.cursor].label : '';
-}
-
-export function uiRedoLabel(): string {
-  return canRedoUi() ? uiHistory.steps[uiHistory.cursor + 1].label : '';
-}
-
-/** 丢掉本地历史：换片时旧快照已经没有意义（样式仍在 localStorage 里）。 */
-export function resetExportUiHistory() {
-  uiHistory.steps = [];
-  uiHistory.cursor = -1;
-  uiHistory.coalesceKind = '';
-  uiHistory.coalesceAt = 0;
-}
-
-function moveExportUiCursor(index: number) {
-  uiHistory.cursor = index;
-  applyExportUiState(uiHistory.steps[index].state);
-}
-
-/** 撤回一步导出设置；没有可撤回的返回 false。 */
-export function undoExportUi(): boolean {
-  if (!canUndoUi()) return false;
-  const label = uiUndoLabel();
-  moveExportUiCursor(uiHistory.cursor - 1);
-  toast(`已撤销：${label}`);
-  return true;
-}
-
-export function redoExportUi(): boolean {
-  if (!canRedoUi()) return false;
-  const label = uiRedoLabel();
-  moveExportUiCursor(uiHistory.cursor + 1);
-  toast(`已重做：${label}`);
-  return true;
-}
-
-/** 点历史里的任意一步，直接回到当时的导出设置。 */
-export function jumpExportUiHistory(index: number) {
-  if (index < 0 || index >= uiHistory.steps.length) return;
-  const step = uiHistory.steps[index];
-  moveExportUiCursor(index);
-  toast(`已回到：${step.label}`);
+  checkpointExportUi(labeler(exportCoalesce.base, after), kind);
 }
 
 // ---- 导出交付参数（全部走历史，界面不得直接改 exporter.xxx） ----------------
@@ -2080,37 +2204,6 @@ export async function refreshCues() {
 }
 
 /**
- * 全局下一步「撤销」：字幕编辑（服务端历史）与导出设置（本地历史）共用 ⌘Z。
- *
- * 两个历史各自记录时间戳，取**更近**的那一边；没有可撤回的操作返回空。
- * 这样用户刚拖完字号就按 ⌘Z 会撤回字号，而不是去撤一句几分钟前改过的字幕。
- */
-export function nextUndo(): { domain: 'cue' | 'export' | ''; label: string } {
-  const uiReady = canUndoUi();
-  const cueReady = app.canUndo;
-  const uiAt = uiReady ? uiHistory.steps[uiHistory.cursor].at : 0;
-  const cueAt = cueReady ? app.undoAt : 0;
-  if (uiReady && (!cueReady || uiAt >= cueAt)) {
-    return { domain: 'export', label: uiUndoLabel() };
-  }
-  if (cueReady) return { domain: 'cue', label: app.undoLabel || '上一步' };
-  return { domain: '', label: '' };
-}
-
-/** 全局下一步「重做」，与 nextUndo 同一套先后规则。 */
-export function nextRedo(): { domain: 'cue' | 'export' | ''; label: string } {
-  const uiReady = canRedoUi();
-  const cueReady = app.canRedo;
-  const uiAt = uiReady ? uiHistory.steps[uiHistory.cursor + 1].at : 0;
-  const cueAt = cueReady ? app.redoAt : 0;
-  if (uiReady && (!cueReady || uiAt >= cueAt)) {
-    return { domain: 'export', label: uiRedoLabel() };
-  }
-  if (cueReady) return { domain: 'cue', label: app.redoLabel || '下一步' };
-  return { domain: '', label: '' };
-}
-
-/**
  * 菜单快捷键（main 进程的「编辑 → 撤回」）与渲染层 `App.svelte` 的 ⌘Z 兜底
  * 可能对同一次按键各触发一次。60ms 内只认第一次，避免一次 ⌘Z 退回两步；
  * macOS 的按键重复最快约 83ms，正常连按不会被吃掉。
@@ -2119,22 +2212,18 @@ let lastUndoInvoke = 0;
 let lastRedoInvoke = 0;
 const UNDO_DEDUPE_SECONDS = 0.06;
 
+/**
+ * 全局撤销：**没有分域比较**。字幕、译文、质检、导出设置与 AI 草稿都在
+ * 服务端同一条时间线上，⌘Z 永远退回最近一步。
+ */
 export async function undo() {
   const now = Date.now() / 1000;
   if (now - lastUndoInvoke < UNDO_DEDUPE_SECONDS) return;
   lastUndoInvoke = now;
-  const target = nextUndo();
-  if (target.domain === 'export') {
-    undoExportUi();
-    return;
-  }
-  if (target.domain !== 'cue') {
-    toast('没有可撤销的操作', 'warn');
-    return;
-  }
+  exportCoalesce = null;
   try {
     const data = await api.undo();
-    applyCueSnapshot(data);
+    applyCueSnapshot(data, { applyClientState: true });
     await loadTranslations();
     await refreshQa();
     if (play.selected >= app.cues.length) {
@@ -2152,18 +2241,10 @@ export async function redo() {
   const now = Date.now() / 1000;
   if (now - lastRedoInvoke < UNDO_DEDUPE_SECONDS) return;
   lastRedoInvoke = now;
-  const target = nextRedo();
-  if (target.domain === 'export') {
-    redoExportUi();
-    return;
-  }
-  if (target.domain !== 'cue') {
-    toast('没有可重做的操作', 'warn');
-    return;
-  }
+  exportCoalesce = null;
   try {
     const data = await api.redo();
-    applyCueSnapshot(data);
+    applyCueSnapshot(data, { applyClientState: true });
     await loadTranslations();
     await refreshQa();
     if (play.selected >= app.cues.length) {
@@ -2605,7 +2686,7 @@ function watchJob(initial: JobSnapshot, kind: 'transcribe' | 'proxy' | 'export')
     initial.id,
     async (ev) => {
       if (ev.job) app.job = ev.job;
-      if (ev.type === 'progress' && kind === 'transcribe' && app.job) {
+      if (ev.type === 'progress' && (kind === 'transcribe' || kind === 'proxy') && app.job) {
         app.job = {
           ...app.job,
           percent: ev.job_percent ?? Math.round((ev.ratio ?? 0) * 100),
@@ -2886,9 +2967,66 @@ export async function refreshQa() {
   }
 }
 
+/** 切换右侧检查器的页签；切到「质检待核」会从浮窗模式收回。 */
+export function setInspectorTab(tab: 'cue' | 'qa') {
+  if (tab === 'qa' && qa.floating) {
+    qa.floating = false;
+    try {
+      localStorage.setItem('kikusub.qaFloating', '0');
+    } catch {
+      /* 忽略 */
+    }
+  }
+  app.inspectorTab = tab;
+  if (tab === 'qa') {
+    qa.open = true;
+    app.inspectorOpen = true;
+    if (app.view !== 'review') setView('review');
+    void refreshQa();
+  } else {
+    qa.open = false;
+  }
+}
+
+/** 质检面板：停靠到检查器页签 / 弹出为独立浮窗。 */
+export function setQaFloating(floating: boolean) {
+  qa.floating = floating;
+  try {
+    localStorage.setItem('kikusub.qaFloating', floating ? '1' : '0');
+  } catch {
+    /* 忽略 */
+  }
+  qa.open = true;
+  if (app.view !== 'review') setView('review');
+  if (floating) {
+    if (app.inspectorTab === 'qa') app.inspectorTab = 'cue';
+    app.inspectorOpen = true;
+  } else {
+    app.inspectorTab = 'qa';
+    app.inspectorOpen = true;
+  }
+  void refreshQa();
+}
+
 export async function toggleQaPanel(open?: boolean) {
-  qa.open = open ?? !qa.open;
-  if (qa.open) await refreshQa();
+  // 浮窗模式：只开关浮窗，不改变当前页签。
+  if (qa.floating) {
+    qa.open = open ?? !qa.open;
+    if (qa.open) await refreshQa();
+    return;
+  }
+  const dockedOpen = qa.open && app.inspectorTab === 'qa' && app.inspectorOpen;
+  const next = open ?? !dockedOpen;
+  if (next) {
+    app.inspectorTab = 'qa';
+    qa.open = true;
+    if (app.view !== 'review') setView('review');
+    app.inspectorOpen = true;
+    await refreshQa();
+  } else {
+    qa.open = false;
+    if (app.inspectorTab === 'qa') app.inspectorTab = 'cue';
+  }
 }
 
 export async function qaAction(cmd: {
@@ -2902,11 +3040,10 @@ export async function qaAction(cmd: {
     const res = await api.qaAction(cmd);
     if (res.warning) toast(res.warning, 'warn');
     else if (res.message) toast(res.message);
-    if (res.cues_changed) {
-      // QA 响应带 cues 但不带 count；补一个，避免在两个快照形状之间做类型断言
-      applyCueSnapshot({ ...res, count: res.cues.length });
-      scheduleDraftSave();
-    }
+    // 即使只改了待核状态（没有动字幕），也要更新 can_undo / undo_label；
+    // QA 响应带 cues 但不带 count，补一个避免在两个快照形状之间做类型断言。
+    applyCueSnapshot({ ...res, count: res.cues.length });
+    if (res.cues_changed) scheduleDraftSave();
     if (res.focus) {
       play.selected = Math.max(0, res.focus.index - 1);
       setView('review');
@@ -2990,7 +3127,11 @@ export async function undoTranslation(lang = app.trackLang) {
   try {
     const res = await api.undoTranslation(lang);
     await loadTranslations();
-    if (res.undone) scheduleDraftSave();
+    // 「撤回上一版译文」本身也是统一历史的一步；刷新 can_undo / undo_label。
+    if (res.undone) {
+      await refreshCues();
+      scheduleDraftSave();
+    }
     toast(res.undone ? '已退回上一版译文' : '这个语种没有更早的译文了', res.undone ? 'info' : 'warn');
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -3001,11 +3142,54 @@ export async function deleteTranslation(lang = app.trackLang) {
   try {
     await api.deleteTranslation(lang);
     await loadTranslations();
+    await refreshCues();
     scheduleDraftSave();
     toast(`已删除 ${lang} 译文`);
   } catch (err) {
     toast((err as Error).message, 'error');
   }
+}
+
+/** 删除全部原文字幕与时间轴（所有译文轨一起清空，一步历史）。 */
+export async function clearOriginalTrack() {
+  if (!app.cues.length) {
+    toast('当前没有原文字幕', 'warn');
+    return;
+  }
+  if (!window.confirm(`删除全部 ${app.cues.length} 条原文字幕？所有译文轨会一起清空，⌘Z 可撤回。`)) {
+    return;
+  }
+  const count = app.cues.length;
+  app.busy = true;
+  try {
+    logEvent('info', 'subtitle-clear', `cues=${count}`);
+    applyCueSnapshot(await api.clearCues());
+    await loadTranslations();
+    setTrackMode('source');
+    play.selected = 0;
+    play.focus = null;
+    seekTo(0);
+    await refreshQa();
+    scheduleDraftSave();
+    toast(`已删除 ${count} 条原文字幕（可按 ⌘Z 撤回）`);
+  } catch (err) {
+    toast(`删除原文字幕失败：${(err as Error).message}`, 'error');
+  } finally {
+    app.busy = false;
+  }
+}
+
+/** 删除当前语种的译文轨（原文与时间轴不动，一步历史）。 */
+export async function removeTranslationTrack(lang = app.trackLang) {
+  if (!app.translations[lang]) {
+    toast('当前没有译文轨可删除', 'warn');
+    return;
+  }
+  if (!window.confirm(`删除 ${lang} 译文字幕？原文与时间轴不受影响，⌘Z 可撤回。`)) {
+    return;
+  }
+  await deleteTranslation(lang);
+  if (app.track !== 'source' && !app.translations[lang]) setTrackMode('source');
 }
 
 // ---------------------------------------------------------------------------
@@ -3184,52 +3368,150 @@ export function resetAi() {
   ai.loadedFor = '';
 }
 
-export async function loadAiProposal(force = false) {
-  if (!app.connected || ai.loading) return;
+let aiLoadPromise: Promise<void> | null = null;
+
+/**
+ * 拉取当前上下文的提案。
+ *
+ * 并发调用返回同一个 Promise：撤销 / 重做恢复 AI 草稿时，AiView 的 `$effect`
+ * 可能同时触发一次加载，等待同一个任务才能保证 `.then` 写入的 edits 不被
+ * 后完成的加载重置。
+ */
+export function loadAiProposal(force = false): Promise<void> {
+  if (!app.connected) return Promise.resolve();
+  if (aiLoadPromise) return aiLoadPromise;
   const key = aiContextKey();
-  if (!force && ai.loadedFor === key) return;
+  if (!force && ai.loadedFor === key) return Promise.resolve();
   ai.loading = true;
-  try {
-    const res = await api.getAiProposal(ai.kind, ai.kind === 'translate' ? ai.lang : '');
-    ai.proposal = res.proposal;
-    ai.path = res.path;
-    ai.warnings = res.warnings ?? [];
-    ai.errors = res.errors ?? [];
-    ai.digestMatch = res.digest_match;
-    ai.accept = {};
-    ai.edits = {};
-    for (const item of res.proposal.items) ai.accept[item.i] = true;
-  } catch (err) {
-    // "还没有提案"不是错误状态：界面给的是生成/导入的引导
-    resetAi();
-    ai.errors = [(err as Error).message];
-  } finally {
-    ai.loadedFor = key;
-    ai.loading = false;
-  }
+  const task = (async () => {
+    try {
+      const res = await api.getAiProposal(ai.kind, ai.kind === 'translate' ? ai.lang : '');
+      ai.proposal = res.proposal;
+      ai.path = res.path;
+      ai.warnings = res.warnings ?? [];
+      ai.errors = res.errors ?? [];
+      ai.digestMatch = res.digest_match;
+      ai.accept = {};
+      ai.edits = {};
+      for (const item of res.proposal.items) ai.accept[item.i] = true;
+    } catch (err) {
+      // "还没有提案"不是错误状态：界面给的是生成/导入的引导
+      resetAi();
+      ai.errors = [(err as Error).message];
+    } finally {
+      ai.loadedFor = key;
+      ai.loading = false;
+    }
+  })();
+  aiLoadPromise = task;
+  void task.finally(() => {
+    if (aiLoadPromise === task) aiLoadPromise = null;
+  });
+  return task;
+}
+
+function switchAiContext(kind: 'polish' | 'translate', lang: string) {
+  ai.kind = kind;
+  ai.lang = lang;
+  ai.loadedFor = '';
+  ai.accept = {};
+  ai.edits = {};
+  void (async () => {
+    if (aiLoadPromise) await aiLoadPromise;
+    await loadAiProposal(true);
+    syncClientState(false);
+  })();
 }
 
 export function setAiKind(kind: 'polish' | 'translate') {
   if (ai.kind === kind) return;
-  ai.kind = kind;
-  ai.loadedFor = '';
-  void loadAiProposal();
+  switchAiContext(kind, ai.lang);
+}
+
+export function setAiLang(lang: string) {
+  if (ai.lang === lang) return;
+  switchAiContext(ai.kind, lang);
+}
+
+/** 当前 AI diff 草稿（人工编辑 + 采纳/拒绝）；随统一历史快照回滚。 */
+export function currentAiDraft(): Record<string, any> {
+  return {
+    key: aiContextKey(),
+    kind: ai.kind,
+    lang: ai.lang,
+    edits: { ...ai.edits },
+    accept: { ...ai.accept },
+    changedOnly: ai.changedOnly,
+  };
+}
+
+/** 撤销 / 重做 / 历史跳转时恢复 AI diff 草稿。 */
+export function applyAiDraft(raw: Record<string, any> | null | undefined) {
+  if (!raw || typeof raw !== 'object') return;
+  const kind: 'polish' | 'translate' = raw.kind === 'translate' ? 'translate' : 'polish';
+  const lang = typeof raw.lang === 'string' && raw.lang ? raw.lang : ai.lang;
+  const contextChanged = kind !== ai.kind || lang !== ai.lang;
+  const apply = () => {
+    ai.edits = { ...(raw.edits ?? {}) };
+    ai.accept = { ...(raw.accept ?? {}) };
+    ai.changedOnly = raw.changedOnly ?? ai.changedOnly;
+  };
+  if (contextChanged) {
+    void (async () => {
+      // 先等掉可能还在飞的旧上下文请求，再切上下文强制重拉；否则旧请求的
+      // finally 会用旧 key 覆盖 loadedFor，并把刚恢复的 edits 重置掉。
+      if (aiLoadPromise) await aiLoadPromise;
+      ai.kind = kind;
+      ai.lang = lang;
+      ai.loadedFor = '';
+      await loadAiProposal(true);
+      apply();
+    })();
+  } else {
+    apply();
+  }
+}
+
+function checkpointAiDraft(label: string, coalesce: string) {
+  void api
+    .historyCheckpoint({
+      label,
+      export_ui: currentExportUiState(),
+      ai_draft: currentAiDraft(),
+      coalesce,
+    })
+    .then(applyHistoryMeta)
+    .catch(() => {
+      /* 历史提交失败不挡住 diff 编辑本身；下一次操作会再提交完整状态 */
+    });
 }
 
 export function toggleAiAccept(i: number) {
   ai.accept[i] = ai.accept[i] === false;
+  checkpointAiDraft(
+    ai.accept[i] === false ? `AI 建议：取消采纳第 ${i} 条` : `AI 建议：采纳第 ${i} 条`,
+    `ai.accept.${i}`,
+  );
 }
 
 export function setAllAiAccept(value: boolean) {
   if (!ai.proposal) return;
   for (const item of ai.proposal.items) ai.accept[item.i] = value;
+  checkpointAiDraft(value ? 'AI 建议：全选' : 'AI 建议：全不选', 'ai.accept.all');
 }
 
 export function setAiEdit(i: number, text: string) {
   const item = ai.proposal?.items.find((it) => it.i === i);
   if (!item) return;
-  if (text === item.after) delete ai.edits[i];
-  else ai.edits[i] = text;
+  const previous = ai.edits[i];
+  if (text === item.after) {
+    if (previous === undefined) return;
+    delete ai.edits[i];
+  } else {
+    if (previous === text) return;
+    ai.edits[i] = text;
+  }
+  checkpointAiDraft(`AI 建议：修改第 ${i} 条`, `ai.edit.${i}`);
 }
 
 /** 某一行最终会写进字幕的文本（人工编辑优先于提案）。 */
@@ -3359,6 +3641,7 @@ export async function applyAiTranslation() {
     const items = ai.proposal.items.map((it) => ({ ...it, after: ai.edits[it.i] ?? it.after }));
     const res = await api.applyTranslation({ lang, proposal: { ...ai.proposal, items } });
     await loadTranslations();
+    await loadCueHistory();
     setTrackLang(lang);
     setTrackMode('both');
     scheduleDraftSave();
@@ -3413,6 +3696,7 @@ export async function updateTranslation(index: number, text: string) {
   try {
     await api.patchTranslation(lang, index, text);
     await loadTranslations();
+    void loadCueHistory();
     scheduleDraftSave();
   } catch (err) {
     toast((err as Error).message, 'error');

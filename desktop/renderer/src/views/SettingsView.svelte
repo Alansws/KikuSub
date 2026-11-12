@@ -8,6 +8,7 @@
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import EngineSetup from '../components/EngineSetup.svelte';
+  import ProgressBar from '../components/ProgressBar.svelte';
   import { api, logEvent, type EngineInfo } from '../lib/api';
   import {
     app,
@@ -27,6 +28,7 @@
   } from '../lib/store.svelte';
   import { SCHEMES, SKINS, skinOf } from '../lib/themes';
   import { formatBytes } from '../lib/time';
+  import { onDestroy } from 'svelte';
 
   type Diag = Awaited<ReturnType<typeof api.diagnostics>>;
 
@@ -40,6 +42,82 @@
   let showEngineSetup = $state(false);
   const ttsRunning = $derived(tts.download?.status === 'running');
   let ttsChecking = $state(false);
+
+  // OmniVoice 的进度展示：校验（不确定进度）与下载（真实百分比）共用一条轨道。
+  type TtsUiState = 'idle' | 'verifying' | 'downloading' | 'done' | 'error';
+  let ttsUiState = $state<TtsUiState>('idle');
+  let ttsStageText = $state('');
+  let ttsUiTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastTtsDownloadStatus = '';
+
+  const ttsPercent = $derived(
+    ttsUiState === 'downloading'
+      ? (tts.download?.percent ?? 0)
+      : ttsUiState === 'done'
+        ? 100
+        : null,
+  );
+  const ttsBarState = $derived(
+    ttsUiState === 'done' ? 'done' : ttsUiState === 'error' ? 'error' : 'running',
+  );
+  const ttsRightText = $derived(
+    ttsUiState === 'verifying'
+      ? '校验中'
+      : ttsUiState === 'error'
+        ? '失败'
+        : `${ttsPercent ?? 0}%`,
+  );
+  const ttsStageLine = $derived(
+    ttsUiState === 'verifying'
+      ? '正在校验 OmniVoice 权重…'
+      : ttsUiState === 'downloading'
+        ? tts.download?.stage || '正在下载 OmniVoice 模型…'
+        : ttsStageText,
+  );
+  const ttsProgressVisible = $derived(ttsUiState !== 'idle');
+
+  function clearTtsTimer() {
+    if (ttsUiTimer) {
+      clearTimeout(ttsUiTimer);
+      ttsUiTimer = undefined;
+    }
+  }
+
+  function showTtsState(state: TtsUiState, stage = '', timeout = 0) {
+    clearTtsTimer();
+    ttsUiState = state;
+    ttsStageText = stage;
+    if (timeout > 0) {
+      ttsUiTimer = setTimeout(() => {
+        ttsUiState = 'idle';
+        ttsStageText = '';
+        ttsUiTimer = undefined;
+      }, timeout);
+    }
+  }
+
+  onDestroy(clearTtsTimer);
+
+  // 下载进度来自 store 的轮询；这里只做「状态机 → 完成/失败闪一下」。
+  $effect(() => {
+    const status = tts.download?.status ?? 'idle';
+    if (!lastTtsDownloadStatus) {
+      lastTtsDownloadStatus = status;
+      if (status === 'running') ttsUiState = 'downloading';
+      return;
+    }
+    if (status === lastTtsDownloadStatus) return;
+    if (status === 'running') {
+      clearTtsTimer();
+      ttsUiState = 'downloading';
+      ttsStageText = '';
+    } else if (status === 'done' && (lastTtsDownloadStatus === 'running' || ttsUiState === 'downloading')) {
+      showTtsState('done', 'OmniVoice 模型已就绪', 1600);
+    } else if (status === 'error' && (lastTtsDownloadStatus === 'running' || ttsUiState === 'downloading')) {
+      showTtsState('error', tts.download?.error || 'OmniVoice 下载失败', 4500);
+    }
+    lastTtsDownloadStatus = status;
+  });
   const ttsDefaultVoice = $derived(
     tts.custom.find((voice) => voice.id === tts.defaultVoiceId) ?? null,
   );
@@ -338,20 +416,32 @@
     let needsDownload = !tts.engine?.installed;
     if (!needsDownload) {
       ttsChecking = true;
+      showTtsState('verifying', '正在校验 OmniVoice 权重…');
+      const started = Date.now();
       try {
         const result = await api.verifyTtsModel();
+        // 只读校验通常几十毫秒；给不确定进度至少 450ms，避免进度条一闪而过。
+        const remaining = 450 - (Date.now() - started);
+        if (remaining > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remaining));
+        }
         if (result.installed) {
           toast('校验完成：OmniVoice 权重文件完整');
           await loadTtsVoices();
+          showTtsState('done', 'OmniVoice 权重完整', 1600);
           return;
         }
         const missing = result.missing?.length ? `（缺少 ${result.missing.join('、')}）` : '';
         needsDownload = window.confirm(
           `OmniVoice 权重不完整${missing}。\n\n要现在重新下载补齐吗？系统语音不受影响。`,
         );
-        if (!needsDownload) return;
+        if (!needsDownload) {
+          showTtsState('idle');
+          return;
+        }
       } catch (err) {
         toast(`校验失败：${(err as Error).message}`, 'error');
+        showTtsState('error', `校验失败：${(err as Error).message}`, 4000);
         return;
       } finally {
         ttsChecking = false;
@@ -363,7 +453,11 @@
     ) {
       return;
     }
+    showTtsState('downloading', '准备下载 OmniVoice 模型…');
     await downloadTtsModel();
+    if (!tts.download) {
+      showTtsState('error', '下载没有启动，请查看日志', 4000);
+    }
   }
 
   function onTtsDefault(kind: 'system' | 'clone') {
@@ -622,6 +716,7 @@
       <span>{installedCount} / {engines.length} 个引擎已就绪</span>
       <span>·</span>
       <span>{enabledCount} 个已启用</span>
+      <kbd class="head-key" title="⌘, 可从任意页面回到设置">⌘,</kbd>
     </div>
   </PageHeader>
 
@@ -730,9 +825,11 @@
                   <span>{dl.stage}</span>
                   <b>{dl.percent}%</b>
                 </div>
-                <div class="bar" class:error={dl.status === 'error'}>
-                  <i style="width:{Math.max(2, dl.percent)}%"></i>
-                </div>
+                <ProgressBar
+                  percent={dl.percent}
+                  state={dl.status === 'error' ? 'error' : dl.status === 'done' ? 'done' : 'running'}
+                  label="模型下载进度"
+                />
               </div>
             {/if}
           </div>
@@ -793,10 +890,21 @@
               {tts.engine?.package_installed ? '下载模型' : '依赖缺失'}
             </button>
           {/if}
-          {#if ttsRunning}
-            <span class="path mono">正在下载 · {tts.download?.percent ?? 0}%</span>
-          {/if}
         </div>
+
+        {#if ttsProgressVisible}
+          <div class="dl" class:error={ttsUiState === 'error'}>
+            <div class="dl-top">
+              <span>{ttsStageLine}</span>
+              <b>{ttsRightText}</b>
+            </div>
+            <ProgressBar
+              percent={ttsPercent}
+              state={ttsBarState}
+              label="OmniVoice 校验与下载进度"
+            />
+          </div>
+        {/if}
       </div>
 
       {#if enabledCount === 0}
@@ -1344,6 +1452,17 @@
     justify-content: center;
     align-content: start;
   }
+  .head-key {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    background: var(--bg-content);
+    color: var(--text-3);
+    font-family: var(--font-sans);
+    font-size: 11.5px;
+    line-height: 16px;
+  }
   .head-meta {
     display: flex;
     gap: 6px;
@@ -1525,20 +1644,8 @@
     margin-bottom: 4px;
     font-variant-numeric: tabular-nums;
   }
-  .bar {
-    height: 4px;
-    border-radius: 2px;
-    background: var(--fill-strong);
-    overflow: hidden;
-  }
-  .bar i {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    transition: width 300ms var(--ease);
-  }
-  .bar.error i {
-    background: var(--danger);
+  .dl.error .dl-top {
+    color: var(--danger);
   }
 
   .switch {

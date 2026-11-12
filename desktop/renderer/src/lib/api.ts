@@ -243,11 +243,14 @@ export interface CueSnapshot {
   can_redo: boolean;
   undo_label?: string;
   redo_label?: string;
-  /** 下一步撤回/重做那一步的服务端记录时间（与导出设置的本地历史比先后）。 */
+  /** 下一步撤回/重做那一步的服务端记录时间（显示用）。 */
   undo_at?: number;
   redo_at?: number;
   /** 当前字幕来自本次转写、导入文件还是恢复的草稿。 */
   review_source?: ReviewSource | null;
+  /** 只有撤销 / 重做 / 历史跳转才带：把导出设置与 AI 草稿一起回滚。 */
+  export_ui?: Record<string, any>;
+  ai_draft?: Record<string, any>;
 }
 
 /** 历史时间线上的一步。past=可点回去；current=当前状态；undone=可重做。 */
@@ -708,6 +711,13 @@ export const api = {
 
   getMedia: (id: string) => req<MediaInfo>(`/api/media/${id}`),
 
+  /** 挂载用户已有的代理文件，跳过重复压制。 */
+  attachProxy: (mediaId: string, path: string) =>
+    req<MediaInfo>(`/api/media/${mediaId}/proxy`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+
   listMedia: () => req<{ items: MediaInfo[] }>('/api/media'),
 
   peaks: (
@@ -834,6 +844,9 @@ export const api = {
       body: JSON.stringify({ cues, label: label ?? '' }),
     }),
 
+  /** 清空原文字幕（连同无法再对齐的译文轨，一次历史）。 */
+  clearCues: () => req<CueSnapshot>('/api/cues/clear', { method: 'POST' }),
+
   patchCue: (index: number, patch: Partial<Cue>) =>
     req<CueSnapshot>(`/api/cues/${index}`, {
       method: 'PATCH',
@@ -875,8 +888,33 @@ export const api = {
 
   redo: () => req<CueSnapshot & { redone?: string }>('/api/cues/redo', { method: 'POST' }),
 
-  /** 20 步可回溯历史。 */
+  /** 50 步可回溯历史（字幕 / 译文 / 质检 / 导出设置 / AI 草稿共用）。 */
   getCueHistory: () => req<CueHistory>('/api/cues/history'),
+
+  /** 双语「全部替换」：原文 + 译文一次提交，只压一步历史。 */
+  replaceAll: (body: {
+    label?: string;
+    cues?: Cue[];
+    lang?: string;
+    texts?: string[];
+  }) =>
+    req<CueSnapshot>('/api/cues/replace-all', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** 渲染层本地状态的一次历史提交（导出设置 / AI diff 草稿）。 */
+  historyCheckpoint: (body: {
+    label: string;
+    export_ui?: Record<string, any>;
+    ai_draft?: Record<string, any>;
+    coalesce?: string;
+    record?: boolean;
+  }) =>
+    req<CueSnapshot>('/api/history/checkpoint', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   jumpCueHistory: (index: number) =>
     req<CueSnapshot & { label: string; index: number }>('/api/cues/history/jump', {
@@ -1086,6 +1124,13 @@ export const api = {
     return req<{ removed: boolean; path: string }>(`/api/ai/proposal?${q}`, { method: 'DELETE' });
   },
 
+  /** 整轨替换译文文本（查找替换 - 全部替换）：条数必须与当前轨道一致。 */
+  replaceTranslationTexts: (lang: string, texts: string[]) =>
+    req<TranslationTrack>(`/api/translations/${encodeURIComponent(lang)}/replace`, {
+      method: 'POST',
+      body: JSON.stringify({ texts }),
+    }),
+
   /** 改某一条译文（核对台「译文 / 双语」模式下直接编辑） */
   patchTranslation: (lang: string, index: number, text: string) =>
     req<TranslationTrack>(`/api/translations/${encodeURIComponent(lang)}/${index}`, {
@@ -1105,6 +1150,13 @@ export const api = {
 
   applyTranslation: (body: { lang: string; texts?: string[]; proposal?: AiProposal }) =>
     req<TranslationTrack>('/api/translations', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** 按路径导入译文 SRT / VTT；按时间对齐到当前原文时间轴。 */
+  importTranslation: (path: string, lang: string) =>
+    req<TranslationTrack & { path: string }>('/api/translations/import', {
+      method: 'POST',
+      body: JSON.stringify({ path, lang }),
+    }),
 
   undoTranslation: (lang: string) =>
     req<TranslationTrack & { undone: boolean }>('/api/translations/undo', {
