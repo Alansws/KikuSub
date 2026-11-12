@@ -122,6 +122,16 @@
   function coverUrl(r: Recent) {
     return mediaThumbUrl(r.path, String(r.size));
   }
+
+  /** 音频没有画面可截，缩略图会 404；用波形图标而不是胶片，避免看起来像「加载失败」。 */
+  function thumbIcon(name: string) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'aiff'].includes(ext)) {
+      return 'wave';
+    }
+    if (['srt', 'vtt', 'txt'].includes(ext)) return 'doc';
+    return 'film';
+  }
 </script>
 
 <div class="pane">
@@ -170,7 +180,7 @@
           aria-label="列表视图"
           onclick={() => setRecentView('list')}
         >
-          <Icon name="rows" size={12} />
+          <Icon name="rows" size={13} />
         </button>
         <button
           class:on={recentView === 'grid'}
@@ -179,7 +189,7 @@
           aria-label="图标视图"
           onclick={() => setRecentView('grid')}
         >
-          <Icon name="grid" size={12} />
+          <Icon name="grid" size={13} />
         </button>
       </div>
     </div>
@@ -190,7 +200,7 @@
           <div class="recent-row">
             <button class="recent-main" onclick={() => openMedia(r.path)} title={r.path}>
               <span class="ri">
-                <Icon name="film" size={13} />
+                <Icon name={thumbIcon(r.name)} size={13} />
                 {#if thumbsReady}
                   <img
                     class="ri-img"
@@ -227,7 +237,7 @@
           <div class="gcard" style={`--i:${index}`}>
             <button class="gcard-main" onclick={() => openMedia(r.path)} title={r.path}>
               <span class="cover">
-                <span class="cover-fb"><Icon name="film" size={22} /></span>
+                <span class="cover-fb"><Icon name={thumbIcon(r.name)} size={22} /></span>
                 {#if thumbsReady}
                   <img
                     class="cover-img"
@@ -534,6 +544,11 @@
   .gcard-main:hover .cover-img {
     transform: scale(1.035);
   }
+  /* 纯色/黑场封面上「放大」几乎不可见，补一圈与画面无关的轮廓说明整张卡可点。 */
+  .gcard-main:hover .cover,
+  .gcard-main:focus-visible .cover {
+    box-shadow: 0 0 0 1px var(--accent-ring);
+  }
   .gcard-main:hover .gcard-name {
     color: var(--text);
   }
@@ -550,7 +565,11 @@
     display: grid;
     place-items: center;
     color: #fff;
-    background: rgba(0, 0, 0, 0.46);
+    /* 压在图上的浮层要同时活在黑场与白场封面上：深色填充保证白字对比，
+       浅色描边 + 投影保证在纯黑画面里仍有边界。 */
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.34);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
     backdrop-filter: blur(2px);
     opacity: 0;
     transform: scale(0.9);
@@ -579,14 +598,15 @@
     position: absolute;
     top: 6px;
     right: 6px;
-    width: 22px;
-    height: 22px;
-    border: 0;
+    width: 24px;
+    height: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.34);
     border-radius: 50%;
     display: grid;
     place-items: center;
     color: #fff;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.58);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
     cursor: default;
     opacity: 0;
     transform: scale(0.92);
@@ -614,7 +634,8 @@
   }
   .gcard-name {
     font-size: 12.5px;
-    color: var(--text-2);
+    /* 与列表视图同色：同一份数据在两种视图里的「重量」应当一致。 */
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

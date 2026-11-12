@@ -447,18 +447,26 @@ html[data-theme='dark'] .seg button.on {
   background: rgba(236, 241, 250, 0.14);
 }
 
-/* 紧凑版：分区标题右侧的小切换（导入页「最近打开」的列表 / 图标）。 */
+/* 紧凑版：分区标题右侧的小切换（导入页「最近打开」的列表 / 图标）。
+   轨道用 fill-strong、选中片补 1px inset 描边：浅色主题下「fill」与页面几乎同色，
+   只靠投影会读成两枚散落图标（独立评审实测对比度约 1.06:1）。 */
 .seg.compact {
-  height: 22px;
+  height: 24px;
   padding: 1px;
   gap: 1px;
+  background: var(--fill-strong);
 }
 .seg.compact button {
-  width: 24px;
-  height: 20px;
+  width: 26px;
+  height: 22px;
   padding: 0;
   display: grid;
   place-items: center;
+  color: var(--text-2);
+}
+.seg.compact button.on {
+  color: var(--text);
+  box-shadow: var(--shadow-seg), inset 0 0 0 1px var(--separator);
 }
 
 .seg button:focus-visible {
