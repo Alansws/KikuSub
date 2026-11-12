@@ -111,6 +111,10 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    `build_app.sh` 会因为 sidecar 比源码旧直接退出，这是有意的。
 10. **改前端必须真验证**：`cd desktop && npm run build`，然后实际过一遍单击跳转、抖动单击不建选区、
     缩放、保存；只看编译通过不算验证。
+11. **两个 4000 行文件只许变短**：改 `lib/store.svelte.ts` / `views/ReviewView.svelte` 前，先把
+    **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
+    `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
+    变成"先读完 4000 行"。
 
 ## 5. 改动纪律（提交流程）
 

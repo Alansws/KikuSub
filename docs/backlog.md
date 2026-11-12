@@ -29,7 +29,7 @@
 | --- | --- | --- | --- |
 | 1 | 布局语义块合并：`.actions` 6 份、`.empty` 6 份、`.sec-head` 3 份、`.sec` 3 份 | `desktop/test/style-baseline.json` | 每合并一处就把基线数字调小，最终到 1。**⏸ 暂缓（2026-11-13）：动正在跑的界面，需单独一轮 + 截图 PSNR + 手点** |
 | 2 | 主题色裸值 → 令牌：`ExportView.svelte:1029` `#8fa6ff`、`:1281` `#14161c`，以及 `themes.ts` 的 swatch 与 `app.css` 双写 | 审计 P2-3 | `style-drift.test.cjs` 增加"组件内不得出现 hex"规则并绿。**⏸ 暂缓（2026-11-13）：同上** |
-| 3 | 大文件拆分：`store.svelte.ts` 3937 行、`ReviewView.svelte` 3933 行、`SettingsView.svelte` 2056 行、`main.cjs` 1570 行 | engineering-practice §5 | 先拆纯函数到 `lib/*.ts` 并补单测；每次只拆一块，跑完 `npm run check`。**⏸ 暂缓（2026-11-13）：同上，先拆纯函数再谈组件** |
+| 3 | 大文件：`store.svelte.ts` 3933 行、`ReviewView.svelte` 3933 行（`SettingsView.svelte` 2056、`main.cjs` 1570） | engineering-practice §5 | **不做一次性大重构**（动正在跑的核对台，风险高）。改成"随功能抽"：`tests/test_big_file_budget.py` 冻结行数，只能变短——加功能前先把这次要用的纯逻辑抽到 `lib/`。`SettingsView` / `main.cjs` 暂不设预算，等它们真被改到再说 |
 | 4 | 机械化测试清理：81 个单断言用例抽检过，多数合理 | 审计 P2-… | 扫一遍删掉"删了没人疼"的用例 |
 
 ---
