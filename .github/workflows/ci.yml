@@ -53,6 +53,7 @@ jobs:
     # CPU 版 torch 足够（用例用替身引擎，不加载权重），整套约 40s。
     name: Pytest + kernel smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +72,14 @@ jobs:
           pip install "transformers>=5.13.0,<6" huggingface_hub "silero-vad>=5.1.0" \
                       fastapi uvicorn websockets "numpy>=1.24.0" "soundfile>=0.12.1" \
                       "Pillow>=10" httpx pytest
+
+      # 媒体相关用例（server/media、translations、jobs）会真的调 ffprobe；
+      # 少了它整片 77 个用例变成 KeyError: 'id'，看起来像代码坏了，其实是环境缺件。
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffprobe -version | head -1
 
       - name: Kernel smoke
         run: python -m core.smoke
