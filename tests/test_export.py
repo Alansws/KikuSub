@@ -27,7 +27,25 @@ def _ffmpeg_available() -> bool:
     return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
 
-pytestmark = pytest.mark.skipif(not _ffmpeg_available(), reason="需要 ffmpeg/ffprobe")
+def _cjk_font_available() -> bool:
+    """硬字幕要真的烧字形：字体表里全是 macOS 系统字体（PingFang / 苹方等）。
+
+    Linux CI 上没有这些字体，7 个用例会以「找不到可用的中文字体」失败——不是代码坏了，
+    是这台机器烧不了硬字幕。跟 ffmpeg 一样按环境 skip，本地 macOS 仍然全跑。
+    """
+    try:
+        from core import video_export
+
+        ok, _ = video_export.font_status()
+        return ok
+    except Exception:
+        return False
+
+
+pytestmark = [
+    pytest.mark.skipif(not _ffmpeg_available(), reason="需要 ffmpeg/ffprobe"),
+    pytest.mark.skipif(not _cjk_font_available(), reason="需要 macOS 中文字体（硬字幕烧录）"),
+]
 
 
 @pytest.fixture()
