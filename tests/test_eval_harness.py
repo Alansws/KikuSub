@@ -66,12 +66,22 @@ def test_onset_missing_ignores_uncovered_reference():
     assert sc.onset_missing([Cue(5.0, 6.0, "おはよう")], [Cue(0.0, 1.0, "こんばんは")]) == []
 
 
-def test_onset_missing_picks_max_overlap_cue():
+def test_onset_missing_ignores_text_split_across_cues():
+    # 回归：人工版一句被拆成两条候选时，只看「重叠最多的那条」会把前半句误报成缺字
+    #（2026-11-13 实测：Test 一 qwen 因此多报 2 条）。拼起来看首字才是对的。
     ref = [Cue(10.0, 13.0, "そんなに腰ビクつかせちゃって")]
     hyps = [Cue(10.2, 10.6, "そんなに"), Cue(11.4, 12.2, "腰ビクつかせちゃって")]
+    assert sc.onset_missing(ref, hyps) == []
+
+
+def test_onset_missing_flags_when_lead_in_is_really_gone():
+    # 真的只有后半句：首字「す」不在，且第一条候选起点晚 >0.4s。
+    ref = [Cue(10.0, 13.0, "すっごいおちんちん")]
+    hyps = [Cue(11.0, 13.0, "おちんちん")]
     items = sc.onset_missing(ref, hyps)
     assert len(items) == 1
-    assert items[0]["hyp_start"] == 11.4
+    assert items[0]["hyp_start"] == 11.0
+    assert items[0]["hyp_text"] == "おちんちん"
 
 
 # --------------------------------------------------------------------------- 参数覆写

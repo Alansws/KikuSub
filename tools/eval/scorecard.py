@@ -139,33 +139,36 @@ def onset_missing(
     *,
     min_lag_s: float = ONSET_LAG_S,
 ) -> list[dict]:
-    """句首缺字：字幕起点晚于人工版 `min_lag_s` 以上，且首字不同。
+    """句首缺字：该参考条的第一个字，在覆盖它的候选文本里找不到。
 
-    判定口径与路线文档 §2.1 的整片统计一致：每条参考条取**时间重叠最多**的那条候选，
-    不做文本相似度匹配（否则「听成近似音」会被算成边界问题）。
-    候选完全没盖住这条参考时不计入——那是「漏块」，`score_srt` 已经在数。
+    为什么把**所有重叠候选拼起来**再比首字，而不是只看「重叠最多的那一条」：
+    人工版常把一句话拆成两条（`好きでしょう?` / `こういう服装`），只看重叠最多的那条
+    会取到后半句，于是「上一屏明明有这几个字」被误报成缺字。2026-11-13 实测：
+    Test 一 qwen 用拼接口径是 2 条，用最大重叠口径是 4 条，多出来的两条都是拆条误报。
+
+    判定条件：第一条重叠候选的起点比参考晚 > `min_lag_s`，且拼接后的首字不同。
+    完全没被覆盖的条目不计入——那是「漏块」，`score_srt` 已经在数。
     """
     items: list[dict] = []
     for ref in reference:
         ref_chars = normalize_text(ref.text)
         if not ref_chars:
             continue
-        best: Cue | None = None
-        best_overlap = 0.0
-        for hyp in hypothesis:
-            overlap = _overlap_s(ref, hyp)
-            if overlap > best_overlap:
-                best, best_overlap = hyp, overlap
-        if best is None:
+        hits = sorted(
+            (cue for cue in hypothesis if _overlap_s(ref, cue) > 0.0),
+            key=lambda cue: cue.start,
+        )
+        if not hits:
             continue
-        lag = best.start - ref.start
-        if lag > min_lag_s and normalize_text(best.text)[:1] != ref_chars[:1]:
+        text = "".join(normalize_text(cue.text) for cue in hits)
+        lag = hits[0].start - ref.start
+        if lag > min_lag_s and text[:1] != ref_chars[:1]:
             items.append(
                 {
                     "ref_start": round(ref.start, 3),
                     "ref_text": ref.text.strip()[:40],
-                    "hyp_start": round(best.start, 3),
-                    "hyp_text": best.text.strip()[:40],
+                    "hyp_start": round(hits[0].start, 3),
+                    "hyp_text": " / ".join(cue.text.strip()[:40] for cue in hits),
                     "lag_s": round(lag, 3),
                 }
             )

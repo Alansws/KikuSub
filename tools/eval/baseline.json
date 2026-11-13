@@ -90,7 +90,7 @@
         "aux_start_cues": 0
       },
       "onset_missing": {
-        "count": 4,
+        "count": 2,
         "items": [
           {
             "ref_start": 480.075,
@@ -98,20 +98,6 @@
             "hyp_start": 481.162,
             "hyp_text": "…正解",
             "lag_s": 1.087
-          },
-          {
-            "ref_start": 731.086,
-            "ref_text": "いいよ…見せて…",
-            "hyp_start": 732.48,
-            "hyp_text": "見せて…",
-            "lag_s": 1.394
-          },
-          {
-            "ref_start": 774.247,
-            "ref_text": "出ちゃう出ちゃう…",
-            "hyp_start": 774.727,
-            "hyp_text": "う",
-            "lag_s": 0.48
           },
           {
             "ref_start": 809.627,
@@ -192,28 +178,21 @@
         "aux_start_cues": 0
       },
       "onset_missing": {
-        "count": 3,
+        "count": 2,
         "items": [
-          {
-            "ref_start": 176.503,
-            "ref_text": "好きでしょう?こういう服装",
-            "hyp_start": 177.79,
-            "hyp_text": "こういう服装",
-            "lag_s": 1.287
-          },
           {
             "ref_start": 451.463,
             "ref_text": "すっごいおちんちんビンビンだね",
-            "hyp_start": 452.31,
-            "hyp_text": "ごいおちんちんビンビンだね",
-            "lag_s": 0.847
+            "hyp_start": 452.342,
+            "hyp_text": "ごいおちんちんビンビンだね…",
+            "lag_s": 0.879
           },
           {
-            "ref_start": 809.627,
-            "ref_text": "そんなに腰ビクつかせちゃって",
-            "hyp_start": 810.27,
-            "hyp_text": "に腰引くつかせちゃって",
-            "lag_s": 0.643
+            "ref_start": 480.075,
+            "ref_text": "あー…すっごい…",
+            "hyp_start": 481.222,
+            "hyp_text": "すっごい",
+            "lag_s": 1.147
           }
         ]
       },
@@ -287,28 +266,14 @@
         "aux_start_cues": 2
       },
       "onset_missing": {
-        "count": 5,
+        "count": 3,
         "items": [
-          {
-            "ref_start": 626.76,
-            "ref_text": "すっごい背徳感で興奮しちゃう",
-            "hyp_start": 627.338,
-            "hyp_text": "濃い背徳感で興奮しちゃう…",
-            "lag_s": 0.578
-          },
           {
             "ref_start": 677.234,
             "ref_text": "もうイキそうなの?",
             "hyp_start": 677.786,
             "hyp_text": "イキそうなの?",
             "lag_s": 0.552
-          },
-          {
-            "ref_start": 679.926,
-            "ref_text": "いいよ 先生のお口にちょうだい",
-            "hyp_start": 681.466,
-            "hyp_text": "先生のお口にちょうだい…",
-            "lag_s": 1.54
           },
           {
             "ref_start": 851.773,
@@ -396,15 +361,8 @@
         "aux_start_cues": 0
       },
       "onset_missing": {
-        "count": 8,
+        "count": 5,
         "items": [
-          {
-            "ref_start": 37.161,
-            "ref_text": "大丈夫だよ 先生に見せてごらん",
-            "hyp_start": 38.542,
-            "hyp_text": "先生に見せてごらん",
-            "lag_s": 1.381
-          },
           {
             "ref_start": 626.76,
             "ref_text": "すっごい背徳感で興奮しちゃう",
@@ -420,25 +378,11 @@
             "lag_s": 0.564
           },
           {
-            "ref_start": 679.926,
-            "ref_text": "いいよ 先生のお口にちょうだい",
-            "hyp_start": 681.478,
-            "hyp_text": "先生の口にちょうだい…",
-            "lag_s": 1.552
-          },
-          {
             "ref_start": 728.791,
             "ref_text": "まだだーめ",
             "hyp_start": 729.246,
             "hyp_text": "だだーめ",
             "lag_s": 0.455
-          },
-          {
-            "ref_start": 785.188,
-            "ref_text": "次は止めないから安心してぴゅっぴゅってしていいよ",
-            "hyp_start": 786.75,
-            "hyp_text": "してぴゅっぴゅってしていいよ…",
-            "lag_s": 1.562
           },
           {
             "ref_start": 851.773,
