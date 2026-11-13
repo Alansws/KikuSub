@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import math
@@ -1330,6 +1331,40 @@ class QwenCtcEngine:
             except Exception:
                 log.debug("覆盖审计失败（不影响转写）", exc_info=True)
         return final_cues
+
+    def unload(self) -> None:
+        """卸掉权重，把显存让给另一个引擎（P1-1 的「另一引擎听一遍」要换模型）。
+
+        与 `transcribe_file` 共用 `_LOAD_LOCK`：卸载过程中不能有另一条线程在加载/推理。
+        """
+        if self._model is None:
+            return
+        with _LOAD_LOCK:
+            self._model = None
+            self._processor = None
+            self._head = None
+            self._lookup = {}
+            self._frame_classes = ()
+            gc.collect()
+            if self.device == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:  # noqa: BLE001 - 释放缓存失败不该阻断卸载
+                    log.debug("释放 MPS 缓存失败", exc_info=True)
+            log.info("Qwen 权重已卸载")
+
+    def transcribe_window(self, audio: np.ndarray, *, config: QwenCtcConfig | None = None) -> str:
+        """把**一段窗口音频**直接送模，返回文本（P1-1「另一引擎听一遍」用）。
+
+        与整片转写的区别只有「不跑 VAD / 不断句」；端点非台词发声照样剔，
+        否则两条引擎的文本不具可比性。
+        """
+        self.load()
+        cfg = config or self.config
+        text, _features = self._transcribe(np.ascontiguousarray(audio, dtype=np.float32), cfg)
+        if cfg.strip_nonverbal_edges:
+            text = strip_edge_nonverbal_ex(text)[0]
+        return text.strip()
 
     def transcribe_file(
         self,

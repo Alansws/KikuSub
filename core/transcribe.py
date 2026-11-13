@@ -1573,6 +1573,68 @@ class AnimeWhisperEngine:
             LAYER.unload()
         return out
 
+    def _generation_kwargs(self, ngram_val: int | None, penalty_val: float) -> dict:
+        """本次解码的生成参数（含对 generation_config 的修正）。
+
+        抽出来是为了让「窗口直送」（`transcribe_window`）与整片转写走**同一条**解码路径：
+        P0-2 那次 probe 只做了 qwen，就是因为 Whisper 的这层参数藏在闭包里，
+        另拷一份等于第二份真相。
+        """
+        for target in (
+            getattr(self._pipe, "generation_config", None),
+            getattr(getattr(self._pipe, "model", None), "generation_config", None),
+        ):
+            if target is not None:
+                if ngram_val is not None:
+                    target.no_repeat_ngram_size = ngram_val
+                target.repetition_penalty = penalty_val
+                target.forced_decoder_ids = None
+        kwargs = {"language": "Japanese", "task": "transcribe"}
+        if ngram_val is not None:
+            kwargs["no_repeat_ngram_size"] = ngram_val
+        if penalty_val > 1.0:
+            kwargs["repetition_penalty"] = penalty_val
+        return kwargs
+
+    def _decode_chunk(
+        self, buf: np.ndarray, generate_kwargs: dict, *, timestamps: bool = False
+    ) -> str:
+        res = self._pipe(
+            {"array": buf, "sampling_rate": SAMPLE_RATE},
+            generate_kwargs=generate_kwargs,
+            return_timestamps=bool(timestamps),
+        )
+        return (res.get("text") or "").strip()
+
+    def transcribe_window(
+        self,
+        audio: np.ndarray,
+        *,
+        config: "WhisperVadConfig | None" = None,
+        no_repeat_ngram_size: int = 5,
+        repetition_penalty: float = 1.15,
+    ) -> str:
+        """把**一段窗口音频**直接送模，返回文本（P1-1「另一引擎听一遍」用）。
+
+        与整片转写的区别只有两处：不跑 VAD（窗口是调用方给的）、不做幻觉门控
+        （没有相邻段可比）。句首尾的非台词发声照样剔——产品里这条字幕也会被剔，
+        不剔的话「另一引擎」会凭空多出气声，看起来像它更差。
+        """
+        self.load()
+        cfg = config or self.config
+        ngram = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
+        penalty = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
+        kwargs = self._generation_kwargs(ngram, penalty)
+        buf = np.ascontiguousarray(audio, dtype=np.float32)
+        text = self._decode_chunk(buf, kwargs)
+        if cfg.strip_nonverbal_edges:
+            text = strip_edge_nonverbal_ex(text)[0]
+        if _is_blank(text):
+            text = self._decode_chunk(_retry_gain(buf), kwargs)
+            if cfg.strip_nonverbal_edges:
+                text = strip_edge_nonverbal_ex(text)[0]
+        return text.strip()
+
     def release(self) -> None:
         """卸掉权重，把内存让给别的模型。
 
@@ -1696,36 +1758,14 @@ class AnimeWhisperEngine:
         ngram_val = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
         penalty_val = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
 
-        for target in (
-            getattr(self._pipe, "generation_config", None),
-            getattr(getattr(self._pipe, "model", None), "generation_config", None),
-        ):
-            if target is not None:
-                if ngram_val is not None:
-                    target.no_repeat_ngram_size = ngram_val
-                target.repetition_penalty = penalty_val
-                target.forced_decoder_ids = None
-
-        generate_kwargs = {
-            "language": "Japanese",
-            "task": "transcribe",
-        }
-        if ngram_val is not None:
-            generate_kwargs["no_repeat_ngram_size"] = ngram_val
-        if penalty_val > 1.0:
-            generate_kwargs["repetition_penalty"] = penalty_val
+        generate_kwargs = self._generation_kwargs(ngram_val, penalty_val)
 
         cues: list[SubtitleCue] = []
         total = len(segments)
         prev_text = ""
 
         def _decode(buf: np.ndarray, *, timestamps: bool = False) -> str:
-            res = self._pipe(
-                {"array": buf, "sampling_rate": SAMPLE_RATE},
-                generate_kwargs=generate_kwargs,
-                return_timestamps=bool(timestamps),
-            )
-            return (res.get("text") or "").strip()
+            return self._decode_chunk(buf, generate_kwargs, timestamps=timestamps)
 
         hallucination_drops = 0
         suspect_cues = 0

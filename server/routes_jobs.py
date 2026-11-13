@@ -30,10 +30,20 @@ from .sessions import Session
 router = APIRouter(tags=["jobs"])
 
 
+class CompareRange(BaseModel):
+    """一条要复核的字幕：时间窗 + 两侧邻句边界（服务端据此夹窗口）。"""
+
+    index: int | None = None
+    start: float
+    end: float
+    prev_end: float | None = None
+    next_start: float | None = None
+
+
 class TranscribeJobRequest(BaseModel):
     media_id: str
-    # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
-    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
+    # transcribe=转写；proxy=压制 480p 监看代理；compare=用另一个引擎把窗口重听一遍
+    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy|compare)$")
     # 合法值来自 `core.engines` 注册表（见下方 validator）：不要在这里写死引擎名，
     # 否则新增引擎会在请求层被 422 掉，而 pipeline/设置页都是正常的。
     engine: str = "whisper"
@@ -46,6 +56,8 @@ class TranscribeJobRequest(BaseModel):
     apply: str = Field(default="replace", pattern="^(replace|append|replace_range)$")
     # 引擎参数直接透传给 dataclass；字段名以 WhisperVadConfig / QwenCtcConfig 为准
     params: dict = Field(default_factory=dict)
+    # kind=compare 时用它；每条一个字幕窗口，最多 core.second_opinion.MAX_WINDOWS 条
+    ranges: list[CompareRange] = Field(default_factory=list)
 
     @field_validator("engine")
     @classmethod
@@ -63,15 +75,56 @@ def _manager(request: Request) -> JobManager:
     return request.app.state.jobs
 
 
+def _engine_config(engine_key: str, family: str, values: dict):
+    """按引擎族构造配置 dataclass。转写与复核共用这一份，避免两处默认值分裂。"""
+    # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要跑片时才付这个代价
+    from core import params as param_specs
+    from core.qwen_ctc import QwenCtcConfig
+    from core.sherpa_asr import SherpaAsrConfig
+    from core.transcribe import build_whisper_config
+
+    try:
+        if family == "qwen":
+            return QwenCtcConfig(**param_specs.config_kwargs("qwen", values))
+        if family == "sherpa":
+            return SherpaAsrConfig(**param_specs.config_kwargs(engine_key, values))
+        return build_whisper_config(**param_specs.config_kwargs("whisper", values))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"引擎参数不合法：{exc}") from exc
+
+
+def _compare_windows(payload: TranscribeJobRequest) -> list[dict]:
+    from core.second_opinion import MAX_WINDOWS, clamp_window
+
+    if not payload.ranges:
+        raise HTTPException(status_code=422, detail="复核需要至少一条字幕区间")
+    if len(payload.ranges) > MAX_WINDOWS:
+        raise HTTPException(
+            status_code=422, detail=f"一次最多复核 {MAX_WINDOWS} 条（收到 {len(payload.ranges)} 条）"
+        )
+    windows: list[dict] = []
+    for item in payload.ranges:
+        if item.end <= item.start:
+            raise HTTPException(status_code=422, detail="字幕区间的结束必须大于开始")
+        lo, hi = clamp_window(
+            item.start, item.end, prev_end=item.prev_end, next_start=item.next_start
+        )
+        windows.append(
+            {
+                "index": item.index if item.index is not None else len(windows),
+                "start": lo,
+                "end": hi,
+            }
+        )
+    return windows
+
+
 def _build_request(request: Request, payload: TranscribeJobRequest):
     # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
     from core import engines as engine_registry
     from core import params as param_specs
     from core import pipeline
     from core import settings as settings_store
-    from core.qwen_ctc import QwenCtcConfig
-    from core.sherpa_asr import SherpaAsrConfig
-    from core.transcribe import WhisperVadConfig, build_whisper_config
 
     try:
         info = request.app.state.media.get(payload.media_id)
@@ -91,20 +144,13 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    whisper_config: WhisperVadConfig | None = None
-    qwen_config: QwenCtcConfig | None = None
-    sherpa_config: SherpaAsrConfig | None = None
-    try:
-        if family == "qwen":
-            qwen_config = QwenCtcConfig(**param_specs.config_kwargs("qwen", values))
-        elif family == "sherpa":
-            sherpa_config = SherpaAsrConfig(
-                **param_specs.config_kwargs(payload.engine, values)
-            )
-        else:
-            whisper_config = build_whisper_config(**param_specs.config_kwargs("whisper", values))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"引擎参数不合法：{exc}") from exc
+    config = _engine_config(payload.engine, family, values)
+    if family == "qwen":
+        whisper_config, qwen_config, sherpa_config = None, config, None
+    elif family == "sherpa":
+        whisper_config, qwen_config, sherpa_config = None, None, config
+    else:
+        whisper_config, qwen_config, sherpa_config = config, None, None
 
     extra = param_specs.passthrough_kwargs(payload.engine, values)
 
@@ -152,10 +198,36 @@ async def create_job(
 
     # 会话与媒体显式绑定：`/api/qa` 按媒体落盘，抢在转写前绑好，
     # 任务完成时才能把结果写回同一个会话。
-    session.media_id = payload.media_id
+    if payload.kind != "compare":
+        # 复核不改会话里的字幕，也就不应该把会话的「当前媒体」绑到这次请求上。
+        session.media_id = payload.media_id
 
     try:
-        if payload.kind == "proxy":
+        if payload.kind == "compare":
+            from core import engines as engine_registry
+
+            try:
+                info = request.app.state.media.get(payload.media_id)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            family = engine_registry.family_of(payload.engine)
+            if family not in {"whisper", "qwen"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"复核只支持 whisper / qwen；{payload.engine} 的权重是按需下载的",
+                )
+            values = dict(payload.params or {})
+            config = _engine_config(payload.engine, family, values)
+            job = manager.start_compare(
+                info.path,
+                payload.engine,
+                config,
+                _compare_windows(payload),
+                media_id=info.id,
+                session_id=session.id,
+                loop=loop,
+            )
+        elif payload.kind == "proxy":
             try:
                 info = request.app.state.media.get(payload.media_id)
             except Exception as exc:

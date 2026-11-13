@@ -81,6 +81,21 @@ def resolve_engine(engine_key: str):
     return engine
 
 
+def release_engine(engine_key: str) -> bool:
+    """卸载某个引擎的权重（Qwen 的 `unload()` 或 Whisper 的 `release()`）。
+
+    单槽下同时常驻两个日语引擎会在 16GB 机器上把系统挤到换页，所以「换引擎复核」
+    与「整片任务开始」都要能主动让路。返回是否真的调用了卸载。
+    """
+    engine = resolve_engine(engine_key)
+    for name in ("unload", "release"):
+        fn = getattr(engine, name, None)
+        if callable(fn):
+            fn()
+            return True
+    return False
+
+
 def engine_family(engine_key: str) -> str:
     """引擎所属运行时族（whisper / qwen / sherpa）。
 
