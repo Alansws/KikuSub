@@ -13,6 +13,7 @@
 | [contracts/](contracts/) | **分域契约正文**：`review-console.md`（核对台/内核边界/历史/主题）、`desktop-lifecycle.md`（启动/日志/退出清理）、`ai-proposal.md`（AI 提案 / 润色 / 翻译 / 技能，含冻结决定 D-1～D-6 与验收断言 A1–A8）、`export-and-prompt.md`（提示词/成片导出/代理）。改哪块先读哪份。 |
 | [review.md](review.md) | **合入前自审清单**：Review 四件事的可执行版本、本仓库的硬检查、单模型下的三个补偿动作（隔一轮再读 / 给置信度 / 换入口找问题）。配合 PR 模板用。 |
 | [backlog.md](backlog.md) | **待办唯一入口**：P1/P2 与「明确不做」的清单。发现的问题写这里，别只写在会话里；完成时移到「已完成」并留 commit。 |
+| [日语引擎优化路线-2026-11.md](日语引擎优化路线-2026-11.md) | **日语引擎的现行优化路线**：逐条核实外部建议，给出 P0/P1/P2 排序（句首补回、置信度质检、第二引擎复核、ForcedAligner）、验收口径与止损线。 |
 | [templates/feature-plan.md](templates/feature-plan.md) | **方案模板**（人能看懂的四件事）：界面怎么变 / 思路与改动范围 / 特殊情况与取舍 / 怎么验收。大改入 `sprints/`，小改贴 PR。 |
 | [release.md](release.md) | **发版规范**：四步流程（合入审查 → 本地实测 → 打包分发 → 发布日志）、版本号与分支模型、回滚口径、Release notes 模板。发版前必读。 |
 | [../README.md](../README.md) · [../README_EN.md](../README_EN.md) | 用户安装与使用说明。 |
