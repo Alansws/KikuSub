@@ -13,7 +13,6 @@ torch = pytest.importorskip("torch")
 from core.transcribe import (  # noqa: E402
     SubtitleCue,
     _is_blank,
-    SubtitleCue,
     is_nonverbal_only,
     merge_fragmented_cues,
     strip_edge_nonverbal,
