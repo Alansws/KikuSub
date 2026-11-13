@@ -63,7 +63,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/procutil.py` | 可取消、带超时的子进程执行器（Popen + 读线程 + terminate/kill），ffmpeg/ffprobe 统一走这里。 |
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理与后台线程 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
-| `tools/eval/` | 纯标准库 SRT 评测台（CER/块准确率/劈词计数）；改断句或 VAD 参数前后必须跑同一区间。 |
+| `tools/eval/` | 评测台：`score_srt.py` 纯标准库打分（CER/块准确率/劈词计数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 数字基线。改断句或 VAD 参数前后必须跑同一区间；素材用 `--fixtures` 指（不随仓库）。 |
 | `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配 → 打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
@@ -185,3 +185,8 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
     对齐完 `finally` 里卸载，MPS 回落到 0.03GB。
     精度 p90 约 320ms——改善明显但**没到** ±150ms，所以没设成默认；
     细节与数字见 Qwen 标定文档 §4，门槛仍在 `docs/backlog.md` P1-5。
+- **日语引擎优化路线**（[docs/日语引擎优化路线-2026-11.md](docs/日语引擎优化路线-2026-11.md)）：
+  **P0-2 评测台已入库**——`tools/eval/` 的 `run_clip.py`（跑片出 scorecard）、
+  `probe_window.py`（qwen 逐窗直探）、`baseline.json`（第一遍数字 + 素材指纹），
+  用法在 `tools/eval/README.md`。素材与参考字幕**不随仓库**（`--fixtures` 指向），
+  基线只存数字与 sha1。下一步是 P0-1「句首补回」A/B（矩阵驱动 `ab_onset.py` 随它一起交）。
