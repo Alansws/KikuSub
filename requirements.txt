@@ -4,7 +4,10 @@ torchaudio>=2.1.0,<3
 # Qwen3-ASR 原生支持（AutoModelForMultimodalLM / apply_transcription_request）需要 5.13+
 transformers>=5.13.0,<6
 huggingface_hub>=0.23.0
-silero-vad>=5.1.0
+# 钉版本，不用 >=：silero-vad 5.1 与 6.2 的分段结果不同，同一组参数下
+# Test 一 qwen 的 CER 是 12.97% vs 10.86%（路线文档 §4 P0-2）。评测与打包
+# 都用仓库 .venv（tools/pack/build_sidecar.sh 的 PYTHON 默认值）。
+silero-vad==6.2.3
 soundfile>=0.12.1
 numpy>=1.24.0,<3
 accelerate>=0.28.0
