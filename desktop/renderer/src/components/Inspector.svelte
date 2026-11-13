@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import { jobBusy } from '../lib/jobState';
   import QaPanel from './QaPanel.svelte';
   import {
     adoptAlternative,
@@ -692,10 +693,10 @@
           <button
             class="btn mini"
             onclick={() => runSecondOpinion([play.selected])}
-            disabled={!availableEngine() || !!app.job}
+            disabled={!availableEngine() || jobBusy()}
             title={!availableEngine()
               ? '另一个引擎已停用：到「设置 → 引擎与模型」里启用'
-              : app.job
+              : jobBusy()
                 ? '有任务在跑（同一时间只允许一个重任务），结束后再复核'
                 : '换引擎要重新加载模型，约 20–40 秒'}
           >

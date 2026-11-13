@@ -15,6 +15,11 @@ export function laneKey(cue: Cue): string {
   return `${cue.start}:${cue.end}`;
 }
 
+/** ⌘ 多选：有就移除、没有就追加（返回新数组，调用方负责赋值）。 */
+export function toggleLaneSelection(keys: string[], key: string): string[] {
+  return keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key];
+}
+
 /** 按轨道块的键找下标（⌘ 多选用的就是键）。 */
 export function indicesForLaneKeys(cues: Cue[], keys: string[]): number[] {
   if (!keys.length) return [];

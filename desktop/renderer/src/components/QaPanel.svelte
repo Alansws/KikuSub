@@ -32,6 +32,7 @@
     runSecondOpinion,
     secondOpinion,
   } from '../lib/secondOpinion.svelte';
+  import { jobBusy } from '../lib/jobState';
   import { tcShort } from '../lib/time';
   import { cubicOut } from 'svelte/easing';
   import { untrack } from 'svelte';
@@ -647,8 +648,8 @@
                   <button
                     class="act"
                     onclick={() => runSecondOpinion([cueIndex])}
-                    disabled={!!app.job || secondOpinion.status === 'running'}
-                    title={app.job
+                    disabled={jobBusy() || secondOpinion.status === 'running'}
+                    title={jobBusy()
                       ? '有任务在跑（同一时间只允许一个重任务）'
                       : secondOpinion.status === 'running'
                         ? '正在复核另一条…'

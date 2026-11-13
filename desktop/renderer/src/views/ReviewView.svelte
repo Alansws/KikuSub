@@ -19,6 +19,7 @@
    */
   import { tick as nextTick, untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
+  import SelectionBar from '../components/SelectionBar.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
   import {
@@ -50,10 +51,10 @@
     transcribeRange,
     tts,
   } from '../lib/store.svelte';
+  import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
-  import { indicesForLaneKeys, indicesInRange } from '../lib/selection';
-  import { runSecondOpinion, secondOpinion } from '../lib/secondOpinion.svelte';
+  import { indicesForLaneKeys, indicesInRange, toggleLaneSelection } from '../lib/selection';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -899,10 +900,22 @@
   }
 
 
+  /**
+   * ⌘ 单击选一块字幕（表格行与波形主体共用）。
+   *
+   * 原来只有底部 17px 的字幕轨道条认 ⌘，实际用下来「点在表格行上」是更自然的入口，
+   * 所以两条路径都收敛到这里，保证 key / 选中行 / 重绘三件事永远一起发生。
+   */
+  function metaSelect(i: number): void {
+    const cue = app.cues[i];
+    if (!cue) return;
+    toggleLaneKey(`${cue.start}:${cue.end}`);
+    play.selected = i;
+    requestAnimationFrame(draw);
+  }
+
   function toggleLaneKey(key: string) {
-    laneSelection = laneSelection.includes(key)
-      ? laneSelection.filter((item) => item !== key)
-      : [...laneSelection, key];
+    laneSelection = toggleLaneSelection(laneSelection, key);
   }
 
   function beginPlayhead(t: number) {
@@ -1103,7 +1116,15 @@
       return;
     }
 
-    // 4) 波形主体：Shift 直接框选；否则先当作「可能是单击」
+    // 4) 波形主体：⌘ 点在句子范围内 = 多选（和底部轨道条同一个 key）；
+    //    Shift 直接框选；否则先当作「可能是单击」。
+    if (e.metaKey || e.ctrlKey) {
+      const hit = app.cues.findIndex((cue) => cue.start <= t && t <= cue.end);
+      if (hit >= 0) {
+        metaSelect(hit);
+        return;
+      }
+    }
     if (e.shiftKey) {
       beginSelectRange(play.time, t);
       return;
@@ -2264,60 +2285,18 @@
         <i></i>{follow ? '跟随中' : '跟随'}
       </button>
 
-      {#if laneSelection.length > 1}
-        <div class="sel-bar lane-bar">
-          <span class="sel-info">
-            <span class="sel-range">已选 {laneSelection.length} 块字幕</span>
-            <b>可一起删除</b>
-          </span>
-          <button class="btn tiny danger" onclick={deleteSelectedNow} title="删除选中的全部字幕（⌘Z 可撤销）">
-            <Icon name="trash" size={10} />删除
-          </button>
-          <button
-            class="btn tiny"
-            onclick={() => runSecondOpinion(indicesForLaneKeys(app.cues, laneSelection))}
-            disabled={!!app.job || secondOpinion.status === 'running' || laneSelection.length > 40}
-            title={laneSelection.length > 40 ? '一次最多 40 条' : '用另一个引擎把选中的字幕各听一遍'}>
-            {#if secondOpinion.status === 'running'}<span class="spin"></span>复核中{:else}🎧 复核 {laneSelection.length} 条{/if}
-          </button>
-          <div class="tl-spacer"></div>
-          <button class="btn tiny ghost" onclick={() => (laneSelection = [])} title="取消多选">
-            <Icon name="close" size={10} />
-          </button>
-        </div>
-      {:else if selection}
-        <div class="sel-bar">
-          <span class="sel-info">
-            <span class="sel-range">{tcShort(selection.start)} → {tcShort(selection.end)}</span>
-            <b>{(selection.end - selection.start).toFixed(2)}s</b>
-          </span>
-          <button
-            class="btn tiny"
-            onclick={() => seekTo(selection!.start, { stopAt: selection!.end, play: true })}
-            title="只播放选区"
-          >
-            <Icon name="play" size={10} />试听
-          </button>
-          <button class="btn tiny primary" onclick={transcribeSelection} disabled={rangeBusy}>
-            {#if rangeBusy}
-              <span class="spin"></span>转写中
-            {:else}
-              <Icon name="wave" size={10} />转写选区
-            {/if}
-          </button>
-          <button class="btn tiny" onclick={sendSelectionToTranscribe} title="填到转写页的区间">
-            填入转写
-          </button>
-          <button class="btn tiny" onclick={focusSelection} title="放大到选区">聚焦</button>
-          <button class="btn tiny" onclick={() => runSecondOpinion(indicesInRange(app.cues, selection!.start, selection!.end))}
-            disabled={!!app.job || secondOpinion.status === 'running'}
-            title="把选区里的字幕送给另一个引擎各听一遍">🎧 复核选区</button>
-          <div class="tl-spacer"></div>
-          <button class="btn tiny ghost" onclick={clearSelection} title="清除选区">
-            <Icon name="close" size={10} />
-          </button>
-        </div>
-      {/if}
+      <SelectionBar
+        {selection}
+        {laneSelection}
+        {rangeBusy}
+        onDelete={deleteSelectedNow}
+        onTranscribe={transcribeSelection}
+        onFocus={focusSelection}
+        onSendSelection={sendSelectionToTranscribe}
+        onSeekSelection={() => selection && seekTo(selection.start, { stopAt: selection.end, play: true })}
+        onClearLane={() => (laneSelection = [])}
+        onClearSelection={clearSelection}
+      />
     </div>
   </div>
 
@@ -2556,12 +2535,18 @@
             class:row-cur={currentFind?.cue === i}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
-            onclick={() => selectCue(i)}
+            onclick={(e) => {
+              if (e.metaKey || e.ctrlKey) {
+                metaSelect(i);
+                return;
+              }
+              selectCue(i);
+            }}
             oncontextmenu={(e) => onCueContextMenu(e, i)}
             ondblclick={() => previewRange(cue.start, cue.end)}
             role="button"
             tabindex="-1"
-            title="单击跳转 · 双击试听"
+            title="单击跳转 · ⌘ 单击多选（可批量复核） · 双击试听"
           >
             <div class="c-idx">{i + 1}</div>
             <div class="c-t">{tcShort(cue.start)}</div>
