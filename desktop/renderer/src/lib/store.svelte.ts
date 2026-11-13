@@ -36,6 +36,7 @@ import {
   ttsAudioUrl,
 } from './api';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
+import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 
 export type View = 'import' | 'transcribe' | 'review' | 'ai' | 'prompts' | 'export' | 'report' | 'settings';
 
@@ -2845,7 +2846,8 @@ export async function loadReport(opts: { silent?: boolean } = {}) {
 // 调参与预设
 // ---------------------------------------------------------------------------
 
-const TUNING_KEY = 'kikusub.tuning';
+// v2：只存「改过的键」，默认值跟着版本走（v1 存整份快照，默认值改了也不生效）
+const TUNING_KEY = 'kikusub.tuning.v2';
 
 export async function loadTuning() {
   tuning.loading = true;
@@ -2853,18 +2855,8 @@ export async function loadTuning() {
     const schema = await api.getParams();
     tuning.schema = schema.engines;
 
-    let saved: Record<string, Record<string, number | boolean>> = {};
-    try {
-      saved = JSON.parse(localStorage.getItem(TUNING_KEY) || '{}');
-    } catch {
-      saved = {};
-    }
     // 以默认值打底，再叠用户上次的调整；规格表里已删掉的键自然被丢掉
-    const values: Record<string, Record<string, number | boolean>> = {};
-    for (const engine of schema.engines) {
-      values[engine.key] = { ...engine.defaults, ...(saved[engine.key] || {}) };
-    }
-    tuning.values = values;
+    tuning.values = mergeParamValues(schema.engines, readSavedTuning(TUNING_KEY));
     await refreshPresets();
   } catch (err) {
     toast(`加载参数失败：${(err as Error).message}`, 'error');
@@ -2890,7 +2882,10 @@ export function resetParams(engine: string) {
 
 function persistTuning() {
   try {
-    localStorage.setItem(TUNING_KEY, JSON.stringify(tuning.values));
+    localStorage.setItem(
+      TUNING_KEY,
+      JSON.stringify(changedParamValues(tuning.values, tuning.schema ?? [])),
+    );
   } catch {
     /* 隐私模式下写不了，忽略 */
   }
