@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import unicodedata
@@ -560,6 +561,9 @@ class AlignedChar:
     char: str
     start: float
     end: float
+    # 该字对应帧的 CTC 后验均值（log-prob）；插值补出来的字没有后验，记 NaN。
+    # 这是 P0-3 置信度诊断的原料：段均值会把单个错字稀释掉，逐字才能看见局部。
+    logprob: float = float("nan")
 
 
 @dataclass
@@ -570,6 +574,59 @@ class AlignmentResult:
     ok: bool = True
     reason: str = ""
     interpolated: int = 0   # 本段被插值（时间靠猜、零宽）的字数
+
+
+@dataclass
+class CueConfidence:
+    """一条字幕的可疑度特征（P0-3 诊断用，先不进 audit）。
+
+    `interp_chars` 是「没对齐上、靠插值补时间」的字数：那些字的时间是猜的，
+    文本是否正确与它无关，但整句的 `mean_logprob` 会被 NaN 排除掉，所以要单独记。
+    """
+
+    chars: int
+    interp_chars: int
+    mean_logprob: float
+    min_char_logprob: float
+    min_pair_logprob: float
+
+    def to_dict(self) -> dict:
+        return {
+            "chars": self.chars,
+            "interp_chars": self.interp_chars,
+            "mean_logprob": self.mean_logprob,
+            "min_char_logprob": self.min_char_logprob,
+            "min_pair_logprob": self.min_pair_logprob,
+        }
+
+
+def _cue_confidence(chars: list["AlignedChar"], group: list[int]) -> CueConfidence:
+    """按一条字幕里的字算置信度特征（纯函数，测试不加载模型）。
+
+    - `mean_logprob`：句内逐字后验的均值；
+    - `min_char_logprob`：最差的一个字；
+    - `min_pair_logprob`：连续两字均值的下限——局部 1–2 字错（同音、听反）在段均值里
+      被稀释，滑动窗口是最便宜的对症特征。
+    插值字（logprob 为 NaN）不参与均值，但计入 `interp_chars`。
+    """
+    lps = [chars[i].logprob for i in group]
+    finite = [value for value in lps if math.isfinite(value)]
+    if not finite:
+        return CueConfidence(
+            chars=len(lps),
+            interp_chars=len(lps),
+            mean_logprob=float("nan"),
+            min_char_logprob=float("nan"),
+            min_pair_logprob=float("nan"),
+        )
+    pairs = [(a + b) / 2 for a, b in zip(finite, finite[1:])]
+    return CueConfidence(
+        chars=len(lps),
+        interp_chars=len(lps) - len(finite),
+        mean_logprob=sum(finite) / len(finite),
+        min_char_logprob=min(finite),
+        min_pair_logprob=min(pairs) if pairs else min(finite),
+    )
 
 
 @dataclass
@@ -645,6 +702,8 @@ class QwenCtcEngine:
         self.last_coverage_spans: list[dict] = []
         self.last_segment_stats: dict = {}
         self.last_align_stats: dict = {}
+        # 与最近一次 transcribe_array 返回的 cues 一一对应（None = 该条没走对齐）。
+        self.last_cue_confidence: list[CueConfidence | None] = []
         self._last_truncated = False
         self._last_capped = False
         self._model = None
@@ -899,12 +958,16 @@ class QwenCtcEngine:
             pos = id_positions[k]
             if pos is None:
                 continue
+            lo = min(span[0], n_out - 1)
+            hi = min(span[1], n_out - 1)
+            frame_scores = scores[0][lo : hi + 1]
             chars.append(
                 AlignedChar(
                     pos=pos,
                     char=folded_text[pos],
-                    start=float(out_times[min(span[0], n_out - 1)]),
-                    end=float(out_times[min(span[1], n_out - 1)]),
+                    start=float(out_times[lo]),
+                    end=float(out_times[hi]),
+                    logprob=float(frame_scores.mean().item()) if frame_scores.numel() else float("nan"),
                 )
             )
         if not chars:
@@ -933,7 +996,8 @@ class QwenCtcEngine:
 
     def _cues_from_alignment(
         self, result: AlignmentResult, offset: float, folded: FoldedText, cfg: QwenCtcConfig
-    ) -> list[SubtitleCue]:
+    ) -> tuple[list[SubtitleCue], list[CueConfidence]]:
+        """把对齐结果切成字幕；同时给出与字幕**一一对应**的置信度特征。"""
         positions = [c.pos for c in result.chars]
         costs = _break_costs(folded, positions)
         _apply_pauses(costs, result.chars, result.pauses, cfg.min_pause_s)
@@ -942,6 +1006,7 @@ class QwenCtcEngine:
         )
 
         cues: list[SubtitleCue] = []
+        confidences: list[CueConfidence] = []
         spans: list[tuple[float, float, str, int, int]] = []
         for group in groups:
             if not group:
@@ -971,11 +1036,18 @@ class QwenCtcEngine:
                 text = strip_edge_nonverbal_ex(text)[0]
                 if _is_blank(text):
                     continue
+            # 同一条 DP 分组被二次切开时，几段共用这一组的特征（切分不改文本）。
+            group_conf = _cue_confidence(result.chars, groups[i])
             ceiling = spans[i + 1][0] if i + 1 < len(spans) else None
             if end - start < cfg.min_cue_dur:
                 wanted = start + cfg.min_cue_dur
                 end = wanted if ceiling is None else min(wanted, max(ceiling, start + MIN_CUE_DUR))
-            cue = SubtitleCue(start=round(max(0.0, start), 3), end=round(end, 3), text=text)
+            cue = SubtitleCue(
+                start=round(max(0.0, start), 3),
+                end=round(end, 3),
+                text=text,
+                confidence=group_conf.to_dict(),
+            )
             # DP 允许单条最长到 hard_max_cue_dur（5.2s），因此对齐路径也会产出
             # 超过 max_cue_dur 的条。这里用 CTC 逐字时间（D6 第一优先级）再切一刀：
             # 切点落在真实发声边界上，比按比例分配精确得多。
@@ -984,12 +1056,20 @@ class QwenCtcEngine:
                 pieces = _split_overlong_single(
                     cue.text, cue.start, cue.end, cfg.max_cue_dur, char_times=char_times,
                 )
-                cues.extend(
-                    SubtitleCue(start=round(a, 3), end=round(b, 3), text=t) for a, b, t in pieces
-                )
+                for a, b, piece in pieces:
+                    cues.append(
+                        SubtitleCue(
+                            start=round(a, 3),
+                            end=round(b, 3),
+                            text=piece,
+                            confidence=group_conf.to_dict(),
+                        )
+                    )
+                    confidences.append(group_conf)
             else:
                 cues.append(cue)
-        return cues
+                confidences.append(group_conf)
+        return cues, confidences
 
     def _cues_fallback(
         self,
@@ -1029,6 +1109,7 @@ class QwenCtcEngine:
         self.last_segment_stats = {}
         self.last_align_stats = {}
         cfg = config or self.config
+        self.last_cue_confidence = []
         if progress_cb:
             progress_cb(0.06, "正在使用动态 VAD 切分语音段落…")
 
@@ -1179,17 +1260,16 @@ class QwenCtcEngine:
             prev_text = text
 
             if not use_alignment:
-                cues.extend(
-                    split_text_into_cues(
-                        text,
-                        seg_start=offset,
-                        seg_end=(end / SAMPLE_RATE) + time_offset,
-                        max_cue_dur=cfg.max_cue_dur,
-                        max_cue_chars=cfg.max_cue_chars,
-                        audio=chunk,
-                        sample_rate=SAMPLE_RATE,
-                    )
+                added = split_text_into_cues(
+                    text,
+                    seg_start=offset,
+                    seg_end=(end / SAMPLE_RATE) + time_offset,
+                    max_cue_dur=cfg.max_cue_dur,
+                    max_cue_chars=cfg.max_cue_chars,
+                    audio=chunk,
+                    sample_rate=SAMPLE_RATE,
                 )
+                cues.extend(added)
                 continue
             if audio_features is not None:
                 result = self._align_projected(
@@ -1201,7 +1281,10 @@ class QwenCtcEngine:
                 aligned += 1
                 align_chars += len(result.chars)
                 interp_chars += result.interpolated
-                cues.extend(self._cues_from_alignment(result, offset, FoldedText(text), cfg))
+                new_cues, _new_conf = self._cues_from_alignment(
+                    result, offset, FoldedText(text), cfg
+                )
+                cues.extend(new_cues)
             else:
                 if result.reason == "no-acoustic-chars":
                     noop += 1          # 纯符号文本，无需对齐，不计入降级率
@@ -1238,6 +1321,7 @@ class QwenCtcEngine:
             progress_cb(0.95, f"正在整理字幕…{note}")
         cues.sort(key=lambda c: (c.start, c.end))
         final_cues = _dedupe(cues)
+        self.last_cue_confidence = [cue.confidence for cue in final_cues]
         if not self.last_interrupted and final_cues:
             try:
                 self.last_coverage_spans = find_coverage_spans(
@@ -1350,6 +1434,7 @@ def _heal_broken_cues(cues: list[SubtitleCue], max_merge_dur: float = 5.2) -> li
                     start=curr.start,
                     end=nxt.end,
                     text=curr_text + nxt_text,
+                    confidence=curr.confidence,
                 )
                 i += 1
         merged.append(curr)
@@ -1376,5 +1461,9 @@ def _dedupe(cues: list[SubtitleCue]) -> list[SubtitleCue]:
                     # 起点被推到前一条的终点之后，终点必须跟着抬：
                     # 否则会写出 end < start 的负时长条（实测「ねえ」2.500→2.480）。
                     end = max(end, start + MIN_CUE_DUR)
-        out.append(SubtitleCue(start=round(start, 3), end=round(end, 3), text=text))
+        out.append(
+            SubtitleCue(
+                start=round(start, 3), end=round(end, 3), text=text, confidence=cue.confidence
+            )
+        )
     return _heal_broken_cues(out)

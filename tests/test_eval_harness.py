@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pytest
 
 from tools.eval import scorecard as sc
@@ -345,3 +346,81 @@ def test_probe_window_rejects_missing_media(tmp_path):
     assert probe_window.main(
         ["--media", "nope.mp4", "--ref", "nope.srt", "--fixtures", str(tmp_path)]
     ) == 2
+
+
+# --------------------------------------------------------------------------- 置信度诊断的统计件
+
+
+def test_auc_handles_separation_and_ties():
+    # 完全分开：错的都更大 → 1.0。
+    assert sc.auc([0.1, 0.2, 0.8, 0.9], [False, False, True, True]) == 1.0
+    # 完全反向 → 0.0（调用方靠取负来归一方向）。
+    assert sc.auc([0.9, 0.8, 0.2, 0.1], [False, False, True, True]) == 0.0
+    # 全并列 → 0.5。
+    assert sc.auc([0.5] * 4, [False, True, False, True]) == 0.5
+
+
+def test_auc_ignores_missing_values_and_single_class():
+    assert sc.auc([0.1, float("nan"), 0.9], [False, True, True]) is not None
+    assert sc.auc([0.1, 0.2], [True, True]) is None
+
+
+def test_threshold_at_fpr_reports_recall_and_precision():
+    values = [0.1, 0.2, 0.3, 0.4, 0.9, 0.95]
+    labels = [False, False, False, False, True, True]
+    result = sc.threshold_at_fpr(values, labels, fpr=0.0)
+    assert result is not None
+    assert result["recall"] == 1.0
+    assert result["threshold"] == 0.4
+
+
+# --------------------------------------------------------------------------- 置信度诊断
+
+
+def test_confidence_label_uses_reference_to_hyp_concatenation():
+    from tools.eval import qwen_confidence_diag as diag
+    from tools.eval.score_srt import Cue
+
+    refs = [Cue(0.0, 4.0, "あいうえ")]
+    # 参考一句被候选切成两条：拼起来与参考一致 → 两条都算对句。
+    cues = [Cue(0.0, 2.0, "あい"), Cue(2.0, 4.0, "うえ")]
+    labels = diag._label_by_reference(refs, cues)
+    assert {item["label"] for item in labels} == {"correct"}
+    assert len(labels) == 2
+
+
+def test_confidence_label_marks_wrong_and_skips_grey_zone():
+    from tools.eval import qwen_confidence_diag as diag
+    from tools.eval.score_srt import Cue
+
+    refs = [Cue(0.0, 4.0, "あいうえ"), Cue(10.0, 14.0, "かきくけ")]
+    cues = [Cue(0.0, 4.0, "かき"), Cue(10.0, 14.0, "かきくけ")]
+    labels = {item["cue_id"]: item["label"] for item in diag._label_by_reference(refs, cues)}
+    assert labels[id(cues[0])] == "wrong"
+    assert labels[id(cues[1])] == "correct"
+
+
+def test_confidence_onset_stats():
+    from tools.eval import qwen_confidence_diag as diag
+
+    silence = np.zeros(16000, dtype=np.float32)
+    assert diag._onset_stats(silence, 0.0)[0] == -100.0
+    tone = np.full(16000, 0.5, dtype=np.float32)
+    db, zcr = diag._onset_stats(tone, 0.0)
+    assert -6.5 < db < -5.5
+    assert zcr < 0.01
+
+
+def test_confidence_analysis_respects_feature_direction():
+    from tools.eval import qwen_confidence_diag as diag
+
+    # logprob 越低越可疑：错句给更低的均值，方向取负后 AUC 应为 1。
+    rows = [
+        {"label": "correct", "mean_logprob": -0.05},
+        {"label": "correct", "mean_logprob": -0.10},
+        {"label": "wrong", "mean_logprob": -0.90},
+        {"label": "wrong", "mean_logprob": -0.80},
+    ]
+    analysis = {item["feature"]: item for item in diag._analysis(rows)}
+    assert analysis["mean_logprob"]["auc"] == 1.0
+    assert analysis["mean_logprob"]["direction"] == "越小越可疑"

@@ -95,7 +95,7 @@ class CtcAlignLayer:
         if not result.ok or not result.chars:
             return AlignOutcome(False, result.reason or "align-failed")
         folded = FoldedText(text)
-        cues = engine._cues_from_alignment(result, offset, folded, cfg)
+        cues, _confidence = engine._cues_from_alignment(result, offset, folded, cfg)
         if cfg.strip_nonverbal_edges:
             kept: list[SubtitleCue] = []
             for item in cues:

@@ -13,6 +13,7 @@
 | `score_srt.py` | 两份 SRT 打分：CER、块均准确率、漏块、可疑切分 | 否（只依赖标准库） |
 | `run_clip.py` | 跑「一个引擎 × 一支片 × 一组参数」，出一条 scorecard | 是（whisper / qwen） |
 | `ab_onset.py` | 跑 P0-1 的 A0–A3 矩阵（起点提前 × 能量闸门），拼成一张对比表 | 是（whisper / qwen） |
+| `qwen_confidence_diag.py` | P0-3a：置信度特征 × 对/错句标签，打印每个特征的 AUC | 是（qwen） |
 | `probe_window.py` | 参考 SRT 的每条时间窗**绕开 VAD** 直送模型，分离「识别」与「分段」 | 是（qwen） |
 | `scorecard.py` | 公共件：卡片形状、句首缺字判定、基线比对、fixtures 解析 | 否 |
 
@@ -90,6 +91,20 @@ python tools/eval/ab_onset.py --engines qwen,whisper \
 
 除 CER / 插入 / 句首缺字，表里多一列「重复句」：相邻两条归一化后文本完全相同的次数。
 它是「吃进上一句尾音」的代理指标——重复句会先于 CER 变化，用来兜住「CER 没涨但字幕不对」。
+
+## qwen_confidence_diag.py：置信度特征诊断（P0-3a）
+
+```bash
+python tools/eval/qwen_confidence_diag.py --media Jap_test.mp4 --ref Jap_test_perfect.srt     --json /tmp/conf.json
+```
+
+跑一遍 qwen（产品默认参数），把每条字幕的特征与「对句 / 错句」标签配起来，打印每个特征的
+ROC AUC 与「误报率 ≤5% 时的阈值 / 召回 / 精度」。标签口径：与参考条比块准确率 = 1.0 算对句、
+≤0.66 算错句，中间带与没有参考覆盖的条目不参与（前者是编辑距离灰区，后者是多余句）。
+
+特征：`mean_logprob` / `min_char_logprob` / `min_pair_logprob`（CTC 后验按字聚合）、
+`interp_ratio`（插值字数占比）、`cps`、句首 40 ms 的 `onset_db` / `onset_zcr`。
+**文档的准入门槛是 AUC ≥ 0.75**，所以这张表直接决定「要不要进 audit」。
 
 ## probe_window.py：绕开 VAD 的逐窗探针
 

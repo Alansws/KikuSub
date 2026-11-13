@@ -20,6 +20,10 @@ class SubtitleCue:
     start: float
     end: float
     text: str
+    # 置信度特征（P0-3 诊断用；只有 Qwen 的对齐路径会填，其余引擎恒为 None）。
+    # 挂在这条字幕上而不是平行列表里：`_dedupe` / `_heal_broken_cues` 会重建并合并
+    # 字幕对象，平行列表一旦被删条/合并就永久错位（2026-11-14 实测 89 vs 88）。
+    confidence: dict | None = None
 
 
 ELLIPSIS_ONLY_RE = re.compile(r"^[.…。]+$")

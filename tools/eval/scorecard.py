@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import sys
@@ -426,6 +427,65 @@ def format_comparison(result: dict) -> str:
         lines.append("⚠ 解释器/torch/VAD 版本与基线不同，这组数字不可比（换环境后请重采基线）")
     lines.append("❌ 回归：CER 涨超容差或插入变多" if result["regressed"] else "✅ 不劣于基线")
     return "\n".join(lines)
+
+
+def auc(values: list[float], labels: list[bool]) -> float | None:
+    """ROC AUC（Mann–Whitney）：`labels=True` 的样本特征值更大时趋近 1。
+
+    只依赖标准库（CI 不装 sklearn）。NaN / None 与被判为「无标签」的样本先剔除；
+    两类里有一类为空时返回 None——这时谈 AUC 没有意义，别让它显示成 0.5。
+    """
+    pairs = [
+        (float(v), bool(y))
+        for v, y in zip(values, labels)
+        if v is not None and math.isfinite(float(v))
+    ]
+    positives = sum(1 for _, y in pairs if y)
+    negatives = len(pairs) - positives
+    if positives == 0 or negatives == 0:
+        return None
+    ordered = sorted(pairs, key=lambda item: item[0])
+    # 并列值的秩取平均，否则 AUC 会被平局顺序污染。
+    ranks = [0.0] * len(ordered)
+    index = 0
+    while index < len(ordered):
+        end = index
+        while end + 1 < len(ordered) and ordered[end + 1][0] == ordered[index][0]:
+            end += 1
+        average = (index + end) / 2 + 1
+        for k in range(index, end + 1):
+            ranks[k] = average
+        index = end + 1
+    rank_sum = sum(rank for rank, (_, y) in zip(ranks, ordered) if y)
+    return (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
+
+
+def threshold_at_fpr(
+    values: list[float], labels: list[bool], *, fpr: float = 0.05
+) -> dict | None:
+    """按「误报率 ≤ fpr」取分位阈值，返回该阈值在错句上的召回率。
+
+    用法：特征已经过方向归一（越大越可疑）。返回 None 表示样本不足。
+    """
+    pairs = [
+        (float(v), bool(y))
+        for v, y in zip(values, labels)
+        if v is not None and math.isfinite(float(v))
+    ]
+    positives = [v for v, y in pairs if y]
+    negatives = [v for v, y in pairs if not y]
+    if not positives or not negatives:
+        return None
+    ordered = sorted(negatives)
+    position = min(len(ordered) - 1, int(round((1 - fpr) * (len(ordered) - 1))))
+    threshold = ordered[position]
+    hits = sum(1 for v in positives if v >= threshold)
+    return {
+        "threshold": threshold,
+        "fpr": fpr,
+        "recall": hits / len(positives),
+        "precision": hits / max(1, hits + sum(1 for v in negatives if v >= threshold)),
+    }
 
 
 def fixture_problems(baseline: dict, fixtures: Path) -> list[str]:
