@@ -176,10 +176,11 @@ SPECS: tuple[ParamSpec, ...] = (
         help="调大防止句首辅音或句尾被切断。耳语片句首常被削掉半个词，250ms 与 Whisper 侧一致。",
     ),
     ParamSpec(
-        "qwen.vad_onset_pad_ms", "句首提前 (ms)", QWEN, "int", 0,
+        "qwen.vad_onset_pad_ms", "句首提前 (ms)", QWEN, "int", 400,
         group="VAD", minimum=0, maximum=600, step=20, config_field="vad_onset_pad_ms",
-        help="把 VAD 段起点整体向左扩，救回被吞的句首；0 = 关闭（与旧行为一致）。"
-        "与 Whisper 侧同一条实现（transcribe.extend_segment_onsets）。",
+        help="把 VAD 段起点整体向左扩，救回被吞的句首。默认 400 ms 来自 2026-11-13 的 A/B"
+        "（Test 二 CER −1.95pt、句首缺字 −80%；Test 一 −0.75pt；长片不劣化）。"
+        "0 = 回到旧行为。与 Whisper 侧同一条实现（transcribe.extend_segment_onsets）。",
     ),
     ParamSpec(
         "qwen.merge_gap_s", "合并间隔 (s)", QWEN, "float", 0.50,

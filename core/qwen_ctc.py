@@ -599,7 +599,9 @@ class QwenCtcConfig:
     max_new_tokens: int = 440
     # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
     # 与 Whisper 侧同一条实现（transcribe.extend_segment_onsets），别在这里再写一份。
-    vad_onset_pad_ms: int = 0
+    # 默认 400 与 core/params.py 的 `qwen.vad_onset_pad_ms` 保持一致：产品走参数表，
+    # 但测试与外部脚本常直接构造本 dataclass，两边默认值分裂过一次（见路线文档 P0-2）。
+    vad_onset_pad_ms: int = 400
     # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
     onset_gate: str = "none"
 

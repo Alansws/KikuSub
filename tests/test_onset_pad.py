@@ -145,12 +145,14 @@ def test_build_whisper_config_clamps_onset_pad():
     assert build_whisper_config(onset_pad_ms=-10).onset_pad_ms == 0
 
 
-def test_params_default_keeps_old_behaviour():
-    # 兼容承诺：不传这个参数时，两边的配置字段都是 0（关闭）。
+def test_params_defaults_match_the_ab_decision():
+    # 2026-11-13 的 A/B 结论：qwen 默认 400 ms（Test 二 −1.95pt、句首缺字 5→1），
+    # whisper 不启用（扩窗会把气声幻觉成字幕，CER +1.61pt）。
+    assert params.config_kwargs("qwen", {})["vad_onset_pad_ms"] == 400
     assert params.config_kwargs("whisper", {})["onset_pad_ms"] == 0
-    assert params.config_kwargs("qwen", {})["vad_onset_pad_ms"] == 0
+    # 0 必须能完全回到旧行为（两边的显式覆写都认）。
+    assert params.config_kwargs("qwen", {"qwen.vad_onset_pad_ms": 0})["vad_onset_pad_ms"] == 0
     assert params.config_kwargs("whisper", {"whisper.vad_onset_pad_ms": 400})["onset_pad_ms"] == 400
-    assert params.config_kwargs("qwen", {"qwen.vad_onset_pad_ms": 100})["vad_onset_pad_ms"] == 100
 
 
 # --------------------------------------------------------------------------- 报告
@@ -178,5 +180,11 @@ def test_report_param_list_gains_onset_row_only_when_enabled():
         )
         return dict(pairs)
 
-    assert "句首提前 (onset_pad_ms)" not in rows(QwenCtcConfig())
+    assert "句首提前 (onset_pad_ms)" not in rows(QwenCtcConfig(vad_onset_pad_ms=0))
     assert rows(QwenCtcConfig(vad_onset_pad_ms=400))["句首提前 (onset_pad_ms)"] == "400 ms"
+
+
+def test_qwen_config_default_matches_param_default():
+    from core.qwen_ctc import QwenCtcConfig
+
+    assert QwenCtcConfig().vad_onset_pad_ms == params.config_kwargs("qwen", {})["vad_onset_pad_ms"]
