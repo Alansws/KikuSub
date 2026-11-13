@@ -6,14 +6,14 @@
  * 这里只依赖 store 暴露的 `app` / `play` / `updateCue` / `toast`，不反向被 store 依赖。
  *
  * 关键约定：
- * - **不自动采用**：结果只放在 `texts` 里，采用要用户点；
+ * - **不自动采用**：结果只放在 `records` 里，采用要用户点；
  * - **采用走现有历史**：`updateCue()` → 服务端压一步统一历史，可撤销；
  * - **收起不改质检状态**：dismiss 只清本地卡片，质检条目要处理仍走它自己的按钮。
  */
 
 import { api, type JobEvent } from './api';
 import { app, toast, updateCue } from './store.svelte';
-import { buildRanges, cueIndexForRange, otherEngineKey } from './secondOpinion';
+import { MAX_BATCH, buildRanges, cueIndexForRange, otherEngineKey } from './secondOpinion';
 
 export type SecondOpinionStatus = 'idle' | 'running' | 'done' | 'error';
 
@@ -24,8 +24,12 @@ export const secondOpinion = $state({
   jobId: '',
   ratio: 0,
   stage: '',
-  /** 字幕下标 → 另一引擎给出的文本。 */
-  texts: {} as Record<number, string>,
+  /**
+   * 字幕下标 → { 这条字幕当时的起止时间, 另一引擎的文本 }。
+   * 记时间是为了防止「删掉一条之后下标整体前移」时把备选安到错句上：
+   * 采用前会核对当前这条的起止时间，对不上就当没有。
+   */
+  records: {} as Record<number, { start: number; end: number; text: string }>,
   /** 发起时的下标（「再听一次」用它）。 */
   requested: [] as number[],
   error: '',
@@ -59,13 +63,23 @@ export function currentEngineLabel(): string {
   return engineLabel(app.engine);
 }
 
+function matchingRecord(index: number): { start: number; end: number; text: string } | null {
+  const record = secondOpinion.records[index];
+  const cue = app.cues[index];
+  if (!record || !cue) return null;
+  if (Math.abs(cue.start - record.start) > 1e-6 || Math.abs(cue.end - record.end) > 1e-6) {
+    return null;  // 下标对应的已经不是同一条字幕（删除 / 重排 / 改时间）
+  }
+  return record;
+}
+
 /** 某条是否已有备选文本（用于决定卡片是否展开）。 */
 export function hasAlternative(index: number): boolean {
-  return typeof secondOpinion.texts[index] === 'string';
+  return matchingRecord(index) !== null;
 }
 
 export function alternativeText(index: number): string {
-  return secondOpinion.texts[index] ?? '';
+  return matchingRecord(index)?.text ?? '';
 }
 
 function reset(): void {
@@ -74,7 +88,7 @@ function reset(): void {
   secondOpinion.jobId = '';
   secondOpinion.ratio = 0;
   secondOpinion.stage = '';
-  secondOpinion.texts = {};
+  secondOpinion.records = {};
   secondOpinion.requested = [];
   secondOpinion.error = '';
   secondOpinion.index = -1;
@@ -92,11 +106,14 @@ function onEvent(event: JobEvent): void {
   }
   if (event.type === 'done') {
     const texts = (event.job?.result?.texts ?? []) as Array<{ index: number; text: string }>;
-    const next: Record<number, string> = {};
+    const next: Record<number, { start: number; end: number; text: string }> = {};
     for (const item of texts) {
-      if (typeof item?.index === 'number') next[item.index] = item.text ?? '';
+      const cue = app.cues[item?.index ?? -1];
+      if (typeof item?.index === 'number' && cue) {
+        next[item.index] = { start: cue.start, end: cue.end, text: item.text ?? '' };
+      }
     }
-    secondOpinion.texts = next;
+    secondOpinion.records = next;
     secondOpinion.status = 'done';
     secondOpinion.ratio = 1;
     secondOpinion.stage = '';
@@ -127,7 +144,10 @@ export async function runSecondOpinion(indices: number[]): Promise<void> {
     toast(`另一个引擎（${engineLabel(otherEngineKey(app.engine))}）已停用：到「设置 → 引擎与模型」里启用`, 'warn');
     return;
   }
-  const ranges = buildRanges(app.cues, indices);
+  if (indices.length > MAX_BATCH) {
+    toast(`一次最多复核 ${MAX_BATCH} 条，已取前 ${MAX_BATCH} 条`, 'warn');
+  }
+  const ranges = buildRanges(app.cues, indices.slice(0, MAX_BATCH));
   if (!ranges.length) {
     toast('没有可复核的字幕', 'warn');
     return;
@@ -198,12 +218,12 @@ export async function cancelSecondOpinion(): Promise<void> {
 
 /** 采用备选文本：走既有的 updateCue（服务端记一步历史，可撤销）。 */
 export async function adoptAlternative(index = secondOpinion.index): Promise<void> {
-  const text = secondOpinion.texts[index];
-  if (text === undefined) return;
-  await updateCue(index, { text });
-  const rest: Record<number, string> = { ...secondOpinion.texts };
+  const record = matchingRecord(index);
+  if (!record) return;
+  await updateCue(index, { text: record.text });
+  const rest = { ...secondOpinion.records };
   delete rest[index];
-  secondOpinion.texts = rest;
+  secondOpinion.records = rest;
   toast('已采用另一引擎的文本（可撤销）');
   if (secondOpinion.index === index || !Object.keys(rest).length) {
     secondOpinion.status = 'idle';

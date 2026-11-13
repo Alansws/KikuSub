@@ -52,6 +52,8 @@
   } from '../lib/store.svelte';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
+  import { indicesForLaneKeys, indicesInRange } from '../lib/selection';
+  import { runSecondOpinion, secondOpinion } from '../lib/secondOpinion.svelte';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -896,24 +898,6 @@
     return { key: bestKey, start: first.start, end: first.end, indices };
   }
 
-  function indicesForLaneKeys(keys: string[]): number[] {
-    if (!keys.length) return [];
-    const wanted = new Set(keys);
-    const out: number[] = [];
-    app.cues.forEach((cue, index) => {
-      if (wanted.has(`${cue.start}:${cue.end}`)) out.push(index);
-    });
-    return out;
-  }
-
-  /** 时间区间里的字幕下标（框选后右键合并用）。 */
-  function indicesInRange(start: number, end: number): number[] {
-    const out: number[] = [];
-    app.cues.forEach((cue, index) => {
-      if (cue.start < end && cue.end > start) out.push(index);
-    });
-    return out;
-  }
 
   function toggleLaneKey(key: string) {
     laneSelection = laneSelection.includes(key)
@@ -1221,9 +1205,9 @@
     // 合并目标：优先用刚框选的区间，其次用底部轨道的 ⌘ 多选。
     let merge: number[] = [];
     if (selection && selection.end - selection.start > 0.08) {
-      merge = indicesInRange(selection.start, selection.end);
+      merge = indicesInRange(app.cues, selection.start, selection.end);
     } else if (laneSelection.length >= 2) {
-      merge = indicesForLaneKeys(laneSelection);
+      merge = indicesForLaneKeys(app.cues, laneSelection);
     }
     if (merge.length < 2) merge = [];
     const x = Math.min(e.clientX, window.innerWidth - 236);
@@ -1237,7 +1221,7 @@
     e.stopPropagation();
     play.selected = index;
     const cue = app.cues[index];
-    const merge = laneSelection.length >= 2 ? indicesForLaneKeys(laneSelection) : [];
+    const merge = laneSelection.length >= 2 ? indicesForLaneKeys(app.cues, laneSelection) : [];
     const x = Math.min(e.clientX, window.innerWidth - 236);
     const y = Math.min(e.clientY, window.innerHeight - 190);
     contextMenu = { x, y, t: cue?.start ?? timeAt(e.clientX), index, merge };
@@ -1272,7 +1256,7 @@
       toast('当前没有可删除的字幕', 'warn');
       return;
     }
-    const fromLane = indicesForLaneKeys(laneSelection);
+    const fromLane = indicesForLaneKeys(app.cues, laneSelection);
     const indices = fromLane.length
       ? fromLane
       : play.selected >= 0 && play.selected < app.cues.length
@@ -2289,6 +2273,13 @@
           <button class="btn tiny danger" onclick={deleteSelectedNow} title="删除选中的全部字幕（⌘Z 可撤销）">
             <Icon name="trash" size={10} />删除
           </button>
+          <button
+            class="btn tiny"
+            onclick={() => runSecondOpinion(indicesForLaneKeys(app.cues, laneSelection))}
+            disabled={!!app.job || secondOpinion.status === 'running' || laneSelection.length > 40}
+            title={laneSelection.length > 40 ? '一次最多 40 条' : '用另一个引擎把选中的字幕各听一遍'}>
+            {#if secondOpinion.status === 'running'}<span class="spin"></span>复核中{:else}🎧 复核 {laneSelection.length} 条{/if}
+          </button>
           <div class="tl-spacer"></div>
           <button class="btn tiny ghost" onclick={() => (laneSelection = [])} title="取消多选">
             <Icon name="close" size={10} />
@@ -2318,6 +2309,9 @@
             填入转写
           </button>
           <button class="btn tiny" onclick={focusSelection} title="放大到选区">聚焦</button>
+          <button class="btn tiny" onclick={() => runSecondOpinion(indicesInRange(app.cues, selection!.start, selection!.end))}
+            disabled={!!app.job || secondOpinion.status === 'running'}
+            title="把选区里的字幕送给另一个引擎各听一遍">🎧 复核选区</button>
           <div class="tl-spacer"></div>
           <button class="btn tiny ghost" onclick={clearSelection} title="清除选区">
             <Icon name="close" size={10} />

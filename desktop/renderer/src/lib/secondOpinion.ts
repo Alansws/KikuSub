@@ -8,6 +8,9 @@
 
 import type { Cue } from './api';
 
+/** 一次最多复核多少条；与 `core.second_opinion.MAX_WINDOWS` 保持一致。 */
+export const MAX_BATCH = 40;
+
 export interface CompareRange {
   index: number;
   start: number;
