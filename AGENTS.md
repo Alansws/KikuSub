@@ -174,8 +174,14 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
 
 ## 7. 进行中的专项（跨会话必须能接上）
 
-- **转录引擎标定**：Anime Whisper 已完成一版（分窗 VAD、默认参数、句首尾发声剔除与边界收口），
-  记录在 [docs/转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)。
-  **未完成的一条是逐字对齐**：自带的 cross-attention DTW 在 2 层蒸馏解码器上实测达不到 ±150ms
-  （句内停顿倒准），已决定不单独为 Whisper 写对齐器，等 Qwen（自带 CTC 头）那一轮一起做通用对齐层。
-  新开 Qwen 标定会话时，把这件事一起排进去——待办在 `docs/backlog.md` P1-5。
+- **转录引擎标定**：两个日语引擎都已完成一轮。
+  - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)
+    （分窗 VAD、默认参数、句首尾发声剔除与边界收口）。
+  - Qwen3-ASR + CTC：[转录标定-Qwen-2026-11.md](docs/转录标定-Qwen-2026-11.md)
+    （分窗 VAD 从「整段一次跑」改过来是最大收益；参数与「建议内存 16GB 标错」一并修正）。
+  - **通用对齐层已落地**（`core/align_layer.py`）：借 Qwen 的 acoustic-only CTC 头给任意
+    日语文本打逐字时间，Anime Whisper 侧是 `whisper.use_ctc_alignment`（默认关）。
+    实现是两遍：先 `engine.release()` 卸掉 Whisper 再装对齐器（实测峰值 6.2GB 而不是 11.8GB），
+    对齐完 `finally` 里卸载，MPS 回落到 0.03GB。
+    精度 p90 约 320ms——改善明显但**没到** ±150ms，所以没设成默认；
+    细节与数字见 Qwen 标定文档 §4，门槛仍在 `docs/backlog.md` P1-5。

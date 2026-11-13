@@ -162,7 +162,7 @@ Japanese-particle DP respectively, so they do not need this step.
 - macOS 12 or newer, Apple Silicon (arm64)
 - `ffmpeg` and `ffprobe` (`brew install ffmpeg`; the app adds Homebrew paths to PATH)
 - Disk: ~6.6 GB for both Japanese transcription models plus ~1.4 GB for the two optional Chinese engines, proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
-- RAM: 16 GB recommended (Qwen3-ASR weights are ~3.8 GB); the cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
+- RAM: 8 GB minimum (measured transcription peaks: Anime Whisper ~6.7 GB, Qwen3-ASR ~5.1 GB; 12 GB leaves the system comfortable). Weight size is not resident size: Anime Whisper keeps its fp32 weights in the process while Qwen loads straight to bf16, so the 3.8 GB model is actually the lighter one. The cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
 
 ### Using the packaged .app
 

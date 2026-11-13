@@ -22,7 +22,7 @@
 | 2 | **svelte-check 清零并进 CI**：修掉 10 个存量类型错误 | 审计 P1-1；基线冻结在 `desktop/test/svelte-check-baseline.json` | `npm run check:svelte` 报 0 错，且成为 CI 的一步 |
 | 3 | **`popIn` 未定义**（`QaPanel.svelte:398`）：`in:popIn` 指向不存在的函数，编译后是全局查找，质检浮窗的进场动画是死的 | 2026-11-13 接入 svelte-check 时发现；用户确认"先不用修" | 选定一种动画（缩放/淡入/去掉指令）并手点验证浮窗开合 |
 | 4 | **本页与代码的对账**：`tests/test_docs_health.py` 只覆盖文档结构与链接，不覆盖"契约里的数字/常量 vs 代码" | 审计 P1-5 | 至少一条对账（例如 `HISTORY_LIMIT=50` 与契约里的"50 步"）能在不一致时红 |
-| 5 | **Anime Whisper 逐字对齐（与 Qwen 一起做通用方案）**：现在字幕起止全靠「段边界 + 字符比例 + 能量谷」猜，起点误差 p90 约 1.2s。已实测 Whisper 自带 cross-attention DTW：2 层蒸馏解码器注意力太糊（峰值仅约均匀分布 20 倍），单句段起点中位 147ms / p90 276ms、终点 p90 612ms，绝对时间达不到 ±150ms；**句内停顿倒是准（34–80ms）**。结论是不单独为 Whisper 写对齐器，等 Qwen（自带 CTC 头）那一轮一起做通用对齐层，Whisper 只作为「停顿切分」的补充输入 | 2026-11-13 标定会话；证据见 [转录标定-AnimeWhisper-2026-11.md](转录标定-AnimeWhisper-2026-11.md) §1.6，实验工具在仓库外 `tune/dtw.py` | 通用对齐层上线后：单句段起点 p90 ≤150ms；且「一个 VAD 块里两句话」的切点落在真实停顿上（±150ms）。改完在同一支素材上用 `tools/eval/score_srt.py` 报前后数字 |
+| 5 | **Anime Whisper 逐字对齐**：已做通用对齐层（`core/align_layer.py`，借 Qwen 的 acoustic-only CTC 头 + 人工文本）。实测单句段起点 p90 320ms / 终点 p90 477ms（去掉人工提前/停留的系统性偏移后），比原来的字符比例分配（p90 1.35s）好 4 倍，但**仍未达到 ±150ms**，所以只作为可选层 `whisper.use_ctc_alignment`（默认关，多常驻一份 Qwen 权重 5.1GB）；300s 窗口实测 CER 5.96% → 5.30%、起点 p90 0.934s → 0.745s、字幕时长中位 3.48s → 2.13s（人工 2.46s）
 
 ## P2：存量债（能做则做）
 
