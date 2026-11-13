@@ -117,7 +117,7 @@
     },
     {
       "schemaVersion": 1,
-      "capturedAt": "2026-11-13T23:17:37",
+      "capturedAt": "2026-11-14T00:07:03",
       "engine": "qwen",
       "media": {
         "name": "Jap_test.mp4",
@@ -144,6 +144,7 @@
         "qwen.vad_min_speech_ms": 100,
         "qwen.vad_min_silence_ms": 200,
         "qwen.vad_speech_pad_ms": 250,
+        "qwen.vad_onset_pad_ms": 400,
         "qwen.merge_gap_s": 0.5,
         "qwen.max_segment_s": 12.0,
         "qwen.min_pause_s": 0.12,
@@ -154,23 +155,23 @@
         "qwen.strip_nonverbal_edges": true
       },
       "run": {
-        "cues": 85,
+        "cues": 88,
         "chars": 772,
-        "pending_qa": 6,
-        "elapsed_s": 54.36,
-        "peak_rss_mb": 1055.0,
+        "pending_qa": 7,
+        "elapsed_s": 63.57,
+        "peak_rss_mb": 1065.9,
         "peak_mps_mb": 4504.5
       },
       "score": {
         "reference_cues": 76,
-        "hypothesis_cues": 85,
+        "hypothesis_cues": 88,
         "reference_chars": 663,
-        "hypothesis_chars": 698,
-        "cer": 0.129713,
-        "substitutions": 33,
-        "deletions": 9,
+        "hypothesis_chars": 701,
+        "cer": 0.122172,
+        "substitutions": 31,
+        "deletions": 6,
         "insertions": 44,
-        "block_accuracy": 0.787871,
+        "block_accuracy": 0.796016,
         "missed_blocks": 9,
         "max_cue_dur": 4.01,
         "over_4_3s": 0,
@@ -178,30 +179,15 @@
         "aux_start_cues": 0
       },
       "onset_missing": {
-        "count": 2,
-        "items": [
-          {
-            "ref_start": 451.463,
-            "ref_text": "すっごいおちんちんビンビンだね",
-            "hyp_start": 452.342,
-            "hyp_text": "ごいおちんちんビンビンだね…",
-            "lag_s": 0.879
-          },
-          {
-            "ref_start": 480.075,
-            "ref_text": "あー…すっごい…",
-            "hyp_start": 481.222,
-            "hyp_text": "すっごい",
-            "lag_s": 1.147
-          }
-        ]
+        "count": 0,
+        "items": []
       },
       "range": [
         null,
         null
       ],
       "id": "test1.qwen",
-      "note": "2026-11-13 用 tools/eval/run_clip.py 复采（.venv 解释器），与路线文档 §1 的数字一致。重跑前先用 --check-fixtures 核对素材指纹。"
+      "note": "2026-11-13 用 .venv + run_clip 复采；2026-11-14 按 A/B 结论把 qwen 的 vad_onset_pad_ms 默认改成 400 后重采（CER 13.42%→11.47% / 12.97%→12.22%）。whisper 两条仍是默认 0 的第一遍结果。"
     },
     {
       "schemaVersion": 1,
@@ -300,7 +286,7 @@
     },
     {
       "schemaVersion": 1,
-      "capturedAt": "2026-11-13T23:18:28",
+      "capturedAt": "2026-11-14T00:08:00",
       "engine": "qwen",
       "media": {
         "name": "Jap_test_2.mp4",
@@ -327,6 +313,7 @@
         "qwen.vad_min_speech_ms": 100,
         "qwen.vad_min_silence_ms": 200,
         "qwen.vad_speech_pad_ms": 250,
+        "qwen.vad_onset_pad_ms": 400,
         "qwen.merge_gap_s": 0.5,
         "qwen.max_segment_s": 12.0,
         "qwen.min_pause_s": 0.12,
@@ -337,66 +324,38 @@
         "qwen.strip_nonverbal_edges": true
       },
       "run": {
-        "cues": 90,
-        "chars": 941,
+        "cues": 92,
+        "chars": 954,
         "pending_qa": 5,
-        "elapsed_s": 48.97,
-        "peak_rss_mb": 1083.6,
-        "peak_mps_mb": 4464.4
+        "elapsed_s": 55.58,
+        "peak_rss_mb": 1101.2,
+        "peak_mps_mb": 4462.9
       },
       "score": {
         "reference_cues": 79,
-        "hypothesis_cues": 90,
+        "hypothesis_cues": 92,
         "reference_chars": 872,
-        "hypothesis_chars": 895,
-        "cer": 0.134174,
-        "substitutions": 56,
-        "deletions": 19,
-        "insertions": 42,
-        "block_accuracy": 0.755097,
-        "missed_blocks": 12,
-        "max_cue_dur": 3.77,
+        "hypothesis_chars": 910,
+        "cer": 0.114679,
+        "substitutions": 36,
+        "deletions": 13,
+        "insertions": 51,
+        "block_accuracy": 0.795432,
+        "missed_blocks": 10,
+        "max_cue_dur": 3.89,
         "over_4_3s": 0,
         "particle_start_cues": 0,
         "aux_start_cues": 0
       },
       "onset_missing": {
-        "count": 5,
+        "count": 1,
         "items": [
-          {
-            "ref_start": 626.76,
-            "ref_text": "すっごい背徳感で興奮しちゃう",
-            "hyp_start": 627.478,
-            "hyp_text": "声はいとく感で興奮しちゃう…",
-            "lag_s": 0.718
-          },
-          {
-            "ref_start": 677.234,
-            "ref_text": "もうイキそうなの?",
-            "hyp_start": 677.798,
-            "hyp_text": "きそうなの?",
-            "lag_s": 0.564
-          },
-          {
-            "ref_start": 728.791,
-            "ref_text": "まだだーめ",
-            "hyp_start": 729.246,
-            "hyp_text": "だだーめ",
-            "lag_s": 0.455
-          },
           {
             "ref_start": 851.773,
             "ref_text": "いいよ　先生のお口にちょうだい",
-            "hyp_start": 852.958,
-            "hyp_text": "先生のお口にちょうだい…",
-            "lag_s": 1.185
-          },
-          {
-            "ref_start": 911.212,
-            "ref_text": "今度はこっちで試してみる?",
-            "hyp_start": 912.04,
-            "hyp_text": "こっちで試してみる?",
-            "lag_s": 0.828
+            "hyp_start": 852.878,
+            "hyp_text": "先生のお口にちょうだい",
+            "lag_s": 1.105
           }
         ]
       },
@@ -405,7 +364,7 @@
         null
       ],
       "id": "test2.qwen",
-      "note": "2026-11-13 用 tools/eval/run_clip.py 复采（.venv 解释器），与路线文档 §1 的数字一致。重跑前先用 --check-fixtures 核对素材指纹。"
+      "note": "2026-11-13 用 .venv + run_clip 复采；2026-11-14 按 A/B 结论把 qwen 的 vad_onset_pad_ms 默认改成 400 后重采（CER 13.42%→11.47% / 12.97%→12.22%）。whisper 两条仍是默认 0 的第一遍结果。"
     }
   ]
 }
