@@ -192,4 +192,9 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
   基线只存数字与 sha1。
   **P0-1 已完成**：`qwen.vad_onset_pad_ms` 默认 400（Test 二 CER 13.42%→11.47%、句首缺字
   5→1；Test 一 12.97%→12.22%；长片不劣化），whisper 同改法 CER +1.61pt，**不启用**。
-  闸门 `onset_gate` 只在 A/B 里用、不进参数面板（实测按文档口径无效）。下一步 P0-3 置信度。
+  闸门 `onset_gate` 只在 A/B 里用、不进参数面板（实测按文档口径无效）。
+  - **P0-3a 完成**：置信度特征 AUC 全 <0.75（最好 0.703），按止损线**不进 audit**；
+    诊断脚本 `tools/eval/qwen_confidence_diag.py`。
+  - **P1-1 完成**（三段）：`kind="compare"` 只回文本；核对台「当前条目」/质检条目可复核，
+    轨道 ⌘ 多选与框选可批量（≤40）；引擎侧 `transcribe_window()` + 空闲 180s 卸载。
+    下一步按文档 P1-3 词表 / P1-2 对齐 spike 排。
