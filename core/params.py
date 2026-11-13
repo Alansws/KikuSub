@@ -61,39 +61,45 @@ SPECS: tuple[ParamSpec, ...] = (
         help="按句法边界切分并平滑分配时间；关掉后按 VAD 段整段出字幕。",
     ),
     ParamSpec(
-        "whisper.enable_loudnorm", "动态响度归一化", WHISPER, "bool", False,
+        "whisper.enable_loudnorm", "动态响度归一化", WHISPER, "bool", True,
         group="基础", config_field="enable_loudnorm",
-        help="弱人声增强。耳语、远景对话建议开启。",
+        help="弱人声增强（dynaudnorm）。安静母带（整片峰值 < 0.1）不开会把大段台词识别成"
+        "空段；实测开着能同时降低错字与漏句。",
     ),
     ParamSpec(
-        "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.30,
+        "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.25,
         group="VAD", minimum=0.05, maximum=0.80, step=0.01, config_field="threshold",
-        help="调小对耳语更灵敏；调大抗噪更强，能过滤背景音乐。",
+        help="调小对耳语更灵敏；调大抗噪更强、能过滤背景音乐。VAD 已改成分窗检测，"
+        "不再需要靠抬高阈值来压住误检。",
     ),
     ParamSpec(
-        "whisper.vad_speech_pad_ms", "首尾留白 (ms)", WHISPER, "int", 200,
+        "whisper.vad_speech_pad_ms", "首尾留白 (ms)", WHISPER, "int", 250,
         group="VAD", minimum=0, maximum=400, step=10, config_field="speech_pad_ms",
-        help="调大防吞头尾音与呼吸声；调小切除无效空白。",
+        help="调大防吞头音（耳语的开头很容易被判成静音）；副作用是句尾喘气会被一起送模，"
+        "已由「句首尾非台词发声自动剔除」兜底。",
     ),
     ParamSpec(
-        "whisper.vad_min_silence_ms", "判定停顿静音 (ms)", WHISPER, "int", 150,
+        "whisper.vad_min_silence_ms", "判定停顿静音 (ms)", WHISPER, "int", 200,
         group="VAD", minimum=50, maximum=600, step=10, config_field="min_silence_ms",
         help="调小会频繁切成短句；调大连贯保留长句。",
     ),
     ParamSpec(
-        "whisper.vad_min_speech_ms", "最短语音 (ms)", WHISPER, "int", 120,
+        "whisper.vad_min_speech_ms", "最短语音 (ms)", WHISPER, "int", 80,
         group="VAD", minimum=0, maximum=500, step=10, config_field="min_speech_ms",
-        help="调小可捕获短叹词；调大过滤短促爆音。",
+        help="调小可捕获「ほら」这类半秒短句（它们单独送模常被判空，靠合并间隔并到下一句）；"
+        "调大过滤短促爆音。",
     ),
     ParamSpec(
         "whisper.vad_merge_gap_s", "片段合并间隔 (s)", WHISPER, "float", 0.30,
         group="VAD", minimum=0.0, maximum=2.0, step=0.05, config_field="merge_gap_s",
-        help="调大让相邻对话合并；调小严格按停顿分段。",
+        help="调大让相邻对话合并；调小严格按停顿分段。留白已经给到 250ms，"
+        "合并间隔再放大在正常对话片上会把两句并进一个块，块准确率反而降。",
     ),
     ParamSpec(
-        "whisper.vad_max_segment_s", "单次送模最长 (s)", WHISPER, "float", 12.0,
+        "whisper.vad_max_segment_s", "单次送模最长 (s)", WHISPER, "float", 9.0,
         group="VAD", minimum=5.0, maximum=28.0, step=1.0, config_field="max_segment_s",
-        help="调小识别快且极少幻觉；调大上下文更连贯。",
+        help="调小识别快且极少幻觉；调大上下文更连贯。9s 是长片回归后取的折中："
+        "再大就会把两轮对话糊进同一块，字幕块准确率下降。",
     ),
     ParamSpec(
         "whisper.vad_min_speech_s", "合并后最短片段 (s)", WHISPER, "float", 0.08,
@@ -104,6 +110,13 @@ SPECS: tuple[ParamSpec, ...] = (
         "whisper.cue_pad_s", "字幕外扩留白 (s)", WHISPER, "float", 0.02,
         group="字幕", minimum=0.0, maximum=0.3, step=0.01, config_field="cue_pad_s",
         help="调大让字幕提前出现、滞后消失，观影更舒适。",
+    ),
+    ParamSpec(
+        "whisper.strip_nonverbal_edges", "剔除句首尾喘气/笑声", WHISPER, "bool", True,
+        group="字幕", config_field="strip_nonverbal_edges",
+        help="模型会如实转写「んふふ」「えへへ」这类非台词发声，它们几乎不该进字幕。"
+        "开着只删句首尾、句中不动；整条只剩促音/长音符的碎片也不会占一条字幕。"
+        "动画里角色的笑声算内容时，关掉即可原样保留。",
     ),
     ParamSpec(
         "whisper.no_repeat_ngram_size", "重复抑制 n-gram", WHISPER, "int", 5,

@@ -363,7 +363,10 @@ def test_params_endpoint_exposes_groups_and_defaults(client: TestClient) -> None
     assert "whisper.vad_threshold" in {
         p["key"] for g in engines["whisper"]["groups"] for p in g["params"]
     }
-    assert engines["whisper"]["defaults"]["whisper.vad_threshold"] == 0.30
+    assert (
+        engines["whisper"]["defaults"]["whisper.vad_threshold"]
+        == param_specs.defaults_for("whisper")["whisper.vad_threshold"]
+    )
     assert keys  # 第一组不能为空
 
 
