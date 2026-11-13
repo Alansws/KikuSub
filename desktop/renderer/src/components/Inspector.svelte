@@ -2,6 +2,19 @@
   import Icon from './Icon.svelte';
   import QaPanel from './QaPanel.svelte';
   import {
+    adoptAlternative,
+    alternativeText,
+    availableEngine,
+    availableEngineLabel,
+    cancelSecondOpinion,
+    currentEngineLabel,
+    dismissAlternative,
+    hasAlternative,
+    retrySecondOpinion,
+    secondOpinion,
+    runSecondOpinion,
+  } from '../lib/secondOpinion.svelte';
+  import {
     app,
     deleteCue,
     exportCues,
@@ -636,6 +649,60 @@
       >
         更新此行
       </button>
+    </div>
+  {/if}
+
+  {#if cue}
+    <div class="second-opinion">
+      <div class="so-head">
+        <b>另一引擎复核</b>
+        <span>{currentEngineLabel()} → {availableEngineLabel() || '另一个引擎未启用'}</span>
+      </div>
+      {#if secondOpinion.status === 'running'}
+        <div class="so-progress" aria-hidden="true">
+          <i style="width:{Math.round(secondOpinion.ratio * 100)}%"></i>
+        </div>
+        <div class="so-stage">{secondOpinion.stage || '正在复核…'}</div>
+        <div class="so-actions">
+          <button class="btn mini ghost" onclick={() => cancelSecondOpinion()}>取消</button>
+        </div>
+      {:else if hasAlternative(play.selected)}
+        <div class="so-grid">
+          <div class="so-col">
+            <div class="so-label">{currentEngineLabel()}</div>
+            <div class="so-text">{cue.text || '∅'}</div>
+          </div>
+          <div class="so-col alt">
+            <div class="so-label">{availableEngineLabel()}</div>
+            <div class="so-text">{alternativeText(play.selected) || '∅'}</div>
+          </div>
+        </div>
+        <div class="so-actions">
+          <button class="btn mini primary" onclick={() => adoptAlternative(play.selected)}>采用这份</button>
+          <button class="btn mini ghost" onclick={() => retrySecondOpinion()}>再听一遍</button>
+          <button class="btn mini ghost" onclick={() => dismissAlternative()}>收起</button>
+        </div>
+      {:else}
+        <div class="so-tip" class:warn={secondOpinion.status === 'error'}>
+          {secondOpinion.status === 'error'
+            ? secondOpinion.error
+            : '把这一句的时间窗送给另一个引擎再听一遍；不会改动当前字幕，采用后才进历史。'}
+        </div>
+        <div class="so-actions">
+          <button
+            class="btn mini"
+            onclick={() => runSecondOpinion([play.selected])}
+            disabled={!availableEngine() || !!app.job}
+            title={!availableEngine()
+              ? '另一个引擎已停用：到「设置 → 引擎与模型」里启用'
+              : app.job
+                ? '有任务在跑（同一时间只允许一个重任务），结束后再复核'
+                : '换引擎要重新加载模型，约 20–40 秒'}
+          >
+            {secondOpinion.status === 'error' ? '重试' : '🎧 用另一引擎再听一遍'}
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -1299,6 +1366,81 @@
     color: var(--danger);
   }
 
+  .second-opinion {
+    margin-top: var(--sp-4);
+    padding: var(--sp-3) 0 0;
+    border-top: 1px solid var(--line-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+  .so-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    font-size: var(--fs-ui);
+  }
+  .so-head b {
+    font-weight: 600;
+  }
+  .so-head span {
+    color: var(--text-3);
+    font-size: var(--fs-label);
+  }
+  .so-progress {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--line-2);
+    overflow: hidden;
+  }
+  .so-progress i {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.12s linear;
+  }
+  .so-stage {
+    color: var(--text-3);
+    font-size: var(--fs-label);
+  }
+  .so-tip {
+    color: var(--text-3);
+    font-size: var(--fs-label);
+    line-height: 1.5;
+  }
+  .so-tip.warn {
+    color: var(--danger);
+  }
+  .so-grid {
+    display: grid;
+    gap: var(--sp-2);
+  }
+  .so-col {
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--line-2);
+    border-radius: var(--rad-card);
+    background: var(--fill);
+  }
+  .so-col.alt {
+    border-color: var(--accent);
+  }
+  .so-label {
+    color: var(--text-3);
+    font-size: var(--fs-label);
+    margin-bottom: var(--sp-1);
+  }
+  .so-text {
+    font-size: var(--fs-body);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .so-actions {
+    display: flex;
+    gap: var(--sp-2);
+    align-items: center;
+  }
   .tts-block {
     margin-top: var(--sp-4);
     padding: var(--sp-3) 0 0;

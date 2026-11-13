@@ -360,7 +360,7 @@
     font: inherit;
     font-size: var(--fs-ui);
     width: 100%;
-    padding-right: 16px;
+    padding-right: var(--sp-4);
     cursor: default;
   }
   .engine-field .chev {

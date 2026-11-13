@@ -793,6 +793,20 @@ export const api = {
     params?: Record<string, unknown>;
   }) => req<JobSnapshot>('/api/jobs', { method: 'POST', body: JSON.stringify(payload) }),
 
+  /** 用另一个引擎把若干字幕窗口各听一遍；服务端只回文本、不落盘。 */
+  createCompareJob: (payload: {
+    media_id: string;
+    engine: string;
+    ranges: Array<{
+      index: number;
+      start: number;
+      end: number;
+      prev_end?: number;
+      next_start?: number;
+    }>;
+    params?: Record<string, unknown>;
+  }) => req<JobSnapshot>('/api/jobs', { method: 'POST', body: JSON.stringify({ ...payload, kind: 'compare' }) }),
+
   createProxyJob: (mediaId: string) =>
     req<JobSnapshot>('/api/jobs', {
       method: 'POST',
