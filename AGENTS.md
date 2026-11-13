@@ -195,6 +195,6 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
   闸门 `onset_gate` 只在 A/B 里用、不进参数面板（实测按文档口径无效）。
   - **P0-3a 完成**：置信度特征 AUC 全 <0.75（最好 0.703），按止损线**不进 audit**；
     诊断脚本 `tools/eval/qwen_confidence_diag.py`。
-  - **P1-1 完成**（三段）：`kind="compare"` 只回文本；核对台「当前条目」/质检条目可复核，
-    轨道 ⌘ 多选与框选可批量（≤40）；引擎侧 `transcribe_window()` + 空闲 180s 卸载。
-    下一步按文档 P1-3 词表 / P1-2 对齐 spike 排。
+  - **P1-1 完成**：`kind="compare"` 只回文本；单句复核可用（批量入口后续删除）；
+    `transcribe_window()` + 空闲 180s 卸载。下一步 P1-3 词表 / P1-2 对齐 spike。
+  - **后续产品需求**：[双引擎复核与工作流-需求-2026-11.md](docs/双引擎复核与工作流-需求-2026-11.md)。
