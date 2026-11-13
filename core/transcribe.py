@@ -160,6 +160,26 @@ MAX_SEGMENT_S_LIMIT = 29.0
 VAD_WINDOW_S = 20.0
 VAD_WINDOW_OVERLAP_S = 1.0
 
+# 句首补回（路线文档 P0-1）：Silero 的段起点系统性晚于真实发声。830s 素材实测，
+# 即使已经带 250ms 的 `speech_pad_ms`，段起点仍比人工版晚中位 +0.5s、最多 +1.1s；
+# 人工时间窗左右各扩 0.25s 直送模型，9 个「句首缺字」样本的句首全部回来了。
+# 做法是把**合并后**的块起点整体向左扩 `pad`，而不是调阈值（0.20 会换来 7 处强制
+# 切分与更多音乐误检）。`0` = 关闭，与旧行为一致。
+ONSET_PAD_MAX_MS = 600
+# 左扩不得吃进上一块：`start = max(0, prev_end + gap, start - pad)`。
+ONSET_PREV_GAP_MS = 80
+# 闸门只在 A/B 里用，不进参数面板：被吞的句首多是「す / そ / え」这类清辅音，
+# 按段内峰值百分比设闸恰好把想救的音拦在门外（见路线文档 P0-1「不要默认死绑能量闸门」）。
+ONSET_GATE_NONE = "none"
+ONSET_GATE_SNR = "snr"  # 回看窗内有 ≥ 底噪 + 6dB 的帧
+ONSET_GATE_SNR_CAP = "snr_cap"  # clamp(段峰值×0.08, 底噪+6dB, 底噪+18dB)
+ONSET_FRAME = 512  # 32ms @16k，与 Silero 的窗口一致
+ONSET_HOP = 160  # 10ms
+ONSET_NOISE_QUANTILE = 0.10
+ONSET_SNR_DB = 6.0
+ONSET_CAP_DB = 18.0
+ONSET_RELATIVE_PEAK = 0.08
+
 # 非台词发声（笑声 / 喘气 / 亲吻声）。模型会如实转写这些东西，但它们几乎从不
 # 该进字幕：句首尾挂着「んふふ」「えへへ」会让整条字幕读起来像噪声。只在**端点**
 # 删（句中不动），且不删「あー」「うー」这类可能是台词本身的感叹（人工整理版里
@@ -323,6 +343,11 @@ class WhisperVadConfig:
     # 借用 Qwen 的 CTC 对齐头拿逐字时间（core/align_layer.py）。
     # 默认关：要多常驻一份 Qwen 权重（MPS 4.3 GB），而且要先装 Qwen 引擎。
     use_ctc_alignment: bool = False
+    # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
+    # 见 `extend_segment_onsets()` 与路线文档 P0-1。
+    onset_pad_ms: int = 0
+    # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
+    onset_gate: str = ONSET_GATE_NONE
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -333,6 +358,7 @@ def build_whisper_config(**overrides) -> WhisperVadConfig:
     cfg.min_speech_ms = max(0, int(cfg.min_speech_ms))
     cfg.min_silence_ms = max(0, int(cfg.min_silence_ms))
     cfg.min_speech_s = max(0.0, float(cfg.min_speech_s))
+    cfg.onset_pad_ms = max(0, min(int(cfg.onset_pad_ms), ONSET_PAD_MAX_MS))
     return cfg
 
 
@@ -832,6 +858,129 @@ def detect_speech_stamps(
         else:
             merged.append(dict(stamp))
     return merged
+
+
+def _frame_rms(audio: np.ndarray) -> np.ndarray:
+    """逐帧 RMS（帧长 32ms / 步长 10ms，与 Silero 的窗口一致）。
+
+    分块计算：830s 素材展开成 8 万个帧，一次性 `mean` 会临时吃掉 ~170MB，
+    而这里只需要一维结果。帧视图本身是 stride 视图，不复制音频。
+    """
+    if audio.size < ONSET_FRAME:
+        return np.zeros(0, dtype=np.float32)
+    frames = np.lib.stride_tricks.sliding_window_view(
+        np.asarray(audio, dtype=np.float32), ONSET_FRAME
+    )[::ONSET_HOP]
+    out = np.empty(len(frames), dtype=np.float32)
+    block = 4096
+    for start in range(0, len(frames), block):
+        chunk = frames[start : start + block]
+        out[start : start + block] = np.sqrt(np.mean(np.square(chunk), axis=1))
+    return out
+
+
+def _db_to_gain(db: float) -> float:
+    return float(10.0 ** (db / 20.0))
+
+
+def _gate_threshold(
+    gate: str,
+    *,
+    noise: float,
+    peak: float,
+) -> float:
+    """回看窗的准入阈值（RMS）。三种闸门的定义见路线文档 P0-1 的 A/B 矩阵。"""
+    if gate == ONSET_GATE_SNR:
+        return noise * _db_to_gain(ONSET_SNR_DB)
+    if gate == ONSET_GATE_SNR_CAP:
+        low = noise * _db_to_gain(ONSET_SNR_DB)
+        high = noise * _db_to_gain(ONSET_CAP_DB)
+        # 注意是 clamp 不是 max：段内一声大声喘息会把 peak×0.08 抬起来，
+        # 用 max 就防不住「峰值带偏」，这一点在路线文档里专门写了。
+        return min(max(peak * ONSET_RELATIVE_PEAK, low), high)
+    return 0.0
+
+
+def extend_segment_onsets(
+    segments: list[tuple[int, int]],
+    audio: np.ndarray,
+    *,
+    pad_ms: int,
+    gate: str = ONSET_GATE_NONE,
+    sample_rate: int = SAMPLE_RATE,
+    prev_gap_ms: int = ONSET_PREV_GAP_MS,
+    stats: dict | None = None,
+) -> list[tuple[int, int]]:
+    """把每个语音块的起点向左扩，救回被 VAD 吞掉的句首。
+
+    `segments` 是 `merge_vad_segments()` 的输出（样本下标，已按 max_segment_s 切过）。
+    左扩在合并**之后**做：先扩再合并会让 0.3–0.5s 的句间空隙消失，两句话被并成
+    一个送模块，那是另一种错误。左扩后块长最多 +pad，仍在 ASR 的单段上限（9s/12s）内。
+
+    返回新的块列表；`stats` 里补 `onset_*` 计数，报告与核对台状态行直接读它。
+    """
+    pad_ms = int(max(0, min(pad_ms, ONSET_PAD_MAX_MS)))
+    if stats is not None:
+        stats.update(
+            {
+                "onset_pad_ms": pad_ms,
+                "onset_gate": gate if pad_ms > 0 else ONSET_GATE_NONE,
+                "onset_extended": 0,
+                "onset_gated": 0,
+                "onset_shift_s": 0.0,
+            }
+        )
+    if pad_ms <= 0 or not segments:
+        return list(segments)
+
+    pad_samples = int(sample_rate * pad_ms / 1000)
+    gap_samples = int(sample_rate * prev_gap_ms / 1000)
+    rms = _frame_rms(audio)
+    if rms.size:
+        noise = float(np.quantile(rms, ONSET_NOISE_QUANTILE))
+    else:
+        noise = 0.0
+
+    out: list[tuple[int, int]] = []
+    extended = 0
+    gated = 0
+    shift_total = 0
+    prev_end = 0
+    for index, (start, end) in enumerate(segments):
+        floor_start = prev_end + gap_samples if index else 0
+        target = max(0, floor_start, start - pad_samples)
+        prev_end = end
+        if target >= start:
+            out.append((start, end))
+            continue
+        if gate in (ONSET_GATE_SNR, ONSET_GATE_SNR_CAP) and rms.size:
+            # 帧 i 覆盖样本 [i*hop, i*hop+frame)：下标直接除 hop，不用浮点换算。
+            # 回看窗只取**完整落在 start 之前**的帧：跨在边界上的那一帧会被
+            # 段内语音的能量污染，拿它判闸等于永远放行。
+            lo = max(0, target // ONSET_HOP)
+            hi = max(lo, (start - ONSET_FRAME) // ONSET_HOP + 1)
+            window = rms[lo:hi]
+            peak = float(
+                rms[max(0, start // ONSET_HOP) : max(0, end // ONSET_HOP) + 1].max(initial=0.0)
+            )
+            threshold = _gate_threshold(gate, noise=noise, peak=peak)
+            if window.size and float(window.max()) < threshold:
+                gated += 1
+                out.append((start, end))
+                continue
+        extended += 1
+        shift_total += start - target
+        out.append((target, end))
+
+    if stats is not None:
+        stats.update(
+            {
+                "onset_extended": extended,
+                "onset_gated": gated,
+                "onset_shift_s": round(shift_total / sample_rate / max(extended, 1), 3),
+            }
+        )
+    return out
 
 
 def strip_edge_nonverbal(text: str) -> str:
@@ -1523,6 +1672,15 @@ class AnimeWhisperEngine:
             min_speech_s=float(cfg.min_speech_s),
             audio=audio,
             snap_stats=self.last_segment_stats,
+        )
+        # 句首补回在合并之后：先扩再合并会把 0.3–0.5s 的句间空隙填掉，
+        # 两句话被并成一个送模块。`0` 时原样返回，不改变任何旧行为。
+        segments = extend_segment_onsets(
+            segments,
+            audio,
+            pad_ms=int(cfg.onset_pad_ms),
+            gate=str(getattr(cfg, "onset_gate", ONSET_GATE_NONE) or ONSET_GATE_NONE),
+            stats=self.last_segment_stats,
         )
         if not segments:
             # VAD 没命中任何语音时**不要**把整段音频兜底送模。

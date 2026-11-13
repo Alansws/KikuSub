@@ -79,6 +79,13 @@ SPECS: tuple[ParamSpec, ...] = (
         "已由「句首尾非台词发声自动剔除」兜底。",
     ),
     ParamSpec(
+        "whisper.vad_onset_pad_ms", "句首提前 (ms)", WHISPER, "int", 0,
+        group="VAD", minimum=0, maximum=600, step=20, config_field="onset_pad_ms",
+        help="把 VAD 段起点整体向左扩。Silero 的起点系统性晚于真实发声，"
+        "被吞的常是「す / そ / え」这类轻声起音的句首；0 = 关闭（与旧行为一致）。"
+        "不调阈值：调低会换来更多强制切分与音乐误检。",
+    ),
+    ParamSpec(
         "whisper.vad_min_silence_ms", "判定停顿静音 (ms)", WHISPER, "int", 200,
         group="VAD", minimum=50, maximum=600, step=10, config_field="min_silence_ms",
         help="调小会频繁切成短句；调大连贯保留长句。",
@@ -167,6 +174,12 @@ SPECS: tuple[ParamSpec, ...] = (
         "qwen.vad_speech_pad_ms", "首尾留白 (ms)", QWEN, "int", 250,
         group="VAD", minimum=0, maximum=400, step=10, config_field="vad_speech_pad_ms",
         help="调大防止句首辅音或句尾被切断。耳语片句首常被削掉半个词，250ms 与 Whisper 侧一致。",
+    ),
+    ParamSpec(
+        "qwen.vad_onset_pad_ms", "句首提前 (ms)", QWEN, "int", 0,
+        group="VAD", minimum=0, maximum=600, step=20, config_field="vad_onset_pad_ms",
+        help="把 VAD 段起点整体向左扩，救回被吞的句首；0 = 关闭（与旧行为一致）。"
+        "与 Whisper 侧同一条实现（transcribe.extend_segment_onsets）。",
     ),
     ParamSpec(
         "qwen.merge_gap_s", "合并间隔 (s)", QWEN, "float", 0.50,

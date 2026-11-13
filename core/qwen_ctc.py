@@ -69,6 +69,7 @@ from .transcribe import (
     is_nonverbal_only,
     strip_edge_nonverbal_ex,
     detect_speech_stamps,
+    extend_segment_onsets,
     forbidden_cut_positions,
     load_audio_for_transcription,
     merge_vad_segments,
@@ -596,6 +597,11 @@ class QwenCtcConfig:
     cue_pad_start_s: float = 0.20
     cue_pad_end_s: float = 0.45
     max_new_tokens: int = 440
+    # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
+    # 与 Whisper 侧同一条实现（transcribe.extend_segment_onsets），别在这里再写一份。
+    vad_onset_pad_ms: int = 0
+    # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
+    onset_gate: str = "none"
 
 
 def _char_times_in_span(
@@ -1043,6 +1049,14 @@ class QwenCtcEngine:
             min_speech_s=cfg.min_speech_s,
             audio=audio,
             snap_stats=self.last_segment_stats,
+        )
+        # 与 Whisper 侧同一个实现：左扩在合并之后，`0` 时原样返回。
+        segments = extend_segment_onsets(
+            segments,
+            audio,
+            pad_ms=int(getattr(cfg, "vad_onset_pad_ms", 0) or 0),
+            gate=str(getattr(cfg, "onset_gate", "none") or "none"),
+            stats=self.last_segment_stats,
         )
         if not segments:
             # 与 Whisper 侧同一口径：VAD 未命中语音时不得把整段音频送模。

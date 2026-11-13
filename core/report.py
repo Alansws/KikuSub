@@ -114,6 +114,27 @@ def _cut_snap_summary(stats: dict | None) -> str:
     return f"{forced} 处强制切分，其中 {snapped} 处吸附到能量谷（累计前移 {shift:.2f}s）"
 
 
+def _onset_summary(stats: dict | None) -> str:
+    """【句首补回】一行：扩了几段、平均提前多少、被闸门拦回几段。
+
+    这一段是给用户核对「句首是不是真回来了」用的，所以数字必须来自本次转写
+    （`extend_segment_onsets` 写进 segment_stats），不能写成产品宣传语。
+    """
+    stats = stats or {}
+    pad = int(stats.get("onset_pad_ms", 0) or 0)
+    if pad <= 0:
+        return "未启用（句首提前 = 0 ms）"
+    extended = int(stats.get("onset_extended", 0) or 0)
+    shift = float(stats.get("onset_shift_s", 0.0) or 0.0)
+    gated = int(stats.get("onset_gated", 0) or 0)
+    if extended <= 0:
+        return f"已启用（{pad} ms），本次没有可补的段"
+    text = f"{extended} 段，平均 +{shift:.2f}s"
+    if gated:
+        text += f"（{gated} 段被能量闸门拦回）"
+    return text
+
+
 def _align_stats_headline(stats: dict | None, family: str = "whisper") -> str:
     """【时间轴】一行摘要：把「精确到哪种粒度」从宣传语变成可核对的数字。
 
@@ -250,6 +271,14 @@ def overview_pairs(
     ]
 
 
+def _onset_param_pair(config: object, field: str) -> list[tuple[str, str]]:
+    """参数清单里的「句首提前」行：只在启用时出现，默认配置不占一行。"""
+    pad = int(getattr(config, field, 0) or 0)
+    if pad <= 0:
+        return []
+    return [("句首提前 (onset_pad_ms)", f"{pad} ms")]
+
+
 def param_pairs(
     *,
     is_qwen: bool,
@@ -306,6 +335,7 @@ def param_pairs(
             ("字幕前后留白 (cue_pad_s)", f"{getattr(config, 'cue_pad_start_s', 0.12)} s"),
             ("CTC 逐字发声帧对齐 (use_alignment)", "启用" if use_alignment else "停用"),
             ("动态响度归一化 (enable_loudnorm)", "启用" if getattr(config, "enable_loudnorm", True) else "停用"),
+            *_onset_param_pair(config, "vad_onset_pad_ms"),
         ]
     return [
         ("识别方案", "Anime Whisper (litagin/anime-whisper)"),
@@ -321,6 +351,7 @@ def param_pairs(
         ("字幕首尾外扩留白 (cue_pad_s)", f"{getattr(config, 'cue_pad_s', 0.02)} s"),
         ("重复抑制 n-gram (no_repeat_ngram_size)", str(ngram)),
         ("重复惩罚因子 (repetition_penalty)", str(penalty)),
+        *_onset_param_pair(config, "onset_pad_ms"),
     ]
 
 
@@ -456,6 +487,7 @@ def build_transcription_report(
             f"（多为配乐/底噪误判，已留在 .missed.json 备查）"
         )
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
+    lines.append("【句首补回】" + _onset_summary(segment_stats))
     dropped_rows = _hallucination_rows(hallucination_spans, "dropped")
     suspect_rows = _hallucination_rows(hallucination_spans, "suspect")
     if not is_whisper:
@@ -648,6 +680,12 @@ def build_report_data(
             "id": "cut_snap",
             "title": "切分点吸附",
             "headline": _cut_snap_summary(segment_stats),
+            "items": [],
+        },
+        {
+            "id": "onset_pad",
+            "title": "句首补回",
+            "headline": _onset_summary(segment_stats),
             "items": [],
         },
     ]
