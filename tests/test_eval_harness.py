@@ -79,7 +79,7 @@ def test_onset_missing_picks_max_overlap_cue():
 
 def test_apply_overrides_rejects_unknown_key():
     with pytest.raises(sc.OverrideError):
-        sc.apply_overrides("whisper", ["whisper.vad_onset_pad_ms=400"])
+        sc.apply_overrides("whisper", ["whisper.vad_onset_gate=snr"])
 
 
 def test_apply_overrides_rejects_foreign_engine_key():
@@ -296,6 +296,37 @@ def test_run_clip_rejects_unknown_engine(tmp_path):
         ["--engine", "no-such-engine", "--media", "a.mp4", "--ref", "a.srt",
          "--fixtures", str(tmp_path)]
     ) == 2
+
+
+def test_ab_onset_groups_match_the_route_doc():
+    from tools.eval import ab_onset
+
+    assert ab_onset.GROUPS["a0"] == (0, "none")
+    assert ab_onset.GROUPS["a1"] == (400, "none")
+    assert ab_onset.GROUPS["a2"] == (400, "snr")
+    assert ab_onset.GROUPS["a2b"] == (400, "snr_cap")
+    assert ab_onset.GROUPS["a3"] == (600, "none")
+    # 起点提前全部落在参数表允许的 0–600 区间。
+    for pad_ms, _ in ab_onset.GROUPS.values():
+        assert 0 <= pad_ms <= 600
+
+
+def test_ab_onset_duplicate_proxy():
+    from tools.eval import ab_onset
+    from tools.eval.score_srt import Cue
+
+    cues = [Cue(0, 1, "おはよう"), Cue(1, 2, "おはよう"), Cue(2, 3, "おはよう")]
+    assert ab_onset._duplicate_cues(cues) == 2
+    # 太短的重复（「うん」）不算：那是正常的对话来回，不是吃进尾音。
+    assert ab_onset._duplicate_cues([Cue(0, 1, "うん"), Cue(1, 2, "うん")]) == 0
+
+
+def test_ab_onset_candidate_path_uses_engine_suffix(tmp_path):
+    from tools.eval import ab_onset
+
+    media = tmp_path / "Jap_test_2.mp4"
+    assert ab_onset._candidate_path(tmp_path, media, "whisper").name == "Jap_test_2.srt"
+    assert ab_onset._candidate_path(tmp_path, media, "qwen").name == "Jap_test_2.qwen.srt"
 
 
 def test_probe_window_rejects_missing_media(tmp_path):

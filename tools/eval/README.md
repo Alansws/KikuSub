@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | `score_srt.py` | 两份 SRT 打分：CER、块均准确率、漏块、可疑切分 | 否（只依赖标准库） |
 | `run_clip.py` | 跑「一个引擎 × 一支片 × 一组参数」，出一条 scorecard | 是（whisper / qwen） |
+| `ab_onset.py` | 跑 P0-1 的 A0–A3 矩阵（起点提前 × 能量闸门），拼成一张对比表 | 是（whisper / qwen） |
 | `probe_window.py` | 参考 SRT 的每条时间窗**绕开 VAD** 直送模型，分离「识别」与「分段」 | 是（qwen） |
 | `scorecard.py` | 公共件：卡片形状、句首缺字判定、基线比对、fixtures 解析 | 否 |
 
@@ -73,6 +74,22 @@ python tools/eval/run_clip.py --engine qwen --media Jap_test.mp4 \
   同一支片的第二组参数不用重新解码。
 - 卡片里的 `params` 存**该引擎的完整取值**（含默认值）：只存覆写的话，代码里的默认值改了
   也发现不了。比对时参数不同会报 `params_differ`，提示这组数字不可比。
+
+## ab_onset.py：句首补回的 A/B 矩阵
+
+```bash
+# Test 二、两个引擎、默认五组（a0 基线 / a1 400ms / a2 400ms+信噪比 / a2b 400ms+上限 / a3 600ms）
+python tools/eval/ab_onset.py --engines qwen,whisper \
+    --media Jap_test_2.mp4 --ref Jap_test_2_perfect.srt --fixtures . \
+    --json /tmp/ab.json --markdown /tmp/ab.md
+```
+
+组定义在 `ab_onset.GROUPS`，与路线文档 P0-1 的矩阵一一对应；每组只是「`vad_onset_pad_ms`」
+加一个 A/B 专用的 `onset_gate`（`none` / `snr` / `snr_cap`，**不进参数面板**）。
+跑片逻辑复用 `run_clip.run_one`，所以表里的数字与单跑完全同源。
+
+除 CER / 插入 / 句首缺字，表里多一列「重复句」：相邻两条归一化后文本完全相同的次数。
+它是「吃进上一句尾音」的代理指标——重复句会先于 CER 变化，用来兜住「CER 没涨但字幕不对」。
 
 ## probe_window.py：绕开 VAD 的逐窗探针
 

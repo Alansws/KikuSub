@@ -122,8 +122,12 @@ def _media_duration_s(path: Path) -> float | None:
 # --------------------------------------------------------------------------- 引擎配置
 
 
-def _engine_configs(engine_key: str, overrides: dict):
-    """返回 (whisper_config, qwen_config, passthrough, resolved)。"""
+def _engine_configs(engine_key: str, overrides: dict, gate: str | None = None):
+    """返回 (whisper_config, qwen_config, passthrough, resolved)。
+
+    `gate` 是 A/B 专用的实验轴（none / snr / snr_cap），**不进参数面板**：
+    它决定「左扩的音频要不要过能量闸门」，产品上最终只会有一档（或不设）。
+    """
     from core import engines as registry
     from core import params as param_specs
 
@@ -142,10 +146,16 @@ def _engine_configs(engine_key: str, overrides: dict):
     if family == "qwen":
         from core.qwen_ctc import QwenCtcConfig
 
-        return None, QwenCtcConfig(**kwargs), passthrough, resolved
+        config = QwenCtcConfig(**kwargs)
+        if gate is not None:
+            config.onset_gate = gate
+        return None, config, passthrough, resolved
     from core.transcribe import build_whisper_config
 
-    return build_whisper_config(**kwargs), None, passthrough, resolved
+    config = build_whisper_config(**kwargs)
+    if gate is not None:
+        config.onset_gate = gate
+    return config, None, passthrough, resolved
 
 
 def _known_engines() -> list[str]:
@@ -161,18 +171,30 @@ def _default_params(engine_key: str) -> dict:
     return param_specs.defaults_for(engine_key)
 
 
-def _transcribe(media: Path, engine_key: str, overrides: dict, out_dir: Path, args):
+def _transcribe(
+    media: Path,
+    engine_key: str,
+    overrides: dict,
+    out_dir: Path,
+    *,
+    start: float | None = None,
+    end: float | None = None,
+    gate: str | None = None,
+    progress: bool = True,
+):
     from core.pipeline import TranscribeRequest, run_transcription
 
-    whisper_config, qwen_config, passthrough, resolved = _engine_configs(engine_key, overrides)
+    whisper_config, qwen_config, passthrough, resolved = _engine_configs(
+        engine_key, overrides, gate
+    )
     req = TranscribeRequest(
         media_path=media,
         engine_key=engine_key,
         output_format="SRT",
         whisper_config=whisper_config,
         qwen_config=qwen_config,
-        start_s=args.start,
-        end_s=args.end,
+        start_s=start,
+        end_s=end,
         write_audit=False,  # 评测不该覆盖应用里的待核进度
         no_repeat_ngram_size=int(passthrough.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(passthrough.get("repetition_penalty", 1.15)),
@@ -181,14 +203,79 @@ def _transcribe(media: Path, engine_key: str, overrides: dict, out_dir: Path, ar
     state = {"last": -5}
 
     def on_progress(ratio: float, message: str) -> None:
+        if not progress:
+            return
         pct = int(round(ratio * 100))
         if pct >= state["last"] + 5 or ratio >= 1.0:
             state["last"] = pct
             print(f"  [{pct:3d}%] {message}", file=sys.stderr, flush=True)
 
-    print(f"跑片：{engine_key} × {media.name}", file=sys.stderr, flush=True)
+    if progress:
+        print(f"跑片：{engine_key} × {media.name}", file=sys.stderr, flush=True)
     result = run_transcription(req, on_progress=on_progress, output_dir=out_dir)
     return result, resolved
+
+
+# --------------------------------------------------------------------------- 跑一组
+
+
+def run_one(
+    *,
+    engine: str,
+    media: Path,
+    reference: Path,
+    out_dir: Path,
+    start: float | None = None,
+    end: float | None = None,
+    overrides: dict | None = None,
+    gate: str | None = None,
+    progress: bool = True,
+) -> dict:
+    """跑一组转写 + 打分，返回一张评测卡。
+
+    `run_clip.py` 与 `ab_onset.py` 都走这里——「一次跑片怎么算数字」只有这一份实现。
+    """
+    overrides = dict(overrides or {})
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sampler = _MpsPeak()
+    started = time.perf_counter()
+    sampler.start()
+    try:
+        result, resolved = _transcribe(
+            media,
+            engine,
+            overrides,
+            out_dir,
+            start=start,
+            end=end,
+            gate=gate,
+            progress=progress,
+        )
+    finally:
+        sampler.stop()
+    wall_s = time.perf_counter() - started
+
+    hypothesis = parse_srt(Path(result.out_path).read_text(encoding="utf-8-sig"))
+    reference_cues = parse_srt(reference.read_text(encoding="utf-8-sig"))
+    score_result = score(reference_cues, hypothesis, start=start, end=end)
+    ref_ja = filter_time(filter_language(reference_cues, "ja"), start, end)
+    onset = onset_missing(ref_ja, filter_language(hypothesis, "all"))
+    return build_card(
+        engine=engine,
+        media=media,
+        reference=reference,
+        score_result=score_result,
+        resolved_params=resolved,
+        cues=len(result.cues),
+        chars=result.char_count,
+        pending_qa=result.pending_qa,
+        elapsed_s=wall_s,
+        peak_rss_mb=_peak_rss_mb(),
+        peak_mps_mb=sampler.peak_mb,
+        onset=onset,
+        media_duration_s=_media_duration_s(media),
+        timerange=(start, end),
+    )
 
 
 # --------------------------------------------------------------------------- 主流程
@@ -270,37 +357,14 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = Path(args.out) if args.out else REPO_ROOT / "outputs" / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    sampler = _MpsPeak()
-    started = time.perf_counter()
-    sampler.start()
-    try:
-        result, resolved = _transcribe(media, args.engine, overrides, out_dir, args)
-    finally:
-        sampler.stop()
-    wall_s = time.perf_counter() - started
-
-    hypothesis = parse_srt(Path(result.out_path).read_text(encoding="utf-8-sig"))
-    reference_cues = parse_srt(reference.read_text(encoding="utf-8-sig"))
-    score_result = score(reference_cues, hypothesis, start=start, end=end)
-    ref_ja = filter_time(filter_language(reference_cues, "ja"), start, end)
-    onset = onset_missing(ref_ja, filter_language(hypothesis, "all"))
-
-    card = build_card(
+    card = run_one(
         engine=args.engine,
         media=media,
         reference=reference,
-        score_result=score_result,
-        resolved_params=resolved,
-        cues=len(result.cues),
-        chars=result.char_count,
-        pending_qa=result.pending_qa,
-        elapsed_s=wall_s,
-        peak_rss_mb=_peak_rss_mb(),
-        peak_mps_mb=sampler.peak_mb,
-        onset=onset,
-        media_duration_s=_media_duration_s(media),
-        timerange=(start, end),
+        out_dir=out_dir,
+        start=start,
+        end=end,
+        overrides=overrides,
     )
 
     print()
