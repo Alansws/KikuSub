@@ -171,3 +171,11 @@ bash tools/pack/build_dmg.sh                   # 出 DMG
 
 CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一致、tag 的提交不在 `main` 上。
 本地可选装钩子：`git config core.hooksPath tools/git-hooks`（推发版 tag 前自动跑 preflight）。
+
+## 7. 进行中的专项（跨会话必须能接上）
+
+- **转录引擎标定**：Anime Whisper 已完成一版（分窗 VAD、默认参数、句首尾发声剔除与边界收口），
+  记录在 [docs/转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)。
+  **未完成的一条是逐字对齐**：自带的 cross-attention DTW 在 2 层蒸馏解码器上实测达不到 ±150ms
+  （句内停顿倒准），已决定不单独为 Whisper 写对齐器，等 Qwen（自带 CTC 头）那一轮一起做通用对齐层。
+  新开 Qwen 标定会话时，把这件事一起排进去——待办在 `docs/backlog.md` P1-5。

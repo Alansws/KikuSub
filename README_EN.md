@@ -48,7 +48,14 @@ Everything except the optional AI features is local inference.
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
 - All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. Six built-in presets, plus save / overwrite / delete.
-- Optional FFmpeg `dynaudnorm` to push down BGM and lift quiet dialogue.
+- FFmpeg `dynaudnorm` is on by default (on quiet masters it is the difference between
+  transcribing a line and dropping it); turn it off in the parameter panel if you prefer.
+- Silero VAD runs in 30 s windows: one long pass drifts and silently misses clear lines.
+- Breath and laughter at cue edges ("んふふ", "えへへ") are stripped after decoding; cue
+  interiors are left alone. The "strip edge vocalisation" switch turns this off for anime
+  where a character's laugh is content.
+- One-character lines ("え？", "ん…") are kept — only cues made purely of sokuon/long-vowel
+  marks, or a single kana stretched over 2 s (a breath misread as speech), are dropped.
 - Cancel mid-run and keep what finished (`*.part_cancelled.srt`).
 - **Import source and target tracks separately**: the Transcribe page's “existing subtitles” cards can load a source SRT/VTT or a target SRT/VTT aligned to the current source; the Review desk “⋯” menu can delete either track independently, so a restart no longer forces a full re-transcription just to restore translations.
 - Hallucination gate: segments transcribed but re-checked as empty are dropped, suspicious short cues are marked, and the per-segment details go into the task report.
