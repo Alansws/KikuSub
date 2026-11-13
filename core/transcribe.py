@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import re
@@ -165,7 +166,9 @@ VAD_WINDOW_OVERLAP_S = 1.0
 # 「あー…すっごい…」是保留的）。
 _NONVERBAL_UNIT = (
     r"(?:ん|ン)?[ふフはハへヘほホひヒ][ふフはハへヘほホひヒ]+"
-    r"|くすくす|あはは|えへへ|うふふ|はぁ|んー+|ふー+|ちゅっ"
+    r"|くすくす|あはは|うふふ|はぁ|んー+|ふー+|ちゅっ"
+    # 「えへへへ」这种：正则下面那条要求首字就是呼气字，'え' 会剩下来。
+    r"|え[へヘ][へヘ]+"
 )
 _EDGE_LEAD_RE = re.compile(
     r"^(?:[、。…！？!?ー~〜っッ♪\s]*(?:" + _NONVERBAL_UNIT + r"))+[、。…！？!?ー~〜っッ♪\s]*"
@@ -317,6 +320,9 @@ class WhisperVadConfig:
     enable_loudnorm: bool = True
     # 句首尾的喘气/笑声是否自动剔除（整条只剩发声的碎片一并丢弃）
     strip_nonverbal_edges: bool = True
+    # 借用 Qwen 的 CTC 对齐头拿逐字时间（core/align_layer.py）。
+    # 默认关：要多常驻一份 Qwen 权重（MPS 4.3 GB），而且要先装 Qwen 引擎。
+    use_ctc_alignment: bool = False
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -1355,6 +1361,88 @@ class AnimeWhisperEngine:
             # 最后再赋值：加载中途失败时 _pipe 保持 None，下一次还能重试。
             self._pipe = pipe
 
+    def _aligned_pass(
+        self,
+        pending: list[tuple[int, int, str, float, float]],
+        audio: np.ndarray,
+        cfg: "WhisperVadConfig",
+        stats: dict,
+        progress_cb=None,
+    ) -> list[SubtitleCue]:
+        """第二遍：**先卸掉 Whisper**，再借 Qwen 的 CTC 对齐头切条。
+
+        顺序是硬要求：release() 必须在 ensure_loaded() 之前，否则 6.7GB（Whisper）
+        + 5.1GB（对齐器）会同时常驻。对齐器是纯推理借用，用完立刻 unload()；
+        任何一段对齐失败都回退到原来的按字数分配，绝不丢已识别的文本。
+        """
+        from .align_layer import LAYER
+        from .qwen_ctc import QwenCtcConfig
+
+        # 对齐层给的是「真实发声边界」，字幕还要按人工核验版的观影惯例补留白：
+        # 提前 0.18s、句尾多停 0.43s，剩下的 0.02 由 apply_cue_padding 用用户自己的
+        # cue_pad_s 补上（默认 0.02 → 合计 0.20 / 0.45）。
+        cue_cfg = QwenCtcConfig(
+            max_cue_dur=cfg.max_cue_dur,
+            max_cue_chars=cfg.max_cue_chars,
+            strip_nonverbal_edges=cfg.strip_nonverbal_edges,
+            cue_pad_start_s=0.18,
+            cue_pad_end_s=0.43,
+        )
+        self.release()
+        ready = LAYER.ensure_loaded(progress_cb)
+        out: list[SubtitleCue] = []
+        total = len(pending)
+        try:
+            for i, (start, end, text, seg_start_s, seg_end_s) in enumerate(pending, start=1):
+                if progress_cb and i % 20 == 1:
+                    progress_cb(
+                        0.9 + 0.05 * (i - 1) / max(total, 1),
+                        f"正在对齐第 {i}/{total} 段…",
+                    )
+                chunk = audio[start:end]
+                if ready:
+                    outcome = LAYER.split(chunk, text, offset=seg_start_s, cue=cue_cfg)
+                    if outcome.ok and outcome.cues:
+                        stats["segments"] += 1
+                        stats["chars"] += len(text)
+                        out.extend(outcome.cues)
+                        continue
+                stats["degraded"] += 1
+                out.extend(
+                    split_text_into_cues(
+                        text,
+                        seg_start_s,
+                        seg_end_s,
+                        max_cue_dur=cfg.max_cue_dur,
+                        max_cue_chars=cfg.max_cue_chars,
+                        audio=chunk,
+                        sample_rate=SAMPLE_RATE,
+                    )
+                )
+        finally:
+            # 无论成功、失败还是被取消，都不能把 5GB 的对齐器留在显存里。
+            LAYER.unload()
+        return out
+
+    def release(self) -> None:
+        """卸掉权重，把内存让给别的模型。
+
+        `whisper.use_ctc_alignment` 打开时，对齐层要再装一份 Qwen（实测 MPS 4.3GB）。
+        6.7GB + 5.1GB 同时常驻会在 16GB 机器上把系统挤到换页，所以对齐这一遍
+        **必须先卸掉 Whisper 再加载对齐器**（`_aligned_pass` 里按这个顺序调）。
+        """
+        if self._pipe is None:
+            return
+        with _MODEL_LOAD_LOCK:
+            self._pipe = None
+            gc.collect()
+            if self.device == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:
+                    log.debug("释放 MPS 缓存失败", exc_info=True)
+            log.info("Anime Whisper 权重已卸载（让位给对齐层）")
+
     def transcribe_file(
         self,
         media_path: str | Path,
@@ -1484,6 +1572,9 @@ class AnimeWhisperEngine:
         hallucination_drops = 0
         suspect_cues = 0
         nonverbal_skips = 0
+        aligned_stats = {"segments": 0, "chars": 0, "degraded": 0}
+        # 走对齐层时段落先排队，循环结束后统一处理（前后两遍不共用显存）
+        pending: list[tuple[int, int, str, float, float]] = []
         # 逐段留档：报告里的【幻觉门控】/【幻觉复核】直接列这些记录，
         # 不再只把明细打到终端。字段与漏句记录保持同一形状，便于对照。
         hallucination_spans: list[dict] = []
@@ -1596,6 +1687,11 @@ class AnimeWhisperEngine:
                 continue
             prev_text = text
 
+            if cfg.use_ctc_alignment:
+                # 只排队，不对齐：对齐器要多占 5GB，必须等 Whisper 卸掉再加载，
+                # 否则两份大模型会同时常驻（见 release()）。
+                pending.append((start, end, text, seg_start_s, seg_end_s))
+                continue
             if cfg.enable_sentence_split:
                 sub_cues = split_text_into_cues(
                     text,
@@ -1615,6 +1711,12 @@ class AnimeWhisperEngine:
                         text=text,
                     )
                 )
+
+        if pending:
+            if progress_cb and not self.last_interrupted:
+                progress_cb(0.9, f"正在对齐第 1/{len(pending)} 段（卸下 Whisper 后借用 Qwen 对齐头）…")
+            cues.extend(self._aligned_pass(pending, audio, cfg, aligned_stats, progress_cb))
+            self.last_segment_stats["ctc_alignment"] = dict(aligned_stats)
 
         cues = merge_fragmented_cues(
             cues,

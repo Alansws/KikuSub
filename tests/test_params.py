@@ -61,10 +61,21 @@ def test_config_kwargs_maps_field_names():
     assert "no_repeat_ngram_size" not in kwargs
 
 
-def test_tuple_config_field_fans_out():
-    kwargs = params.config_kwargs("qwen", {"qwen.cue_pad_s": 0.2})
+def test_qwen_cue_pads_are_independent():
+    """起点/终点留白是两个独立滑杆：人工核验版的惯例是提前 0.2s、句尾多停 0.45s。"""
+    kwargs = params.config_kwargs(
+        "qwen", {"qwen.cue_pad_start_s": 0.2, "qwen.cue_pad_end_s": 0.45}
+    )
     assert kwargs["cue_pad_start_s"] == 0.2
-    assert kwargs["cue_pad_end_s"] == 0.2
+    assert kwargs["cue_pad_end_s"] == 0.45
+    assert params.defaults_for("qwen")["qwen.cue_pad_end_s"] == 0.45
+
+
+def test_legacy_cue_pad_key_expands():
+    """旧预设里的 qwen.cue_pad_s 仍要生效（拆成起点/终点两个键）。"""
+    kwargs = params.config_kwargs("qwen", {"qwen.cue_pad_s": 0.08})
+    assert kwargs["cue_pad_start_s"] == 0.08
+    assert kwargs["cue_pad_end_s"] == 0.08
 
 
 def test_passthrough_kwargs():

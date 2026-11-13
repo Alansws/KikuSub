@@ -59,8 +59,11 @@ ENGINES: tuple[EngineSpec, ...] = (
         dir_name="anime-whisper",
         env_var="ANIME_WHISPER_MODEL",
         approx_bytes=int(2.8 * GiB),
-        min_ram_gb=6.0,
-        notes="日常对话、长片通稿首选；会做幻觉门控与短句复核。",
+        # 实测（tune/mem_probe.py，苹果 48 GB / M5）：fp32 权重常驻进程 RSS 4.6 GB，
+        # MPS 上还有 fp16 副本 2.1 GB，合计峰值 6.7 GB。原来的 6 GB 是照权重大小猜的，
+        # 比真实峰值还低——8 GB 机器会开始换页。
+        min_ram_gb=12.0,
+        notes="日常对话、长片通稿首选；会做幻觉门控与短句复核。实测转写峰值内存约 6.7 GB。",
         family="whisper",
         required_files=("model.safetensors",),
     ),
@@ -75,8 +78,11 @@ ENGINES: tuple[EngineSpec, ...] = (
         dir_name="qwen3-asr-ja-anime",
         env_var="QWEN3_ASR_MODEL",
         approx_bytes=int(3.8 * GiB),
-        min_ram_gb=16.0,
-        notes="内存建议 16 GB 以上；只覆盖“可能漏句”检查。",
+        # 实测（tune/mem_probe.py）：bf16 权重直接进 MPS，进程 RSS 只有 0.8 GB，
+        # 合计峰值 5.1 GB —— 比 Anime Whisper 的 6.7 GB 更低，而且快一倍。
+        # 原来的 16 GB 是照 1.7B 模型的官方口径抄的，与实际不符。
+        min_ram_gb=8.0,
+        notes="逐字对齐时间最准；实测转写峰值内存约 5.1 GB（低于 Anime Whisper），830 秒素材约 50 秒转完。",
         family="qwen",
         required_files=("config.json", "ctc_aligner_jav_vocalisation_v3.pt"),
     ),

@@ -45,7 +45,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 log = logging.getLogger(__name__)
 
-from silero_vad import get_speech_timestamps, load_silero_vad
+from silero_vad import load_silero_vad
 
 from .coverage import find_coverage_spans
 from .procutil import CommandCancelled
@@ -66,11 +66,13 @@ from .transcribe import (
     _split_overlong_single,
     chunk_level_stats,
     detect_device,
+    is_nonverbal_only,
+    strip_edge_nonverbal_ex,
+    detect_speech_stamps,
     forbidden_cut_positions,
     load_audio_for_transcription,
     merge_vad_segments,
     split_text_into_cues,
-    vad_neg_threshold,
 )
 
 REPO_ID = "jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf"
@@ -424,14 +426,38 @@ def collapse_token_spans(label_list: list[int], n_ids: int) -> list[tuple[int, i
     return spans
 
 
-def _apply_pauses(costs: list[float], char_spans: list["AlignedChar"], pauses, min_pause: float) -> None:
+PAUSE_REWARD_PER_S = 2.0    # 每 1 秒静音，切分边界拿多少负成本（越大越愿意断）
+PAUSE_REWARD_CAP = 4.0      # 单条边界的奖励上限，防止长静音把一句话腰斩
+
+
+def _apply_pauses(
+    costs: list[float],
+    char_spans: list["AlignedChar"],
+    pauses,
+    min_pause: float,
+    *,
+    reward_per_s: float | None = None,
+    reward_cap: float | None = None,
+) -> None:
+    """把真实停顿的边界变成「奖励切分」而不是「可以切但没好处」。
+
+    旧行为是给 0 成本：DP 只有在超过 max_cue_dur 时才愿意付出 SEG_BASE_COST 去切，
+    结果人工版把「今日は…」「チラチラ見なくていいんだよ」分成两条，我们合成一条。
+    人工字幕的节奏就是「一口气说完就一条、换气就切」，所以停顿必须有实际收益；
+    奖励按停顿时长线性给，封顶之后不再涨（1 秒静音与 3 秒静音的断句价值是一样的）。
+    """
+    # 默认值在调用时取模块常量：直接写进函数默认参数会把它钉死在 import 时刻，
+    # 调参台（tune/qwen_replay.py）改全局也扫不动。
+    per_s = PAUSE_REWARD_PER_S if reward_per_s is None else float(reward_per_s)
+    cap = PAUSE_REWARD_CAP if reward_cap is None else float(reward_cap)
     for start, end in pauses:
-        if end - start < min_pause:
+        span = end - start
+        if span < min_pause:
             continue
         for i in range(1, len(char_spans)):
             if char_spans[i].start >= end and char_spans[i - 1].end <= start:
                 if 0.0 < costs[i] < BREAK_FORBIDDEN:
-                    costs[i] = BREAK_FREE
+                    costs[i] = -min(cap, per_s * span)
                 break
 
 
@@ -552,20 +578,23 @@ class QwenCtcConfig:
     vad_threshold: float = 0.30
     vad_min_speech_ms: int = 100
     vad_min_silence_ms: int = 200
-    vad_speech_pad_ms: int = 150
+    vad_speech_pad_ms: int = 250
     merge_gap_s: float = 0.5
     min_speech_s: float = 0.08
     enable_loudnorm: bool = True
 
-    max_segment_s: float = 16.0
+    max_segment_s: float = 12.0
     max_cue_dur: float = 4.3
     soft_max_cue_dur: float = 3.8
     max_cue_chars: int = 21
     hard_max_cue_dur: float = 5.2
     min_pause_s: float = 0.12
     min_cue_dur: float = 0.35
-    cue_pad_start_s: float = 0.12
-    cue_pad_end_s: float = 0.12
+    # 与 Whisper 侧同名同义：模型会如实转写「んふふ」「えへへ」这类非台词发声，
+    # 人工整理版一律不留。Qwen 之前漏了这条，实测多出 19 条纯笑声字幕。
+    strip_nonverbal_edges: bool = True
+    cue_pad_start_s: float = 0.20
+    cue_pad_end_s: float = 0.45
     max_new_tokens: int = 440
 
 
@@ -928,6 +957,12 @@ class QwenCtcEngine:
             spans[i] = (start, min(end, spans[i + 1][0]), text, first_pos, tail)
 
         for i, (start, end, text, first_pos, tail) in enumerate(spans):
+            if cfg.strip_nonverbal_edges:
+                # 段首尾剔过了，但段**中间**的「ふふっ、」会被 DP 切到下一条的开头。
+                # 对齐时间不动（删的是发声，不是台词），只把文本再收一遍。
+                text = strip_edge_nonverbal_ex(text)[0]
+                if _is_blank(text):
+                    continue
             ceiling = spans[i + 1][0] if i + 1 < len(spans) else None
             if end - start < cfg.min_cue_dur:
                 wanted = start + cfg.min_cue_dur
@@ -990,15 +1025,16 @@ class QwenCtcEngine:
             progress_cb(0.06, "正在使用动态 VAD 切分语音段落…")
 
         speech_pad_ms = int(cfg.vad_speech_pad_ms)
-        stamps = get_speech_timestamps(
-            torch.from_numpy(audio),
+        # 分窗跑 VAD：整段一次跑会因 Silero 隐状态漂移漏掉整条台词，而这个文件
+        # 之前一直没跟 Whisper 侧的修复（detect_speech_stamps）。830s 耳语素材上
+        # 实测整段一次跑漏 19/77 条人工台词（含 461.8s 那段），分窗后 0 条。
+        stamps = detect_speech_stamps(
+            audio,
             self._vad,
-            sampling_rate=SAMPLE_RATE,
             threshold=float(cfg.vad_threshold),
-            min_speech_duration_ms=int(cfg.vad_min_speech_ms),
-            min_silence_duration_ms=int(cfg.vad_min_silence_ms),
+            min_speech_ms=int(cfg.vad_min_speech_ms),
+            min_silence_ms=int(cfg.vad_min_silence_ms),
             speech_pad_ms=speech_pad_ms,
-            neg_threshold=vad_neg_threshold(cfg.vad_threshold),
         )
         segments = merge_vad_segments(
             stamps,
@@ -1024,6 +1060,7 @@ class QwenCtcEngine:
                 "interp_chars": 0,
                 "truncated": 0,
                 "capped_repeat": 0,
+                "nonverbal_skips": 0,
                 "spans": [],
             }
             return []
@@ -1036,6 +1073,7 @@ class QwenCtcEngine:
         interp_chars = 0
         truncated = 0
         capped_repeat = 0
+        nonverbal_skips = 0
         degraded: list[dict] = []
         total = len(segments)
         prev_text = ""
@@ -1059,6 +1097,14 @@ class QwenCtcEngine:
             text, audio_features = self._transcribe(
                 chunk, cfg, capture_audio=use_alignment
             )
+            # 句首尾的非台词发声（笑声/喘气）一律先剔掉再对齐：对齐是在 text 上做的，
+            # 剔在解码后等于让第一个真字的 CTC 时间当成字幕起点，边界自然收口，
+            # 不需要 Whisper 那套「按段内停顿挪边界」的后处理。
+            stripped_to_empty = False
+            if cfg.strip_nonverbal_edges and not _is_blank(text):
+                cleaned = strip_edge_nonverbal_ex(text)[0]
+                stripped_to_empty = _is_blank(cleaned)
+                text = cleaned
             if self._last_capped:
                 if self._last_truncated:
                     # 密度正常却撞上限 = 真被砍：按完整上限重跑一次，宁可慢也不吃字。
@@ -1085,12 +1131,26 @@ class QwenCtcEngine:
                 text, audio_features = self._transcribe(
                     _retry_gain(chunk), cfg, capture_audio=use_alignment
                 )
+                if cfg.strip_nonverbal_edges and not _is_blank(text):
+                    cleaned = strip_edge_nonverbal_ex(text)[0]
+                    stripped_to_empty = _is_blank(cleaned)
+                    text = cleaned
                 if not _is_blank(text) and _retry_suspicious(text, seg_dur_s, prev_text):
                     text, reason = "", "retry-suspicious"
-                elif _is_blank(text):
+                elif _is_blank(text) and not stripped_to_empty:
                     reason = "empty-after-retry"
 
             if _is_blank(text):
+                if stripped_to_empty or (
+                    cfg.strip_nonverbal_edges
+                    and text
+                    and is_nonverbal_only(text, seg_dur_s)
+                ):
+                    # 纯笑声/喘气段：删掉端点发声后什么都不剩，本来就不是台词，
+                    # 不该占一条字幕，也不该进「可能漏句」清单。
+                    nonverbal_skips += 1
+                    continue
+
                 self.last_missed_spans.append({
                     "start": round(offset, 3),
                     "end": round(offset + seg_dur_s, 3),
@@ -1153,6 +1213,7 @@ class QwenCtcEngine:
             "interp_chars": interp_chars,
             "truncated": truncated,
             "capped_repeat": capped_repeat,
+            "nonverbal_skips": nonverbal_skips,
             "spans": degraded[:50],
         }
 
@@ -1296,5 +1357,8 @@ def _dedupe(cues: list[SubtitleCue]) -> list[SubtitleCue]:
                     prev.end = round(start, 3)
                 else:
                     start = prev.end
+                    # 起点被推到前一条的终点之后，终点必须跟着抬：
+                    # 否则会写出 end < start 的负时长条（实测「ねえ」2.500→2.480）。
+                    end = max(end, start + MIN_CUE_DUR)
         out.append(SubtitleCue(start=round(start, 3), end=round(end, 3), text=text))
     return _heal_broken_cues(out)
