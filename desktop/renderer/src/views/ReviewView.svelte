@@ -54,7 +54,7 @@
   import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
-  import { indicesForLaneKeys, indicesInRange, toggleLaneSelection } from '../lib/selection';
+  import { cueIndexAtTime, indicesForLaneKeys, indicesInRange, laneKey, stepSelection } from '../lib/selection';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -119,6 +119,8 @@
   } | null>(null);
   /** 底部字幕轨道多选：存块 key（`start:end`），双语同区间算一块。 */
   let laneSelection = $state<string[]>([]);
+  /** 只保留仍存在的块：整表被转写/导入替换后，旧 key 会让工具条卡住、行也不高亮。 */
+  const multiKeys = $derived(laneSelection.filter((key) => app.cues.some((cue) => laneKey(cue) === key)));
   /** 「以此句音频新建音色」浮层：命名 + 可选参考文本。 */
   let voiceDialog = $state<{ index: number; name: string; refText: string } | null>(null);
   let voiceBusy = $state(false);
@@ -901,21 +903,23 @@
 
 
   /**
-   * ⌘ 单击选一块字幕（表格行与波形主体共用）。
+   * ⌘ 单击选一块字幕（表格行 / 波形主体 / 底部轨道条共用）。
    *
-   * 原来只有底部 17px 的字幕轨道条认 ⌘，实际用下来「点在表格行上」是更自然的入口，
-   * 所以两条路径都收敛到这里，保证 key / 选中行 / 重绘三件事永远一起发生。
+   * 基准是「当前句」：用户已经选中第 3 句，⌘ 点第 4 句就是 {3,4}，不需要先 ⌘ 点在 3 上。
+   * 取消选中（⌘ 点已选的那块）时把当前行移到剩下的一块，避免当前行留在选中集合之外。
    */
   function metaSelect(i: number): void {
     const cue = app.cues[i];
     if (!cue) return;
-    toggleLaneKey(`${cue.start}:${cue.end}`);
-    play.selected = i;
+    const anchor = app.cues[play.selected];
+    const step = stepSelection(laneSelection, anchor ? laneKey(anchor) : '', laneKey(cue));
+    laneSelection = step.keys;
+    const first = step.kept ? i : indicesForLaneKeys(app.cues, step.keys)[0];
+    const target = first >= 0 ? first : i;
+    play.selected = target;
+    // 播放头也要过去：否则「按播放头同步当前行」的 effect 会把当前行抢回上一句。
+    seek(app.cues[target].start + 0.02);
     requestAnimationFrame(draw);
-  }
-
-  function toggleLaneKey(key: string) {
-    laneSelection = toggleLaneSelection(laneSelection, key);
   }
 
   function beginPlayhead(t: number) {
@@ -1097,10 +1101,8 @@
       if (block) {
         // ⌘ 单击 = 多选（再按一次取消）；普通点击仍保持原来的拖动 / 跳转。
         if (e.metaKey || e.ctrlKey) {
-          toggleLaneKey(block.key);
-          play.selected = block.indices[0];
+          metaSelect(block.indices[0]);
           dragMode = 'none';
-          requestAnimationFrame(draw);
           return;
         }
         laneSelection = [block.key];
@@ -1385,17 +1387,12 @@
         selection = null;
         seek(t);
       } else {
-        play.selected = cueIndexAt(selection.start);
+        const hit = cueIndexAtTime(app.cues, selection.start);
+        play.selected = hit >= 0 ? hit : play.selected;
       }
     }
   }
 
-  function cueIndexAt(t: number) {
-    for (let i = 0; i < app.cues.length; i += 1) {
-      if (app.cues[i].start <= t && t <= app.cues[i].end) return i;
-    }
-    return play.selected;
-  }
 
   function onWaveWheel(e: WheelEvent) {
     e.preventDefault();
@@ -1469,7 +1466,8 @@
 
   function selectCue(i: number, doSeek = true) {
     play.selected = i;
-    laneSelection = [];
+    // 普通单击 = 单选。集合必须同步成 {这一句}，否则之后 ⌘ 点第二句只能得到一条。
+    laneSelection = app.cues[i] ? [laneKey(app.cues[i])] : [];
     if (doSeek) seek(app.cues[i].start + 0.02);
   }
 
@@ -2287,7 +2285,7 @@
 
       <SelectionBar
         {selection}
-        {laneSelection}
+        laneSelection={multiKeys}
         {rangeBusy}
         onDelete={deleteSelectedNow}
         onTranscribe={transcribeSelection}
@@ -2530,7 +2528,7 @@
           <div
             class="row"
             class:dual={app.track === 'both'}
-            class:row-sel={play.selected === i}
+            class:row-sel={multiKeys.length > 1 ? multiKeys.includes(`${cue.start}:${cue.end}`) : play.selected === i}
             class:row-match={matchedCueSet.has(i)}
             class:row-cur={currentFind?.cue === i}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
