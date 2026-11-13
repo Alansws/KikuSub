@@ -133,3 +133,17 @@ def test_both_japanese_engines_expose_the_window_seam():
         assert any(
             callable(getattr(engine, name, None)) for name in ("unload", "release")
         ), key
+
+
+def test_transcribe_windows_wraps_decode_failure(monkeypatch, tmp_path):
+    """没有音轨的素材：错误信息要能读懂，不能把 ffmpeg 的整段输出甩给用户。"""
+    import core.transcribe as transcribe
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("ffmpeg 提取音频失败:\n[out#0/wav] Output file does not contain any stream")
+
+    monkeypatch.setattr(transcribe, "load_audio_for_transcription", boom)
+    with pytest.raises(RuntimeError) as err:
+        transcribe_windows(_FakeEngine(), [{"start": 0.0, "end": 1.0}], media_path=tmp_path / "a.mp4")
+    assert "没有音轨" in str(err.value)
+    assert "ffmpeg" not in str(err.value)

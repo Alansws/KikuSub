@@ -82,7 +82,12 @@ def transcribe_windows(
         from .transcribe import load_audio_for_transcription
 
         loudnorm = bool(getattr(config, "enable_loudnorm", True))
-        audio = load_audio_for_transcription(Path(media_path), enable_loudnorm=loudnorm)
+        try:
+            audio = load_audio_for_transcription(Path(media_path), enable_loudnorm=loudnorm)
+        except Exception as exc:  # noqa: BLE001 - ffmpeg 的原始输出不该直接甩给用户
+            raise RuntimeError(
+                f"取不到音频（{Path(media_path).name}）：这段素材可能没有音轨，或者音轨无法解码"
+            ) from exc
 
     from .transcribe import SAMPLE_RATE
 
