@@ -36,6 +36,11 @@ def _copy(cues: list[SubtitleCue]) -> list[SubtitleCue]:
     return [SubtitleCue(start=c.start, end=c.end, text=c.text) for c in cues]
 
 
+def _table_signature(cues: list[SubtitleCue]) -> tuple[tuple[float, float, str], ...]:
+    """整表签名：判断一次替换到底有没有改动（毫秒级比较，避免浮点噪声）。"""
+    return tuple((round(cue.start, 3), round(cue.end, 3), cue.text) for cue in cues)
+
+
 def _copy_tracks(tracks: dict[str, "TranslationTrack"]) -> dict[str, "TranslationTrack"]:
     """译文轨快照：结构性编辑与撤销必须一起回滚，否则时间轴与译文会错位。"""
     return {lang: track.copy() for lang, track in tracks.items()}
@@ -505,6 +510,59 @@ class Session:
                 self._record(label)
             else:
                 self.updated_at = time.time()
+
+    def replace_range(
+        self,
+        from_index: int,
+        to_index: int,
+        cues: list[SubtitleCue],
+        label: str = "断句重排：覆盖本段",
+        *,
+        record: bool = True,
+    ) -> dict:
+        """按**原稿条目索引区间**换掉一段，段外条目原样保留。
+
+        锚点必须是索引而不是模型给的时间：分段重排时两段的交界由原稿的切法决定，
+        模型的时间漂移不该把邻段吃掉。返回被替换条数、新条数与被丢弃的译文轨。
+
+        条数一旦变化，任何旧译文轨都无法逐条对齐，这里与 ``replace_review()``
+        同一口径：直接丢弃并回报，让界面提示「可 ⌘Z 退回」而不是留下一排错位的译文。
+        """
+        start = max(1, int(from_index))
+        end = int(to_index)
+        with self.lock:
+            self._ensure_baseline()
+            total = len(self.review_cues)
+            if total <= 0:
+                raise ValueError("当前没有字幕")
+            end = min(total, end)
+            if start > end:
+                raise ValueError(f"片段范围不合法：第 {start}–{end} 条")
+            before = total
+            replaced = end - start + 1
+            block = _copy(list(cues))
+            merged = self.review_cues[: start - 1] + block + self.review_cues[end:]
+            changed = _table_signature(merged) != _table_signature(self.review_cues)
+            self.review_cues = merged
+            dropped = sorted(self.translations)
+            self._drop_misaligned_translations()
+            dropped = [lang for lang in dropped if lang not in self.translations]
+            if dropped:
+                self._drop_translation_undo()
+            if record and changed:
+                self._record(label)
+            elif changed:
+                self.updated_at = time.time()
+            return {
+                "from": start,
+                "to": end,
+                "replaced": replaced,
+                "inserted": len(block),
+                "count": len(self.review_cues),
+                "count_before": before,
+                "changed": changed,
+                "dropped_translations": dropped,
+            }
 
     def _drop_misaligned_translations(self) -> None:
         """删掉条数已与字幕对不上的译文轨，绝不让错位的轨继续存在。"""
