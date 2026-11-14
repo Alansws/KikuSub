@@ -15,6 +15,7 @@
     toast,
     tuning,
   } from '../lib/store.svelte';
+  import { altEngineLabel, deleteAltReview, dual, refreshAltReview } from '../lib/dualReview.svelte';
   import { parseTimeInput } from '../lib/time';
 
   let { engine = $bindable('whisper') }: { engine?: string } = $props();
@@ -26,6 +27,9 @@
   let applyMode = $state<'auto' | 'replace' | 'append'>('auto');
   let presetName = $state('');
   let picked = $state('');
+  /** 核对台非空时的整片结果去向：覆盖第一版 / 放进第二列。 */
+  let destination = $state<'cover' | 'alt'>('cover');
+  let lastDestKey = '';
 
   const transcribeSub = $derived(
     app.media
@@ -42,6 +46,19 @@
   const hasEnabledEngine = $derived(
     (app.config?.engines ?? []).some((e) => e.enabled && e.key === engine),
   );
+  const enabledEngines = $derived((app.config?.engines ?? []).filter((e) => e.enabled));
+  const currentEngine = $derived(enabledEngines.find((e) => e.key === engine) ?? null);
+  const primaryEngine = $derived(String(app.reviewSource?.engine ?? ''));
+  /** 空区间或区间已覆盖整片：只有整片转写才允许写第二列。 */
+  const fullCover = $derived.by(() => {
+    const start = parseTimeInput(startText);
+    const end = parseTimeInput(endText);
+    const duration = app.media?.duration || 0;
+    const startCovers = start === null || start <= 0.001;
+    const endCovers = end === null || end >= duration - 0.5;
+    return startCovers && endCovers;
+  });
+  const canChooseDest = $derived(app.cues.length > 0 && fullCover && applyMode !== 'append');
 
   // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
   // 不能每次渲染都覆盖用户手输的内容。
@@ -53,6 +70,26 @@
     startText = req.start;
     endText = req.end;
     applyMode = 'auto';
+  });
+
+  // 默认去向：引擎不同 → 第二列；引擎相同（含主稿来源未知）→ 覆盖。
+  // 用户手动切换后，只有“换引擎”才重新套默认，不会在点按钮时被覆盖。
+  $effect(() => {
+    const key = `${app.media?.id ?? ''}:${engine}:${primaryEngine}`;
+    if (!app.cues.length) {
+      lastDestKey = key;
+      return;
+    }
+    if (lastDestKey === key) return;
+    lastDestKey = key;
+    destination = primaryEngine && primaryEngine !== engine ? 'alt' : 'cover';
+  });
+
+  // 当前媒体如果有第二版，转写页也要能看见并清理。
+  $effect(() => {
+    void app.connected;
+    void app.media?.id;
+    if (app.connected) void refreshAltReview();
   });
 
   // 只列出当前引擎可用的预设
@@ -69,6 +106,7 @@
         endText,
         absoluteTimeline: absolute,
         apply: applyMode === 'auto' ? undefined : applyMode,
+        altReview: destination === 'alt' && fullCover,
       },
       parseTimeInput,
     );
@@ -122,11 +160,25 @@
     <section class="left">
       <div class="form">
         <label for="engine">识别引擎</label>
-        {#if (app.config?.engines ?? []).some((e) => e.enabled)}
-          <div class="seg" style="justify-self:start">
-            {#each (app.config?.engines ?? []).filter((e) => e.enabled) as e (e.key)}
-              <button class:on={engine === e.key} onclick={() => (engine = e.key)}>{e.label}</button>
-            {/each}
+        {#if enabledEngines.length}
+          <!-- 引擎可能到 3–4 个：平铺分段会溢出（4 个中日引擎就放不下），
+               表单里改用下拉。顶栏那个胶囊是全局快捷入口，两者绑同一个值。 -->
+          <div class="engine-pick">
+            <div class="field engine-field">
+              <select id="engine" bind:value={engine}>
+                {#each enabledEngines as e (e.key)}
+                  <option value={e.key}>
+                    {e.label}{e.installed ? '' : `（未下载 · ${e.approx_label}）`}
+                  </option>
+                {/each}
+              </select>
+              <span class="chev"><Icon name="chevron-down" size={11} /></span>
+            </div>
+            {#if currentEngine && !currentEngine.installed}
+              <span class="engine-hint warn">
+                尚未下载 · {currentEngine.approx_label} · 开始转写会先下载
+              </span>
+            {/if}
           </div>
         {:else}
           <div class="no-engine">
@@ -173,6 +225,43 @@
             {applyMode === 'auto' ? '整片覆盖核对台，区间去重后追加' : applyMode === 'replace' ? '用本次结果替换整张表' : '与现有时间轴合并去重'}
           </span>
         </div>
+
+        {#if canChooseDest}
+          <label>结果去向</label>
+          <div class="dest">
+            <div class="seg">
+              <button class:on={destination === 'cover'} onclick={() => (destination = 'cover')}>
+                覆盖核对台
+              </button>
+              <button class:on={destination === 'alt'} onclick={() => (destination = 'alt')}>
+                放进双引擎复核
+              </button>
+            </div>
+            <span class="hint">
+              {destination === 'alt'
+                ? '第二版只进参考列，核对台一个字都不改'
+                : '本次整片结果替换当前核对台'}
+            </span>
+          </div>
+          {#if dual.exists}
+            <label></label>
+            <div class="alt-state">
+              <span class="alt-label">已有第二版</span>
+              <b>{altEngineLabel()} · {dual.count} 条</b>
+              <button class="btn tiny" onclick={() => setView('dual')}>查看对照</button>
+              <button
+                class="btn tiny ghost"
+                onclick={async () => {
+                  if (window.confirm('删除当前第二版？核对台不受影响。')) {
+                    await deleteAltReview();
+                  }
+                }}
+              >
+                删除
+              </button>
+            </div>
+          {/if}
+        {/if}
 
         <label></label>
         <div class="actions">
@@ -244,6 +333,16 @@
               <span>{app.job.status}</span>
             {/if}
           </div>
+          {#if app.job.status === 'done' && app.job.result?.alt_review}
+            <div class="alt-done">
+              <span class="saved-ok"><Icon name="check" size={10} />已放进双引擎复核</span>
+              <span class="saved-path">
+                第二引擎 {app.job.result?.alt_engine || engine} · {app.job.result?.alt_count ?? 0} 条；
+                核对台未改动
+              </span>
+              <button class="btn tiny" onclick={() => setView('dual')}>打开双引擎复核</button>
+            </div>
+          {/if}
           {#if app.job.status === 'done' && app.lastSavedPath}
             <div class="saved-row">
               <span class="saved-ok"><Icon name="check" size={10} />已自动保存</span>
@@ -322,6 +421,49 @@
     min-height: 0;
     border-left: 1px solid var(--separator-soft);
     padding-left: 22px;
+  }
+
+  .engine-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .engine-field {
+    width: 190px;
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .engine-field select {
+    appearance: none;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--fs-ui);
+    width: 100%;
+    padding-right: var(--sp-4);
+    cursor: default;
+  }
+  .engine-field .chev {
+    position: absolute;
+    right: 8px;
+    color: var(--text-3);
+    pointer-events: none;
+    display: grid;
+    place-items: center;
+  }
+  .engine-hint {
+    font-size: 12px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .engine-hint.warn {
+    color: var(--warn);
   }
 
   .form {
@@ -448,11 +590,37 @@
     color: var(--text-3);
     white-space: nowrap;
   }
-  .apply-row {
+  .apply-row,
+  .dest {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
     flex-wrap: wrap;
+  }
+  .alt-state {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .alt-label {
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .alt-state b {
+    color: var(--accent);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .alt-done {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--separator-soft);
+    min-width: 0;
   }
   .no-engine {
     font-size: 12px;

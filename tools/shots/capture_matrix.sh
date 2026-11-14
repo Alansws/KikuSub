@@ -17,7 +17,7 @@ SIZE="1360x838"
 DELAY=4500
 COMPARE=""
 MEDIA="${KIKUSUB_SHOT_MEDIA:-/tmp/kikusub-shot-media.mp4}"
-STATES="transcribe review settings export ai prompts"
+STATES="transcribe review dual polish translate prompts export settings"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -74,10 +74,12 @@ for st in $STATES; do
   case "$st" in
     transcribe) shot transcribe "" "" ;;
     review)     shot review "" "seed" ;;
-    settings)   shot settings "document.querySelectorAll('.sb-item')[6].click()" "" ;;
-    prompts)    shot prompts "document.querySelectorAll('.sb-item')[5].click()" "" ;;
-    export)     shot export "document.querySelectorAll('.sb-item')[4].click()" "" ;;
-    ai)         shot ai "document.querySelectorAll('.sb-item')[3].click()" "" ;;
+    settings)   shot settings "document.querySelectorAll('.sb-item')[8].click()" "" ;;
+    prompts)    shot prompts "document.querySelectorAll('.sb-item')[7].click()" "" ;;
+    export)     shot export "document.querySelectorAll('.sb-item')[6].click()" "" ;;
+    translate)  shot translate "document.querySelectorAll('.sb-item')[5].click()" "" ;;
+    polish)     shot polish "document.querySelectorAll('.sb-item')[4].click()" "" ;;
+    dual)       shot dual "document.querySelectorAll('.sb-item')[3].click()" "" ;;
     *) echo "未知状态：$st" >&2; exit 2 ;;
   esac
 done

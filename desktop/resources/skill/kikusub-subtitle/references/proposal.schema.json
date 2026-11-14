@@ -52,6 +52,16 @@
         "digest": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "count_b": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "双源润色：第二版条数（可选）"
+        },
+        "digest_b": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "双源润色：第二版源指纹（可选；单源提案不要写）"
         }
       }
     },

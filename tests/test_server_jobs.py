@@ -376,3 +376,17 @@ def test_transcribe_uses_configured_export_dir(tmp_path: Path) -> None:
     assert captured["request_export_dir"] == export_dir.resolve()
     assert captured["output_dir"] == export_dir.resolve()
     assert snapshot["result"]["export_dir"] == str(export_dir.resolve())
+
+
+def test_request_model_accepts_every_registered_engine():
+    """引擎白名单只能来自 `core.engines`：请求层写死 whisper/qwen 会把中文引擎挡在 422。"""
+    from pydantic import ValidationError
+
+    from core import engines
+    from server.routes_jobs import TranscribeJobRequest
+
+    for key in engines.KEYS:
+        assert TranscribeJobRequest(media_id="m", engine=key).engine == key
+
+    with pytest.raises(ValidationError):
+        TranscribeJobRequest(media_id="m", engine="nope")

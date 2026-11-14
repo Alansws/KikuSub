@@ -36,6 +36,9 @@ class EngineSpec:
     min_ram_gb: float
     notes: str = ""
     downloadable: bool = True
+    # 推理运行时族：whisper / qwen / sherpa。pipeline 与报告按它分派，
+    # 新加同族引擎（例如再上一个 sherpa 模型）不用改分派代码。
+    family: str = "whisper"
     # 判断“装好了没”的必需文件；全部存在才算 installed。
     required_files: tuple[str, ...] = ()
 
@@ -56,8 +59,12 @@ ENGINES: tuple[EngineSpec, ...] = (
         dir_name="anime-whisper",
         env_var="ANIME_WHISPER_MODEL",
         approx_bytes=int(2.8 * GiB),
-        min_ram_gb=6.0,
-        notes="日常对话、长片通稿首选；会做幻觉门控与短句复核。",
+        # 实测（tune/mem_probe.py，苹果 48 GB / M5）：fp32 权重常驻进程 RSS 4.6 GB，
+        # MPS 上还有 fp16 副本 2.1 GB，合计峰值 6.7 GB。原来的 6 GB 是照权重大小猜的，
+        # 比真实峰值还低——8 GB 机器会开始换页。
+        min_ram_gb=12.0,
+        notes="日常对话、长片通稿首选；会做幻觉门控与短句复核。实测转写峰值内存约 6.7 GB。",
+        family="whisper",
         required_files=("model.safetensors",),
     ),
     EngineSpec(
@@ -71,14 +78,55 @@ ENGINES: tuple[EngineSpec, ...] = (
         dir_name="qwen3-asr-ja-anime",
         env_var="QWEN3_ASR_MODEL",
         approx_bytes=int(3.8 * GiB),
-        min_ram_gb=16.0,
-        notes="内存建议 16 GB 以上；只覆盖“可能漏句”检查。",
+        # 实测（tune/mem_probe.py）：bf16 权重直接进 MPS，进程 RSS 只有 0.8 GB，
+        # 合计峰值 5.1 GB —— 比 Anime Whisper 的 6.7 GB 更低，而且快一倍。
+        # 原来的 16 GB 是照 1.7B 模型的官方口径抄的，与实际不符。
+        min_ram_gb=8.0,
+        notes="逐字对齐时间最准；实测转写峰值内存约 5.1 GB（低于 Anime Whisper），830 秒素材约 50 秒转完。",
+        family="qwen",
         required_files=("config.json", "ctc_aligner_jav_vocalisation_v3.pt"),
+    ),
+    # ---- 中文（可选装）----
+    # 两个引擎都走 sherpa-onnx（ONNX Runtime / CPU），不引入 torch 之外的新运行时；
+    # 权重不随包分发，默认停用，用户在设置页自己启用并点「下载模型」。
+    EngineSpec(
+        key="sensevoice",
+        label="SenseVoice-Small 中文",
+        short_label="SenseVoice",
+        description="阿里 FunAudioLLM 的轻量多语种模型（中/英/日/韩/粤），CPU 推理很快，自带 token 时间戳与标点归一化。",
+        languages=("中文", "英语", "日语", "韩语", "粤语"),
+        purpose="中文通稿 · 轻量快速",
+        hf_repo="csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+        dir_name="sensevoice-small",
+        env_var="KIKUSUB_SENSEVOICE_MODEL",
+        approx_bytes=int(0.23 * GiB),
+        min_ram_gb=4.0,
+        notes="int8 权重约 230 MB；中文/中英混排首选，也覆盖日语与粤语。",
+        family="sherpa",
+        required_files=("model.int8.onnx", "tokens.txt"),
+    ),
+    EngineSpec(
+        key="firered",
+        label="FireRedASR2-AED 中文",
+        short_label="FireRed",
+        description="小红书 FireRedASR2 的注意力编解码模型：中文普通话 + 英语 + 20 多种方言，中文准确率高于轻量模型。",
+        languages=("中文", "英语", "方言"),
+        purpose="中文高精度 · 方言兼容",
+        hf_repo="csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
+        dir_name="fireredasr2-aed",
+        env_var="KIKUSUB_FIRERED_MODEL",
+        approx_bytes=int(1.34 * GiB),
+        min_ram_gb=8.0,
+        notes="int8 权重约 1.2 GB + FireRedPunc 标点模型约 160 MB。该模型不输出逐字时间戳，句内时间按字数比例分配（与 Anime Whisper 同口径）。",
+        family="sherpa",
+        required_files=("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"),
     ),
 )
 
 KEYS: tuple[str, ...] = tuple(spec.key for spec in ENGINES)
-DEFAULT_ENABLED: tuple[str, ...] = KEYS
+# 默认只启用日语两个引擎：中文引擎是可选装件，避免新用户第一次打开就看到
+# 四张「未下载」卡片。已经保存过 settings.json 的用户不受影响。
+DEFAULT_ENABLED: tuple[str, ...] = ("whisper", "qwen")
 
 _BY_KEY = {spec.key: spec for spec in ENGINES}
 
@@ -92,6 +140,11 @@ def get(key: str) -> EngineSpec:
 
 def spec_or_none(key: str) -> EngineSpec | None:
     return _BY_KEY.get(key)
+
+
+def family_of(key: str) -> str:
+    """引擎运行时的族名；未知 key 直接抛错（不要静默退回 whisper）。"""
+    return get(key).family
 
 
 def model_dir(spec: EngineSpec) -> Path:
@@ -169,6 +222,7 @@ def status(spec: EngineSpec, *, enabled: bool | None = None, include_size: bool 
         "min_ram_gb": spec.min_ram_gb,
         "notes": spec.notes,
         "downloadable": spec.downloadable,
+        "family": spec.family,
         "installed": installed,
         "size_bytes": size,
         "enabled": True if enabled is None else bool(enabled),

@@ -59,4 +59,14 @@ def bind_media(payload: BindRequest, request: Request, session: Session = Depend
         session.reset_for_media()
     # 质检队列按媒体落盘；会话缓存一份，之后的工作区快照才能回滚待核状态。
     session.set_qa_payload(load_audit_payload(session.media_path))
-    return {"id": session.id, "media": info.to_dict(), "review_cleared": changed}
+    # 第二版稿按媒体身份落盘：切走时清内存，切回来自动从边车恢复（Q11）。
+    session.sync_alt_review(
+        media_path=session.media_path,
+        output_dir=request.app.state.config.output_dir,
+    )
+    return {
+        "id": session.id,
+        "media": info.to_dict(),
+        "review_cleared": changed,
+        "alt_review": session.alt_review_summary(),
+    }

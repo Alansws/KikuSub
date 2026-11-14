@@ -14,10 +14,23 @@
     at: number;
   }
 
+  type RecentView = 'list' | 'grid';
+
   let recents = $state<Recent[]>([]);
+  /** 「最近打开」的呈现方式：列表（信息密度高）或图标（封面画廊）。 */
+  let recentView = $state<RecentView>('list');
 
   /** 字幕默认导出目录：设置页可改；旧配置没有 export_dir 时退回 output_dir。 */
   const exportDir = $derived(app.config?.export_dir || app.settings?.export_dir || app.config?.output_dir || '');
+
+  /**
+   * 缩略图必须等握手完成再挂载。
+   *
+   * `<img>` 的 URL 里带 `?token=`；内核还没 ready 时 TOKEN 是空串，请求必然 401，
+   * 而 onerror 会把这张图摘掉——冷启动时「最近打开」就只能看到胶片图标。
+   * 等 `app.connected` 变 true 再挂 `<img>`，一次就成功。
+   */
+  const thumbsReady = $derived(app.connected);
 
   function persistRecents(next: Recent[]) {
     recents = next;
@@ -28,10 +41,22 @@
     }
   }
 
+  function setRecentView(next: RecentView) {
+    if (recentView === next) return;
+    recentView = next;
+    try {
+      localStorage.setItem('kikusub.recent.view', next);
+    } catch {
+      /* 同上：记不住偏好不影响使用 */
+    }
+  }
+
   $effect(() => {
     try {
       const raw = JSON.parse(localStorage.getItem('kikusub.recent') || '[]');
       recents = Array.isArray(raw) ? raw.filter((r) => r && typeof r.path === 'string') : [];
+      const saved = localStorage.getItem('kikusub.recent.view');
+      if (saved === 'grid' || saved === 'list') recentView = saved;
     } catch {
       recents = [];
     }
@@ -92,6 +117,21 @@
     if (sameDay) return `今天 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
   }
+
+  /** 画廊封面请求更大尺寸的缩略图：卡片约 220px 宽，2x 屏需要 ~440px。 */
+  function coverUrl(r: Recent) {
+    return mediaThumbUrl(r.path, String(r.size));
+  }
+
+  /** 音频没有画面可截，缩略图会 404；用波形图标而不是胶片，避免看起来像「加载失败」。 */
+  function thumbIcon(name: string) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'aiff'].includes(ext)) {
+      return 'wave';
+    }
+    if (['srt', 'vtt', 'txt'].includes(ext)) return 'doc';
+    return 'film';
+  }
 </script>
 
 <div class="pane">
@@ -130,40 +170,106 @@
   {/if}
 
   {#if recents.length}
-    <div class="ins-h" style="margin-top:22px">最近打开</div>
-    <div class="recent">
-      {#each recents as r (r.path)}
-        <div class="recent-row">
-          <button class="recent-main" onclick={() => openMedia(r.path)} title={r.path}>
-            <span class="ri">
-              <Icon name="film" size={13} />
-              <img
-                class="ri-img"
-                src={mediaThumbUrl(r.path, String(r.size))}
-                alt=""
-                loading="lazy"
-                onerror={(e) => e.currentTarget.remove()}
-              />
-            </span>
-            <span class="rn-wrap">
-              <span class="rn">{r.name}</span>
-              <span class="rm">
-                {formatBytes(r.size)} · {formatDuration(r.duration)}
-              </span>
-            </span>
-            <span class="rt">{when(r.at)}</span>
-          </button>
-          <button
-            class="recent-del"
-            onclick={() => removeRecent(r.path)}
-            title="从最近打开中移除（不删除文件）"
-            aria-label={`从最近打开中移除 ${r.name}`}
-          >
-            <Icon name="trash" size={12} />
-          </button>
-        </div>
-      {/each}
+    <div class="ins-h" style="margin-top:22px">
+      <span>最近打开</span>
+      <div class="seg compact" role="group" aria-label="最近打开的显示方式">
+        <button
+          class:on={recentView === 'list'}
+          aria-pressed={recentView === 'list'}
+          title="列表：一次看清大小、时长与打开时间"
+          aria-label="列表视图"
+          onclick={() => setRecentView('list')}
+        >
+          <Icon name="rows" size={13} />
+        </button>
+        <button
+          class:on={recentView === 'grid'}
+          aria-pressed={recentView === 'grid'}
+          title="图标：封面画廊，找片子更快"
+          aria-label="图标视图"
+          onclick={() => setRecentView('grid')}
+        >
+          <Icon name="grid" size={13} />
+        </button>
+      </div>
     </div>
+
+    {#if recentView === 'list'}
+      <div class="recent">
+        {#each recents as r (r.path)}
+          <div class="recent-row">
+            <button class="recent-main" onclick={() => openMedia(r.path)} title={r.path}>
+              <span class="ri">
+                <Icon name={thumbIcon(r.name)} size={13} />
+                {#if thumbsReady}
+                  <img
+                    class="ri-img"
+                    src={mediaThumbUrl(r.path, String(r.size))}
+                    alt=""
+                    loading="lazy"
+                    draggable="false"
+                    onerror={(e) => e.currentTarget.remove()}
+                  />
+                {/if}
+              </span>
+              <span class="rn-wrap">
+                <span class="rn">{r.name}</span>
+                <span class="rm">
+                  {formatBytes(r.size)} · {formatDuration(r.duration)}
+                </span>
+              </span>
+              <span class="rt">{when(r.at)}</span>
+            </button>
+            <button
+              class="recent-del"
+              onclick={() => removeRecent(r.path)}
+              title="从最近打开中移除（不删除文件）"
+              aria-label={`从最近打开中移除 ${r.name}`}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="gallery">
+        {#each recents as r, index (r.path)}
+          <div class="gcard" style={`--i:${index}`}>
+            <button class="gcard-main" onclick={() => openMedia(r.path)} title={r.path}>
+              <span class="cover">
+                <span class="cover-fb"><Icon name={thumbIcon(r.name)} size={22} /></span>
+                {#if thumbsReady}
+                  <img
+                    class="cover-img"
+                    src={coverUrl(r)}
+                    alt=""
+                    loading="lazy"
+                    draggable="false"
+                    onerror={(e) => e.currentTarget.remove()}
+                  />
+                {/if}
+                <span class="cover-play" aria-hidden="true"><Icon name="play" size={15} /></span>
+                {#if r.duration > 0}
+                  <span class="cover-dur">{formatDuration(r.duration)}</span>
+                {/if}
+              </span>
+              <span class="gcard-body">
+                <span class="gcard-name">{r.name}</span>
+                <span class="gcard-meta">{formatBytes(r.size)} · {when(r.at)}</span>
+              </span>
+            </button>
+            <button
+              class="gcard-del"
+              onclick={() => removeRecent(r.path)}
+              title="从最近打开中移除（不删除文件）"
+              aria-label={`从最近打开中移除 ${r.name}`}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -363,5 +469,195 @@
     font-size: 12px;
     color: var(--text-3);
     flex: 0 0 auto;
+  }
+
+  /* ---------- 画廊（图标视图）---------- */
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-4) 14px;
+  }
+
+  .gcard {
+    position: relative;
+    min-width: 0;
+    animation: card-in 220ms var(--ease) both;
+    animation-delay: calc(var(--i, 0) * 26ms);
+  }
+
+  @keyframes card-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .gcard-main {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    width: 100%;
+    padding: 0;
+    text-align: left;
+    cursor: default;
+  }
+  .gcard-main:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 3px;
+    border-radius: var(--rad-card);
+  }
+
+  .cover {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--rad-card);
+    background: var(--fill);
+    overflow: hidden;
+  }
+  .cover-fb {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-3);
+  }
+  .cover-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scale(1);
+    transition: transform 320ms var(--ease), filter var(--dur) var(--ease);
+  }
+  .gcard-main:hover .cover-img {
+    transform: scale(1.035);
+  }
+  /* 纯色/黑场封面上「放大」几乎不可见，补一圈与画面无关的轮廓说明整张卡可点。 */
+  .gcard-main:hover .cover,
+  .gcard-main:focus-visible .cover {
+    box-shadow: 0 0 0 1px var(--accent-ring);
+  }
+  .gcard-main:hover .gcard-name {
+    color: var(--text);
+  }
+
+  /* 封面上的控件是「压在媒体上的浮层」，黑白半透明在明暗两套主题下都成立。 */
+  .cover-play {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 34px;
+    height: 34px;
+    margin: -17px 0 0 -17px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    /* 压在图上的浮层要同时活在黑场与白场封面上：深色填充保证白字对比，
+       浅色描边 + 投影保证在纯黑画面里仍有边界。 */
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.34);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    transform: scale(0.9);
+    transition: opacity 180ms var(--ease), transform 180ms var(--ease);
+  }
+  .gcard-main:hover .cover-play,
+  .gcard-main:focus-visible .cover-play {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .cover-dur {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 11px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .gcard-del {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.34);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.58);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    cursor: default;
+    opacity: 0;
+    transform: scale(0.92);
+    transition: opacity 160ms var(--ease), background var(--dur) var(--ease),
+      transform 160ms var(--ease);
+  }
+  .gcard:hover .gcard-del,
+  .gcard-del:focus-visible {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .gcard-del:hover {
+    background: var(--danger);
+  }
+  .gcard-del:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 2px;
+  }
+
+  .gcard-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .gcard-name {
+    font-size: 12.5px;
+    /* 与列表视图同色：同一份数据在两种视图里的「重量」应当一致。 */
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color var(--dur) var(--ease);
+  }
+  .gcard-meta {
+    font-size: 12px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 窄窗口（分屏、小尺寸窗口）退成两列，封面仍然比列表缩略图大得多。 */
+  @media (max-width: 720px) {
+    .pane {
+      padding-left: var(--sp-6);
+      padding-right: var(--sp-6);
+    }
+    .gallery {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 </style>

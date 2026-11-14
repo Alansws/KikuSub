@@ -19,6 +19,7 @@
    */
   import { tick as nextTick, untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
+  import SelectionBar from '../components/SelectionBar.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
   import {
@@ -50,8 +51,10 @@
     transcribeRange,
     tts,
   } from '../lib/store.svelte';
+  import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
+  import { cueIndexAtTime, indicesForLaneKeys, indicesInRange, laneKey, stepSelection } from '../lib/selection';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -116,6 +119,8 @@
   } | null>(null);
   /** 底部字幕轨道多选：存块 key（`start:end`），双语同区间算一块。 */
   let laneSelection = $state<string[]>([]);
+  /** 只保留仍存在的块：整表被转写/导入替换后，旧 key 会让工具条卡住、行也不高亮。 */
+  const multiKeys = $derived(laneSelection.filter((key) => app.cues.some((cue) => laneKey(cue) === key)));
   /** 「以此句音频新建音色」浮层：命名 + 可选参考文本。 */
   let voiceDialog = $state<{ index: number; name: string; refText: string } | null>(null);
   let voiceBusy = $state(false);
@@ -896,29 +901,25 @@
     return { key: bestKey, start: first.start, end: first.end, indices };
   }
 
-  function indicesForLaneKeys(keys: string[]): number[] {
-    if (!keys.length) return [];
-    const wanted = new Set(keys);
-    const out: number[] = [];
-    app.cues.forEach((cue, index) => {
-      if (wanted.has(`${cue.start}:${cue.end}`)) out.push(index);
-    });
-    return out;
-  }
 
-  /** 时间区间里的字幕下标（框选后右键合并用）。 */
-  function indicesInRange(start: number, end: number): number[] {
-    const out: number[] = [];
-    app.cues.forEach((cue, index) => {
-      if (cue.start < end && cue.end > start) out.push(index);
-    });
-    return out;
-  }
-
-  function toggleLaneKey(key: string) {
-    laneSelection = laneSelection.includes(key)
-      ? laneSelection.filter((item) => item !== key)
-      : [...laneSelection, key];
+  /**
+   * ⌘ 单击选一块字幕（表格行 / 波形主体 / 底部轨道条共用）。
+   *
+   * 基准是「当前句」：用户已经选中第 3 句，⌘ 点第 4 句就是 {3,4}，不需要先 ⌘ 点在 3 上。
+   * 取消选中（⌘ 点已选的那块）时把当前行移到剩下的一块，避免当前行留在选中集合之外。
+   */
+  function metaSelect(i: number): void {
+    const cue = app.cues[i];
+    if (!cue) return;
+    const anchor = app.cues[play.selected];
+    const step = stepSelection(laneSelection, anchor ? laneKey(anchor) : '', laneKey(cue));
+    laneSelection = step.keys;
+    const first = step.kept ? i : indicesForLaneKeys(app.cues, step.keys)[0];
+    const target = first >= 0 ? first : i;
+    play.selected = target;
+    // 播放头也要过去：否则「按播放头同步当前行」的 effect 会把当前行抢回上一句。
+    seek(app.cues[target].start + 0.02);
+    requestAnimationFrame(draw);
   }
 
   function beginPlayhead(t: number) {
@@ -1100,10 +1101,8 @@
       if (block) {
         // ⌘ 单击 = 多选（再按一次取消）；普通点击仍保持原来的拖动 / 跳转。
         if (e.metaKey || e.ctrlKey) {
-          toggleLaneKey(block.key);
-          play.selected = block.indices[0];
+          metaSelect(block.indices[0]);
           dragMode = 'none';
-          requestAnimationFrame(draw);
           return;
         }
         laneSelection = [block.key];
@@ -1119,7 +1118,15 @@
       return;
     }
 
-    // 4) 波形主体：Shift 直接框选；否则先当作「可能是单击」
+    // 4) 波形主体：⌘ 点在句子范围内 = 多选（和底部轨道条同一个 key）；
+    //    Shift 直接框选；否则先当作「可能是单击」。
+    if (e.metaKey || e.ctrlKey) {
+      const hit = app.cues.findIndex((cue) => cue.start <= t && t <= cue.end);
+      if (hit >= 0) {
+        metaSelect(hit);
+        return;
+      }
+    }
     if (e.shiftKey) {
       beginSelectRange(play.time, t);
       return;
@@ -1221,9 +1228,9 @@
     // 合并目标：优先用刚框选的区间，其次用底部轨道的 ⌘ 多选。
     let merge: number[] = [];
     if (selection && selection.end - selection.start > 0.08) {
-      merge = indicesInRange(selection.start, selection.end);
+      merge = indicesInRange(app.cues, selection.start, selection.end);
     } else if (laneSelection.length >= 2) {
-      merge = indicesForLaneKeys(laneSelection);
+      merge = indicesForLaneKeys(app.cues, laneSelection);
     }
     if (merge.length < 2) merge = [];
     const x = Math.min(e.clientX, window.innerWidth - 236);
@@ -1237,7 +1244,7 @@
     e.stopPropagation();
     play.selected = index;
     const cue = app.cues[index];
-    const merge = laneSelection.length >= 2 ? indicesForLaneKeys(laneSelection) : [];
+    const merge = laneSelection.length >= 2 ? indicesForLaneKeys(app.cues, laneSelection) : [];
     const x = Math.min(e.clientX, window.innerWidth - 236);
     const y = Math.min(e.clientY, window.innerHeight - 190);
     contextMenu = { x, y, t: cue?.start ?? timeAt(e.clientX), index, merge };
@@ -1272,7 +1279,7 @@
       toast('当前没有可删除的字幕', 'warn');
       return;
     }
-    const fromLane = indicesForLaneKeys(laneSelection);
+    const fromLane = indicesForLaneKeys(app.cues, laneSelection);
     const indices = fromLane.length
       ? fromLane
       : play.selected >= 0 && play.selected < app.cues.length
@@ -1380,17 +1387,12 @@
         selection = null;
         seek(t);
       } else {
-        play.selected = cueIndexAt(selection.start);
+        const hit = cueIndexAtTime(app.cues, selection.start);
+        play.selected = hit >= 0 ? hit : play.selected;
       }
     }
   }
 
-  function cueIndexAt(t: number) {
-    for (let i = 0; i < app.cues.length; i += 1) {
-      if (app.cues[i].start <= t && t <= app.cues[i].end) return i;
-    }
-    return play.selected;
-  }
 
   function onWaveWheel(e: WheelEvent) {
     e.preventDefault();
@@ -1464,7 +1466,8 @@
 
   function selectCue(i: number, doSeek = true) {
     play.selected = i;
-    laneSelection = [];
+    // 普通单击 = 单选。集合必须同步成 {这一句}，否则之后 ⌘ 点第二句只能得到一条。
+    laneSelection = app.cues[i] ? [laneKey(app.cues[i])] : [];
     if (doSeek) seek(app.cues[i].start + 0.02);
   }
 
@@ -2237,7 +2240,7 @@
     </div>
 
     <!-- 第二行只放「看时间轴」的工具：缩放、全景、聚焦、跟随。
-         AI 优化 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
+         润色 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
     <div class="tl-tools">
       <div class="zoom-group">
         <button class="zbtn" onclick={() => zoomAt(play.time, 1.5)} title="缩小波形" aria-label="缩小波形">
@@ -2280,50 +2283,18 @@
         <i></i>{follow ? '跟随中' : '跟随'}
       </button>
 
-      {#if laneSelection.length > 1}
-        <div class="sel-bar lane-bar">
-          <span class="sel-info">
-            <span class="sel-range">已选 {laneSelection.length} 块字幕</span>
-            <b>可一起删除</b>
-          </span>
-          <button class="btn tiny danger" onclick={deleteSelectedNow} title="删除选中的全部字幕（⌘Z 可撤销）">
-            <Icon name="trash" size={10} />删除
-          </button>
-          <div class="tl-spacer"></div>
-          <button class="btn tiny ghost" onclick={() => (laneSelection = [])} title="取消多选">
-            <Icon name="close" size={10} />
-          </button>
-        </div>
-      {:else if selection}
-        <div class="sel-bar">
-          <span class="sel-info">
-            <span class="sel-range">{tcShort(selection.start)} → {tcShort(selection.end)}</span>
-            <b>{(selection.end - selection.start).toFixed(2)}s</b>
-          </span>
-          <button
-            class="btn tiny"
-            onclick={() => seekTo(selection!.start, { stopAt: selection!.end, play: true })}
-            title="只播放选区"
-          >
-            <Icon name="play" size={10} />试听
-          </button>
-          <button class="btn tiny primary" onclick={transcribeSelection} disabled={rangeBusy}>
-            {#if rangeBusy}
-              <span class="spin"></span>转写中
-            {:else}
-              <Icon name="wave" size={10} />转写选区
-            {/if}
-          </button>
-          <button class="btn tiny" onclick={sendSelectionToTranscribe} title="填到转写页的区间">
-            填入转写
-          </button>
-          <button class="btn tiny" onclick={focusSelection} title="放大到选区">聚焦</button>
-          <div class="tl-spacer"></div>
-          <button class="btn tiny ghost" onclick={clearSelection} title="清除选区">
-            <Icon name="close" size={10} />
-          </button>
-        </div>
-      {/if}
+      <SelectionBar
+        {selection}
+        laneSelection={multiKeys}
+        {rangeBusy}
+        onDelete={deleteSelectedNow}
+        onTranscribe={transcribeSelection}
+        onFocus={focusSelection}
+        onSendSelection={sendSelectionToTranscribe}
+        onSeekSelection={() => selection && seekTo(selection.start, { stopAt: selection.end, play: true })}
+        onClearLane={() => (laneSelection = [])}
+        onClearSelection={clearSelection}
+      />
     </div>
   </div>
 
@@ -2557,17 +2528,23 @@
           <div
             class="row"
             class:dual={app.track === 'both'}
-            class:row-sel={play.selected === i}
+            class:row-sel={multiKeys.length > 1 ? multiKeys.includes(`${cue.start}:${cue.end}`) : play.selected === i}
             class:row-match={matchedCueSet.has(i)}
             class:row-cur={currentFind?.cue === i}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
-            onclick={() => selectCue(i)}
+            onclick={(e) => {
+              if (e.metaKey || e.ctrlKey) {
+                metaSelect(i);
+                return;
+              }
+              selectCue(i);
+            }}
             oncontextmenu={(e) => onCueContextMenu(e, i)}
             ondblclick={() => previewRange(cue.start, cue.end)}
             role="button"
             tabindex="-1"
-            title="单击跳转 · 双击试听"
+            title="单击跳转 · ⌘ 单击多选（可批量复核） · 双击试听"
           >
             <div class="c-idx">{i + 1}</div>
             <div class="c-t">{tcShort(cue.start)}</div>

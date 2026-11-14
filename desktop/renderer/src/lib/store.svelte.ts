@@ -9,7 +9,6 @@ import {
   api,
   logEvent,
   setEndpoint,
-  type AiProposal,
   type AppSettings,
   type Cue,
   type CueHistoryItem,
@@ -22,8 +21,6 @@ import {
   type JobSnapshot,
   type MediaInfo,
   type ParamSpec,
-  type PromptLibrary,
-  type PromptTemplate,
   type ReportData,
   type ReviewSource,
   type SettingsPayload,
@@ -35,9 +32,21 @@ import {
   type TtsVoiceInfo,
   ttsAudioUrl,
 } from './api';
+import { aiBridge } from './aiBridge';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
+import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 
-export type View = 'import' | 'transcribe' | 'review' | 'ai' | 'prompts' | 'export' | 'report' | 'settings';
+export type View =
+  | 'import'
+  | 'transcribe'
+  | 'review'
+  | 'dual'
+  | 'polish'
+  | 'translate'
+  | 'prompts'
+  | 'export'
+  | 'report'
+  | 'settings';
 
 export interface AppConfig {
   version: string;
@@ -174,7 +183,7 @@ export function previewRange(start: number, end: number) {
   seekTo(start + 0.02, { stopAt: end, play: true });
 }
 
-function applyHistoryMeta(data: CueSnapshot) {
+export function applyHistoryMeta(data: CueSnapshot) {
   app.canUndo = data.can_undo;
   app.canRedo = data.can_redo;
   if (data.undo_label !== undefined) app.undoLabel = data.undo_label;
@@ -185,7 +194,7 @@ function applyHistoryMeta(data: CueSnapshot) {
 }
 
 /** 把服务端返回的字幕快照统一写回状态（含撤销/重做按钮的说明）。 */
-function applyCueSnapshot(data: CueSnapshot, opts: { applyClientState?: boolean } = {}) {
+export function applyCueSnapshot(data: CueSnapshot, opts: { applyClientState?: boolean } = {}) {
   app.cues = data.cues;
   app.cuesRevision += 1;
   app.canUndo = data.can_undo;
@@ -199,10 +208,10 @@ function applyCueSnapshot(data: CueSnapshot, opts: { applyClientState?: boolean 
   if (data.undo_at !== undefined) app.undoAt = data.undo_at;
   if (data.redo_at !== undefined) app.redoAt = data.redo_at;
   // 只有撤销 / 重做 / 历史跳转的回包带本地状态；普通编辑不能用稍旧的快照
-  // 覆盖用户刚在导出面板 / AI 优化台改好的值。
+  // 覆盖用户刚在导出面板 / 润色页改好的值。
   if (opts.applyClientState) {
     if (data.export_ui) applyServerExportUi(data.export_ui);
-    if (data.ai_draft) applyAiDraft(data.ai_draft);
+    if (data.ai_draft) aiBridge.applyDraft(data.ai_draft);
   }
   if (cueHistory.open) void loadCueHistory();
 }
@@ -885,15 +894,6 @@ export const settings = $state({
   },
 });
 
-/** 提示词模板库（AI 优化台与「提示词库」共用）。 */
-export const prompts = $state({
-  items: [] as PromptTemplate[],
-  selected: '',
-  path: '',
-  loading: false,
-  error: '',
-});
-
 /** 烧录样式：字段与 core/video_export.py 的 SubtitleStyle 一一对应。 */
 const DEFAULT_EXPORT_STYLE: SubtitleStylePayload = {
   preset: 'fansub',
@@ -1039,7 +1039,6 @@ export async function boot(port: number, token: string) {
       settings: app.config.settings,
     });
     await loadTuning();
-    void loadPrompts();
     void loadExportOptions();
     void loadExportStyles();
     // 设备探测在 sidecar 的后台预热线程里；先让界面出来，再补一次配置
@@ -1367,8 +1366,6 @@ export async function openMedia(
   // 换片前取消上一部片还没落地的草稿写入，避免把旧字幕写到新媒体的草稿名下
   clearTimeout(draftTimer);
   draftAgain = false;
-  // 提案是按片生成的：换了片就不能让上一部片的 diff 继续留在界面上
-  resetAi();
   const lower = path.toLowerCase();
   if (SUBTITLE_EXTS.some((ext) => lower.endsWith(ext))) {
     await openSubtitle(path);
@@ -1732,7 +1729,7 @@ const UI_COALESCE_SECONDS = 1.2;
  */
 let exportCoalesce: { kind: string; base: ExportUiState; at: number } | null = null;
 
-function currentExportUiState(): ExportUiState {
+export function currentExportUiState(): ExportUiState {
   return {
     mode: exporter.mode,
     track: exporter.track,
@@ -1776,7 +1773,7 @@ export function syncClientState(record = false, label = "同步工作区状态")
     .historyCheckpoint({
       label,
       export_ui: currentExportUiState(),
-      ai_draft: currentAiDraft(),
+      ai_draft: aiBridge.currentDraft(),
       record,
     })
     .catch(() => {
@@ -1790,7 +1787,7 @@ function checkpointExportUi(label: string, kind: string) {
     .historyCheckpoint({
       label,
       export_ui: currentExportUiState(),
-      ai_draft: currentAiDraft(),
+      ai_draft: aiBridge.currentDraft(),
       coalesce: kind,
     })
     .then(applyHistoryMeta)
@@ -2139,7 +2136,7 @@ export async function startExport() {
     return;
   }
   if (exporter.track !== 'source' && !app.translations[exporter.lang]?.texts.length) {
-    toast(`还没有 ${exporter.lang} 译文；先在 AI 优化台生成并应用`, 'warn');
+    toast(`还没有 ${exporter.lang} 译文；先在翻译页生成并应用`, 'warn');
     return;
   }
   exporter.running = true;
@@ -2508,6 +2505,8 @@ export interface TranscribeOptions {
   absoluteTimeline: boolean;
   /** 结果如何进入核对台。整片默认覆盖，区间默认追加。 */
   apply?: 'replace' | 'append' | 'replace_range';
+  /** 整片且核对台非空时：true = 写进双引擎复核第二列，不覆盖核对台。 */
+  altReview?: boolean;
 }
 
 function optimisticJob(stage: string): JobSnapshot {
@@ -2587,6 +2586,7 @@ export async function startTranscribe(
       end,
       keep_absolute_timeline: opts.absoluteTimeline,
       apply,
+      alt_review: !isRange && Boolean(opts.altReview),
       // 参数键就是 core.params 的规格键，服务端负责补默认 / 夹区间
       params: tuning.values[opts.engine] ?? {},
     });
@@ -2765,6 +2765,18 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
 
   const meta = app.jobMeta;
   app.lastSavedPath = String(job.result?.out_path ?? '') || app.lastSavedPath;
+  if (job.result?.alt_review) {
+    // 第二版只进参考列：核对台一个字都没改，不要跳到核对屏，也不要重算质检。
+    const { refreshAltReview } = await import('./dualReview.svelte');
+    await refreshAltReview();
+    const engineLabel =
+      app.config?.engines.find((e) => e.key === String(job.result?.alt_engine ?? ''))?.label ??
+      String(job.result?.alt_engine ?? '第二引擎');
+    toast(
+      `已放进双引擎复核（${engineLabel} · ${Number(job.result?.alt_count ?? 0)} 条），核对台未改动`,
+    );
+    return;
+  }
   await refreshCues();
   await refreshQa();
   // 整片/区间转写都会改写核对表：写一份最新草稿，防丢
@@ -2845,7 +2857,8 @@ export async function loadReport(opts: { silent?: boolean } = {}) {
 // 调参与预设
 // ---------------------------------------------------------------------------
 
-const TUNING_KEY = 'kikusub.tuning';
+// v2：只存「改过的键」，默认值跟着版本走（v1 存整份快照，默认值改了也不生效）
+const TUNING_KEY = 'kikusub.tuning.v2';
 
 export async function loadTuning() {
   tuning.loading = true;
@@ -2853,18 +2866,8 @@ export async function loadTuning() {
     const schema = await api.getParams();
     tuning.schema = schema.engines;
 
-    let saved: Record<string, Record<string, number | boolean>> = {};
-    try {
-      saved = JSON.parse(localStorage.getItem(TUNING_KEY) || '{}');
-    } catch {
-      saved = {};
-    }
     // 以默认值打底，再叠用户上次的调整；规格表里已删掉的键自然被丢掉
-    const values: Record<string, Record<string, number | boolean>> = {};
-    for (const engine of schema.engines) {
-      values[engine.key] = { ...engine.defaults, ...(saved[engine.key] || {}) };
-    }
-    tuning.values = values;
+    tuning.values = mergeParamValues(schema.engines, readSavedTuning(TUNING_KEY));
     await refreshPresets();
   } catch (err) {
     toast(`加载参数失败：${(err as Error).message}`, 'error');
@@ -2890,7 +2893,10 @@ export function resetParams(engine: string) {
 
 function persistTuning() {
   try {
-    localStorage.setItem(TUNING_KEY, JSON.stringify(tuning.values));
+    localStorage.setItem(
+      TUNING_KEY,
+      JSON.stringify(changedParamValues(tuning.values, tuning.schema ?? [])),
+    );
   } catch {
     /* 隐私模式下写不了，忽略 */
   }
@@ -3192,497 +3198,6 @@ export async function removeTranslationTrack(lang = app.trackLang) {
   if (app.track !== 'source' && !app.translations[lang]) setTrackMode('source');
 }
 
-// ---------------------------------------------------------------------------
-// 提示词模板
-// ---------------------------------------------------------------------------
-
-let promptsLoaded = false;
-
-function applyPromptLibrary(lib: PromptLibrary) {
-  prompts.items = lib.templates ?? [];
-  prompts.selected = lib.selected || prompts.items[0]?.id || '';
-  prompts.path = lib.path || '';
-  prompts.error = '';
-}
-
-export async function loadPrompts(force = false) {
-  if (!app.connected) return;
-  if (promptsLoaded && !force && prompts.items.length) return;
-  prompts.loading = true;
-  try {
-    applyPromptLibrary(await api.getPrompts());
-    promptsLoaded = true;
-  } catch (err) {
-    prompts.error = (err as Error).message;
-  } finally {
-    prompts.loading = false;
-  }
-}
-
-export function selectedPromptTemplate(): PromptTemplate | null {
-  return prompts.items.find((item) => item.id === prompts.selected) ?? prompts.items[0] ?? null;
-}
-
-export async function selectPromptTemplate(id: string) {
-  if (!id || id === prompts.selected) return;
-  try {
-    applyPromptLibrary(await api.selectPrompt(id));
-    toast(`已切换到「${selectedPromptTemplate()?.name ?? id}」`);
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  }
-}
-
-export async function savePromptTemplate(
-  id: string,
-  patch: { name?: string; description?: string; content?: string },
-) {
-  try {
-    applyPromptLibrary(await api.updatePrompt(id, patch));
-    promptsLoaded = true;
-    toast('提示词模板已保存');
-    return true;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return false;
-  }
-}
-
-export async function createPromptTemplate(
-  name: string,
-  content: string,
-  description = '',
-) {
-  try {
-    const lib = await api.createPrompt({ name, content, description });
-    applyPromptLibrary(lib);
-    promptsLoaded = true;
-    toast('已新建提示词模板');
-    return lib.created;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return '';
-  }
-}
-
-export async function resetPromptTemplate(id: string) {
-  try {
-    applyPromptLibrary(await api.resetPrompt(id));
-    toast('已恢复内置模板');
-    return true;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return false;
-  }
-}
-
-export async function deletePromptTemplate(id: string) {
-  try {
-    applyPromptLibrary(await api.deletePrompt(id));
-    toast('模板已删除');
-    return true;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return false;
-  }
-}
-
-/** 把某个模板 + 当前字幕渲染成完整提示词并复制。 */
-export async function copyPromptTemplate(id?: string) {
-  if (!app.cues.length) {
-    toast('当前没有可翻译的字幕', 'warn');
-    return false;
-  }
-  const templateId = id || prompts.selected;
-  try {
-    // 这是翻译提示词；复制后 AI 优化台应停在「翻译」，粘贴面板才会直接露出来。
-    ai.kind = 'translate';
-    const res = await api.getAiPrompt('translate', ai.lang, templateId);
-    if (window.kikusub?.writeClipboard) {
-      await window.kikusub.writeClipboard(res.prompt);
-    } else if (navigator.clipboard) {
-      await navigator.clipboard.writeText(res.prompt);
-    }
-    toast(
-      `已复制「${res.template_name}」：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`,
-    );
-    ai.pasteOpen = true;
-    return true;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// AI 提案（M1：读取 / 另存 / 应用，不调模型）
-// ---------------------------------------------------------------------------
-
-/**
- * 当前这轮提案的上下文。
- *
- * `accept` / `edits` 用普通对象而不是 Set/Map：Svelte 5 的 runes 只追踪对象属性
- * 读写，`Set.add()` 不会触发重渲染，界面会出现"勾了没反应"。
- */
-export const ai = $state({
-  kind: 'polish' as 'polish' | 'translate',
-  lang: 'zh-Hans',
-  path: '',
-  proposal: null as AiProposal | null,
-  warnings: [] as string[],
-  errors: [] as string[],
-  digestMatch: true,
-  /** i -> 是否采纳；默认全采纳 */
-  accept: {} as Record<number, boolean>,
-  /** i -> 人手工改过的文本（优先于提案原文） */
-  edits: {} as Record<number, string>,
-  changedOnly: true,
-  loading: false,
-  applying: false,
-  saving: false,
-  /** 手动粘贴通道：把网页版模型的回复解析成提案 */
-  pasteOpen: false,
-  pasteText: '',
-  parsing: false,
-  /** 正在生成提案（后台任务） */
-  generating: false,
-  progress: 0,
-  stage: '',
-  jobId: '',
-  /** 已经为哪一份上下文拉过提案，避免 $effect 反复请求 */
-  loadedFor: '',
-});
-
-function aiContextKey(): string {
-  return `${app.media?.id ?? ''}:${ai.kind}:${ai.lang}`;
-}
-
-export function resetAi() {
-  ai.proposal = null;
-  ai.path = '';
-  ai.warnings = [];
-  ai.errors = [];
-  ai.accept = {};
-  ai.edits = {};
-  ai.digestMatch = true;
-  ai.loadedFor = '';
-}
-
-let aiLoadPromise: Promise<void> | null = null;
-
-/**
- * 拉取当前上下文的提案。
- *
- * 并发调用返回同一个 Promise：撤销 / 重做恢复 AI 草稿时，AiView 的 `$effect`
- * 可能同时触发一次加载，等待同一个任务才能保证 `.then` 写入的 edits 不被
- * 后完成的加载重置。
- */
-export function loadAiProposal(force = false): Promise<void> {
-  if (!app.connected) return Promise.resolve();
-  if (aiLoadPromise) return aiLoadPromise;
-  const key = aiContextKey();
-  if (!force && ai.loadedFor === key) return Promise.resolve();
-  ai.loading = true;
-  const task = (async () => {
-    try {
-      const res = await api.getAiProposal(ai.kind, ai.kind === 'translate' ? ai.lang : '');
-      ai.proposal = res.proposal;
-      ai.path = res.path;
-      ai.warnings = res.warnings ?? [];
-      ai.errors = res.errors ?? [];
-      ai.digestMatch = res.digest_match;
-      ai.accept = {};
-      ai.edits = {};
-      for (const item of res.proposal.items) ai.accept[item.i] = true;
-    } catch (err) {
-      // "还没有提案"不是错误状态：界面给的是生成/导入的引导
-      resetAi();
-      ai.errors = [(err as Error).message];
-    } finally {
-      ai.loadedFor = key;
-      ai.loading = false;
-    }
-  })();
-  aiLoadPromise = task;
-  void task.finally(() => {
-    if (aiLoadPromise === task) aiLoadPromise = null;
-  });
-  return task;
-}
-
-function switchAiContext(kind: 'polish' | 'translate', lang: string) {
-  ai.kind = kind;
-  ai.lang = lang;
-  ai.loadedFor = '';
-  ai.accept = {};
-  ai.edits = {};
-  void (async () => {
-    if (aiLoadPromise) await aiLoadPromise;
-    await loadAiProposal(true);
-    syncClientState(false);
-  })();
-}
-
-export function setAiKind(kind: 'polish' | 'translate') {
-  if (ai.kind === kind) return;
-  switchAiContext(kind, ai.lang);
-}
-
-export function setAiLang(lang: string) {
-  if (ai.lang === lang) return;
-  switchAiContext(ai.kind, lang);
-}
-
-/** 当前 AI diff 草稿（人工编辑 + 采纳/拒绝）；随统一历史快照回滚。 */
-export function currentAiDraft(): Record<string, any> {
-  return {
-    key: aiContextKey(),
-    kind: ai.kind,
-    lang: ai.lang,
-    edits: { ...ai.edits },
-    accept: { ...ai.accept },
-    changedOnly: ai.changedOnly,
-  };
-}
-
-/** 撤销 / 重做 / 历史跳转时恢复 AI diff 草稿。 */
-export function applyAiDraft(raw: Record<string, any> | null | undefined) {
-  if (!raw || typeof raw !== 'object') return;
-  const kind: 'polish' | 'translate' = raw.kind === 'translate' ? 'translate' : 'polish';
-  const lang = typeof raw.lang === 'string' && raw.lang ? raw.lang : ai.lang;
-  const contextChanged = kind !== ai.kind || lang !== ai.lang;
-  const apply = () => {
-    ai.edits = { ...(raw.edits ?? {}) };
-    ai.accept = { ...(raw.accept ?? {}) };
-    ai.changedOnly = raw.changedOnly ?? ai.changedOnly;
-  };
-  if (contextChanged) {
-    void (async () => {
-      // 先等掉可能还在飞的旧上下文请求，再切上下文强制重拉；否则旧请求的
-      // finally 会用旧 key 覆盖 loadedFor，并把刚恢复的 edits 重置掉。
-      if (aiLoadPromise) await aiLoadPromise;
-      ai.kind = kind;
-      ai.lang = lang;
-      ai.loadedFor = '';
-      await loadAiProposal(true);
-      apply();
-    })();
-  } else {
-    apply();
-  }
-}
-
-function checkpointAiDraft(label: string, coalesce: string) {
-  void api
-    .historyCheckpoint({
-      label,
-      export_ui: currentExportUiState(),
-      ai_draft: currentAiDraft(),
-      coalesce,
-    })
-    .then(applyHistoryMeta)
-    .catch(() => {
-      /* 历史提交失败不挡住 diff 编辑本身；下一次操作会再提交完整状态 */
-    });
-}
-
-export function toggleAiAccept(i: number) {
-  ai.accept[i] = ai.accept[i] === false;
-  checkpointAiDraft(
-    ai.accept[i] === false ? `AI 建议：取消采纳第 ${i} 条` : `AI 建议：采纳第 ${i} 条`,
-    `ai.accept.${i}`,
-  );
-}
-
-export function setAllAiAccept(value: boolean) {
-  if (!ai.proposal) return;
-  for (const item of ai.proposal.items) ai.accept[item.i] = value;
-  checkpointAiDraft(value ? 'AI 建议：全选' : 'AI 建议：全不选', 'ai.accept.all');
-}
-
-export function setAiEdit(i: number, text: string) {
-  const item = ai.proposal?.items.find((it) => it.i === i);
-  if (!item) return;
-  const previous = ai.edits[i];
-  if (text === item.after) {
-    if (previous === undefined) return;
-    delete ai.edits[i];
-  } else {
-    if (previous === text) return;
-    ai.edits[i] = text;
-  }
-  checkpointAiDraft(`AI 建议：修改第 ${i} 条`, `ai.edit.${i}`);
-}
-
-export async function applyAiProposal() {
-  if (!ai.proposal || ai.applying) return;
-  if (ai.proposal.kind === 'translate') return applyAiTranslation();
-  ai.applying = true;
-  try {
-    const accept = ai.proposal.items.filter((it) => ai.accept[it.i] !== false).map((it) => it.i);
-    const edits: Record<number, string> = {};
-    for (const [k, v] of Object.entries(ai.edits)) edits[Number(k)] = v;
-
-    const res = await api.applyAiProposal({ kind: ai.kind, lang: ai.lang, accept, edits });
-    applyCueSnapshot(res);
-
-    if (res.changed) {
-      scheduleDraftSave();
-      // 质检清单是按旧文本算的，这里不自动重算（开发文档 §9 R7）
-      toast(`已应用 ${res.changed} 处修改（⌘Z 可整批撤回）；质检清单基于旧文本，如需复核请重新跑质检`);
-    } else {
-      toast('没有需要应用的修改', 'warn');
-    }
-    await refreshCues();
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  } finally {
-    ai.applying = false;
-  }
-}
-
-/**
- * 「一键复制提示词」：把当前字幕整成 SRT 塞进翻译模板，复制到剪贴板。
- *
- * 这条路是给没有 API Key、或想用网页版模型的用户：复制 → 粘到任意聊天窗 →
- * 把回复粘回来 → 解析成提案 → 同一套 diff。
- */
-export async function copyAiPrompt() {
-  if (!app.cues.length) {
-    toast(ai.kind === 'translate' ? '当前没有可翻译的字幕' : '当前没有可润色的字幕', 'warn');
-    return false;
-  }
-  try {
-    const templateId = ai.kind === 'translate' ? prompts.selected : '';
-    const res = await api.getAiPrompt(ai.kind, ai.kind === 'translate' ? ai.lang : '', templateId);
-    if (window.kikusub?.writeClipboard) {
-      await window.kikusub.writeClipboard(res.prompt);
-    } else if (navigator.clipboard) {
-      await navigator.clipboard.writeText(res.prompt);
-    }
-    toast(
-      `已复制「${res.template_name}」：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`,
-    );
-    ai.pasteOpen = true;
-    return true;
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return false;
-  }
-}
-
-/**
- * 解析粘贴回来的 SRT。
- *
- * 服务端只取**文本**（按顺序），序号与时间戳一律丢弃、改用我们自己的时间码；
- * 条数对不上会整批拒绝——这比生成半份错位译文安全得多。
- */
-export async function parseAiPastedSrt() {
-  const text = ai.pasteText.trim();
-  if (!text) {
-    toast('先把模型返回的 SRT 粘进来', 'warn');
-    return;
-  }
-  ai.parsing = true;
-  try {
-    const res = await api.aiFromSrt({
-      kind: ai.kind,
-      lang: ai.kind === 'translate' ? ai.lang : '',
-      text,
-    });
-    ai.proposal = res.proposal;
-    ai.path = '';
-    ai.errors = [];
-    ai.warnings = res.warnings ?? [];
-    ai.accept = {};
-    ai.edits = {};
-    for (const item of res.proposal.items) ai.accept[item.i] = true;
-    ai.pasteOpen = false;
-    ai.pasteText = '';
-    // 标记成"已加载"，避免 $effect 又去拉磁盘上的旧提案把它顶掉
-    ai.loadedFor = aiContextKey();
-    toast(
-      ai.kind === 'translate'
-        ? `已解析 ${res.count} 条译文，右侧就是待应用的建议`
-        : `已解析 ${res.count} 条修改，右侧就是待应用的建议`,
-    );
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  } finally {
-    ai.parsing = false;
-  }
-}
-
-/**
- * 应用译文：写进平行轨，**不动 review_cues**（D-3）。
- *
- * 应用后自动切到「双语」，让用户立刻看到原文 + 译文叠在一起。
- */
-export async function applyAiTranslation() {
-  if (!ai.proposal || ai.applying) return;
-  const track = ai.proposal.kind === 'translate' ? ai.proposal : null;
-  if (!track) {
-    toast('这不是一份翻译建议', 'warn');
-    return;
-  }
-  const lang = (track.dst_lang || ai.lang || '').trim();
-  if (!lang) {
-    toast('建议里没有目标语种', 'error');
-    return;
-  }
-  ai.applying = true;
-  try {
-    const items = ai.proposal.items.map((it) => ({ ...it, after: ai.edits[it.i] ?? it.after }));
-    const res = await api.applyTranslation({ lang, proposal: { ...ai.proposal, items } });
-    await loadTranslations();
-    await loadCueHistory();
-    setTrackLang(lang);
-    setTrackMode('both');
-    scheduleDraftSave();
-    toast(`已应用 ${res.count} 条译文，核对台已切到双语`);
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  } finally {
-    ai.applying = false;
-  }
-}
-
-/** 另存当前（含人工编辑的）提案，供 agent 复用或留档。 */
-export async function saveAiProposalAs() {
-  if (!ai.proposal || ai.saving) return;
-  ai.saving = true;
-  try {
-    const items = ai.proposal.items.map((it) => ({
-      ...it,
-      after: ai.edits[it.i] ?? it.after,
-    }));
-    const res = await api.saveAiProposal({ ...ai.proposal, items }, ai.kind, ai.lang);
-    ai.path = res.path;
-    toast(`已保存建议：${res.path.split('/').pop()}`);
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  } finally {
-    ai.saving = false;
-  }
-}
-
-/**
- * 「丢弃」= 真删文件 + 清界面。
- *
- * 注意末尾那行 `loadedFor`：`resetAi()` 会把它清空，而 AiView 的 `$effect` 依赖它，
- * 于是会立刻再去磁盘读一遍——刚删掉的提案就"复活"了。标记成本上下文已查过即可。
- */
-export async function discardAiProposal() {
-  try {
-    await api.deleteAiProposal(ai.kind, ai.kind === 'translate' ? ai.lang : '');
-  } catch {
-    /* 文件删不掉也要让界面回到空态 */
-  }
-  resetAi();
-  ai.loadedFor = aiContextKey();
-  toast('已丢弃建议');
-}
-
 /** 改某一条译文（三种显示模式下右侧检查器都用它）。 */
 export async function updateTranslation(index: number, text: string) {
   const lang = app.trackLang;
@@ -3692,126 +3207,6 @@ export async function updateTranslation(index: number, text: string) {
     await loadTranslations();
     void loadCueHistory();
     scheduleDraftSave();
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  }
-}
-
-let aiStream: (() => void) | null = null;
-
-function onAiJobEvent(ev: any) {
-  if (ev?.job) {
-    ai.progress = Math.max(ai.progress, Number(ev.job.percent ?? 0));
-    if (ev.job.stage) ai.stage = ev.job.stage;
-  }
-  if (ev?.type === 'done') {
-    ai.generating = false;
-    ai.jobId = '';
-    ai.progress = 100;
-    aiStream?.();
-    aiStream = null;
-    void loadAiProposal(true);
-  } else if (ev?.type === 'error') {
-    ai.generating = false;
-    ai.jobId = '';
-    aiStream?.();
-    aiStream = null;
-    toast(ev.message || '生成建议失败', 'error');
-  } else if (ev?.type === 'cancelled') {
-    ai.generating = false;
-    ai.jobId = '';
-    aiStream?.();
-    aiStream = null;
-    toast('已取消生成', 'warn');
-  }
-}
-
-/**
- * 生成一份润色提案。
- *
- * 密钥在**发起这一刻**从主进程取，随请求头走一次；服务层不保存、日志也不会记。
- * 进度/取消复用转写那套 `/ws/jobs`，不另起一套轮询。
- */
-export async function startAiPolish() {
-  return startAiGeneration('polish');
-}
-
-export async function startAiTranslate() {
-  return startAiGeneration('translate');
-}
-
-async function startAiGeneration(kind: 'polish' | 'translate') {
-  if (!app.connected || ai.generating) return;
-  if (!app.cues.length) {
-    toast(kind === 'translate' ? '当前没有可翻译的字幕' : '当前没有可润色的字幕', 'warn');
-    return;
-  }
-  if (kind === 'translate' && !ai.lang) {
-    toast('先选目标语种', 'warn');
-    return;
-  }
-  let cfg;
-  try {
-    cfg = await api.getAiConfig();
-  } catch (err) {
-    toast((err as Error).message, 'error');
-    return;
-  }
-  if (!cfg.enabled) {
-    toast('AI 优化未启用：设置 → AI 优化（实验功能）里打开', 'warn');
-    return;
-  }
-  const key = await window.kikusub?.aiKey?.get?.();
-  if (!key) {
-    toast('还没有配置 API Key：设置 → AI 优化（实验功能）', 'warn');
-    return;
-  }
-
-  ai.generating = true;
-  ai.progress = 0;
-  ai.stage = '正在提交…';
-  try {
-    const job = await api.createAiJob(
-      {
-        kind,
-        base_url: cfg.base_url,
-        model: cfg.model,
-        chunk_cues: kind === 'translate' ? cfg.translate_chunk_cues : cfg.chunk_cues,
-        context_cues: cfg.context_cues,
-        lang: 'ja',
-        dst_lang: kind === 'translate' ? ai.lang : '',
-      },
-      key,
-    );
-    ai.jobId = job.id;
-    aiStream = api.streamJob(job.id, onAiJobEvent, () => {});
-  } catch (err) {
-    ai.generating = false;
-    ai.jobId = '';
-    toast((err as Error).message, 'error');
-  }
-}
-
-export async function cancelAiPolish() {
-  if (!ai.jobId) return;
-  try {
-    await api.cancelJob(ai.jobId);
-    ai.stage = '正在取消…';
-  } catch (err) {
-    toast((err as Error).message, 'error');
-  }
-}
-
-/** 用原生对话框导入一份外部提案（agent 写的、或别处存下来的）。 */
-export async function importAiProposal() {
-  const dir = app.config?.export_dir || app.config?.output_dir || '';
-  const picked = await window.kikusub?.pickProposal?.(dir);
-  if (!picked) return;
-  try {
-    await api.importAiProposal(picked, ai.kind, ai.lang);
-    ai.loadedFor = '';
-    await loadAiProposal(true);
-    toast(`已导入建议：${picked.split('/').pop()}`);
   } catch (err) {
     toast((err as Error).message, 'error');
   }

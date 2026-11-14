@@ -38,6 +38,8 @@ export interface EngineInfo {
   min_ram_gb: number;
   notes: string;
   downloadable: boolean;
+  /** 推理运行时族：whisper / qwen / sherpa（服务端注册表给出）。 */
+  family?: string;
   installed: boolean;
   size_bytes: number;
   enabled: boolean;
@@ -82,6 +84,8 @@ export interface SettingsPayload {
 
 export interface PromptTemplate {
   id: string;
+  /** polish_single / polish_dual / translate；旧模板缺省按 translate。 */
+  category?: 'polish_single' | 'polish_dual' | 'translate';
   name: string;
   description: string;
   content: string;
@@ -91,7 +95,10 @@ export interface PromptTemplate {
 
 export interface PromptLibrary {
   version: number;
+  /** 翻译分类的选中项（旧字段名保留）。 */
   selected: string;
+  selected_polish_single: string;
+  selected_polish_dual: string;
   templates: PromptTemplate[];
   path: string;
 }
@@ -228,6 +235,8 @@ export interface Cue {
 /** 当前核对表的来源。kind=transcription 才能引用该次转写的报告与质检。 */
 export interface ReviewSource {
   kind: 'transcription' | 'import' | 'draft' | string;
+  /** 产生这一版稿的引擎 key（whisper / qwen / sensevoice / firered）。 */
+  engine?: string;
   name?: string;
   path?: string;
   job_id?: string;
@@ -377,7 +386,14 @@ export interface AiProposal {
   kind: 'polish' | 'translate';
   src_lang: string;
   dst_lang?: string;
-  source: { path: string; count: number; digest: string };
+  source: {
+    path: string;
+    count: number;
+    digest: string;
+    /** 双源润色额外绑定第二版；单源提案没有这两个字段（向后兼容）。 */
+    count_b?: number;
+    digest_b?: string;
+  };
   model?: string;
   entry?: string;
   created_at?: number;
@@ -416,6 +432,48 @@ export interface AiConfig {
   key_held_by: string;
 }
 
+/** 双引擎复核对齐后的一行。`kind` 对应 = / ~ / + / −。 */
+export interface DualRow {
+  kind: 'same' | 'diff' | 'only_a' | 'only_b';
+  a_indices: number[];
+  b_indices: number[];
+  a_text: string;
+  b_text: string;
+  start: number;
+  end: number;
+  a_start: number | null;
+  a_end: number | null;
+  b_start: number | null;
+  b_end: number | null;
+  ratio: number;
+  char_ops?: { op: 'eq' | 'del' | 'ins'; text: string }[];
+}
+
+export interface DualStats {
+  total: number;
+  same: number;
+  diff: number;
+  only_a: number;
+  only_b: number;
+  a_count: number;
+  b_count: number;
+  /** 侧栏徽标只统计 ~（文本不同）条数。 */
+  badge: number;
+}
+
+export interface AltReviewPayload {
+  exists: boolean;
+  engine: string;
+  count: number;
+  source: Record<string, any>;
+  created_at: number;
+  cues: Cue[];
+  media_path?: string;
+  params?: Record<string, unknown>;
+  rows: DualRow[];
+  stats: DualStats | null;
+}
+
 export interface AiProposalPayload {
   path: string;
   proposal: AiProposal;
@@ -425,6 +483,51 @@ export interface AiProposalPayload {
   digest_match: boolean;
   source_count: number;
   current_count: number;
+}
+
+/** 结构建议（Phase 1）：外部模型只给 ops，本地绑定 digest/revision。 */
+export interface StructureOpView {
+  id: number;
+  op: 'merge' | 'retime' | 'replace_text' | 'insert' | 'delete';
+  reason: string;
+  conflict: string[];
+  before: string;
+  after: string;
+  text: string;
+  old_start: number | null;
+  old_end: number | null;
+  new_start: number | null;
+  new_end: number | null;
+  index_label: string;
+  from_index: number | null;
+  to_index: number | null;
+  after_index: number | null;
+}
+
+export interface StructureSummary {
+  input_count: number;
+  output_count: number;
+  total_ops: number;
+  conflicts: number;
+  counts: Record<string, number>;
+}
+
+export interface StructurePayload {
+  exists: boolean;
+  path: string;
+  revision: string;
+  source: { path?: string; count: number; digest: string };
+  current_count: number;
+  digest_match: boolean;
+  ops: StructureOpView[];
+  warnings: string[];
+  summary: StructureSummary;
+}
+
+export interface StructureApplyPayload extends CueSnapshot {
+  changed: number;
+  applied: number;
+  output_count: number;
 }
 
 export interface JobSnapshot {
@@ -788,8 +891,23 @@ export const api = {
     end?: number | null;
     keep_absolute_timeline?: boolean;
     apply?: 'replace' | 'append' | 'replace_range';
+    alt_review?: boolean;
     params?: Record<string, unknown>;
   }) => req<JobSnapshot>('/api/jobs', { method: 'POST', body: JSON.stringify(payload) }),
+
+  /** 用另一个引擎把若干字幕窗口各听一遍；服务端只回文本、不落盘。 */
+  createCompareJob: (payload: {
+    media_id: string;
+    engine: string;
+    ranges: Array<{
+      index: number;
+      start: number;
+      end: number;
+      prev_end?: number;
+      next_start?: number;
+    }>;
+    params?: Record<string, unknown>;
+  }) => req<JobSnapshot>('/api/jobs', { method: 'POST', body: JSON.stringify({ ...payload, kind: 'compare' }) }),
 
   createProxyJob: (mediaId: string) =>
     req<JobSnapshot>('/api/jobs', {
@@ -999,7 +1117,12 @@ export const api = {
   // ---- 提示词模板 ----
   getPrompts: () => req<PromptLibrary>('/api/prompts'),
 
-  createPrompt: (body: { name: string; description?: string; content: string }) =>
+  createPrompt: (body: {
+    name: string;
+    description?: string;
+    content: string;
+    category?: 'polish_single' | 'polish_dual' | 'translate';
+  }) =>
     req<PromptLibrary & { created: string }>('/api/prompts', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -1014,8 +1137,11 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  selectPrompt: (id: string) =>
-    req<PromptLibrary>(`/api/prompts/${encodeURIComponent(id)}/select`, { method: 'POST' }),
+  selectPrompt: (id: string, category = '') =>
+    req<PromptLibrary>(
+      `/api/prompts/${encodeURIComponent(id)}/select${category ? `?category=${encodeURIComponent(category)}` : ''}`,
+      { method: 'POST' },
+    ),
 
   deletePrompt: (id: string) =>
     req<PromptLibrary>(`/api/prompts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -1098,18 +1224,39 @@ export const api = {
     kind: 'translate' | 'polish' = 'translate',
     lang = 'zh-Hans',
     templateId = '',
+    opts: { mode?: 'single' | 'dual'; from?: number; to?: number } = {},
   ) => {
     const q = new URLSearchParams({ kind, lang });
     if (templateId) q.set('template_id', templateId);
+    if (opts.mode) q.set('mode', opts.mode);
+    if (opts.from !== undefined) q.set('from_index', String(opts.from));
+    if (opts.to !== undefined) q.set('to_index', String(opts.to));
     return req<{
       prompt: string;
       count: number;
+      total?: number;
       lang: string;
       chars: number;
+      mode?: 'single' | 'dual';
+      from?: number;
+      to?: number;
+      category?: string;
       template_id: string;
       template_name: string;
     }>(`/api/ai/prompt?${q}`);
   },
+
+  // ---- 双引擎复核（第二版）-----------------------------------------------
+  getAltReview: (diff = false) =>
+    req<AltReviewPayload>(`/api/alt-review${diff ? '?diff=1' : ''}`),
+
+  deleteAltReview: () => req<{ removed: boolean; exists: boolean }>('/api/alt-review', { method: 'DELETE' }),
+
+  replacePrimaryWithAlt: (clearAlt = true) =>
+    req<CueSnapshot & { replaced: number; alt_cleared: boolean }>(
+      '/api/alt-review/replace-primary',
+      { method: 'POST', body: JSON.stringify({ clear_alt: clearAlt }) },
+    ),
 
   /** 删除磁盘上的提案文件（「丢弃」用；只清界面不算丢弃） */
   deleteAiProposal: (kind: 'polish' | 'translate' = 'polish', lang = '') => {
@@ -1133,8 +1280,23 @@ export const api = {
     }),
 
   /** 把粘贴回来的 SRT 解析成提案（只解析，不落盘、不改字幕） */
-  aiFromSrt: (body: { kind: 'translate' | 'polish'; lang: string; text: string }) =>
-    req<{ proposal: AiProposal; warnings: string[]; count: number }>('/api/ai/from-srt', {
+  aiFromSrt: (body: {
+    kind: 'translate' | 'polish';
+    lang: string;
+    text: string;
+    from_index?: number;
+    to_index?: number;
+    mode?: 'single' | 'dual';
+  }) =>
+    req<{
+      proposal: AiProposal;
+      warnings: string[];
+      count: number;
+      mode?: 'single' | 'dual';
+      from?: number;
+      to?: number;
+      expected?: number;
+    }>('/api/ai/from-srt', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -1247,6 +1409,7 @@ export const api = {
       context_cues: number;
       lang: string;
       dst_lang?: string;
+      mode?: 'single' | 'dual';
     },
     key: string,
   ) =>
@@ -1290,6 +1453,30 @@ export const api = {
       changed: number;
       warnings: string[];
     }>('/api/ai/apply', { method: 'POST', body: JSON.stringify(payload) }),
+
+
+  // ---- 结构建议（Phase 1：合并 / 改时间 / 改文字 / 新增 / 删除）------------
+  getStructure: () => req<StructurePayload>('/api/ai/structure'),
+
+  parseStructure: (text: string) =>
+    req<StructurePayload>('/api/ai/structure/from-json', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+
+  applyStructure: (payload: { accept: number[]; revision: string }) =>
+    req<StructureApplyPayload>('/api/ai/structure/apply', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteStructure: () =>
+    req<{ removed: boolean; path: string }>('/api/ai/structure', { method: 'DELETE' }),
+
+  getStructurePrompt: (mode: 'single' | 'dual' = 'single') =>
+    req<{ prompt: string; count: number; chars: number; mode: string; alt_count: number }>(
+      `/api/ai/structure/prompt?mode=${mode}`,
+    ),
 
   qaAction: (cmd: { id: string; action: string; status?: string; resolution?: string }) =>
     req<{

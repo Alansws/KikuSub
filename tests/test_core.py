@@ -13,6 +13,9 @@ torch = pytest.importorskip("torch")
 from core.transcribe import (  # noqa: E402
     SubtitleCue,
     _is_blank,
+    is_nonverbal_only,
+    merge_fragmented_cues,
+    strip_edge_nonverbal,
     apply_cue_padding,
     cues_to_srt,
     cues_to_vtt,
@@ -144,6 +147,106 @@ def test_hallucination_risk_reason_names_the_triggered_rule():
     assert hallucination_risk_reason("…信じる", 8.0) == "low-density"
     assert hallucination_risk_reason("こんにちは", 2.0) == ""
     assert hallucination_risk_reason("", 1.0) == ""
+
+
+def test_hallucination_short_rule_does_not_kill_normal_one_second_lines():
+    # 「いいよー」这种 1.0s 的正常短句曾被时间戳复核判空、整条丢掉。
+    assert hallucination_risk_reason("いいよー", 1.0) == ""
+    assert hallucination_risk_reason("いいよー", 0.7) == "short"
+
+
+def test_strip_edge_nonverbal_removes_laughter_only_at_the_edges():
+    assert strip_edge_nonverbal("んふふ、好きなだけ見て") == "好きなだけ見て"
+    assert strip_edge_nonverbal("…ふふ、かわいい") == "かわいい"
+    assert strip_edge_nonverbal("ねぇ…ふふ") == "ねぇ…"
+    # 句中不动：它是这一句的一部分，删掉会让上下文断裂
+    assert (
+        strip_edge_nonverbal("ほら、いいよ。ふふ、おちんちん触りたいんでしょ?")
+        == "ほら、いいよ。ふふ、おちんちん触りたいんでしょ?"
+    )
+    # 「あー…」可能是台词本身（人工整理版里保留了），不当发声删
+    assert strip_edge_nonverbal("あー…すっごい…えへへ") == "あー…すっごい…"
+    assert strip_edge_nonverbal("") == ""
+
+
+class _FakeVad:
+    """按帧号返回固定概率曲线，用来测边界收口逻辑（不加载模型）。"""
+
+    def __init__(self, probs):
+        self.probs = probs
+        self.i = 0
+
+    def __call__(self, chunk, sampling_rate):
+        value = self.probs[min(self.i, len(self.probs) - 1)]
+        self.i += 1
+        return value
+
+
+def test_refine_bounds_uses_the_pause_between_laughter_and_speech():
+    import numpy as np
+
+    from core.transcribe import _refine_bounds_by_pauses
+
+    # 4s：1s 笑声 + 1s 停顿 + 2s 台词（512/16000 = 32ms 一帧，共 125 帧）
+    probs = [0.9] * 31 + [0.01] * 31 + [0.9] * 63
+    head, tail = _refine_bounds_by_pauses(
+        np.zeros(16000 * 4, dtype=np.float32), _FakeVad(probs), head_removed=True, tail_removed=False
+    )
+    assert 1.9 <= head <= 2.1, head
+    assert tail == 4.0
+
+    # 句尾喘气：3s 台词 + 1s 低概率
+    probs = [0.9] * 94 + [0.01] * 31
+    head, tail = _refine_bounds_by_pauses(
+        np.zeros(16000 * 4, dtype=np.float32), _FakeVad(probs), head_removed=False, tail_removed=True
+    )
+    assert head == 0.0
+    assert 2.9 <= tail <= 3.1, tail
+
+    # 段内没有可信停顿时不改边界（宁可字幕长一点，也不猜着切）
+    probs = [0.9] * 125
+    assert _refine_bounds_by_pauses(
+        np.zeros(16000 * 4, dtype=np.float32), _FakeVad(probs), head_removed=True, tail_removed=True
+    ) == (0.0, 4.0)
+
+
+def test_merge_fragmented_cues_joins_half_sentences_only():
+    cues = [
+        SubtitleCue(0.0, 2.0, "いつも見たそうに"),
+        SubtitleCue(2.0, 3.5, "してたもんねー"),
+        SubtitleCue(3.55, 5.0, "出ちゃうね…"),
+        SubtitleCue(5.0, 6.0, "出ちゃう出ちゃう…"),
+    ]
+    merged = merge_fragmented_cues(cues)
+    assert [c.text for c in merged] == [
+        "いつも見たそうにしてたもんねー",
+        "出ちゃうね…",
+        "出ちゃう出ちゃう…",
+    ]
+    # 间隔明显属于两句时不并
+    gap_cues = [SubtitleCue(0.0, 1.0, "いいよ"), SubtitleCue(1.5, 2.5, "見せて")]
+    assert len(merge_fragmented_cues(gap_cues)) == 2
+    # 合并后超字数上限也不并
+    long_cues = [SubtitleCue(0.0, 1.0, "あ" * 19), SubtitleCue(1.0, 2.0, "い" * 5)]
+    assert len(merge_fragmented_cues(long_cues, max_cue_chars=20)) == 2
+
+
+def test_is_nonverbal_only_drops_fragments_but_keeps_words():
+    assert is_nonverbal_only("っ")
+    assert is_nonverbal_only("ー")
+    assert is_nonverbal_only("ふふっ")
+    assert is_nonverbal_only("えへへ…")
+    assert is_nonverbal_only("…")
+    assert not is_nonverbal_only("はい")
+    assert not is_nonverbal_only("ねぇ…")
+    assert not is_nonverbal_only("かわいい")
+    # 单个假名是正常台词（「え？」「ん…」），不能当碎片丢掉
+    assert not is_nonverbal_only("え")
+    assert not is_nonverbal_only("へ")
+    assert not is_nonverbal_only("ん")
+    # 一个假名却占了 2 秒以上：那是把呼吸判成了语音，不是台词
+    assert is_nonverbal_only("え", 3.0)
+    assert not is_nonverbal_only("え", 0.8)
 
 
 def test_blank_text_detection_matches_placeholder_outputs():

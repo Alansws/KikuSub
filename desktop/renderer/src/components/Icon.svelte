@@ -17,6 +17,8 @@
     sidebar:
       '<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2"/><path d="M6.2 2.8v10.4"/>',
     film: '<rect x="2" y="3.4" width="12" height="9.2" rx="1.6"/><path d="M5.4 3.4v9.2M10.6 3.4v9.2M2 6.4h3.4M2 9.6h3.4M10.6 6.4H14M10.6 9.6H14"/>',
+    rows: '<rect x="2" y="3" width="12" height="3.2" rx="1"/><rect x="2" y="9.8" width="12" height="3.2" rx="1"/>',
+    grid: '<rect x="2" y="2.6" width="5.2" height="4.8" rx="1"/><rect x="8.8" y="2.6" width="5.2" height="4.8" rx="1"/><rect x="2" y="8.6" width="5.2" height="4.8" rx="1"/><rect x="8.8" y="8.6" width="5.2" height="4.8" rx="1"/>',
     search: '<circle cx="7.2" cy="7.2" r="4.4"/><path d="M10.6 10.6 13.6 13.6"/>',
     warn: '<path d="M8 4.4v4.2"/><circle cx="8" cy="11.4" r=".85" fill="currentColor" stroke="none"/>',
     check: '<path d="M3 8.4 6.3 11.7 13 5"/>',
@@ -26,6 +28,8 @@
     redo: '<path d="M11.8 6.2H6a3.8 3.8 0 0 0 0 7.6h3.6"/><path d="M9.4 3.8l2.4 2.4-2.4 2.4"/>',
     history:
       '<path d="M2.4 6.2a5.8 5.8 0 1 1-.2 3.2"/><path d="M2.2 2.6v3.8h3.8"/><path d="M8 5.2v3.1l2.2 1.4"/>',
+    refresh:
+      '<path d="M13.1 6.3a5.5 5.5 0 1 0 .1 3.4"/><path d="M13.4 2.8v3.7H9.7"/>',
     speaker:
       '<path d="M2.4 6.1h2.1L7.8 3.4v9.2L4.5 9.9H2.4z"/><path d="M10.2 5.9a3.1 3.1 0 0 1 0 4.2"/><path d="M12.1 4.1a5.4 5.4 0 0 1 0 7.8"/>',
     trash: '<path d="M2.8 4.4h10.4"/><path d="M6.4 4.4V3.2a1 1 0 0 1 1-1h1.2a1 1 0 0 1 1 1v1.2"/><path d="M4.4 4.4l.6 8a1.2 1.2 0 0 0 1.2 1.1h3.6a1.2 1.2 0 0 0 1.2-1.1l.6-8"/>',

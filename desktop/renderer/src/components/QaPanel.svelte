@@ -23,6 +23,16 @@
     toast,
     transcribeRange,
   } from '../lib/store.svelte';
+  import {
+    adoptAlternative,
+    alternativeText,
+    availableEngineLabel,
+    cueIndexForItem,
+    dismissAlternative,
+    runSecondOpinion,
+    secondOpinion,
+  } from '../lib/secondOpinion.svelte';
+  import { jobBusy } from '../lib/jobState';
   import { tcShort } from '../lib/time';
   import { cubicOut } from 'svelte/easing';
   import { untrack } from 'svelte';
@@ -571,6 +581,7 @@
         {#each shown as item (item.id)}
           {@const st = statusOf(item.id)}
           {@const res = resolutionOf(item.id)}
+          {@const cueIndex = cueIndexForItem(Number(item.start), Number(item.end))}
           <article class="item" class:done={st !== 'pending'}>
             <button
               class="check"
@@ -633,11 +644,42 @@
                   </button>
                 {/if}
 
+                {#if cueIndex >= 0}
+                  <button
+                    class="act"
+                    onclick={() => runSecondOpinion([cueIndex])}
+                    disabled={jobBusy() || secondOpinion.status === 'running'}
+                    title={jobBusy()
+                      ? '有任务在跑（同一时间只允许一个重任务）'
+                      : secondOpinion.status === 'running'
+                        ? '正在复核另一条…'
+                        : `把这一句送给 ${availableEngineLabel() || '另一个引擎'} 再听一遍（换引擎约 20–40 秒）`}
+                  >
+                    {#if secondOpinion.status === 'running' && secondOpinion.requested.includes(cueIndex)}
+                      <span class="spin"></span>复核中
+                    {:else}
+                      🎧 复核
+                    {/if}
+                  </button>
+                {/if}
                 <button class="act skip" onclick={() => act(item, { action: 'skip' })}>跳过</button>
                 {#if st !== 'pending'}
                   <button class="act" onclick={() => toggle(item)}>放回</button>
                 {/if}
               </div>
+
+              {#if cueIndex >= 0 && alternativeText(cueIndex)}
+                <div class="alt">
+                  <div class="alt-label">{availableEngineLabel()}</div>
+                  <div class="alt-text">{alternativeText(cueIndex)}</div>
+                  <div class="alt-acts">
+                    <button class="act primary-ghost" onclick={() => adoptAlternative(cueIndex)}>
+                      采用
+                    </button>
+                    <button class="act" onclick={() => dismissAlternative()}>收起</button>
+                  </div>
+                </div>
+              {/if}
             </div>
           </article>
         {/each}
@@ -1151,6 +1193,29 @@
     gap: 2px;
     flex-wrap: wrap;
     margin-top: 1px;
+  }
+  .alt {
+    margin-top: 6px;
+    padding: 6px var(--sp-2);
+    border: 1px solid var(--accent-line, var(--line));
+    border-radius: 5px;
+    background: var(--accent-soft);
+  }
+  .alt-label {
+    font-size: 11px;
+    color: var(--text-3);
+    margin-bottom: 2px;
+  }
+  .alt-text {
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .alt-acts {
+    display: flex;
+    gap: 6px;
+    margin-top: var(--sp-1);
   }
   .act {
     appearance: none;

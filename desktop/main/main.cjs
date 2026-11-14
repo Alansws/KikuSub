@@ -1058,12 +1058,14 @@ function buildMenu() {
     {
       label: '显示',
       submenu: [
-        // ⌘1–⌘5 由渲染层处理（导入 / 转写 / 核对台 / AI 优化 / 导出）。
+        // ⌘1–⌘7 由渲染层处理（导入 / 转写 / 核对台 / 双引擎复核 / 润色 / 翻译 / 导出）。
         // 菜单不绑 accelerator：用户改键后旧键不能仍然生效。
         { label: '导入', click: send('menu:view', 'import') },
         { label: '转写', click: send('menu:view', 'transcribe') },
         { label: '核对台', click: send('menu:view', 'review') },
-        { label: 'AI 优化', click: send('menu:view', 'ai') },
+        { label: '双引擎复核', click: send('menu:view', 'dual') },
+        { label: '润色', click: send('menu:view', 'polish') },
+        { label: '翻译', click: send('menu:view', 'translate') },
         { label: '导出', click: send('menu:view', 'export') },
         { label: '任务详报', click: send('menu:view', 'report') },
         { type: 'separator' },

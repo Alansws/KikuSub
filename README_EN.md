@@ -32,7 +32,7 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **Transcribe** — Silero VAD segments the speech, then a switchable Japanese engine produces timed subtitles.
 - **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
 - **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
-- **AI polish / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. Translations live in a parallel track and export as source, target or bilingual.
+- **AI polish / translate / structure suggestions** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A separate structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically. Translations live in a parallel track and export as source, target or bilingual.
 - **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
 - **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
 - **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality share one history with subtitles, translations, QA state and AI suggestion edits; ⌘Z always undoes the most recent step, and the history panel is a single list.
@@ -48,7 +48,14 @@ Everything except the optional AI features is local inference.
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
 - All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. Six built-in presets, plus save / overwrite / delete.
-- Optional FFmpeg `dynaudnorm` to push down BGM and lift quiet dialogue.
+- FFmpeg `dynaudnorm` is on by default (on quiet masters it is the difference between
+  transcribing a line and dropping it); turn it off in the parameter panel if you prefer.
+- Silero VAD runs in 30 s windows: one long pass drifts and silently misses clear lines.
+- Breath and laughter at cue edges ("んふふ", "えへへ") are stripped after decoding; cue
+  interiors are left alone. The "strip edge vocalisation" switch turns this off for anime
+  where a character's laugh is content.
+- One-character lines ("え？", "ん…") are kept — only cues made purely of sokuon/long-vowel
+  marks, or a single kana stretched over 2 s (a breath misread as speech), are dropped.
 - Cancel mid-run and keep what finished (`*.part_cancelled.srt`).
 - **Import source and target tracks separately**: the Transcribe page's “existing subtitles” cards can load a source SRT/VTT or a target SRT/VTT aligned to the current source; the Review desk “⋯” menu can delete either track independently, so a restart no longer forces a full re-transcription just to restore translations.
 - Hallucination gate: segments transcribed but re-checked as empty are dropped, suspicious short cues are marked, and the per-segment details go into the task report.
@@ -71,7 +78,7 @@ Everything except the optional AI features is local inference.
 - **The QA panel no longer covers the picture**: it docks into a "QA" tab in the right inspector by default; click "pop out" when you want it beside the source, then drag/resize it, reset it, or dock it back.
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
 - **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
-- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action (play/pause, prev/next, view switching, AI polish/translate tabs).
+- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 translate / ⌘7 export**.
 - Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
 **QA queue**
@@ -81,14 +88,25 @@ Everything except the optional AI features is local inference.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
 
-**AI polish & translation**
+**Dual-engine review, polish, structure suggestions & translation**
 
-![AI view: source on the left, suggestion on the right, applied as one batch](docs/images/ai-view.jpg)
+![Dual review: two read-only columns marked = / ~ / + / −](docs/images/dual-view.jpg)
+
+- A second engine's full transcript goes into a read-only column and **never overwrites the review desk**. Rows are aligned live 1:1 and marked `=` / `~` / `+` / `−`, with a soft character-level tint on `~` (no strikethrough; low-similarity rows keep only the row marker). **The two versions may have different line counts**; extra lines show up as their own `+` / `−` rows instead of being hidden.
+- The second version is cached per media file and restored when you switch back. Drop it, or confirm once to replace the whole review desk with B (one ⌘Z reverts everything).
+- The sidebar badge counts text-diff rows only; `+` / `−` missing lines are shown inside the page.
+
+![Dual-source polish: A | B (collapsible) | AI final](docs/images/polish-view.jpg)
 
 - Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
-- Two columns: source is read-only, the suggestion is editable on double-click. Accept or reject item by item; filter to changed rows only.
-- Applying is one history entry — ⌘Z reverts the whole batch. A digest mismatch (different media or edited source) is rejected without touching a single byte.
+- With a second version you can switch between **single-source / dual-source**: A | B | AI final, with B collapsible. **B does not need the same line count as A** (different engines segment differently); the AI final still follows A's indices and timeline exactly. Accept per item, apply all changed rows, or apply the whole column — all through the same `apply_polish()`, one history entry.
+- Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap, with per-segment copy / paste and completion tracking.
+- Applying is one history entry — ⌘Z reverts the whole batch. A digest / digest_b mismatch is rejected without touching a single byte.
+
+![Structure suggestions: paste ops JSON, preview merge / retime / replace text / insert / delete](docs/images/structure-view.jpg)
+
+- **Structure suggestions (Phase 1)** — the external model only returns `{"ops":[...]}` (merge / retime / replace text / insert / delete); the app binds the source digest on paste, previews every op, and applies the selection as one history step (⌘Z). No digest or version is requested from the model, and the polish timeline contract is untouched. Conflicting ops are red and cannot be selected; count-changing merge / insert / delete are rejected when a non-empty translation track exists.
 - Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
 - Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`). Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
 - **Video export**: hard subs use a Pillow sprite + ffmpeg overlay (no libass needed); soft subs are toggleable in MP4; "copy only" skips re-encoding entirely.
@@ -104,7 +122,9 @@ Everything except the optional AI features is local inference.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
 - Two themes: Clear Sky (light / dark) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch in Settings. Waveform height is draggable from the review stage.
 
-## The two engines
+## Switchable engines
+
+Two Japanese engines are enabled by default:
 
 | | Anime Whisper | Qwen3-ASR + CTC |
 | --- | --- | --- |
@@ -120,14 +140,40 @@ Two caveats:
 1. CTC resolution is set by acoustic frames. This encoder uses 80 ms frames with 2× upsampling, so the real granularity is **40 ms**; the three decimal places in the SRT are just formatting.
 2. Anime Whisper's intra-cue timing is approximate: boundaries come from VAD and multiple cues inside a segment are split proportionally. Use Qwen3 when you need per-character frames.
 
+There are also **two optional Chinese engines**. They are disabled by default and their weights are not bundled:
+download them (about 230 MB / 1.2 GB) from Settings → Engines or the first-run wizard, then enable them.
+
+| | SenseVoice-Small (Chinese) | FireRedASR2-AED (Chinese) |
+| --- | --- | --- |
+| Weights | [`csukuangfj/sherpa-onnx-sense-voice-…`](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | [`csukuangfj2/sherpa-onnx-fire-red-asr2-…`](https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26) |
+| Size | ~230 MB (int8) | ~1.35 GB (1.2 GB ASR + 160 MB FireRedPunc) |
+| Languages | zh / en / ja / ko / yue | zh / en + 20+ dialects |
+| Timing inside a cue | token timestamps from the model | **no timestamps**; proportional to character count |
+| Punctuation | ITN output (can be disabled) | **restored by FireRedPunc** (on by default) |
+| Segmentation | sentence punctuation → pauses → length / duration | punctuation → pauses → length / duration |
+| Speed | ~0.1 s for 5–6 s audio | ~1.5 s for 5–6 s audio (more accurate) |
+| Good for | Chinese first drafts, mixed zh/ja material | Chinese fine-tuning, dialect material |
+
+Both run on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (ONNX Runtime / CPU) rather than FunASR's
+PyTorch stack, so an optional engine does not grow the main bundle or slow down startup. Timings are measured
+locally on an Apple Silicon CPU with 2 threads.
+
+**Why FireRed ships a punctuation model**: Chinese has no spaces and no Japanese-style particles to lean on.
+A 30-character unpunctuated transcript can only be cut by character count — the words may be right while the
+subtitles look wrong. FireRedASR2S' full stack is VAD + AED + FireRedPunc, and the last piece is wired in here:
+FireRedPunc is downloaded with the engine (`<models>/punc/`, ~160 MB) and restores commas/periods before cue
+splitting. When a mark sits only a few characters past the cue limit, the cue is allowed to run a little longer
+instead of cutting through a word. Whisper and Qwen already emit punctuation, and rely on punctuation rules and
+Japanese-particle DP respectively, so they do not need this step.
+
 ## Installation
 
 ### Requirements
 
 - macOS 12 or newer, Apple Silicon (arm64)
 - `ffmpeg` and `ffprobe` (`brew install ffmpeg`; the app adds Homebrew paths to PATH)
-- Disk: ~6.6 GB for both transcription models plus proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
-- RAM: 16 GB recommended (Qwen3-ASR weights are ~3.8 GB); the cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
+- Disk: ~6.6 GB for both Japanese transcription models plus ~1.4 GB for the two optional Chinese engines, proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
+- RAM: 8 GB minimum (measured transcription peaks: Anime Whisper ~6.7 GB, Qwen3-ASR ~5.1 GB; 12 GB leaves the system comfortable). Weight size is not resident size: Anime Whisper keeps its fp32 weights in the process while Qwen loads straight to bf16, so the 3.8 GB model is actually the lighter one. The cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
 
 ### Using the packaged .app
 

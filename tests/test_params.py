@@ -42,7 +42,7 @@ def test_grouped_preserves_declaration_order():
 def test_normalize_fills_defaults_and_clamps():
     resolved = params.normalize("whisper", {"whisper.vad_threshold": 99})
     assert resolved["whisper.vad_threshold"] == 0.80  # 夹到上限
-    assert resolved["whisper.vad_min_speech_ms"] == 120  # 补默认
+    assert resolved["whisper.vad_min_speech_ms"] == 80  # 补默认
     # 别的引擎的键要被丢掉
     assert "qwen.vad_threshold" not in resolved
 
@@ -50,7 +50,7 @@ def test_normalize_fills_defaults_and_clamps():
 def test_normalize_ignores_unknown_and_bad_values():
     resolved = params.normalize("whisper", {"whisper.nope": 1, "whisper.vad_threshold": "abc"})
     assert "whisper.nope" not in resolved
-    assert resolved["whisper.vad_threshold"] == 0.30
+    assert resolved["whisper.vad_threshold"] == params.defaults_for("whisper")["whisper.vad_threshold"]
 
 
 def test_config_kwargs_maps_field_names():
@@ -61,10 +61,21 @@ def test_config_kwargs_maps_field_names():
     assert "no_repeat_ngram_size" not in kwargs
 
 
-def test_tuple_config_field_fans_out():
-    kwargs = params.config_kwargs("qwen", {"qwen.cue_pad_s": 0.2})
+def test_qwen_cue_pads_are_independent():
+    """起点/终点留白是两个独立滑杆：人工核验版的惯例是提前 0.2s、句尾多停 0.45s。"""
+    kwargs = params.config_kwargs(
+        "qwen", {"qwen.cue_pad_start_s": 0.2, "qwen.cue_pad_end_s": 0.45}
+    )
     assert kwargs["cue_pad_start_s"] == 0.2
-    assert kwargs["cue_pad_end_s"] == 0.2
+    assert kwargs["cue_pad_end_s"] == 0.45
+    assert params.defaults_for("qwen")["qwen.cue_pad_end_s"] == 0.45
+
+
+def test_legacy_cue_pad_key_expands():
+    """旧预设里的 qwen.cue_pad_s 仍要生效（拆成起点/终点两个键）。"""
+    kwargs = params.config_kwargs("qwen", {"qwen.cue_pad_s": 0.08})
+    assert kwargs["cue_pad_start_s"] == 0.08
+    assert kwargs["cue_pad_end_s"] == 0.08
 
 
 def test_passthrough_kwargs():

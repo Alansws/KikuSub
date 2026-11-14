@@ -3,11 +3,11 @@
  *
  * 菜单里的固定 accelerator 不能跟着用户改，所以核对台的播放 / 上下句 / 删除、
  * 视图切换与「查找」都收在渲染层这一张表里。主进程菜单只保留点击动作，不再
- * 抢占这些按键（否则 ⌘1 在 AI 优化台里永远先切到「导入」）。
+ * 抢占这些按键（否则 ⌘1 在润色页里永远先切到「导入」）。
  *
- * 视图快捷键固定为一条主路径：⌘1 导入、⌘2 转写、⌘3 核对台、⌘4 AI 优化、
- * ⌘5 导出。AI 优化台内部的「润色 / 翻译」是同一页里的标签，不再单独占键；
- * 提示词库同样不占键。设置页由 macOS 惯例的 ⌘, 进入（见下方 FIXED_SHORTCUTS）。
+ * 视图快捷键按工作流顺序固定为 ⌘1..⌘7：
+ * 导入 / 转写 / 核对台 / 双引擎复核 / 润色 / 翻译 / 导出。
+ * 提示词库不占键；设置页由 macOS 惯例的 ⌘, 进入（见下方 FIXED_SHORTCUTS）。
  */
 
 import type { View } from './store.svelte';
@@ -129,11 +129,27 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     allowInTyping: true,
   },
   {
-    id: 'view.ai',
-    label: 'AI 优化',
+    id: 'view.dual',
+    label: '双引擎复核',
     group: '视图',
     scope: 'view',
     def: 'mod+4',
+    allowInTyping: true,
+  },
+  {
+    id: 'view.polish',
+    label: '润色',
+    group: '视图',
+    scope: 'view',
+    def: 'mod+5',
+    allowInTyping: true,
+  },
+  {
+    id: 'view.translate',
+    label: '翻译',
+    group: '视图',
+    scope: 'view',
+    def: 'mod+6',
     allowInTyping: true,
   },
   {
@@ -141,7 +157,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     label: '导出',
     group: '视图',
     scope: 'view',
-    def: 'mod+5',
+    def: 'mod+7',
     allowInTyping: true,
   },
 ];
@@ -193,11 +209,13 @@ function loadMap(): Record<string, string> {
       const value = raw[def.id];
       if (typeof value === 'string' && value.trim()) map[def.id] = value;
     }
-    // 旧默认值迁移：上一版 ⌘4 是导出、⌘5 是任务详报；只有这两个值与旧默认
-    // 完全一致时才改写，避免覆盖用户自定义的导出键。
-    if (raw['view.export'] === 'mod+4' && raw['view.report'] === 'mod+5') {
-      map['view.export'] = 'mod+5';
-      map['view.ai'] = 'mod+4';
+    // 旧默认值迁移：上一版 ⌘4 是 AI 优化、⌘5 是导出。只有这两个值仍等于
+    // 旧默认时才重排到新的 ⌘4..⌘7，避免覆盖用户自己改过的键。
+    if (raw['view.ai'] === 'mod+4' && raw['view.export'] === 'mod+5') {
+      map['view.dual'] = 'mod+4';
+      map['view.polish'] = 'mod+5';
+      map['view.translate'] = 'mod+6';
+      map['view.export'] = 'mod+7';
     }
   } catch {
     /* 手改坏 / 隐私模式：回到默认，不影响使用 */
@@ -399,8 +417,7 @@ function blocksShortcut(e: KeyboardEvent, target: EventTarget | null): boolean {
 /**
  * 找出这次按键对应的动作。
  *
- * 视图动作只有一个上下文：⌘1–⌘5 在任何页面都切页。AI 优化台内部不再
- * 拦截 ⌘1/⌘2，润色 / 翻译只通过页签切换。
+ * 视图动作只有一个上下文：⌘1–⌘7 在任何页面都切页。
  *
  * `findOpen` 给「查找：上一处 / 下一处」用：这两个动作只在查找栏打开时存在，
  * 避免用户把键设成方向键后，平时在表格/正文里按方向键也被劫走。

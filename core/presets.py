@@ -12,6 +12,7 @@ import re
 import tempfile
 from pathlib import Path
 
+from .engines import KEYS as ENGINE_KEYS
 from .paths import PRESETS_PATH
 
 PRESET_PATH = PRESETS_PATH
@@ -40,7 +41,8 @@ def clean_name(raw: str | None) -> str:
 class PresetStore:
     """参数预设持久化存储类。"""
 
-    ENGINE_KEYS = ("whisper", "qwen")
+    # 唯一来源是 `core/engines.py` 的注册表：加引擎不需要再改这里。
+    ENGINE_KEYS = ENGINE_KEYS
 
     def __init__(self, path: Path = PRESET_PATH) -> None:
         self.path = Path(path)
@@ -51,15 +53,14 @@ class PresetStore:
     @staticmethod
     def _infer_engine(values: dict) -> str | None:
         keys = [str(k) for k in values]
-        has_whisper = any(k.startswith("whisper.") for k in keys)
-        has_qwen = any(k.startswith("qwen.") for k in keys)
-        if has_whisper and has_qwen:
-            return None
-        if has_qwen:
-            return "qwen"
-        if has_whisper:
-            return "whisper"
-        return None
+        present = {
+            prefix
+            for key in keys
+            if "." in key
+            for prefix in (key.split(".", 1)[0],)
+        }
+        matched = [engine for engine in PresetStore.ENGINE_KEYS if engine in present]
+        return matched[0] if len(matched) == 1 else None
 
     @staticmethod
     def _normalize(entry: dict) -> dict | None:

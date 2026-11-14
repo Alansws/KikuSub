@@ -1,40 +1,36 @@
 <script lang="ts">
   /**
-   * AI 优化台（M1）。
+   * 翻译页（原「AI 优化」的翻译半边）。
    *
-   * 只做「读取提案 → 双栏对照 → 逐条采纳 → 应用」这一条链路，**不调用任何模型**。
-   * 提案可以由软件内生成（M2），也可以由外部 agent 写好再导入（M4）——两者在这里
-   * 长得完全一样，因为界面只认 `proposal.json` 这个契约。
-   *
-   * 左栏是核对台当前的原文，**只读**；右栏是 AI 建议，双击可改。
-   * 时间码只用来跳回核对台定位，永远不会被写回字幕（开发文档 D-1）。
+   * 翻译永远只吃「定稿后的原文一列」，不参与双引擎比较（D-3/D-4）。应用后
+   * 写进译文平行轨，核对台可切到双语；原文与时间轴一个字节都不改。
    */
   import Icon from '../components/Icon.svelte';
   import {
     ai,
-    app,
     applyAiProposal,
     cancelAiPolish,
     copyAiPrompt,
     discardAiProposal,
-    focusRange,
     importAiProposal,
-    jumpToCue,
     loadAiProposal,
-    loadPrompts,
     parseAiPastedSrt,
-    prompts,
-    selectedPromptTemplate,
-    startAiPolish,
-    startAiTranslate,
     saveAiProposalAs,
     setAiEdit,
     setAiKind,
     setAiLang,
     setAllAiAccept,
-    setView,
+    startAiTranslate,
     toggleAiAccept,
-  } from '../lib/store.svelte';
+  } from '../lib/aiWorkspace.svelte';
+  import {
+    loadPrompts,
+    prompts,
+    promptItemsFor,
+    selectPromptTemplate,
+    selectedPromptTemplate,
+  } from '../lib/promptStore.svelte';
+  import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -59,24 +55,18 @@
     });
   });
 
-  /**
-   * “还没有提案文件”只是首次打开的正常状态，不能当成错误丢给用户；
-   * 真正的加载/生成失败才显示。
-   */
-  const visibleErrors = $derived(
-    ai.errors.filter((e) => !/还没有提案/.test(e)),
-  );
-
+  const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
   const changedCount = $derived(rows.filter((r) => r.changed).length);
   const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
   const visible = $derived(ai.changedOnly ? rows.filter((r) => r.changed) : rows);
+  const hasNotes = $derived(rows.some((r) => r.note.trim().length > 0));
+  const translateTemplates = $derived(promptItemsFor('translate'));
 
   $effect(() => {
-    // 依赖显式列出：连接状态 / 当前媒体 / 类型 / 语种，换任意一个都重新拉一次
     void app.connected;
     void app.media?.id;
-    void ai.kind;
     void ai.lang;
+    if (ai.kind !== 'translate') setAiKind('translate');
     if (app.connected) {
       void loadAiProposal();
       void loadPrompts();
@@ -85,7 +75,6 @@
 
   function goto(row: { i: number; start: number; end: number }) {
     setView('review');
-    // 先把选中行落下去，右侧检查器才会跟着切到这一条；再聚焦波形。
     jumpToCue(row.i - 1, { seek: false });
     focusRange(row.start, row.end);
   }
@@ -119,55 +108,48 @@
     node.focus();
     node.select();
   }
-
 </script>
 
 <div class="ai">
   <div class="head">
-    <div class="segs" role="tablist" aria-label="建议类型">
-      <button
-        role="tab"
-        aria-selected={ai.kind === 'polish'}
-        class="seg"
-        class:on={ai.kind === 'polish'}
-        title="润色：按全片语境修正识别错误"
-        onclick={() => setAiKind('polish')}>润色</button
-      >
-      <button
-        role="tab"
-        aria-selected={ai.kind === 'translate'}
-        class="seg"
-        class:on={ai.kind === 'translate'}
-        title="翻译：生成与原文逐条对齐的译文平行轨"
-        onclick={() => setAiKind('translate')}>翻译</button
-      >
-    </div>
-
-    {#if ai.kind === 'translate'}
-      <span class="dim" title="当前使用的提示词模板；可在「提示词库」里切换或编辑">
-        模板：{prompts.items.find((p) => p.id === prompts.selected)?.name ?? '—'}
-      </span>
+    <span class="title">翻译</span>
+    <span class="dim" title="翻译只读取 translate 分类的模板">
+      模板：{selectedPromptTemplate('translate')?.name ?? '—'}
+    </span>
+    <select
+      class="lang"
+      value={ai.lang}
+      onchange={(e) => setAiLang(e.currentTarget.value)}
+      title="目标语种"
+    >
+      <option value="zh-Hans">简体中文</option>
+      <option value="zh-Hant">繁體中文</option>
+      <option value="en">English</option>
+    </select>
+    {#if translateTemplates.length}
       <select
         class="lang"
-        value={ai.lang}
-        onchange={(e) => setAiLang(e.currentTarget.value)}
-        title="目标语种"
+        value={prompts.selected}
+        onchange={(e) => void selectPromptTemplate(e.currentTarget.value, 'translate')}
+        title="翻译提示词模板（在提示词库的「翻译」页签里编辑）"
       >
-        <option value="zh-Hans">简体中文</option>
-        <option value="zh-Hant">繁體中文</option>
-        <option value="en">English</option>
+        {#each translateTemplates as item (item.id)}
+          <option value={item.id}>{item.name}</option>
+        {/each}
       </select>
     {/if}
 
     {#if ai.proposal}
-      <span class="badge">
-        {ai.proposal.entry === 'skill'
-          ? '外部 agent'
-          : ai.proposal.entry === 'manual'
-            ? '手动粘贴'
-            : '本机生成'}
+      <span class="badge" title={ai.proposal.entry === 'manual'
+        ? '从外部模型（网页版 / 聊天窗）复制提示词、再把回复粘回来的结果'
+        : ai.proposal.entry === 'skill'
+          ? '由随包 Agent 技能写出的提案文件'
+          : '在本机「生成建议」里调用模型得到的结果'}>
+        {ai.proposal.entry === 'skill' ? '外部 Agent' : ai.proposal.entry === 'manual' ? '外部粘贴' : '本机生成'}
       </span>
-      {#if ai.proposal.model}<span class="dim">{ai.proposal.model}</span>{/if}
+      {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
+        <span class="dim">{ai.proposal.model}</span>
+      {/if}
     {/if}
 
     <div class="spacer"></div>
@@ -176,37 +158,32 @@
       class="btn ghost"
       onclick={copyAiPrompt}
       disabled={!app.cues.length}
-      title={ai.kind === 'translate'
-        ? `使用「${selectedPromptTemplate()?.name ?? '当前模板'}」生成提示词；可粘到任意网页版模型，再把回复粘回来`
-        : '复制润色提示词；可粘到任意网页版模型，再把修正后的 SRT 粘回来'}
+      title="用当前 translate 模板生成提示词；可粘到任意网页版模型，再把回复粘回来"
     >
       复制提示词
     </button>
-    {#if ai.kind === 'translate'}
-      <button
-        class="btn ghost"
-        onclick={() => setView('prompts')}
-        title="打开提示词库：选中、编辑并保存翻译提示词模板"
-      >
-        提示词库
-      </button>
-    {/if}
+    <button
+      class="btn ghost"
+      onclick={() => setView('prompts')}
+      title="打开提示词库：翻译模板在「翻译」页签"
+    >
+      提示词库
+    </button>
     <button
       class="btn ghost"
       onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
       disabled={!app.cues.length}
-      title="粘贴模型返回的 SRT，解析后照样走双栏对照"
+      title="粘贴模型返回的 SRT，解析后走同一套双栏对照"
     >
       粘贴结果…
     </button>
     {#if ai.proposal}<div class="tb-div"></div>{/if}
-
     {#if ai.proposal}
       <button
         class="btn ghost"
-        onclick={() => (ai.kind === 'translate' ? startAiTranslate() : startAiPolish())}
+        onclick={startAiTranslate}
         disabled={ai.generating || !app.cues.length}
-        title={ai.kind === 'translate' ? '把原文字幕翻译成所选语种（只生成建议）' : '用设置里的模型生成一份修改建议（不修改字幕）'}
+        title="把原文字幕翻译成所选语种（只生成建议）"
       >
         生成建议
       </button>
@@ -214,11 +191,7 @@
         导入建议…
       </button>
       <div class="tb-div"></div>
-      <button
-        class="btn ghost"
-        onclick={() => void loadAiProposal(true)}
-        disabled={ai.loading || ai.generating}
-      >
+      <button class="btn ghost" onclick={() => void loadAiProposal(true)} disabled={ai.loading || ai.generating}>
         重新加载
       </button>
       <button class="btn ghost" onclick={saveAiProposalAs} disabled={ai.saving}>另存</button>
@@ -228,9 +201,7 @@
         class="btn primary"
         onclick={applyAiProposal}
         disabled={ai.applying || acceptedCount === 0}
-        title={ai.kind === 'translate'
-          ? '写进译文轨并把核对台切到双语（不改动原文与时间轴）'
-          : '写回核对台，⌘Z 可整批撤回'}
+        title="写进译文轨并把核对台切到双语（不改动原文与时间轴）"
       >
         {ai.applying ? '应用中…' : '应用'}
       </button>
@@ -238,20 +209,20 @@
   </div>
 
   {#if ai.proposal}
-  <div class="bar">
-    <span>共 <b>{app.cues.length}</b> 条</span>
-    <span class="sep"></span>
-    <span>AI 改动 <b class="warn">{changedCount}</b> 处</span>
-    <span class="sep"></span>
-    <span>已采纳 <b>{acceptedCount}</b></span>
-    <div class="spacer"></div>
-    <label class="chk">
-      <input type="checkbox" bind:checked={ai.changedOnly} />
-      只看改动
-    </label>
-    <button class="link" onclick={() => setAllAiAccept(true)} disabled={!ai.proposal}>全选</button>
-    <button class="link" onclick={() => setAllAiAccept(false)} disabled={!ai.proposal}>全不选</button>
-  </div>
+    <div class="bar">
+      <span>共 <b>{app.cues.length}</b> 条</span>
+      <span class="sep"></span>
+      <span>AI 改动 <b class="warn">{changedCount}</b> 处</span>
+      <span class="sep"></span>
+      <span>已采纳 <b>{acceptedCount}</b></span>
+      <div class="spacer"></div>
+      <label class="chk">
+        <input type="checkbox" bind:checked={ai.changedOnly} />
+        只看改动
+      </label>
+      <button class="link" onclick={() => setAllAiAccept(true)} disabled={!ai.proposal}>全选</button>
+      <button class="link" onclick={() => setAllAiAccept(false)} disabled={!ai.proposal}>全不选</button>
+    </div>
   {/if}
 
   {#if ai.proposal && visibleErrors.length}
@@ -270,9 +241,7 @@
     <div class="note warn">
       <Icon name="warn" size={11} />
       <span>
-        {ai.warnings.slice(0, 3).join('；')}{ai.warnings.length > 3
-          ? ` …另有 ${ai.warnings.length - 3} 条提示`
-          : ''}
+        {ai.warnings.slice(0, 3).join('；')}{ai.warnings.length > 3 ? ` …另有 ${ai.warnings.length - 3} 条提示` : ''}
       </span>
     </div>
   {/if}
@@ -289,11 +258,7 @@
         placeholder={'1\n00:00:00,500 --> 00:00:01,500\n早上好\n\n2\n…'}
       ></textarea>
       <div class="paste-actions">
-        <button
-          class="btn primary"
-          onclick={parseAiPastedSrt}
-          disabled={ai.parsing || !ai.pasteText.trim()}
-        >
+        <button class="btn primary" onclick={parseAiPastedSrt} disabled={ai.parsing || !ai.pasteText.trim()}>
           {ai.parsing ? '解析中…' : '解析成建议'}
         </button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
@@ -312,57 +277,44 @@
   {/if}
 
   {#if ai.loading}
-    <div class="empty"><div class="et">正在读取建议…</div></div>
+    <div class="blank"><div class="et">正在读取建议…</div></div>
   {:else if !ai.proposal}
-    <div class="empty">
-      <span class="empty-icon"><Icon name="doc" size={24} /></span>
-      <div class="et">{ai.kind === 'translate' ? '还没有译文建议' : '还没有可对照的修改建议'}</div>
-      <div class="es">
-        点「生成建议」，或导入外部工具写好的建议；时间码保持不变。
-      </div>
+    <div class="blank">
+      <span class="blank-icon"><Icon name="doc" size={24} /></span>
+      <div class="et">还没有译文建议</div>
+      <div class="es">点「生成建议」，或导入外部工具写好的建议；时间码保持不变。</div>
       {#if visibleErrors.length}
-        <div class="empty-err"><Icon name="warn" size={11} />{visibleErrors[0]}</div>
+        <div class="blank-err"><Icon name="warn" size={11} />{visibleErrors[0]}</div>
       {/if}
       <div class="ea">
-        <button
-          class="btn primary"
-          onclick={() => (ai.kind === 'translate' ? startAiTranslate() : startAiPolish())}
-          disabled={ai.generating || !app.cues.length}
-        >
+        <button class="btn primary" onclick={startAiTranslate} disabled={ai.generating || !app.cues.length}>
           生成建议
         </button>
         <button class="btn ghost" onclick={importAiProposal}>导入建议…</button>
       </div>
     </div>
   {:else if !visible.length}
-    <div class="empty">
+    <div class="blank">
       <Icon name="check" size={22} />
       <div class="et">这一栏没有内容</div>
-      <div class="es">
-        {ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}
-      </div>
+      <div class="es">{ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}</div>
     </div>
   {:else}
-    <div class="cols">
+    <div class="cols" class:no-notes={!hasNotes}>
       <span class="c-time">时间码</span>
       <span class="c-side">原文（只读）</span>
-      <span class="c-side">{ai.kind === 'translate' ? 'AI 译文（双击可改）' : 'AI 建议（双击可改）'}</span>
-      <span class="c-note">理由</span>
+      <span class="c-side">AI 译文（双击可改）</span>
+      {#if hasNotes}<span class="c-note">理由</span>{/if}
       <span></span>
     </div>
-
     <div class="list">
       {#each visible as row (row.i)}
-        <div class="row" class:changed={row.changed} class:off={!row.accepted}>
+        <div class="row" class:no-notes={!hasNotes} class:changed={row.changed} class:off={!row.accepted}>
           <div class="c-time">
-            <button class="tc" onclick={() => goto(row)} title="回到核对台定位这一句">
-              {tcShort(row.start)}
-            </button>
+            <button class="tc" onclick={() => goto(row)} title="回到核对台定位这一句">{tcShort(row.start)}</button>
             <span class="idx">#{row.i}</span>
           </div>
-
           <div class="c-side left">{row.before}</div>
-
           <div class="c-side right" ondblclick={() => startEdit(row.i, row.after)}>
             {#if editing === row.i}
               <textarea
@@ -374,14 +326,10 @@
               ></textarea>
             {:else}
               <span class="txt">{row.after}</span>
-              {#if ai.edits[row.i] !== undefined}
-                <span class="tag">已手改</span>
-              {/if}
+              {#if ai.edits[row.i] !== undefined}<span class="tag">已手改</span>{/if}
             {/if}
           </div>
-
-          <div class="c-note">{row.note}</div>
-
+          {#if hasNotes}<div class="c-note">{row.note}</div>{/if}
           <button
             class="pin"
             class:on={row.accepted}
@@ -404,7 +352,6 @@
     flex-direction: column;
     background: var(--paper);
   }
-
   .head,
   .bar {
     display: flex;
@@ -413,68 +360,40 @@
     padding: var(--sp-2) 14px;
     border-bottom: 1px solid var(--separator);
   }
-
   .head {
     flex-wrap: wrap;
   }
-
+  .title {
+    font-size: 13px;
+    font-weight: 600;
+  }
   .bar {
     gap: var(--sp-2);
     font-size: 12px;
     color: var(--text-2);
     background: var(--bg-inspector);
   }
-
   .bar b {
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
-
   .bar b.warn {
     color: var(--warn);
   }
-
   .sep {
     width: 1px;
     height: 11px;
     background: var(--separator);
   }
-
   .spacer {
     flex: 1;
   }
-
   .tb-div {
     width: 1px;
     height: 16px;
     background: var(--separator);
     flex: 0 0 1px;
   }
-
-  .segs {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: 8px;
-    background: var(--fill);
-  }
-
-  .seg {
-    border: 0;
-    background: transparent;
-    color: var(--text-2);
-    font: inherit;
-    font-size: 12px;
-    padding: var(--sp-1) var(--sp-3);
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .seg.on {
-    background: var(--bg-content);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  }
-
   .lang {
     font: inherit;
     font-size: 12px;
@@ -484,7 +403,6 @@
     background: var(--bg-content);
     color: var(--text);
   }
-
   .badge {
     font-size: 12px;
     padding: 2px 7px;
@@ -492,13 +410,11 @@
     background: var(--accent-soft);
     color: var(--accent);
   }
-
   .dim {
     font-size: 12px;
     color: var(--text-3);
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   }
-
   .note {
     display: flex;
     align-items: flex-start;
@@ -508,17 +424,14 @@
     line-height: 1.5;
     border-bottom: 1px solid var(--separator-soft);
   }
-
   .note.err {
     background: var(--danger-soft);
     color: var(--danger);
   }
-
   .note.warn {
     background: var(--warn-soft);
     color: var(--warn);
   }
-
   .paste {
     display: flex;
     flex-direction: column;
@@ -527,13 +440,11 @@
     border-bottom: 1px solid var(--separator);
     background: var(--bg-inspector);
   }
-
   .paste-head {
     font-size: 12px;
     color: var(--text-2);
     line-height: 1.6;
   }
-
   .paste-box {
     width: 100%;
     min-height: 130px;
@@ -549,34 +460,28 @@
     color: var(--text);
     outline: none;
   }
-
   .paste-box:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
-
   .paste-actions {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
   }
-
   .paste-hint {
     margin-left: auto;
     font-size: 12px;
     color: var(--text-3);
   }
-
   .note.busy {
     background: var(--accent-soft);
     color: var(--text);
   }
-
   .note.busy .pct {
     margin-left: auto;
     font-variant-numeric: tabular-nums;
   }
-
   .chk {
     display: inline-flex;
     align-items: center;
@@ -584,7 +489,6 @@
     cursor: pointer;
     user-select: none;
   }
-
   .link {
     border: 0;
     background: transparent;
@@ -594,12 +498,10 @@
     cursor: pointer;
     padding: 2px var(--sp-1);
   }
-
   .link:disabled {
     color: var(--text-3);
     cursor: default;
   }
-
   .cols,
   .row {
     display: grid;
@@ -608,7 +510,10 @@
     align-items: start;
     padding: 6px 14px;
   }
-
+  .cols.no-notes,
+  .row.no-notes {
+    grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr) 26px;
+  }
   .cols {
     position: sticky;
     top: 0;
@@ -620,13 +525,11 @@
     padding-top: 5px;
     padding-bottom: 5px;
   }
-
   .list {
     flex: 1;
     min-height: 0;
     overflow: auto;
   }
-
   .row {
     border-bottom: 1px solid var(--separator-soft);
     font-size: 12.5px;
@@ -634,21 +537,17 @@
     content-visibility: auto;
     contain-intrinsic-size: auto 42px;
   }
-
   .row:hover {
     background: var(--row-hover);
   }
-
   .row.off {
     opacity: 0.42;
   }
-
   .c-time {
     display: flex;
     flex-direction: column;
     gap: 1px;
   }
-
   .tc {
     border: 0;
     background: transparent;
@@ -660,24 +559,20 @@
     cursor: pointer;
     text-align: left;
   }
-
   .idx {
     font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
-
   .c-side,
   .c-note {
     white-space: pre-wrap;
     word-break: break-word;
     min-width: 0;
   }
-
   .left {
     color: var(--text-2);
   }
-
   .right {
     border-radius: 4px;
     padding: 1px var(--sp-1);
@@ -685,15 +580,12 @@
     cursor: text;
     min-height: 18px;
   }
-
   .row.changed .right {
     background: var(--accent-soft);
   }
-
   .row.changed .left {
     color: var(--text);
   }
-
   .right textarea {
     width: 100%;
     min-height: 46px;
@@ -707,7 +599,6 @@
     color: var(--text);
     outline: none;
   }
-
   .tag {
     margin-left: 6px;
     font-size: 12px;
@@ -717,12 +608,10 @@
     color: var(--text-2);
     white-space: nowrap;
   }
-
   .c-note {
     font-size: 12px;
     color: var(--text-3);
   }
-
   .pin {
     width: 22px;
     height: 22px;
@@ -734,14 +623,12 @@
     place-items: center;
     cursor: pointer;
   }
-
   .pin.on {
     border-color: transparent;
     background: var(--accent);
     color: var(--on-accent);
   }
-
-  .empty {
+  .blank {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -752,8 +639,7 @@
     text-align: center;
     color: var(--text-2);
   }
-
-  .empty-icon {
+  .blank-icon {
     width: 44px;
     height: 44px;
     border-radius: 10px;
@@ -763,20 +649,17 @@
     color: var(--accent);
     margin-bottom: var(--sp-1);
   }
-
   .et {
     font-size: 15px;
     font-weight: 600;
     color: var(--text);
   }
-
   .es {
     font-size: 13px;
     line-height: 1.7;
     max-width: 440px;
   }
-
-  .empty-err {
+  .blank-err {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -784,14 +667,6 @@
     color: var(--warn);
     max-width: 460px;
   }
-
-  .es code {
-    font-size: 12px;
-    padding: 1px var(--sp-1);
-    border-radius: 4px;
-    background: var(--fill);
-  }
-
   .ea {
     display: flex;
     gap: var(--sp-2);

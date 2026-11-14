@@ -74,6 +74,7 @@ def build_proposal(
     src_lang: str,
     texts: list[str],
     items: list[dict],
+    texts_b: list[str] | None = None,
     model: str = "",
     entry: str = "in-app",
     dst_lang: str = "",
@@ -82,18 +83,26 @@ def build_proposal(
     source_path: str = "",
     created_at: float | None = None,
 ) -> dict:
-    """组装一份提案 dict。``items`` 由调用方按 ``{i, after}`` 准备。"""
+    """组装一份提案 dict。``items`` 由调用方按 ``{i, after}`` 准备。
+
+    ``texts_b`` 只在双源润色时传入：``source`` 会额外落一份 ``digest_b``，
+    应用前据此确认「第二版字幕没有在生成提案之后被换掉」。
+    """
     import time
 
+    source: dict = {
+        "path": str(source_path or ""),
+        "count": len(texts),
+        "digest": source_digest(texts),
+    }
+    if texts_b is not None:
+        source["count_b"] = len(texts_b)
+        source["digest_b"] = source_digest(texts_b)
     data: dict = {
         "version": PROPOSAL_VERSION,
         "kind": kind,
         "src_lang": str(src_lang or ""),
-        "source": {
-            "path": str(source_path or ""),
-            "count": len(texts),
-            "digest": source_digest(texts),
-        },
+        "source": source,
         "model": str(model or ""),
         "entry": str(entry or "in-app"),
         "created_at": float(created_at if created_at is not None else time.time()),
@@ -149,8 +158,17 @@ def _effective_after(after, source_text: str) -> tuple[str, str]:
     return text, ""
 
 
-def validate_proposal(data: dict, texts: list[str]) -> ProposalCheck:
+def validate_proposal(
+    data: dict,
+    texts: list[str],
+    texts_b: list[str] | None = None,
+) -> ProposalCheck:
     """结构校验 + 源指纹校验。**结构错误 422 优先于指纹错误 409。**
+
+    ``texts_b``：当前第二版字幕。双源提案带 ``source.digest_b`` 时**必须**提供并
+    匹配；**B 的条数不要求等于 A**（两个引擎断句不同），只校验指纹。
+    单源提案（没有 digest_b）即使当前存在第二版也照旧只校验 A，保持
+    ``desktop/resources/skill/`` 与旧提案 100% 向后兼容。
 
     错误不抛异常，交给路由转成 HTTP 状态码，这样纯函数也能被单测直接断言。
     """
@@ -177,6 +195,9 @@ def validate_proposal(data: dict, texts: list[str]) -> ProposalCheck:
     warnings: list[str] = []
     effective: dict[int, str] = {}
     changed = 0
+    # 手动粘贴通道只有 SRT，没有修改理由；逐条提示「没有写理由」只会刷屏。
+    # 来源仍然由 entry=manual 表达，不靠每条的 note。
+    need_note = kind == "polish" and str(data.get("entry") or "") != "manual"
 
     for item in items:
         if not isinstance(item, dict):
@@ -198,14 +219,15 @@ def validate_proposal(data: dict, texts: list[str]) -> ProposalCheck:
             warnings.append(f"第 {idx} 条：{note}")
         if text != texts[idx - 1]:
             changed += 1
-            if kind == "polish" and not str(item.get("note") or "").strip():
+            if need_note and not str(item.get("note") or "").strip():
                 warnings.append(f"第 {idx} 条改动了但没有写理由")
 
     missing = sorted(set(range(1, n + 1)) - seen)
     if missing:
         return fail(f"缺少序号：{missing[:8]}{'…' if len(missing) > 8 else ''}")
 
-    digest = str((data.get("source") or {}).get("digest") or "")
+    source = data.get("source") or {}
+    digest = str(source.get("digest") or "")
     expected = source_digest(texts)
     if digest != expected:
         return ProposalCheck(
@@ -214,6 +236,23 @@ def validate_proposal(data: dict, texts: list[str]) -> ProposalCheck:
             errors=["源文本已变化：提案是针对另一版字幕生成的，请重新生成"],
             digest_match=False,
         )
+
+    digest_b = str(source.get("digest_b") or "")
+    if digest_b:
+        if texts_b is None:
+            return ProposalCheck(
+                ok=False,
+                status=409,
+                errors=["这份提案绑定了第二版字幕，但当前没有第二版：请重新生成或先导入第二版"],
+                digest_match=False,
+            )
+        if digest_b != source_digest(texts_b):
+            return ProposalCheck(
+                ok=False,
+                status=409,
+                errors=["第二版源文本已变化：提案是针对另一版第二稿生成的，请重新生成"],
+                digest_match=False,
+            )
 
     if kind == "polish" and n and changed / n > WARN_CHANGE_RATE:
         warnings.append(

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import re
@@ -102,8 +103,8 @@ def download_anime_whisper(dest: Path, progress_cb=None) -> Path:
     return dest
 
 
-MAX_SEGMENT_S = 20.0
-MERGE_GAP_S = 0.5
+MAX_SEGMENT_S = 9.0
+MERGE_GAP_S = 0.30
 MIN_SPEECH_S = 0.08
 
 # 强制切分点能量谷吸附：搜索窗宽度；0 = 关闭（恢复旧行为）
@@ -131,15 +132,72 @@ BLANK_TEXT_RE = re.compile(r"^[\s\u3000…‥⋯。、，．.,!！?？\-ー~〜�
 # 给退出阈值设下限，让低阈值真正表现为"更灵敏"而不是"退化成整片一段"。
 VAD_NEG_THRESHOLD_FLOOR = 0.02
 
-# 2026-10-26 第三轮 E1 实测（全片 46 分钟、单变量扫描）后固化：
-# 0.45 → 25.08% CER / 插入 69；0.35 → 23.35% / 68；**0.30 → 22.46% / 80 / 强制切分 0**；
-# 0.25 → 21.30% / 94（插入超硬约束 90）；0.20 → 20.51% / 103 / 强制切分 7。
-# 0.30 是「CER 改善 ≥1.5pt 且 插入 ≤85 且 强制切分 ≤3」全部满足的最低阈值档。
-VAD_THRESHOLD = 0.30
-VAD_MIN_SPEECH_MS = 100
+# 阈值历史（2026-10-26，整段一次 VAD，46 分钟素材）：0.45 → 25.08% CER / 插入 69；
+# 0.35 → 23.35%；0.30 → 22.46%；0.25 → 21.30%（插入 94）；0.20 → 20.51%（插入 103）。
+# 当时的结论是「0.30 是插入量还能接受的最低档」——但那份结论建立在**整段一次**跑
+# Silero 之上，插入量随阈值下降而涨，主要是低阈值把呼吸/杂音也判成语音。
+# 2026-11-13 改成**分窗检测 + 句首尾非台词发声剔除**之后，这个权衡被拆掉了：
+# 830s 耳语素材上阈值 0.25 的 CER 反而最低（0.20 = 8.06%、0.25 = 8.22%、0.30 = 9.3%），
+# 且插入量已由发声剔除压住。默认因此下调到 0.25。
+VAD_THRESHOLD = 0.25
+VAD_MIN_SPEECH_MS = 80
 VAD_MIN_SILENCE_MS = 200
-VAD_SPEECH_PAD_MS = 150
+# 留白给到 250ms：耳语的开头很容易被判成静音（吞头音），句尾多带的气声由
+# strip_edge_nonverbal() 在解码后剔掉，所以「调大留白」不再有插入的副作用。
+# （300ms 在耳语素材上再好一点点，但 47 分钟正常对话的长片回归里会把相邻两句
+# 并进同一块，块准确率掉 3pt，取 250ms 折中。）
+VAD_SPEECH_PAD_MS = 250
 MAX_SEGMENT_S_LIMIT = 29.0
+
+# 分窗 VAD：Silero 是带隐状态的流式模型，整段十几分钟一次跑完时隐状态会漂移。
+# 2026-11-13 实测（Jap_test.mp4，830s 耳语素材）：整段一次跑，461.8–463.8s 这段
+# 概率 0.4–0.9 的清晰台词被判成静音；同一段音频从 30s 窗内重新检测则稳定命中。
+# 因此按固定窗长分块检测（每窗 reset_states），再用区间并集消掉重叠窗的重复段。
+# 窗长实测（阈值 0.25 / 留白 300ms，830s 素材，7 个「整段跑必漏」的时间点）：
+# 30s 窗仍漏 2 个（461.8s 的清晰台词就在窗内第 12 秒，隐状态已经漂掉）；
+# 20s / 15s / 10s 窗 7 个全中。窗越短越灵敏，同时误检也会变多（30s→173 段，
+# 20s→179，10s→200），20s 是「不漏」与「不吵」的平衡点。
+VAD_WINDOW_S = 20.0
+VAD_WINDOW_OVERLAP_S = 1.0
+
+# 句首补回（路线文档 P0-1）：Silero 的段起点系统性晚于真实发声。830s 素材实测，
+# 即使已经带 250ms 的 `speech_pad_ms`，段起点仍比人工版晚中位 +0.5s、最多 +1.1s；
+# 人工时间窗左右各扩 0.25s 直送模型，9 个「句首缺字」样本的句首全部回来了。
+# 做法是把**合并后**的块起点整体向左扩 `pad`，而不是调阈值（0.20 会换来 7 处强制
+# 切分与更多音乐误检）。`0` = 关闭，与旧行为一致。
+ONSET_PAD_MAX_MS = 600
+# 左扩不得吃进上一块：`start = max(0, prev_end + gap, start - pad)`。
+ONSET_PREV_GAP_MS = 80
+# 闸门只在 A/B 里用，不进参数面板：被吞的句首多是「す / そ / え」这类清辅音，
+# 按段内峰值百分比设闸恰好把想救的音拦在门外（见路线文档 P0-1「不要默认死绑能量闸门」）。
+ONSET_GATE_NONE = "none"
+ONSET_GATE_SNR = "snr"  # 回看窗内有 ≥ 底噪 + 6dB 的帧
+ONSET_GATE_SNR_CAP = "snr_cap"  # clamp(段峰值×0.08, 底噪+6dB, 底噪+18dB)
+ONSET_FRAME = 512  # 32ms @16k，与 Silero 的窗口一致
+ONSET_HOP = 160  # 10ms
+ONSET_NOISE_QUANTILE = 0.10
+ONSET_SNR_DB = 6.0
+ONSET_CAP_DB = 18.0
+ONSET_RELATIVE_PEAK = 0.08
+
+# 非台词发声（笑声 / 喘气 / 亲吻声）。模型会如实转写这些东西，但它们几乎从不
+# 该进字幕：句首尾挂着「んふふ」「えへへ」会让整条字幕读起来像噪声。只在**端点**
+# 删（句中不动），且不删「あー」「うー」这类可能是台词本身的感叹（人工整理版里
+# 「あー…すっごい…」是保留的）。
+_NONVERBAL_UNIT = (
+    r"(?:ん|ン)?[ふフはハへヘほホひヒ][ふフはハへヘほホひヒ]+"
+    r"|くすくす|あはは|うふふ|はぁ|んー+|ふー+|ちゅっ"
+    # 「えへへへ」这种：正则下面那条要求首字就是呼气字，'え' 会剩下来。
+    r"|え[へヘ][へヘ]+"
+)
+_EDGE_LEAD_RE = re.compile(
+    r"^(?:[、。…！？!?ー~〜っッ♪\s]*(?:" + _NONVERBAL_UNIT + r"))+[、。…！？!?ー~〜っッ♪\s]*"
+)
+_EDGE_TAIL_RE = re.compile(
+    r"(?:(?:" + _NONVERBAL_UNIT + r")[、。…！？!?ー~〜っッ♪\s]*)+$"
+)
+# 整条只剩发声/单个假名碎片（「っ」「へ」「ー」）——不值得占一条字幕
+_NONVERBAL_ONLY_RE = re.compile(r"^[ふフはハへヘほホひヒんンっッー~〜…、。！？!?♪\s]*$")
 
 # ==============================================================================
 # 日语断句语言学资产：两条引擎共用（Whisper 分句兜底 / Qwen 断句 DP）
@@ -280,6 +338,16 @@ class WhisperVadConfig:
     max_cue_dur: float = 4.2
     max_cue_chars: int = 20
     enable_loudnorm: bool = True
+    # 句首尾的喘气/笑声是否自动剔除（整条只剩发声的碎片一并丢弃）
+    strip_nonverbal_edges: bool = True
+    # 借用 Qwen 的 CTC 对齐头拿逐字时间（core/align_layer.py）。
+    # 默认关：要多常驻一份 Qwen 权重（MPS 4.3 GB），而且要先装 Qwen 引擎。
+    use_ctc_alignment: bool = False
+    # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
+    # 见 `extend_segment_onsets()` 与路线文档 P0-1。
+    onset_pad_ms: int = 0
+    # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
+    onset_gate: str = ONSET_GATE_NONE
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -290,6 +358,7 @@ def build_whisper_config(**overrides) -> WhisperVadConfig:
     cfg.min_speech_ms = max(0, int(cfg.min_speech_ms))
     cfg.min_silence_ms = max(0, int(cfg.min_silence_ms))
     cfg.min_speech_s = max(0.0, float(cfg.min_speech_s))
+    cfg.onset_pad_ms = max(0, min(int(cfg.onset_pad_ms), ONSET_PAD_MAX_MS))
     return cfg
 
 
@@ -722,6 +791,315 @@ def vad_neg_threshold(threshold: float) -> float:
     return max(float(threshold) - 0.15, VAD_NEG_THRESHOLD_FLOOR)
 
 
+def detect_speech_stamps(
+    audio: np.ndarray,
+    vad,
+    *,
+    threshold: float,
+    min_speech_ms: int,
+    min_silence_ms: int,
+    speech_pad_ms: int,
+    window_s: float = VAD_WINDOW_S,
+    overlap_s: float = VAD_WINDOW_OVERLAP_S,
+) -> list[dict]:
+    """分窗跑 Silero VAD，返回按样本计的语音段（已消掉重叠窗的重复段）。
+
+    为什么要分窗：Silero 是带隐状态的流式模型，`get_speech_timestamps` 对整段
+    音频一次跑完时，越往后隐状态漂移越明显。830s 耳语素材上实测：整段一次跑，
+    461.8–463.8s 那段概率稳定在 0.4–0.9 的台词被判成静音（阈值降到 0.08 也检不出）；
+    把同一段放进 30s 窗内重跑则稳定命中。分窗后每窗 `reset_states()`，
+    结果不再依赖「前面播了多少」。
+
+    `audio` 是 float32 的一维数组；返回的 start/end 是**整段音频内的样本下标**。
+    """
+    audio = np.asarray(audio)
+    total = len(audio)
+    if total == 0:
+        return []
+
+    kwargs = dict(
+        sampling_rate=SAMPLE_RATE,
+        threshold=float(threshold),
+        min_speech_duration_ms=int(min_speech_ms),
+        min_silence_duration_ms=int(min_silence_ms),
+        speech_pad_ms=int(speech_pad_ms),
+        neg_threshold=vad_neg_threshold(threshold),
+    )
+
+    window = max(1.0, float(window_s))
+    hop = max(0.1, window - max(0.0, float(overlap_s)))
+    total_s = total / SAMPLE_RATE
+    if total_s <= window:
+        return list(get_speech_timestamps(torch.from_numpy(audio), vad, **kwargs))
+
+    stamps: list[dict] = []
+    start_s = 0.0
+    while start_s < total_s:
+        end_s = min(total_s, start_s + window)
+        a = int(round(start_s * SAMPLE_RATE))
+        b = int(round(end_s * SAMPLE_RATE))
+        chunk = audio[a:b]
+        if chunk.size:
+            offset = a
+            for stamp in get_speech_timestamps(torch.from_numpy(chunk), vad, **kwargs):
+                stamps.append(
+                    {"start": int(stamp["start"]) + offset, "end": int(stamp["end"]) + offset}
+                )
+        if end_s >= total_s:
+            break
+        start_s += hop
+
+    # 相邻窗口重叠 1s，同一段语音可能被检出两次：排序后做区间并集。
+    stamps.sort(key=lambda s: s["start"])
+    merged: list[dict] = []
+    for stamp in stamps:
+        if merged and stamp["start"] <= merged[-1]["end"]:
+            merged[-1]["end"] = max(merged[-1]["end"], stamp["end"])
+        else:
+            merged.append(dict(stamp))
+    return merged
+
+
+def _frame_rms(audio: np.ndarray) -> np.ndarray:
+    """逐帧 RMS（帧长 32ms / 步长 10ms，与 Silero 的窗口一致）。
+
+    分块计算：830s 素材展开成 8 万个帧，一次性 `mean` 会临时吃掉 ~170MB，
+    而这里只需要一维结果。帧视图本身是 stride 视图，不复制音频。
+    """
+    if audio.size < ONSET_FRAME:
+        return np.zeros(0, dtype=np.float32)
+    frames = np.lib.stride_tricks.sliding_window_view(
+        np.asarray(audio, dtype=np.float32), ONSET_FRAME
+    )[::ONSET_HOP]
+    out = np.empty(len(frames), dtype=np.float32)
+    block = 4096
+    for start in range(0, len(frames), block):
+        chunk = frames[start : start + block]
+        out[start : start + block] = np.sqrt(np.mean(np.square(chunk), axis=1))
+    return out
+
+
+def _db_to_gain(db: float) -> float:
+    return float(10.0 ** (db / 20.0))
+
+
+def _gate_threshold(
+    gate: str,
+    *,
+    noise: float,
+    peak: float,
+) -> float:
+    """回看窗的准入阈值（RMS）。三种闸门的定义见路线文档 P0-1 的 A/B 矩阵。"""
+    if gate == ONSET_GATE_SNR:
+        return noise * _db_to_gain(ONSET_SNR_DB)
+    if gate == ONSET_GATE_SNR_CAP:
+        low = noise * _db_to_gain(ONSET_SNR_DB)
+        high = noise * _db_to_gain(ONSET_CAP_DB)
+        # 注意是 clamp 不是 max：段内一声大声喘息会把 peak×0.08 抬起来，
+        # 用 max 就防不住「峰值带偏」，这一点在路线文档里专门写了。
+        return min(max(peak * ONSET_RELATIVE_PEAK, low), high)
+    return 0.0
+
+
+def extend_segment_onsets(
+    segments: list[tuple[int, int]],
+    audio: np.ndarray,
+    *,
+    pad_ms: int,
+    gate: str = ONSET_GATE_NONE,
+    sample_rate: int = SAMPLE_RATE,
+    prev_gap_ms: int = ONSET_PREV_GAP_MS,
+    stats: dict | None = None,
+) -> list[tuple[int, int]]:
+    """把每个语音块的起点向左扩，救回被 VAD 吞掉的句首。
+
+    `segments` 是 `merge_vad_segments()` 的输出（样本下标，已按 max_segment_s 切过）。
+    左扩在合并**之后**做：先扩再合并会让 0.3–0.5s 的句间空隙消失，两句话被并成
+    一个送模块，那是另一种错误。左扩后块长最多 +pad，仍在 ASR 的单段上限（9s/12s）内。
+
+    返回新的块列表；`stats` 里补 `onset_*` 计数，报告与核对台状态行直接读它。
+    """
+    pad_ms = int(max(0, min(pad_ms, ONSET_PAD_MAX_MS)))
+    if stats is not None:
+        stats.update(
+            {
+                "onset_pad_ms": pad_ms,
+                "onset_gate": gate if pad_ms > 0 else ONSET_GATE_NONE,
+                "onset_extended": 0,
+                "onset_gated": 0,
+                "onset_shift_s": 0.0,
+            }
+        )
+    if pad_ms <= 0 or not segments:
+        return list(segments)
+
+    pad_samples = int(sample_rate * pad_ms / 1000)
+    gap_samples = int(sample_rate * prev_gap_ms / 1000)
+    rms = _frame_rms(audio)
+    if rms.size:
+        noise = float(np.quantile(rms, ONSET_NOISE_QUANTILE))
+    else:
+        noise = 0.0
+
+    out: list[tuple[int, int]] = []
+    extended = 0
+    gated = 0
+    shift_total = 0
+    prev_end = 0
+    for index, (start, end) in enumerate(segments):
+        floor_start = prev_end + gap_samples if index else 0
+        target = max(0, floor_start, start - pad_samples)
+        prev_end = end
+        if target >= start:
+            out.append((start, end))
+            continue
+        if gate in (ONSET_GATE_SNR, ONSET_GATE_SNR_CAP) and rms.size:
+            # 帧 i 覆盖样本 [i*hop, i*hop+frame)：下标直接除 hop，不用浮点换算。
+            # 回看窗只取**完整落在 start 之前**的帧：跨在边界上的那一帧会被
+            # 段内语音的能量污染，拿它判闸等于永远放行。
+            lo = max(0, target // ONSET_HOP)
+            hi = max(lo, (start - ONSET_FRAME) // ONSET_HOP + 1)
+            window = rms[lo:hi]
+            peak = float(
+                rms[max(0, start // ONSET_HOP) : max(0, end // ONSET_HOP) + 1].max(initial=0.0)
+            )
+            threshold = _gate_threshold(gate, noise=noise, peak=peak)
+            if window.size and float(window.max()) < threshold:
+                gated += 1
+                out.append((start, end))
+                continue
+        extended += 1
+        shift_total += start - target
+        out.append((target, end))
+
+    if stats is not None:
+        stats.update(
+            {
+                "onset_extended": extended,
+                "onset_gated": gated,
+                "onset_shift_s": round(shift_total / sample_rate / max(extended, 1), 3),
+            }
+        )
+    return out
+
+
+def strip_edge_nonverbal(text: str) -> str:
+    """删掉句首/句尾的非台词发声（笑声、喘气、亲吻声），句中一律不动。"""
+    return strip_edge_nonverbal_ex(text)[0]
+
+
+def strip_edge_nonverbal_ex(text: str) -> tuple[str, bool, bool]:
+    """同 `strip_edge_nonverbal`，另外告诉调用方「句首/句尾是否真的删掉了东西」。
+
+    这两个布尔是给时间轴用的：删掉句首的「んふふ」以后，如果字幕起点还停在笑声
+    开始的位置，观众会先看到一条两秒空着的字幕（真踩过）。调用方据此把起点挪到
+    真正开始说话的位置（见 `_speech_bounds`）。
+    """
+    if not text:
+        return text, False, False
+    lead = _EDGE_LEAD_RE.sub("", text)
+    head_removed = len(lead) != len(text)
+    out = _EDGE_TAIL_RE.sub("", lead)
+    tail_removed = len(out) != len(lead)
+    # 只清掉句读与空白；句尾的「…」是语义，不能跟着发声一起删
+    return out.strip("、。 　"), head_removed, tail_removed
+
+
+def _low_prob_runs(
+    probs: list[float],
+    frame_s: float,
+    low: float,
+) -> list[tuple[float, float]]:
+    """把 VAD 概率里的「低概率连续段」抽出来，单位秒（相对切片起点）。"""
+    runs: list[tuple[float, float]] = []
+    start: int | None = None
+    for i, prob in enumerate(probs):
+        if prob < low:
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append((start * frame_s, i * frame_s))
+            start = None
+    if start is not None:
+        runs.append((start * frame_s, len(probs) * frame_s))
+    return runs
+
+
+def _refine_bounds_by_pauses(
+    chunk: np.ndarray,
+    vad,
+    *,
+    head_removed: bool,
+    tail_removed: bool,
+    sample_rate: int = SAMPLE_RATE,
+    low: float = 0.15,
+    min_pause_s: float = 0.15,
+) -> tuple[float, float]:
+    """句首/句尾发声被删掉后，把字幕边界挪到段内的停顿处。
+
+    只看「删掉了哪一侧」：删了句首的「んふふ」，起点要挪到笑声之后的那次停顿
+    （否则观众先看到一条空字幕）；删了句尾的喘气，终点同理往回收。
+
+    判据用 Silero 自己给的概率曲线，而不是能量：耳语素材里笑声往往比台词还响，
+    按能量裁会把笑声留下、把轻声台词裁掉（2026-11-13 实测：段首笑声 RMS 0.24、
+    台词峰值 0.35，相对能量法整段裁错）。
+
+    返回 (head_s, tail_s)，表示相对切片起点保留的起止秒数；找不到可信停顿就返回
+    整段（即不改边界）——宁可字幕长一点，也不要靠猜把台词切掉。
+    """
+    dur = chunk.size / sample_rate if chunk.size else 0.0
+    head, tail = 0.0, dur
+    if dur <= 0:
+        return head, tail
+    window = 512
+    probs = [
+        float(vad(torch.from_numpy(chunk[i : i + window]), sample_rate))
+        for i in range(0, chunk.size - window + 1, window)
+    ]
+    if not probs:
+        return head, tail
+    frame_s = window / sample_rate
+    runs = [r for r in _low_prob_runs(probs, frame_s, low) if r[1] - r[0] >= min_pause_s]
+
+    if head_removed:
+        # 只认「前半段里最后一次停顿」：它是笑声/喘气与台词之间那道缝。
+        # 收得太松会把句中换气当成句首，起点一挪就吃字（cps 飙到 16 的那种）。
+        candidates = [r for r in runs if dur * 0.08 < r[1] < dur * 0.6]
+        if candidates:
+            head = max(r[1] for r in candidates)
+
+    if tail_removed:
+        # 对称：只认「后半段里第一次停顿」，且必须离新的起点还有一段话
+        candidates = [r for r in runs if r[0] > max(dur * 0.55, head + 0.5)]
+        if candidates:
+            tail = min(r[0] for r in candidates)
+
+    if tail - head < 0.6:
+        return 0.0, dur
+    return head, tail
+
+
+_MEANINGLESS_CHARS = set("っッー〜~・、。…！？!?♪「」『』（） ")
+
+
+def is_nonverbal_only(text: str, dur_s: float = 0.0) -> bool:
+    """整条只剩发声/纯符号碎片时返回 True。
+
+    注意：**单个假名不算碎片**。「え？」「ん…」在动画里是正常台词，丢了就是漏句；
+    只有内容全是符号/促音/长音符这类没有语义的东西才丢。
+    例外是「一个假名却占了 2 秒以上」——那是 VAD 把一段呼吸/杂音判成了语音，
+    真实的一句「え？」不会拖这么久。
+    """
+    compact = (text or "").strip("　 ")
+    if not compact:
+        return True
+    core = _EDGE_TAIL_RE.sub("", _EDGE_LEAD_RE.sub("", compact))
+    core = "".join(ch for ch in core if ch not in _MEANINGLESS_CHARS)
+    if not core:
+        return True
+    return len(core) <= 1 and dur_s > 2.0
+
+
 def _retry_gain(chunk: np.ndarray) -> np.ndarray:
     """把空结果段拉到目标峰值再送模一次，返回新数组（不修改原音频）。"""
     if chunk.size == 0:
@@ -769,9 +1147,10 @@ def hallucination_risk_reason(text: str, dur_s: float) -> str:
     repeat_probe = re.sub(r"[\s、。．，,\.!?！？…‥・〜]+", "", text or "")
     if REPEATED_CHUNK_RE.search(repeat_probe):
         return HALLUCINATION_REPEAT
-    # 短段（<1.2s）无论字数多少都复核：正常短句在时间戳模式下会保留，
-    # 噪声/音乐段通常解成「…」。短段复核成本很低。
-    if dur_s < 1.2 and len(compact) >= 2:
+    # 短段（<0.8s）无论字数多少都复核：正常短句在时间戳模式下会保留，
+    # 噪声/音乐段通常解成「…」。门槛不能放到 1.2s——「いいよー」这种 1.0s 的
+    # 正常短句会被时间戳复核判空而整条丢掉（2026-11-13 实测踩到）。
+    if dur_s < 0.8 and len(compact) >= 2:
         return HALLUCINATION_SHORT
     # 长段却只吐出极少量字（「…信じる」3 字 / 8 秒）：大概率是非对白段。
     if dur_s >= 2.0 and len(compact) / dur_s < 0.8:
@@ -862,6 +1241,7 @@ def _split_overlong_single(
     cut = nearest_text_cut(text, int(round(n / 2)))
     if cut <= 0:
         return [(t0, t1, text)]
+
 
     head, tail = text[:cut], text[cut:]
 
@@ -1004,6 +1384,47 @@ def split_text_into_cues(
                               char_times=None)
 
 
+_TERMINAL_PUNCT = set("。！？!?…")
+
+
+def merge_fragmented_cues(
+    cues: list[SubtitleCue],
+    *,
+    max_gap_s: float = 0.08,
+    max_cue_chars: int = 20,
+    max_cue_dur: float = 4.2,
+) -> list[SubtitleCue]:
+    """把被 VAD 从句子中间切断的相邻残句并回一条。
+
+    分窗 VAD 的代价是会在长音的停顿处切得比整段检测更碎：「いつも見たそうに」+
+    「してたもんねー」原本是一句话。这里只并**看起来就是半句**的组合：
+
+    * 两条几乎贴着（间隔 <= max_gap_s），上一句**没有**以句末标点/省略号收尾；
+    * 合并后不超过单条字数与时长上限（不放开上限：一旦为了合并把字幕撑到 4.8s，
+      在核对台里就成了「超长条」，得不偿失）。
+
+    以「…」结尾一律不并——那是用户明确断开的地方（「出ちゃうね…」/「出ちゃう出ちゃう…」）。
+    """
+    merged: list[SubtitleCue] = []
+    for cue in cues:
+        if merged:
+            prev = merged[-1]
+            gap = cue.start - prev.end
+            tail = prev.text.rstrip()
+            combined = prev.text + cue.text
+            if (
+                -0.02 <= gap <= max_gap_s
+                and tail
+                and tail[-1] not in _TERMINAL_PUNCT
+                and len(combined) <= max_cue_chars
+                and cue.end - prev.start <= max_cue_dur + 0.6
+            ):
+                merged[-1] = SubtitleCue(start=prev.start, end=cue.end, text=combined)
+                continue
+        merged.append(cue)
+    return merged
+
+
 def apply_cue_padding(
     cues: list[SubtitleCue],
     pad_s: float,
@@ -1089,6 +1510,150 @@ class AnimeWhisperEngine:
             # 最后再赋值：加载中途失败时 _pipe 保持 None，下一次还能重试。
             self._pipe = pipe
 
+    def _aligned_pass(
+        self,
+        pending: list[tuple[int, int, str, float, float]],
+        audio: np.ndarray,
+        cfg: "WhisperVadConfig",
+        stats: dict,
+        progress_cb=None,
+    ) -> list[SubtitleCue]:
+        """第二遍：**先卸掉 Whisper**，再借 Qwen 的 CTC 对齐头切条。
+
+        顺序是硬要求：release() 必须在 ensure_loaded() 之前，否则 6.7GB（Whisper）
+        + 5.1GB（对齐器）会同时常驻。对齐器是纯推理借用，用完立刻 unload()；
+        任何一段对齐失败都回退到原来的按字数分配，绝不丢已识别的文本。
+        """
+        from .align_layer import LAYER
+        from .qwen_ctc import QwenCtcConfig
+
+        # 对齐层给的是「真实发声边界」，字幕还要按人工核验版的观影惯例补留白：
+        # 提前 0.18s、句尾多停 0.43s，剩下的 0.02 由 apply_cue_padding 用用户自己的
+        # cue_pad_s 补上（默认 0.02 → 合计 0.20 / 0.45）。
+        cue_cfg = QwenCtcConfig(
+            max_cue_dur=cfg.max_cue_dur,
+            max_cue_chars=cfg.max_cue_chars,
+            strip_nonverbal_edges=cfg.strip_nonverbal_edges,
+            cue_pad_start_s=0.18,
+            cue_pad_end_s=0.43,
+        )
+        self.release()
+        ready = LAYER.ensure_loaded(progress_cb)
+        out: list[SubtitleCue] = []
+        total = len(pending)
+        try:
+            for i, (start, end, text, seg_start_s, seg_end_s) in enumerate(pending, start=1):
+                if progress_cb and i % 20 == 1:
+                    progress_cb(
+                        0.9 + 0.05 * (i - 1) / max(total, 1),
+                        f"正在对齐第 {i}/{total} 段…",
+                    )
+                chunk = audio[start:end]
+                if ready:
+                    outcome = LAYER.split(chunk, text, offset=seg_start_s, cue=cue_cfg)
+                    if outcome.ok and outcome.cues:
+                        stats["segments"] += 1
+                        stats["chars"] += len(text)
+                        out.extend(outcome.cues)
+                        continue
+                stats["degraded"] += 1
+                out.extend(
+                    split_text_into_cues(
+                        text,
+                        seg_start_s,
+                        seg_end_s,
+                        max_cue_dur=cfg.max_cue_dur,
+                        max_cue_chars=cfg.max_cue_chars,
+                        audio=chunk,
+                        sample_rate=SAMPLE_RATE,
+                    )
+                )
+        finally:
+            # 无论成功、失败还是被取消，都不能把 5GB 的对齐器留在显存里。
+            LAYER.unload()
+        return out
+
+    def _generation_kwargs(self, ngram_val: int | None, penalty_val: float) -> dict:
+        """本次解码的生成参数（含对 generation_config 的修正）。
+
+        抽出来是为了让「窗口直送」（`transcribe_window`）与整片转写走**同一条**解码路径：
+        P0-2 那次 probe 只做了 qwen，就是因为 Whisper 的这层参数藏在闭包里，
+        另拷一份等于第二份真相。
+        """
+        for target in (
+            getattr(self._pipe, "generation_config", None),
+            getattr(getattr(self._pipe, "model", None), "generation_config", None),
+        ):
+            if target is not None:
+                if ngram_val is not None:
+                    target.no_repeat_ngram_size = ngram_val
+                target.repetition_penalty = penalty_val
+                target.forced_decoder_ids = None
+        kwargs = {"language": "Japanese", "task": "transcribe"}
+        if ngram_val is not None:
+            kwargs["no_repeat_ngram_size"] = ngram_val
+        if penalty_val > 1.0:
+            kwargs["repetition_penalty"] = penalty_val
+        return kwargs
+
+    def _decode_chunk(
+        self, buf: np.ndarray, generate_kwargs: dict, *, timestamps: bool = False
+    ) -> str:
+        res = self._pipe(
+            {"array": buf, "sampling_rate": SAMPLE_RATE},
+            generate_kwargs=generate_kwargs,
+            return_timestamps=bool(timestamps),
+        )
+        return (res.get("text") or "").strip()
+
+    def transcribe_window(
+        self,
+        audio: np.ndarray,
+        *,
+        config: "WhisperVadConfig | None" = None,
+        no_repeat_ngram_size: int = 5,
+        repetition_penalty: float = 1.15,
+    ) -> str:
+        """把**一段窗口音频**直接送模，返回文本（P1-1「另一引擎听一遍」用）。
+
+        与整片转写的区别只有两处：不跑 VAD（窗口是调用方给的）、不做幻觉门控
+        （没有相邻段可比）。句首尾的非台词发声照样剔——产品里这条字幕也会被剔，
+        不剔的话「另一引擎」会凭空多出气声，看起来像它更差。
+        """
+        self.load()
+        cfg = config or self.config
+        ngram = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
+        penalty = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
+        kwargs = self._generation_kwargs(ngram, penalty)
+        buf = np.ascontiguousarray(audio, dtype=np.float32)
+        text = self._decode_chunk(buf, kwargs)
+        if cfg.strip_nonverbal_edges:
+            text = strip_edge_nonverbal_ex(text)[0]
+        if _is_blank(text):
+            text = self._decode_chunk(_retry_gain(buf), kwargs)
+            if cfg.strip_nonverbal_edges:
+                text = strip_edge_nonverbal_ex(text)[0]
+        return text.strip()
+
+    def release(self) -> None:
+        """卸掉权重，把内存让给别的模型。
+
+        `whisper.use_ctc_alignment` 打开时，对齐层要再装一份 Qwen（实测 MPS 4.3GB）。
+        6.7GB + 5.1GB 同时常驻会在 16GB 机器上把系统挤到换页，所以对齐这一遍
+        **必须先卸掉 Whisper 再加载对齐器**（`_aligned_pass` 里按这个顺序调）。
+        """
+        if self._pipe is None:
+            return
+        with _MODEL_LOAD_LOCK:
+            self._pipe = None
+            gc.collect()
+            if self.device == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:
+                    log.debug("释放 MPS 缓存失败", exc_info=True)
+            log.info("Anime Whisper 权重已卸载（让位给对齐层）")
+
     def transcribe_file(
         self,
         media_path: str | Path,
@@ -1153,16 +1718,13 @@ class AnimeWhisperEngine:
         self.last_missed_spans = []
         self.last_coverage_spans = []
         self.last_segment_stats = {}
-        wav_tensor = torch.from_numpy(audio)
-        stamps = get_speech_timestamps(
-            wav_tensor,
+        stamps = detect_speech_stamps(
+            audio,
             self._vad,
-            sampling_rate=SAMPLE_RATE,
             threshold=float(cfg.threshold),
-            min_speech_duration_ms=int(cfg.min_speech_ms),
-            min_silence_duration_ms=int(cfg.min_silence_ms),
+            min_speech_ms=int(cfg.min_speech_ms),
+            min_silence_ms=int(cfg.min_silence_ms),
             speech_pad_ms=int(cfg.speech_pad_ms),
-            neg_threshold=vad_neg_threshold(cfg.threshold),
         )
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(
@@ -1172,6 +1734,15 @@ class AnimeWhisperEngine:
             min_speech_s=float(cfg.min_speech_s),
             audio=audio,
             snap_stats=self.last_segment_stats,
+        )
+        # 句首补回在合并之后：先扩再合并会把 0.3–0.5s 的句间空隙填掉，
+        # 两句话被并成一个送模块。`0` 时原样返回，不改变任何旧行为。
+        segments = extend_segment_onsets(
+            segments,
+            audio,
+            pad_ms=int(cfg.onset_pad_ms),
+            gate=str(getattr(cfg, "onset_gate", ONSET_GATE_NONE) or ONSET_GATE_NONE),
+            stats=self.last_segment_stats,
         )
         if not segments:
             # VAD 没命中任何语音时**不要**把整段音频兜底送模。
@@ -1187,39 +1758,21 @@ class AnimeWhisperEngine:
         ngram_val = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
         penalty_val = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
 
-        for target in (
-            getattr(self._pipe, "generation_config", None),
-            getattr(getattr(self._pipe, "model", None), "generation_config", None),
-        ):
-            if target is not None:
-                if ngram_val is not None:
-                    target.no_repeat_ngram_size = ngram_val
-                target.repetition_penalty = penalty_val
-                target.forced_decoder_ids = None
-
-        generate_kwargs = {
-            "language": "Japanese",
-            "task": "transcribe",
-        }
-        if ngram_val is not None:
-            generate_kwargs["no_repeat_ngram_size"] = ngram_val
-        if penalty_val > 1.0:
-            generate_kwargs["repetition_penalty"] = penalty_val
+        generate_kwargs = self._generation_kwargs(ngram_val, penalty_val)
 
         cues: list[SubtitleCue] = []
         total = len(segments)
         prev_text = ""
 
         def _decode(buf: np.ndarray, *, timestamps: bool = False) -> str:
-            res = self._pipe(
-                {"array": buf, "sampling_rate": SAMPLE_RATE},
-                generate_kwargs=generate_kwargs,
-                return_timestamps=bool(timestamps),
-            )
-            return (res.get("text") or "").strip()
+            return self._decode_chunk(buf, generate_kwargs, timestamps=timestamps)
 
         hallucination_drops = 0
         suspect_cues = 0
+        nonverbal_skips = 0
+        aligned_stats = {"segments": 0, "chars": 0, "degraded": 0}
+        # 走对齐层时段落先排队，循环结束后统一处理（前后两遍不共用显存）
+        pending: list[tuple[int, int, str, float, float]] = []
         # 逐段留档：报告里的【幻觉门控】/【幻觉复核】直接列这些记录，
         # 不再只把明细打到终端。字段与漏句记录保持同一形状，便于对照。
         hallucination_spans: list[dict] = []
@@ -1243,6 +1796,9 @@ class AnimeWhisperEngine:
             seg_dur_s = (end - start) / SAMPLE_RATE
 
             text = _decode(chunk)
+            head_removed = tail_removed = False
+            if cfg.strip_nonverbal_edges:
+                text, head_removed, tail_removed = strip_edge_nonverbal_ex(text)
             reason = ""
             if _is_blank(text):
                 if cancel_event and cancel_event.is_set():
@@ -1251,10 +1807,37 @@ class AnimeWhisperEngine:
                         progress_cb(0.99, f"🛑 用户已中途取消，正在保存前 {len(cues)} 条字幕…")
                     break
                 text = _decode(_retry_gain(chunk))
+                head_removed = tail_removed = False
+                if cfg.strip_nonverbal_edges:
+                    text, head_removed, tail_removed = strip_edge_nonverbal_ex(text)
                 if not _is_blank(text) and _retry_suspicious(text, seg_dur_s, prev_text):
                     text, reason = "", "retry-suspicious"
                 elif _is_blank(text):
                     reason = "empty-after-retry"
+
+            # 删掉了句首/句尾的发声，就把字幕边界挪到段内的停顿处：
+            # 否则「んふふ」占了 2 秒，字幕会提前两秒空着出现（用户报障过）。
+            if (head_removed or tail_removed) and not _is_blank(text):
+                head_off, tail_off = _refine_bounds_by_pauses(
+                    chunk,
+                    self._vad,
+                    head_removed=head_removed,
+                    tail_removed=tail_removed,
+                )
+                seg_start_s = (start / SAMPLE_RATE) + head_off + time_offset
+                seg_end_s = (start / SAMPLE_RATE) + tail_off + time_offset
+                seg_dur_s = max(0.05, tail_off - head_off)
+
+            if (
+                cfg.strip_nonverbal_edges
+                and not _is_blank(text)
+                and is_nonverbal_only(text, seg_dur_s)
+            ):
+                # 纯喘气/笑声：删掉端点的发声后什么都不剩，不该占一条字幕，
+                # 也不该进漏句清单（它本来就不是台词）。
+                nonverbal_skips += 1
+                log.debug("跳过非台词发声段 | %.2fs | %r", seg_dur_s, text[:40])
+                continue
 
             rule = hallucination_risk_reason(text, seg_dur_s) if not _is_blank(text) else ""
             if rule:
@@ -1302,6 +1885,11 @@ class AnimeWhisperEngine:
                 continue
             prev_text = text
 
+            if cfg.use_ctc_alignment:
+                # 只排队，不对齐：对齐器要多占 5GB，必须等 Whisper 卸掉再加载，
+                # 否则两份大模型会同时常驻（见 release()）。
+                pending.append((start, end, text, seg_start_s, seg_end_s))
+                continue
             if cfg.enable_sentence_split:
                 sub_cues = split_text_into_cues(
                     text,
@@ -1322,6 +1910,17 @@ class AnimeWhisperEngine:
                     )
                 )
 
+        if pending:
+            if progress_cb and not self.last_interrupted:
+                progress_cb(0.9, f"正在对齐第 1/{len(pending)} 段（卸下 Whisper 后借用 Qwen 对齐头）…")
+            cues.extend(self._aligned_pass(pending, audio, cfg, aligned_stats, progress_cb))
+            self.last_segment_stats["ctc_alignment"] = dict(aligned_stats)
+
+        cues = merge_fragmented_cues(
+            cues,
+            max_cue_chars=cfg.max_cue_chars,
+            max_cue_dur=cfg.max_cue_dur,
+        )
         cues = apply_cue_padding(cues, cfg.cue_pad_s, (len(audio) / SAMPLE_RATE) + time_offset)
 
         # 覆盖审计：只读旁路，不影响上面任何一条字幕。主 VAD 没切到的空白
@@ -1351,6 +1950,7 @@ class AnimeWhisperEngine:
             hallucinations=hallucination_drops,
             suspect_cues=suspect_cues,
         )
+        self.last_segment_stats["nonverbal_skips"] = nonverbal_skips
         self.last_segment_stats["hallucination_drops"] = hallucination_drops
         self.last_segment_stats["suspect_cues"] = suspect_cues
         self.last_segment_stats["hallucination_spans"] = hallucination_spans

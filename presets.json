@@ -12,8 +12,9 @@
         "qwen.max_cue_chars": 22,
         "qwen.min_pause_s": 0.15,
         "qwen.max_segment_s": 15,
-        "qwen.cue_pad_s": 0.08,
-        "qwen.use_alignment": true
+        "qwen.use_alignment": true,
+        "qwen.cue_pad_start_s": 0.08,
+        "qwen.cue_pad_end_s": 0.08
       }
     },
     "Whisper-MLX 对标参数预设": {
@@ -62,9 +63,10 @@
         "qwen.max_cue_chars": 21,
         "qwen.min_pause_s": 0.12,
         "qwen.max_segment_s": 16,
-        "qwen.cue_pad_s": 0.12,
         "qwen.use_alignment": true,
-        "qwen.enable_loudnorm": true
+        "qwen.enable_loudnorm": true,
+        "qwen.cue_pad_start_s": 0.12,
+        "qwen.cue_pad_end_s": 0.12
       }
     },
     "电影推荐：高召回防漏音": {

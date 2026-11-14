@@ -143,7 +143,14 @@ class JobRecord:
 
 
 class JobManager:
-    def __init__(self, output_dir: Path | None = None, runner=None, on_heavy_job=None) -> None:
+    def __init__(
+        self,
+        output_dir: Path | None = None,
+        runner=None,
+        on_heavy_job=None,
+        idle_releaser=None,
+        engine_resolver=None,
+    ) -> None:
         self._lock = threading.RLock()
         self._jobs: dict[str, JobRecord] = {}
         self._registry = JobRegistry()
@@ -154,6 +161,18 @@ class JobManager:
         # 重任务开跑前让路：TTS 的克隆模型和 ASR 抢同一块统一内存，转写/导出前
         # 必须先卸载。这里用回调而不是直接 import core.tts，避免服务层耦合。
         self._on_heavy_job = on_heavy_job
+        # ASR 引擎的空闲卸载：换引擎复核不该句句冷启动，也不该两个引擎常驻。
+        # 默认不自动起线程，第一次 touch 时才起（测试里不会凭空多线程）。
+        from core.engine_idle import EngineIdleReleaser
+
+        self._idle = idle_releaser or EngineIdleReleaser()
+        # 复核要拿到「另一个引擎」的实例；默认走 core.pipeline 的进程内单例，
+        # 测试里换成替身（替身只需实现 transcribe_window）。
+        self._engine_resolver = engine_resolver
+
+    @property
+    def idle(self):
+        return self._idle
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -168,6 +187,31 @@ class JobManager:
     ) -> JobRecord:
         job = self._launch("transcribe", str(request.media_path.name), session_id, loop)
         self._spawn(self._run_transcribe, job, request, session, apply)
+        return job
+
+    def start_compare(
+        self,
+        media_path: Path,
+        engine_key: str,
+        engine_config,
+        windows: list[dict],
+        *,
+        media_id: str = "",
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """用另一个引擎把若干字幕窗口各听一遍；只回文本，不落盘、不写回会话。
+
+        与转写共用单槽：它同样要吃满 GPU。结果不进 `session.cues`——采用哪一份是
+        用户在核对台的决定，服务端不替用户改字幕。
+        """
+        from core import engines as engine_registry
+
+        name = engine_registry.get(engine_key).label
+        job = self._launch("compare", f"{name} × {len(windows)} 条", session_id, loop)
+        self._spawn(
+            self._run_compare, job, Path(media_path), engine_key, engine_config, windows, media_id
+        )
         return job
 
     def start_proxy(
@@ -310,6 +354,7 @@ class JobManager:
         lang: str,
         source_path: str,
         out_path: Path,
+        dual: bool = False,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
@@ -330,6 +375,7 @@ class JobManager:
                 "chunk_cues": chunk_cues,
                 "context_cues": context_cues,
                 "source_path": source_path,
+                "dual": bool(dual),
             },
             out_path,
         )
@@ -399,6 +445,10 @@ class JobManager:
                     on_progress=progress,
                 )
             else:
+                dual = bool(params.get("dual"))
+                alt = getattr(session, "alt_review", None) if dual else None
+                if dual and (alt is None or not alt.cues):
+                    raise ai_client.AiError("当前没有第二版字幕，无法做双源润色")
                 proposal, warnings = ai_polish.run_polish(
                     texts,
                     config,
@@ -408,6 +458,9 @@ class JobManager:
                     model=config.model,
                     entry="in-app",
                     source_path=str(params.get("source_path") or ""),
+                    texts_b=[cue.text for cue in alt.cues] if alt is not None else None,
+                    cues_a=list(getattr(session, "review_cues", []) or []),
+                    cues_b=list(alt.cues) if alt is not None else None,
                     cancel=job.token,
                     on_progress=progress,
                 )
@@ -428,6 +481,7 @@ class JobManager:
                 "chunks": int(proposal.get("chunks") or 1),
                 "warnings": list(warnings or [])[:5],
                 "pending_apply": True,
+                "mode": "dual" if params.get("dual") else "single",
             }
             if kind == "translate":
                 job.result["dst_lang"] = str(proposal.get("dst_lang") or "")
@@ -551,7 +605,7 @@ class JobManager:
         loop: asyncio.AbstractEventLoop | None,
     ) -> JobRecord:
         # 先释放 TTS 再占单槽：即使后面 JobBusy 失败，提前卸载也不会有副作用。
-        if self._on_heavy_job is not None and kind in {"transcribe", "proxy", "export"}:
+        if self._on_heavy_job is not None and kind in {"transcribe", "proxy", "export", "compare"}:
             try:
                 self._on_heavy_job(f"{kind} 启动")
             except Exception:  # noqa: BLE001 —— 释放失败不能挡住真正的任务
@@ -573,6 +627,78 @@ class JobManager:
             daemon=True,
             name=f"kikusub-job-{job.id}",
         ).start()
+
+    def _run_compare(
+        self,
+        job: JobRecord,
+        media_path: Path,
+        engine_key: str,
+        engine_config,
+        windows: list[dict],
+        media_id: str = "",
+    ) -> None:
+        from core import engines as engine_registry
+        from core.second_opinion import transcribe_windows
+
+        job.status = "running"
+        job.started_at = time.time()
+        name = engine_registry.get(engine_key).label
+        self._emit(job, {"type": "start", "job": job.snapshot()})
+        started = time.time()
+        try:
+            # 复核要装另一个引擎：先把别的引擎让出去（本次要用的那个若已常驻则保留）。
+            self._idle.release_others(engine_key, reason="另一引擎复核")
+            self._progress(job, 0.02, f"正在加载 {name}（换引擎约 20–40 秒）…")
+
+            def on_window(done: int, total: int) -> None:
+                ratio = 0.05 + 0.93 * (done / max(1, total))
+                self._progress(job, ratio, f"正在用 {name} 复核第 {done}/{total} 条…")
+
+            texts = transcribe_windows(
+                self._resolve_engine(engine_key),
+                windows,
+                media_path=media_path,
+                config=engine_config,
+                progress_cb=on_window,
+                cancel_event=job.token,
+            )
+            job.status = "done"
+            job.ratio = 1.0
+            job.percent = 100
+            job.stage = f"{name} 复核完成"
+            job.result = {
+                "kind": "compare",
+                "engine": engine_key,
+                "engine_name": name,
+                "media_id": media_id,
+                "elapsed": round(time.time() - started, 2),
+                "texts": texts,
+            }
+            job.finished_at = time.time()
+            self._emit(job, {"type": "done", "job": job.snapshot()})
+            log.info("复核完成 | job=%s | engine=%s | 条数=%s", job.id, engine_key, len(texts))
+        except CommandCancelled:
+            job.status = "cancelled"
+            job.error = "复核已取消"
+            job.finished_at = time.time()
+            self._emit(job, {"type": "cancelled", "message": job.error, "job": job.snapshot()})
+        except Exception as exc:  # noqa: BLE001
+            job.status = "error"
+            job.error = str(exc)
+            job.finished_at = time.time()
+            log.exception("复核失败 | job=%s", job.id)
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+        finally:
+            # 留着别立刻卸：用户很可能接着复核下一条。空闲超时由 EngineIdleReleaser 负责。
+            self._idle.touch(engine_key)
+            self._registry.finish(job.token)
+
+    def _resolve_engine(self, engine_key: str):
+        if self._engine_resolver is not None:
+            return self._engine_resolver(engine_key)
+        from core.pipeline import resolve_engine
+
+        return resolve_engine(engine_key)
 
     def _run_proxy(self, job: JobRecord, media_path: Path, media_id: str = "") -> None:
         job.status = "running"
@@ -626,6 +752,10 @@ class JobManager:
                 from core.pipeline import run_transcription
 
                 runner = run_transcription
+            # 整片任务开始前把另一个引擎让出去（本轮要用的这个保留，避免自削一刀）。
+            engine_key = str(getattr(request, "engine_key", "") or "")
+            if engine_key:
+                self._idle.release_others(engine_key, reason="整片任务开始")
             # 字幕的落盘目录由设置里的「导出文件夹」决定；漏句清单 / 质检队列 /
             # 代理缓存仍然留在 output_dir（运行数据与用户交付物分开）。
             out_dir = Path(getattr(request, "export_dir", None) or self._output_dir)
@@ -644,9 +774,14 @@ class JobManager:
             # 会话是服务端唯一真源：任务跑完必须把字幕写回去，否则前端
             # `/api/cues` 永远是空的（表现为「转写完成但核对台没有字幕」）。
             if session is not None:
-                job.result.update(self._apply_cues(session, request, result.cues, apply, job))
+                if getattr(request, "alt_review", False):
+                    job.result.update(self._apply_alt_review(session, request, result.cues, job))
+                else:
+                    job.result.update(self._apply_cues(session, request, result.cues, apply, job))
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
+            if engine_key:
+                self._idle.touch(engine_key)
             log.info(
                 "任务完成 | job=%s | cues=%s | apply=%s | session=%s",
                 job.id,
@@ -719,6 +854,7 @@ class JobManager:
             if apply != "replace_range" and job is not None:
                 source = {
                     "kind": "transcription",
+                    "engine": str(getattr(request, "engine_key", "") or ""),
                     "name": Path(str(job_result.get("out_filename") or "")).name,
                     "path": str(job_result.get("out_path") or ""),
                     "job_id": job.id,
@@ -741,6 +877,46 @@ class JobManager:
                 "removed": max(0, before + len(fresh) - len(merged)),
                 # 这次应在核对台选中的第一条新字幕（0 基）；无结果时 None
                 "target_index": target_index,
+            }
+
+    def _apply_alt_review(self, session, request, cues, job=None) -> dict:
+        """把一次整片转写写进「双引擎复核」第二列，**核对台零改动**。
+
+        第二版按媒体身份落盘（sidecar），切走再切回会自动恢复；它不进 50 步
+        history——参考文档不是工作区状态。
+        """
+        from core.cues import _unique_sorted_cues
+
+        fresh = _unique_sorted_cues(cues)
+        job_result = getattr(job, "result", None) or {}
+        with session.lock:
+            source = {
+                "kind": "transcription",
+                "engine": str(getattr(request, "engine_key", "") or ""),
+                "name": Path(str(job_result.get("out_filename") or "")).name,
+                "path": str(job_result.get("out_path") or ""),
+                "job_id": job.id if job is not None else "",
+                "at": time.time(),
+                "apply": "alt_review",
+            }
+            media_path = session.media_path or str(getattr(request, "media_path", "") or "")
+            session.set_alt_review(
+                engine=str(getattr(request, "engine_key", "") or ""),
+                cues=fresh,
+                source=source,
+                params=dict(getattr(request, "param_values", {}) or {}),
+                media_path=media_path,
+                output_dir=self._output_dir,
+            )
+            return {
+                "applied": "alt_review",
+                "alt_review": True,
+                "alt_engine": str(getattr(request, "engine_key", "") or ""),
+                "alt_count": len(fresh),
+                "cue_count": len(session.review_cues),
+                "added": 0,
+                "removed": 0,
+                "target_index": None,
             }
 
     def _progress(self, job: JobRecord, ratio: float, stage: str) -> None:

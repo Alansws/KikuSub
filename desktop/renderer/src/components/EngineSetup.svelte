@@ -3,7 +3,7 @@
    * 本地模型配置：首次启动向导的第二步，也可以从设置页随时打开。
    *
    * 设计约束：
-   * - **默认不强制下载**：所有引擎（Anime Whisper / Qwen3-ASR / OmniVoice）都可勾选，
+   * - **默认不强制下载**：所有引擎（Anime Whisper / Qwen3-ASR / 两个中文引擎 / OmniVoice）都可勾选，
    *   也可以「稍后再说」。系统语音和已有模型不受影响。
    * - **一键配置 = 顺序下载所选**：转写引擎走 `/api/engines/{key}/download` 的单槽任务，
    *   OmniVoice 走自己的后台下载线程；两者都轮询状态，进度只展示当前这一项。
@@ -32,6 +32,8 @@
     sizeBytes: number;
     packageMissing: boolean;
     recommended: boolean;
+    /** 可选装件（默认停用、不进工具栏）：中文引擎与 OmniVoice。 */
+    optional: boolean;
   }
 
   let items = $state<SetupItem[]>([]);
@@ -87,6 +89,7 @@
         sizeBytes: engine.size_bytes,
         packageMissing: false,
         recommended: engine.key === 'whisper',
+        optional: engine.family === 'sherpa',
       }));
       const ttsEngine = voices.engine;
       next.push({
@@ -102,6 +105,7 @@
         sizeBytes: 0,
         packageMissing: !ttsEngine.package_installed,
         recommended: false,
+        optional: true,
       });
       items = next;
       selected = Object.fromEntries(
@@ -226,7 +230,7 @@
                 {#if item.recommended && !item.installed}
                   <span class="tag rec">推荐</span>
                 {/if}
-                {#if item.key === 'omnivoice'}
+                {#if item.optional}
                   <span class="tag opt">可选</span>
                 {/if}
                 {#if item.installed}

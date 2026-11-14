@@ -4,7 +4,10 @@ torchaudio>=2.1.0,<3
 # Qwen3-ASR 原生支持（AutoModelForMultimodalLM / apply_transcription_request）需要 5.13+
 transformers>=5.13.0,<6
 huggingface_hub>=0.23.0
-silero-vad>=5.1.0
+# 钉版本，不用 >=：silero-vad 5.1 与 6.2 的分段结果不同，同一组参数下
+# Test 一 qwen 的 CER 是 12.97% vs 10.86%（路线文档 §4 P0-2）。评测与打包
+# 都用仓库 .venv（tools/pack/build_sidecar.sh 的 PYTHON 默认值）。
+silero-vad==6.2.3
 soundfile>=0.12.1
 numpy>=1.24.0,<3
 accelerate>=0.28.0
@@ -15,6 +18,13 @@ websockets>=12
 
 # 成片导出把字幕渲染成透明 PNG 精灵（不依赖 ffmpeg 的 libass/freetype）
 Pillow>=10
+
+# 中文转写引擎（SenseVoice-Small / FireRedASR2-AED）：纯 ONNX Runtime，不需要额外
+# 的 PyTorch 代码，但原生库必须随 sidecar 一起打包（见 tools/pack/build_sidecar.sh）。
+# 权重不随包分发：设置页里点「下载模型」再下（约 230 MB / 1.2 GB）。
+sherpa-onnx>=1.12.27,<3
+# FireRedPunc 标点恢复走 ONNX Runtime（不额外拉 torch 模型；权重 162 MB 按需下载）
+onnxruntime>=1.31,<2
 
 # 本地零样本克隆 TTS（Apache-2.0，日语 + Apple Silicon MPS）。
 # 权重不随包分发：首次在界面点「下载克隆模型」下到 models/omnivoice（约 3.3GB）。

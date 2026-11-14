@@ -1,0 +1,370 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-11-13T23:25:00",
+  "note": "路线文档 §4 P0-2 的回归基线：2026-11-13 用 .venv 解释器（torch 2.15 / silero-vad 6.2）复采，四组与文档 §1 一致。参考字幕与素材不在仓库里，用 --fixtures 指向它们。换解释器（例如 anaconda 的 silero-vad 5.1）结果会不同，卡片里的 env 会暴露这一点。",
+  "fixtures": {
+    "references": {
+      "Jap_test_perfect.srt": {
+        "sha1": "dae63fe06d4eb766790d35ff89cb39cccca255ac",
+        "cues": 76,
+        "chars": 663
+      },
+      "Jap_test_2_perfect.srt": {
+        "sha1": "4324b4c04e17cb2963d314526422ac4394c1eecf",
+        "cues": 79,
+        "chars": 872
+      }
+    },
+    "media": {
+      "Jap_test.mp4": {
+        "bytes": 2091458850,
+        "duration_s": 830.229
+      },
+      "Jap_test_2.mp4": {
+        "bytes": 2313286869,
+        "duration_s": 918.059
+      }
+    }
+  },
+  "runs": [
+    {
+      "schemaVersion": 1,
+      "capturedAt": "2026-11-13T23:20:45",
+      "engine": "whisper",
+      "media": {
+        "name": "Jap_test.mp4",
+        "bytes": 2091458850,
+        "duration_s": 830.229
+      },
+      "reference": {
+        "name": "Jap_test_perfect.srt",
+        "sha1": "dae63fe06d4eb766790d35ff89cb39cccca255ac",
+        "cues": 76,
+        "chars": 663
+      },
+      "env": {
+        "python": "3.12.2",
+        "torch": "2.15.0",
+        "transformers": "5.22.1",
+        "silero-vad": "6.2.3",
+        "numpy": "2.5.4"
+      },
+      "params": {
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": true,
+        "whisper.vad_threshold": 0.25,
+        "whisper.vad_speech_pad_ms": 250,
+        "whisper.vad_min_silence_ms": 200,
+        "whisper.vad_min_speech_ms": 80,
+        "whisper.vad_merge_gap_s": 0.3,
+        "whisper.vad_max_segment_s": 9.0,
+        "whisper.vad_min_speech_s": 0.08,
+        "whisper.cue_pad_s": 0.02,
+        "whisper.strip_nonverbal_edges": true,
+        "whisper.use_ctc_alignment": false,
+        "whisper.no_repeat_ngram_size": 5,
+        "whisper.repetition_penalty": 1.15
+      },
+      "run": {
+        "cues": 86,
+        "chars": 760,
+        "pending_qa": 85,
+        "elapsed_s": 136.41,
+        "peak_rss_mb": 4716.1,
+        "peak_mps_mb": 2134.6
+      },
+      "score": {
+        "reference_cues": 76,
+        "hypothesis_cues": 86,
+        "reference_chars": 663,
+        "hypothesis_chars": 680,
+        "cer": 0.098039,
+        "substitutions": 22,
+        "deletions": 13,
+        "insertions": 30,
+        "block_accuracy": 0.813494,
+        "missed_blocks": 9,
+        "max_cue_dur": 4.712,
+        "over_4_3s": 1,
+        "particle_start_cues": 0,
+        "aux_start_cues": 0
+      },
+      "onset_missing": {
+        "count": 2,
+        "items": [
+          {
+            "ref_start": 480.075,
+            "ref_text": "あー…すっごい…",
+            "hyp_start": 481.162,
+            "hyp_text": "…正解",
+            "lag_s": 1.087
+          },
+          {
+            "ref_start": 809.627,
+            "ref_text": "そんなに腰ビクつかせちゃって",
+            "hyp_start": 810.37,
+            "hyp_text": "に腰ビクつかせちゃって…",
+            "lag_s": 0.743
+          }
+        ]
+      },
+      "range": [
+        null,
+        null
+      ],
+      "id": "test1.whisper",
+      "note": "2026-11-13 用 tools/eval/run_clip.py 复采（.venv 解释器），与路线文档 §1 的数字一致。重跑前先用 --check-fixtures 核对素材指纹。"
+    },
+    {
+      "schemaVersion": 1,
+      "capturedAt": "2026-11-14T00:07:03",
+      "engine": "qwen",
+      "media": {
+        "name": "Jap_test.mp4",
+        "bytes": 2091458850,
+        "duration_s": 830.229
+      },
+      "reference": {
+        "name": "Jap_test_perfect.srt",
+        "sha1": "dae63fe06d4eb766790d35ff89cb39cccca255ac",
+        "cues": 76,
+        "chars": 663
+      },
+      "env": {
+        "python": "3.12.2",
+        "torch": "2.15.0",
+        "transformers": "5.22.1",
+        "silero-vad": "6.2.3",
+        "numpy": "2.5.4"
+      },
+      "params": {
+        "qwen.enable_loudnorm": true,
+        "qwen.use_alignment": true,
+        "qwen.vad_threshold": 0.3,
+        "qwen.vad_min_speech_ms": 100,
+        "qwen.vad_min_silence_ms": 200,
+        "qwen.vad_speech_pad_ms": 250,
+        "qwen.vad_onset_pad_ms": 400,
+        "qwen.merge_gap_s": 0.5,
+        "qwen.max_segment_s": 12.0,
+        "qwen.min_pause_s": 0.12,
+        "qwen.max_cue_dur": 4.3,
+        "qwen.max_cue_chars": 21,
+        "qwen.cue_pad_start_s": 0.2,
+        "qwen.cue_pad_end_s": 0.45,
+        "qwen.strip_nonverbal_edges": true
+      },
+      "run": {
+        "cues": 88,
+        "chars": 772,
+        "pending_qa": 7,
+        "elapsed_s": 63.57,
+        "peak_rss_mb": 1065.9,
+        "peak_mps_mb": 4504.5
+      },
+      "score": {
+        "reference_cues": 76,
+        "hypothesis_cues": 88,
+        "reference_chars": 663,
+        "hypothesis_chars": 701,
+        "cer": 0.122172,
+        "substitutions": 31,
+        "deletions": 6,
+        "insertions": 44,
+        "block_accuracy": 0.796016,
+        "missed_blocks": 9,
+        "max_cue_dur": 4.01,
+        "over_4_3s": 0,
+        "particle_start_cues": 0,
+        "aux_start_cues": 0
+      },
+      "onset_missing": {
+        "count": 0,
+        "items": []
+      },
+      "range": [
+        null,
+        null
+      ],
+      "id": "test1.qwen",
+      "note": "2026-11-13 用 .venv + run_clip 复采；2026-11-14 按 A/B 结论把 qwen 的 vad_onset_pad_ms 默认改成 400 后重采（CER 13.42%→11.47% / 12.97%→12.22%）。whisper 两条仍是默认 0 的第一遍结果。"
+    },
+    {
+      "schemaVersion": 1,
+      "capturedAt": "2026-11-13T23:22:55",
+      "engine": "whisper",
+      "media": {
+        "name": "Jap_test_2.mp4",
+        "bytes": 2313286869,
+        "duration_s": 918.059
+      },
+      "reference": {
+        "name": "Jap_test_2_perfect.srt",
+        "sha1": "4324b4c04e17cb2963d314526422ac4394c1eecf",
+        "cues": 79,
+        "chars": 872
+      },
+      "env": {
+        "python": "3.12.2",
+        "torch": "2.15.0",
+        "transformers": "5.22.1",
+        "silero-vad": "6.2.3",
+        "numpy": "2.5.4"
+      },
+      "params": {
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": true,
+        "whisper.vad_threshold": 0.25,
+        "whisper.vad_speech_pad_ms": 250,
+        "whisper.vad_min_silence_ms": 200,
+        "whisper.vad_min_speech_ms": 80,
+        "whisper.vad_merge_gap_s": 0.3,
+        "whisper.vad_max_segment_s": 9.0,
+        "whisper.vad_min_speech_s": 0.08,
+        "whisper.cue_pad_s": 0.02,
+        "whisper.strip_nonverbal_edges": true,
+        "whisper.use_ctc_alignment": false,
+        "whisper.no_repeat_ngram_size": 5,
+        "whisper.repetition_penalty": 1.15
+      },
+      "run": {
+        "cues": 104,
+        "chars": 1030,
+        "pending_qa": 75,
+        "elapsed_s": 128.22,
+        "peak_rss_mb": 4713.4,
+        "peak_mps_mb": 2134.6
+      },
+      "score": {
+        "reference_cues": 79,
+        "hypothesis_cues": 104,
+        "reference_chars": 872,
+        "hypothesis_chars": 947,
+        "cer": 0.154817,
+        "substitutions": 31,
+        "deletions": 15,
+        "insertions": 90,
+        "block_accuracy": 0.769676,
+        "missed_blocks": 13,
+        "max_cue_dur": 3.816,
+        "over_4_3s": 0,
+        "particle_start_cues": 0,
+        "aux_start_cues": 2
+      },
+      "onset_missing": {
+        "count": 3,
+        "items": [
+          {
+            "ref_start": 677.234,
+            "ref_text": "もうイキそうなの?",
+            "hyp_start": 677.786,
+            "hyp_text": "イキそうなの?",
+            "lag_s": 0.552
+          },
+          {
+            "ref_start": 851.773,
+            "ref_text": "いいよ　先生のお口にちょうだい",
+            "hyp_start": 852.818,
+            "hyp_text": "先生のお口にちょうだい",
+            "lag_s": 1.045
+          },
+          {
+            "ref_start": 911.212,
+            "ref_text": "今度はこっちで試してみる?",
+            "hyp_start": 911.98,
+            "hyp_text": "こっちで試してみる?",
+            "lag_s": 0.768
+          }
+        ]
+      },
+      "range": [
+        null,
+        null
+      ],
+      "id": "test2.whisper",
+      "note": "2026-11-13 用 tools/eval/run_clip.py 复采（.venv 解释器），与路线文档 §1 的数字一致。重跑前先用 --check-fixtures 核对素材指纹。"
+    },
+    {
+      "schemaVersion": 1,
+      "capturedAt": "2026-11-14T00:08:00",
+      "engine": "qwen",
+      "media": {
+        "name": "Jap_test_2.mp4",
+        "bytes": 2313286869,
+        "duration_s": 918.059
+      },
+      "reference": {
+        "name": "Jap_test_2_perfect.srt",
+        "sha1": "4324b4c04e17cb2963d314526422ac4394c1eecf",
+        "cues": 79,
+        "chars": 872
+      },
+      "env": {
+        "python": "3.12.2",
+        "torch": "2.15.0",
+        "transformers": "5.22.1",
+        "silero-vad": "6.2.3",
+        "numpy": "2.5.4"
+      },
+      "params": {
+        "qwen.enable_loudnorm": true,
+        "qwen.use_alignment": true,
+        "qwen.vad_threshold": 0.3,
+        "qwen.vad_min_speech_ms": 100,
+        "qwen.vad_min_silence_ms": 200,
+        "qwen.vad_speech_pad_ms": 250,
+        "qwen.vad_onset_pad_ms": 400,
+        "qwen.merge_gap_s": 0.5,
+        "qwen.max_segment_s": 12.0,
+        "qwen.min_pause_s": 0.12,
+        "qwen.max_cue_dur": 4.3,
+        "qwen.max_cue_chars": 21,
+        "qwen.cue_pad_start_s": 0.2,
+        "qwen.cue_pad_end_s": 0.45,
+        "qwen.strip_nonverbal_edges": true
+      },
+      "run": {
+        "cues": 92,
+        "chars": 954,
+        "pending_qa": 5,
+        "elapsed_s": 55.58,
+        "peak_rss_mb": 1101.2,
+        "peak_mps_mb": 4462.9
+      },
+      "score": {
+        "reference_cues": 79,
+        "hypothesis_cues": 92,
+        "reference_chars": 872,
+        "hypothesis_chars": 910,
+        "cer": 0.114679,
+        "substitutions": 36,
+        "deletions": 13,
+        "insertions": 51,
+        "block_accuracy": 0.795432,
+        "missed_blocks": 10,
+        "max_cue_dur": 3.89,
+        "over_4_3s": 0,
+        "particle_start_cues": 0,
+        "aux_start_cues": 0
+      },
+      "onset_missing": {
+        "count": 1,
+        "items": [
+          {
+            "ref_start": 851.773,
+            "ref_text": "いいよ　先生のお口にちょうだい",
+            "hyp_start": 852.878,
+            "hyp_text": "先生のお口にちょうだい",
+            "lag_s": 1.105
+          }
+        ]
+      },
+      "range": [
+        null,
+        null
+      ],
+      "id": "test2.qwen",
+      "note": "2026-11-13 用 .venv + run_clip 复采；2026-11-14 按 A/B 结论把 qwen 的 vad_onset_pad_ms 默认改成 400 后重采（CER 13.42%→11.47% / 12.97%→12.22%）。whisper 两条仍是默认 0 的第一遍结果。"
+    }
+  ]
+}

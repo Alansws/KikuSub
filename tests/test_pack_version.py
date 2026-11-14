@@ -30,6 +30,13 @@ def test_build_app_reads_version_from_package_json():
     assert '"version": "$APP_VERSION"' in script, "装配产物应使用 $APP_VERSION 变量"
 
 
+def test_server_api_version_matches_package_json():
+    """`About` / 握手版本与 package.json 必须是同一个值，不能双写漂移。"""
+    from server import API_VERSION
+
+    assert API_VERSION == _version(PACKAGE_JSON)
+
+
 def test_package_lock_matches_package_json():
     """package-lock 根版本落后会导致 `npm ci` 报错，是发版翻车的常见来源。"""
     assert PACKAGE_LOCK.exists(), "缺少 desktop/package-lock.json"

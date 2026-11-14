@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
+import math
 import os
 import threading
 import unicodedata
@@ -45,7 +47,7 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 log = logging.getLogger(__name__)
 
-from silero_vad import get_speech_timestamps, load_silero_vad
+from silero_vad import load_silero_vad
 
 from .coverage import find_coverage_spans
 from .procutil import CommandCancelled
@@ -66,11 +68,14 @@ from .transcribe import (
     _split_overlong_single,
     chunk_level_stats,
     detect_device,
+    is_nonverbal_only,
+    strip_edge_nonverbal_ex,
+    detect_speech_stamps,
+    extend_segment_onsets,
     forbidden_cut_positions,
     load_audio_for_transcription,
     merge_vad_segments,
     split_text_into_cues,
-    vad_neg_threshold,
 )
 
 REPO_ID = "jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf"
@@ -424,14 +429,38 @@ def collapse_token_spans(label_list: list[int], n_ids: int) -> list[tuple[int, i
     return spans
 
 
-def _apply_pauses(costs: list[float], char_spans: list["AlignedChar"], pauses, min_pause: float) -> None:
+PAUSE_REWARD_PER_S = 2.0    # 每 1 秒静音，切分边界拿多少负成本（越大越愿意断）
+PAUSE_REWARD_CAP = 4.0      # 单条边界的奖励上限，防止长静音把一句话腰斩
+
+
+def _apply_pauses(
+    costs: list[float],
+    char_spans: list["AlignedChar"],
+    pauses,
+    min_pause: float,
+    *,
+    reward_per_s: float | None = None,
+    reward_cap: float | None = None,
+) -> None:
+    """把真实停顿的边界变成「奖励切分」而不是「可以切但没好处」。
+
+    旧行为是给 0 成本：DP 只有在超过 max_cue_dur 时才愿意付出 SEG_BASE_COST 去切，
+    结果人工版把「今日は…」「チラチラ見なくていいんだよ」分成两条，我们合成一条。
+    人工字幕的节奏就是「一口气说完就一条、换气就切」，所以停顿必须有实际收益；
+    奖励按停顿时长线性给，封顶之后不再涨（1 秒静音与 3 秒静音的断句价值是一样的）。
+    """
+    # 默认值在调用时取模块常量：直接写进函数默认参数会把它钉死在 import 时刻，
+    # 调参台（tune/qwen_replay.py）改全局也扫不动。
+    per_s = PAUSE_REWARD_PER_S if reward_per_s is None else float(reward_per_s)
+    cap = PAUSE_REWARD_CAP if reward_cap is None else float(reward_cap)
     for start, end in pauses:
-        if end - start < min_pause:
+        span = end - start
+        if span < min_pause:
             continue
         for i in range(1, len(char_spans)):
             if char_spans[i].start >= end and char_spans[i - 1].end <= start:
                 if 0.0 < costs[i] < BREAK_FORBIDDEN:
-                    costs[i] = BREAK_FREE
+                    costs[i] = -min(cap, per_s * span)
                 break
 
 
@@ -533,6 +562,9 @@ class AlignedChar:
     char: str
     start: float
     end: float
+    # 该字对应帧的 CTC 后验均值（log-prob）；插值补出来的字没有后验，记 NaN。
+    # 这是 P0-3 置信度诊断的原料：段均值会把单个错字稀释掉，逐字才能看见局部。
+    logprob: float = float("nan")
 
 
 @dataclass
@@ -546,27 +578,90 @@ class AlignmentResult:
 
 
 @dataclass
+class CueConfidence:
+    """一条字幕的可疑度特征（P0-3 诊断用，先不进 audit）。
+
+    `interp_chars` 是「没对齐上、靠插值补时间」的字数：那些字的时间是猜的，
+    文本是否正确与它无关，但整句的 `mean_logprob` 会被 NaN 排除掉，所以要单独记。
+    """
+
+    chars: int
+    interp_chars: int
+    mean_logprob: float
+    min_char_logprob: float
+    min_pair_logprob: float
+
+    def to_dict(self) -> dict:
+        return {
+            "chars": self.chars,
+            "interp_chars": self.interp_chars,
+            "mean_logprob": self.mean_logprob,
+            "min_char_logprob": self.min_char_logprob,
+            "min_pair_logprob": self.min_pair_logprob,
+        }
+
+
+def _cue_confidence(chars: list["AlignedChar"], group: list[int]) -> CueConfidence:
+    """按一条字幕里的字算置信度特征（纯函数，测试不加载模型）。
+
+    - `mean_logprob`：句内逐字后验的均值；
+    - `min_char_logprob`：最差的一个字；
+    - `min_pair_logprob`：连续两字均值的下限——局部 1–2 字错（同音、听反）在段均值里
+      被稀释，滑动窗口是最便宜的对症特征。
+    插值字（logprob 为 NaN）不参与均值，但计入 `interp_chars`。
+    """
+    lps = [chars[i].logprob for i in group]
+    finite = [value for value in lps if math.isfinite(value)]
+    if not finite:
+        return CueConfidence(
+            chars=len(lps),
+            interp_chars=len(lps),
+            mean_logprob=float("nan"),
+            min_char_logprob=float("nan"),
+            min_pair_logprob=float("nan"),
+        )
+    pairs = [(a + b) / 2 for a, b in zip(finite, finite[1:])]
+    return CueConfidence(
+        chars=len(lps),
+        interp_chars=len(lps) - len(finite),
+        mean_logprob=sum(finite) / len(finite),
+        min_char_logprob=min(finite),
+        min_pair_logprob=min(pairs) if pairs else min(finite),
+    )
+
+
+@dataclass
 class QwenCtcConfig:
     # 与 Whisper 侧保持一致（transcribe.VAD_THRESHOLD = 0.30）。两引擎共用同一套
     # Silero VAD 与合并逻辑，默认值分裂只会让「换个引擎结果差一截」无法归因。
     vad_threshold: float = 0.30
     vad_min_speech_ms: int = 100
     vad_min_silence_ms: int = 200
-    vad_speech_pad_ms: int = 150
+    vad_speech_pad_ms: int = 250
     merge_gap_s: float = 0.5
     min_speech_s: float = 0.08
     enable_loudnorm: bool = True
 
-    max_segment_s: float = 16.0
+    max_segment_s: float = 12.0
     max_cue_dur: float = 4.3
     soft_max_cue_dur: float = 3.8
     max_cue_chars: int = 21
     hard_max_cue_dur: float = 5.2
     min_pause_s: float = 0.12
     min_cue_dur: float = 0.35
-    cue_pad_start_s: float = 0.12
-    cue_pad_end_s: float = 0.12
+    # 与 Whisper 侧同名同义：模型会如实转写「んふふ」「えへへ」这类非台词发声，
+    # 人工整理版一律不留。Qwen 之前漏了这条，实测多出 19 条纯笑声字幕。
+    strip_nonverbal_edges: bool = True
+    cue_pad_start_s: float = 0.20
+    cue_pad_end_s: float = 0.45
     max_new_tokens: int = 440
+    # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
+    # 与 Whisper 侧同一条实现（transcribe.extend_segment_onsets），别在这里再写一份。
+    # 默认 400 与 core/params.py 的 `qwen.vad_onset_pad_ms` 保持一致：产品走参数表，
+    # 但测试与外部脚本常直接构造本 dataclass，两边默认值分裂过一次（见路线文档 P0-2）。
+    vad_onset_pad_ms: int = 400
+    # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
+    onset_gate: str = "none"
 
 
 def _char_times_in_span(
@@ -608,6 +703,8 @@ class QwenCtcEngine:
         self.last_coverage_spans: list[dict] = []
         self.last_segment_stats: dict = {}
         self.last_align_stats: dict = {}
+        # 与最近一次 transcribe_array 返回的 cues 一一对应（None = 该条没走对齐）。
+        self.last_cue_confidence: list[CueConfidence | None] = []
         self._last_truncated = False
         self._last_capped = False
         self._model = None
@@ -862,12 +959,16 @@ class QwenCtcEngine:
             pos = id_positions[k]
             if pos is None:
                 continue
+            lo = min(span[0], n_out - 1)
+            hi = min(span[1], n_out - 1)
+            frame_scores = scores[0][lo : hi + 1]
             chars.append(
                 AlignedChar(
                     pos=pos,
                     char=folded_text[pos],
-                    start=float(out_times[min(span[0], n_out - 1)]),
-                    end=float(out_times[min(span[1], n_out - 1)]),
+                    start=float(out_times[lo]),
+                    end=float(out_times[hi]),
+                    logprob=float(frame_scores.mean().item()) if frame_scores.numel() else float("nan"),
                 )
             )
         if not chars:
@@ -896,7 +997,8 @@ class QwenCtcEngine:
 
     def _cues_from_alignment(
         self, result: AlignmentResult, offset: float, folded: FoldedText, cfg: QwenCtcConfig
-    ) -> list[SubtitleCue]:
+    ) -> tuple[list[SubtitleCue], list[CueConfidence]]:
+        """把对齐结果切成字幕；同时给出与字幕**一一对应**的置信度特征。"""
         positions = [c.pos for c in result.chars]
         costs = _break_costs(folded, positions)
         _apply_pauses(costs, result.chars, result.pauses, cfg.min_pause_s)
@@ -905,6 +1007,7 @@ class QwenCtcEngine:
         )
 
         cues: list[SubtitleCue] = []
+        confidences: list[CueConfidence] = []
         spans: list[tuple[float, float, str, int, int]] = []
         for group in groups:
             if not group:
@@ -928,11 +1031,24 @@ class QwenCtcEngine:
             spans[i] = (start, min(end, spans[i + 1][0]), text, first_pos, tail)
 
         for i, (start, end, text, first_pos, tail) in enumerate(spans):
+            if cfg.strip_nonverbal_edges:
+                # 段首尾剔过了，但段**中间**的「ふふっ、」会被 DP 切到下一条的开头。
+                # 对齐时间不动（删的是发声，不是台词），只把文本再收一遍。
+                text = strip_edge_nonverbal_ex(text)[0]
+                if _is_blank(text):
+                    continue
+            # 同一条 DP 分组被二次切开时，几段共用这一组的特征（切分不改文本）。
+            group_conf = _cue_confidence(result.chars, groups[i])
             ceiling = spans[i + 1][0] if i + 1 < len(spans) else None
             if end - start < cfg.min_cue_dur:
                 wanted = start + cfg.min_cue_dur
                 end = wanted if ceiling is None else min(wanted, max(ceiling, start + MIN_CUE_DUR))
-            cue = SubtitleCue(start=round(max(0.0, start), 3), end=round(end, 3), text=text)
+            cue = SubtitleCue(
+                start=round(max(0.0, start), 3),
+                end=round(end, 3),
+                text=text,
+                confidence=group_conf.to_dict(),
+            )
             # DP 允许单条最长到 hard_max_cue_dur（5.2s），因此对齐路径也会产出
             # 超过 max_cue_dur 的条。这里用 CTC 逐字时间（D6 第一优先级）再切一刀：
             # 切点落在真实发声边界上，比按比例分配精确得多。
@@ -941,12 +1057,20 @@ class QwenCtcEngine:
                 pieces = _split_overlong_single(
                     cue.text, cue.start, cue.end, cfg.max_cue_dur, char_times=char_times,
                 )
-                cues.extend(
-                    SubtitleCue(start=round(a, 3), end=round(b, 3), text=t) for a, b, t in pieces
-                )
+                for a, b, piece in pieces:
+                    cues.append(
+                        SubtitleCue(
+                            start=round(a, 3),
+                            end=round(b, 3),
+                            text=piece,
+                            confidence=group_conf.to_dict(),
+                        )
+                    )
+                    confidences.append(group_conf)
             else:
                 cues.append(cue)
-        return cues
+                confidences.append(group_conf)
+        return cues, confidences
 
     def _cues_fallback(
         self,
@@ -986,19 +1110,21 @@ class QwenCtcEngine:
         self.last_segment_stats = {}
         self.last_align_stats = {}
         cfg = config or self.config
+        self.last_cue_confidence = []
         if progress_cb:
             progress_cb(0.06, "正在使用动态 VAD 切分语音段落…")
 
         speech_pad_ms = int(cfg.vad_speech_pad_ms)
-        stamps = get_speech_timestamps(
-            torch.from_numpy(audio),
+        # 分窗跑 VAD：整段一次跑会因 Silero 隐状态漂移漏掉整条台词，而这个文件
+        # 之前一直没跟 Whisper 侧的修复（detect_speech_stamps）。830s 耳语素材上
+        # 实测整段一次跑漏 19/77 条人工台词（含 461.8s 那段），分窗后 0 条。
+        stamps = detect_speech_stamps(
+            audio,
             self._vad,
-            sampling_rate=SAMPLE_RATE,
             threshold=float(cfg.vad_threshold),
-            min_speech_duration_ms=int(cfg.vad_min_speech_ms),
-            min_silence_duration_ms=int(cfg.vad_min_silence_ms),
+            min_speech_ms=int(cfg.vad_min_speech_ms),
+            min_silence_ms=int(cfg.vad_min_silence_ms),
             speech_pad_ms=speech_pad_ms,
-            neg_threshold=vad_neg_threshold(cfg.vad_threshold),
         )
         segments = merge_vad_segments(
             stamps,
@@ -1007,6 +1133,14 @@ class QwenCtcEngine:
             min_speech_s=cfg.min_speech_s,
             audio=audio,
             snap_stats=self.last_segment_stats,
+        )
+        # 与 Whisper 侧同一个实现：左扩在合并之后，`0` 时原样返回。
+        segments = extend_segment_onsets(
+            segments,
+            audio,
+            pad_ms=int(getattr(cfg, "vad_onset_pad_ms", 0) or 0),
+            gate=str(getattr(cfg, "onset_gate", "none") or "none"),
+            stats=self.last_segment_stats,
         )
         if not segments:
             # 与 Whisper 侧同一口径：VAD 未命中语音时不得把整段音频送模。
@@ -1024,6 +1158,7 @@ class QwenCtcEngine:
                 "interp_chars": 0,
                 "truncated": 0,
                 "capped_repeat": 0,
+                "nonverbal_skips": 0,
                 "spans": [],
             }
             return []
@@ -1036,6 +1171,7 @@ class QwenCtcEngine:
         interp_chars = 0
         truncated = 0
         capped_repeat = 0
+        nonverbal_skips = 0
         degraded: list[dict] = []
         total = len(segments)
         prev_text = ""
@@ -1059,6 +1195,14 @@ class QwenCtcEngine:
             text, audio_features = self._transcribe(
                 chunk, cfg, capture_audio=use_alignment
             )
+            # 句首尾的非台词发声（笑声/喘气）一律先剔掉再对齐：对齐是在 text 上做的，
+            # 剔在解码后等于让第一个真字的 CTC 时间当成字幕起点，边界自然收口，
+            # 不需要 Whisper 那套「按段内停顿挪边界」的后处理。
+            stripped_to_empty = False
+            if cfg.strip_nonverbal_edges and not _is_blank(text):
+                cleaned = strip_edge_nonverbal_ex(text)[0]
+                stripped_to_empty = _is_blank(cleaned)
+                text = cleaned
             if self._last_capped:
                 if self._last_truncated:
                     # 密度正常却撞上限 = 真被砍：按完整上限重跑一次，宁可慢也不吃字。
@@ -1085,12 +1229,26 @@ class QwenCtcEngine:
                 text, audio_features = self._transcribe(
                     _retry_gain(chunk), cfg, capture_audio=use_alignment
                 )
+                if cfg.strip_nonverbal_edges and not _is_blank(text):
+                    cleaned = strip_edge_nonverbal_ex(text)[0]
+                    stripped_to_empty = _is_blank(cleaned)
+                    text = cleaned
                 if not _is_blank(text) and _retry_suspicious(text, seg_dur_s, prev_text):
                     text, reason = "", "retry-suspicious"
-                elif _is_blank(text):
+                elif _is_blank(text) and not stripped_to_empty:
                     reason = "empty-after-retry"
 
             if _is_blank(text):
+                if stripped_to_empty or (
+                    cfg.strip_nonverbal_edges
+                    and text
+                    and is_nonverbal_only(text, seg_dur_s)
+                ):
+                    # 纯笑声/喘气段：删掉端点发声后什么都不剩，本来就不是台词，
+                    # 不该占一条字幕，也不该进「可能漏句」清单。
+                    nonverbal_skips += 1
+                    continue
+
                 self.last_missed_spans.append({
                     "start": round(offset, 3),
                     "end": round(offset + seg_dur_s, 3),
@@ -1103,17 +1261,16 @@ class QwenCtcEngine:
             prev_text = text
 
             if not use_alignment:
-                cues.extend(
-                    split_text_into_cues(
-                        text,
-                        seg_start=offset,
-                        seg_end=(end / SAMPLE_RATE) + time_offset,
-                        max_cue_dur=cfg.max_cue_dur,
-                        max_cue_chars=cfg.max_cue_chars,
-                        audio=chunk,
-                        sample_rate=SAMPLE_RATE,
-                    )
+                added = split_text_into_cues(
+                    text,
+                    seg_start=offset,
+                    seg_end=(end / SAMPLE_RATE) + time_offset,
+                    max_cue_dur=cfg.max_cue_dur,
+                    max_cue_chars=cfg.max_cue_chars,
+                    audio=chunk,
+                    sample_rate=SAMPLE_RATE,
                 )
+                cues.extend(added)
                 continue
             if audio_features is not None:
                 result = self._align_projected(
@@ -1125,7 +1282,10 @@ class QwenCtcEngine:
                 aligned += 1
                 align_chars += len(result.chars)
                 interp_chars += result.interpolated
-                cues.extend(self._cues_from_alignment(result, offset, FoldedText(text), cfg))
+                new_cues, _new_conf = self._cues_from_alignment(
+                    result, offset, FoldedText(text), cfg
+                )
+                cues.extend(new_cues)
             else:
                 if result.reason == "no-acoustic-chars":
                     noop += 1          # 纯符号文本，无需对齐，不计入降级率
@@ -1153,6 +1313,7 @@ class QwenCtcEngine:
             "interp_chars": interp_chars,
             "truncated": truncated,
             "capped_repeat": capped_repeat,
+            "nonverbal_skips": nonverbal_skips,
             "spans": degraded[:50],
         }
 
@@ -1161,6 +1322,7 @@ class QwenCtcEngine:
             progress_cb(0.95, f"正在整理字幕…{note}")
         cues.sort(key=lambda c: (c.start, c.end))
         final_cues = _dedupe(cues)
+        self.last_cue_confidence = [cue.confidence for cue in final_cues]
         if not self.last_interrupted and final_cues:
             try:
                 self.last_coverage_spans = find_coverage_spans(
@@ -1169,6 +1331,40 @@ class QwenCtcEngine:
             except Exception:
                 log.debug("覆盖审计失败（不影响转写）", exc_info=True)
         return final_cues
+
+    def unload(self) -> None:
+        """卸掉权重，把显存让给另一个引擎（P1-1 的「另一引擎听一遍」要换模型）。
+
+        与 `transcribe_file` 共用 `_LOAD_LOCK`：卸载过程中不能有另一条线程在加载/推理。
+        """
+        if self._model is None:
+            return
+        with _LOAD_LOCK:
+            self._model = None
+            self._processor = None
+            self._head = None
+            self._lookup = {}
+            self._frame_classes = ()
+            gc.collect()
+            if self.device == "mps":
+                try:
+                    torch.mps.empty_cache()
+                except Exception:  # noqa: BLE001 - 释放缓存失败不该阻断卸载
+                    log.debug("释放 MPS 缓存失败", exc_info=True)
+            log.info("Qwen 权重已卸载")
+
+    def transcribe_window(self, audio: np.ndarray, *, config: QwenCtcConfig | None = None) -> str:
+        """把**一段窗口音频**直接送模，返回文本（P1-1「另一引擎听一遍」用）。
+
+        与整片转写的区别只有「不跑 VAD / 不断句」；端点非台词发声照样剔，
+        否则两条引擎的文本不具可比性。
+        """
+        self.load()
+        cfg = config or self.config
+        text, _features = self._transcribe(np.ascontiguousarray(audio, dtype=np.float32), cfg)
+        if cfg.strip_nonverbal_edges:
+            text = strip_edge_nonverbal_ex(text)[0]
+        return text.strip()
 
     def transcribe_file(
         self,
@@ -1273,6 +1469,7 @@ def _heal_broken_cues(cues: list[SubtitleCue], max_merge_dur: float = 5.2) -> li
                     start=curr.start,
                     end=nxt.end,
                     text=curr_text + nxt_text,
+                    confidence=curr.confidence,
                 )
                 i += 1
         merged.append(curr)
@@ -1296,5 +1493,12 @@ def _dedupe(cues: list[SubtitleCue]) -> list[SubtitleCue]:
                     prev.end = round(start, 3)
                 else:
                     start = prev.end
-        out.append(SubtitleCue(start=round(start, 3), end=round(end, 3), text=text))
+                    # 起点被推到前一条的终点之后，终点必须跟着抬：
+                    # 否则会写出 end < start 的负时长条（实测「ねえ」2.500→2.480）。
+                    end = max(end, start + MIN_CUE_DUR)
+        out.append(
+            SubtitleCue(
+                start=round(start, 3), end=round(end, 3), text=text, confidence=cue.confidence
+            )
+        )
     return _heal_broken_cues(out)

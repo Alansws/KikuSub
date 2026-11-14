@@ -22,6 +22,9 @@
 | 2 | **svelte-check 清零并进 CI**：修掉 10 个存量类型错误 | 审计 P1-1；基线冻结在 `desktop/test/svelte-check-baseline.json` | `npm run check:svelte` 报 0 错，且成为 CI 的一步 |
 | 3 | **`popIn` 未定义**（`QaPanel.svelte:398`）：`in:popIn` 指向不存在的函数，编译后是全局查找，质检浮窗的进场动画是死的 | 2026-11-13 接入 svelte-check 时发现；用户确认"先不用修" | 选定一种动画（缩放/淡入/去掉指令）并手点验证浮窗开合 |
 | 4 | **本页与代码的对账**：`tests/test_docs_health.py` 只覆盖文档结构与链接，不覆盖"契约里的数字/常量 vs 代码" | 审计 P1-5 | 至少一条对账（例如 `HISTORY_LIMIT=50` 与契约里的"50 步"）能在不一致时红 |
+| 5 | **Anime Whisper 逐字对齐**：已做通用对齐层（`core/align_layer.py`，借 Qwen 的 acoustic-only CTC 头 + 人工文本）。实测单句段起点 p90 320ms / 终点 p90 477ms（去掉人工提前/停留的系统性偏移后），比原来的字符比例分配（p90 1.35s）好 4 倍，但**仍未达到 ±150ms**，所以只作为可选层 `whisper.use_ctc_alignment`（默认关，多常驻一份 Qwen 权重 5.1GB）；300s 窗口实测 CER 5.96% → 5.30%、起点 p90 0.934s → 0.745s、字幕时长中位 3.48s → 2.13s（人工 2.46s）
+| 7 | **双引擎复核与工作流重构**：[双引擎复核与工作流-需求-2026-11.md](双引擎复核与工作流-需求-2026-11.md)。R1 删批量复核入口、R3 第二版本进第二列做 diff、R4 双源 AI 润色、R5 导航按工作流重排；替代路线文档 P1-1 里「多选批量复核」的界面部分（接口保留） | 2026-11-14 产品讨论：批量复核没有实际用处；双引擎对照 + 双源润色才是重点 | 按需求稿 §4 的 S1–S4 分期验收；每阶段先过 `pytest -q` + `npm run check` + 手点 |
+| 6 | **日语引擎优化路线**：[docs/日语引擎优化路线-2026-11.md](日语引擎优化路线-2026-11.md)。**P0-2 评测台已入库**（`tools/eval/`：`run_clip.py` / `ab_onset.py` / `probe_window.py` / `baseline.json`）→ **P0-1 已完成：qwen 句首提前默认 400 ms**（Test 二 CER 13.42%→11.47%、句首缺字 5→1；whisper 实测 CER +1.61pt，**不启用**，记为负结果）→ P0-3a 已诊断（AUC <0.75，不上线）→ **P1-1 段一/段二已完成**（`kind="compare"` 只回文本；核对台「当前条目」与质检条目可发起复核），段三（多选批量）已完成；P1 = 第二引擎按需复核 / ForcedAligner spike / 专名词表 | 2026-11 两片实测：9 个句首缺字样本扩窗直送全部恢复；两引擎错误互补；`mean_logprob` 已算但未接质检 | 按文档 §4 各项验收；S1 结束先交 A/B scorecard，再决定后续。**注意**：评测数字只在同一解释器内可比（`.venv` 与 anaconda 的 silero-vad 5.1/6.2 不同，同片 CER 可差 2pt），卡片已记 `env` 指纹 |
 
 ## P2：存量债（能做则做）
 
@@ -49,6 +52,9 @@
 
 | 日期 | 项 | 提交 |
 | --- | --- | --- |
+| 2026-11-13 | FireRed 原生接 FireRedPunc 标点恢复（ONNX 162 MB，随引擎下载到 `punc/`）；无句读时在切字幕前补标点，中文分句加 soft-max（标点只晚几个字时把当前条放长，不硬切词） | 见 `git log` |
+| 2026-11-13 | 新增两个可选装中文引擎：SenseVoice-Small（230 MB，token 时间戳）与 FireRedASR2-AED（1.2 GB，无时间戳按字分时）；走 sherpa-onnx / ONNX / CPU，默认停用、权重按需下载；注册表 + `family` 分派让未知引擎不再静默退回 Whisper | 见 `git log` |
+| 2026-11-13 | 导入页「最近打开」支持图标画廊（列表 / 图标切换、偏好持久化、封面悬停浮层）；顺带修掉冷启动时缩略图请求早于握手、401 后永久消失的 bug | 见 `git log` |
 | 2026-11-13 | 归档过期 AI 开发文档、契约补齐 D-1～D-6 与 A1–A8、清理工作区 | `1767bb4` |
 | 2026-11-13 | 发版四步规范 + `preflight.sh` + CI `release-tag` + 分支模型（`main` 主线） | `cd772d5` |
 | 2026-11-13 | 主链路 e2e、`npm run check`（tsc）、svelte-check 基线、CI `desktop` job、`review.md` + PR 模板 | `2ba5712` `5fd25b0` `7132b41` |

@@ -20,7 +20,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .deps import get_session
 from .jobs import TERMINAL_EVENTS, JobConflict, JobManager, JobNotFound
@@ -30,11 +30,23 @@ from .sessions import Session
 router = APIRouter(tags=["jobs"])
 
 
+class CompareRange(BaseModel):
+    """一条要复核的字幕：时间窗 + 两侧邻句边界（服务端据此夹窗口）。"""
+
+    index: int | None = None
+    start: float
+    end: float
+    prev_end: float | None = None
+    next_start: float | None = None
+
+
 class TranscribeJobRequest(BaseModel):
     media_id: str
-    # transcribe=转写；proxy=压制 480p 监看代理（Chromium 解不开 MKV/HEVC 时用）
-    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy)$")
-    engine: str = Field(default="whisper", pattern="^(whisper|qwen)$")
+    # transcribe=转写；proxy=压制 480p 监看代理；compare=用另一个引擎把窗口重听一遍
+    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy|compare)$")
+    # 合法值来自 `core.engines` 注册表（见下方 validator）：不要在这里写死引擎名，
+    # 否则新增引擎会在请求层被 422 掉，而 pipeline/设置页都是正常的。
+    engine: str = "whisper"
     output_format: str = Field(default="SRT", pattern="^(SRT|VTT|TXT)$")
     save_beside: bool = False
     start: float | None = None
@@ -44,19 +56,78 @@ class TranscribeJobRequest(BaseModel):
     apply: str = Field(default="replace", pattern="^(replace|append|replace_range)$")
     # 引擎参数直接透传给 dataclass；字段名以 WhisperVadConfig / QwenCtcConfig 为准
     params: dict = Field(default_factory=dict)
+    # kind=compare 时用它；每条一个字幕窗口，最多 core.second_opinion.MAX_WINDOWS 条
+    ranges: list[CompareRange] = Field(default_factory=list)
+    # 整片转写且核对台非空时：true = 写进「双引擎复核」第二列，不覆盖核对台。
+    # 是否真的走第二列由服务端按「核对台非空 + apply=replace」再判一次。
+    alt_review: bool = False
+
+    @field_validator("engine")
+    @classmethod
+    def _known_engine(cls, value: str) -> str:
+        from core import engines
+
+        if value not in engines.KEYS:
+            raise ValueError(
+                f"未知的识别引擎：{value}（可选：{', '.join(engines.KEYS)}）"
+            )
+        return value
 
 
 def _manager(request: Request) -> JobManager:
     return request.app.state.jobs
 
 
+def _engine_config(engine_key: str, family: str, values: dict):
+    """按引擎族构造配置 dataclass。转写与复核共用这一份，避免两处默认值分裂。"""
+    # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要跑片时才付这个代价
+    from core import params as param_specs
+    from core.qwen_ctc import QwenCtcConfig
+    from core.sherpa_asr import SherpaAsrConfig
+    from core.transcribe import build_whisper_config
+
+    try:
+        if family == "qwen":
+            return QwenCtcConfig(**param_specs.config_kwargs("qwen", values))
+        if family == "sherpa":
+            return SherpaAsrConfig(**param_specs.config_kwargs(engine_key, values))
+        return build_whisper_config(**param_specs.config_kwargs("whisper", values))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"引擎参数不合法：{exc}") from exc
+
+
+def _compare_windows(payload: TranscribeJobRequest) -> list[dict]:
+    from core.second_opinion import MAX_WINDOWS, clamp_window
+
+    if not payload.ranges:
+        raise HTTPException(status_code=422, detail="复核需要至少一条字幕区间")
+    if len(payload.ranges) > MAX_WINDOWS:
+        raise HTTPException(
+            status_code=422, detail=f"一次最多复核 {MAX_WINDOWS} 条（收到 {len(payload.ranges)} 条）"
+        )
+    windows: list[dict] = []
+    for item in payload.ranges:
+        if item.end <= item.start:
+            raise HTTPException(status_code=422, detail="字幕区间的结束必须大于开始")
+        lo, hi = clamp_window(
+            item.start, item.end, prev_end=item.prev_end, next_start=item.next_start
+        )
+        windows.append(
+            {
+                "index": item.index if item.index is not None else len(windows),
+                "start": lo,
+                "end": hi,
+            }
+        )
+    return windows
+
+
 def _build_request(request: Request, payload: TranscribeJobRequest):
     # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
+    from core import engines as engine_registry
     from core import params as param_specs
     from core import pipeline
     from core import settings as settings_store
-    from core.qwen_ctc import QwenCtcConfig
-    from core.transcribe import WhisperVadConfig, build_whisper_config
 
     try:
         info = request.app.state.media.get(payload.media_id)
@@ -71,15 +142,18 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     # 参数键用 core.params 的规格键（whisper.vad_threshold 这种），
     # 与预设文件里的键天然一致；缺失补默认、越界夹紧都由 normalize 负责。
     values = dict(payload.params or {})
-    whisper_config: WhisperVadConfig | None = None
-    qwen_config: QwenCtcConfig | None = None
     try:
-        if payload.engine == "qwen":
-            qwen_config = QwenCtcConfig(**param_specs.config_kwargs("qwen", values))
-        else:
-            whisper_config = build_whisper_config(**param_specs.config_kwargs("whisper", values))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"引擎参数不合法：{exc}") from exc
+        family = engine_registry.family_of(payload.engine)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    config = _engine_config(payload.engine, family, values)
+    if family == "qwen":
+        whisper_config, qwen_config, sherpa_config = None, config, None
+    elif family == "sherpa":
+        whisper_config, qwen_config, sherpa_config = None, None, config
+    else:
+        whisper_config, qwen_config, sherpa_config = config, None, None
 
     extra = param_specs.passthrough_kwargs(payload.engine, values)
 
@@ -105,6 +179,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         keep_absolute_timeline=payload.keep_absolute_timeline,
         whisper_config=whisper_config,
         qwen_config=qwen_config,
+        sherpa_config=sherpa_config,
         no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
@@ -112,6 +187,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。
         write_audit=payload.apply != "replace_range",
+        param_values=dict(values),
     )
 
 
@@ -126,10 +202,36 @@ async def create_job(
 
     # 会话与媒体显式绑定：`/api/qa` 按媒体落盘，抢在转写前绑好，
     # 任务完成时才能把结果写回同一个会话。
-    session.media_id = payload.media_id
+    if payload.kind != "compare":
+        # 复核不改会话里的字幕，也就不应该把会话的「当前媒体」绑到这次请求上。
+        session.media_id = payload.media_id
 
     try:
-        if payload.kind == "proxy":
+        if payload.kind == "compare":
+            from core import engines as engine_registry
+
+            try:
+                info = request.app.state.media.get(payload.media_id)
+            except Exception as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            family = engine_registry.family_of(payload.engine)
+            if family not in {"whisper", "qwen"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"复核只支持 whisper / qwen；{payload.engine} 的权重是按需下载的",
+                )
+            values = dict(payload.params or {})
+            config = _engine_config(payload.engine, family, values)
+            job = manager.start_compare(
+                info.path,
+                payload.engine,
+                config,
+                _compare_windows(payload),
+                media_id=info.id,
+                session_id=session.id,
+                loop=loop,
+            )
+        elif payload.kind == "proxy":
             try:
                 info = request.app.state.media.get(payload.media_id)
             except Exception as exc:
@@ -141,8 +243,16 @@ async def create_job(
                 loop=loop,
             )
         else:
+            transcribe_request = _build_request(request, payload)
+            # 只有「整片覆盖 + 核对台已有稿」才允许写第二列；区间/追加任务
+            # 写第二列只会得到一份残缺的「整片稿」，所以服务端直接忽略。
+            transcribe_request.alt_review = bool(
+                payload.alt_review
+                and payload.apply == "replace"
+                and session.review_cues
+            )
             job = manager.start_transcribe(
-                _build_request(request, payload),
+                transcribe_request,
                 session=session,
                 apply=payload.apply,
                 session_id=session.id,

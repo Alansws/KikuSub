@@ -20,6 +20,10 @@ class SubtitleCue:
     start: float
     end: float
     text: str
+    # 置信度特征（P0-3 诊断用；只有 Qwen 的对齐路径会填，其余引擎恒为 None）。
+    # 挂在这条字幕上而不是平行列表里：`_dedupe` / `_heal_broken_cues` 会重建并合并
+    # 字幕对象，平行列表一旦被删条/合并就永久错位（2026-11-14 实测 89 vs 88）。
+    confidence: dict | None = None
 
 
 ELLIPSIS_ONLY_RE = re.compile(r"^[.…。]+$")
@@ -74,6 +78,28 @@ def is_ellipsis_only(text: str) -> bool:
 
 def remove_ellipsis_only_cues(cues: list[SubtitleCue]) -> list[SubtitleCue]:
     return [cue for cue in cues if not is_ellipsis_only(cue.text)]
+
+
+def join_cue_texts(parts: list[str]) -> str:
+    """合并字幕时拼文本：日文/中文直接相连，两侧都是西文单词时才补一个空格。
+
+    结构建议的 `merge` 与核对台的手工合并共用这一条规则；改拼接口径只改这里，
+    否则「手工合并」和「AI 结构建议合并」会产出两种文本。
+    """
+    out = ""
+    for raw in parts:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if not out:
+            out = text
+            continue
+        prev, nxt = out[-1], text[0]
+        if prev.isascii() and prev.isalnum() and nxt.isascii() and nxt.isalnum():
+            out += " " + text
+        else:
+            out += text
+    return out
 
 
 def parse_srt_timestamp(value: str) -> float:

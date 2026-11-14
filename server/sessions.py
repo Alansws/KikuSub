@@ -10,13 +10,16 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.subtitles import SubtitleCue
+from core.subtitles import SubtitleCue, join_cue_texts
+from core.textio import write_text_atomic
 
 # 可回溯历史：最多保留 50 步**操作**（另加一条「起始状态」）。
 # 统一历史把字幕、译文、质检、导出设置与 AI 草稿都算进来，20 步会显得很短。
@@ -36,24 +39,6 @@ def _copy(cues: list[SubtitleCue]) -> list[SubtitleCue]:
 def _copy_tracks(tracks: dict[str, "TranslationTrack"]) -> dict[str, "TranslationTrack"]:
     """译文轨快照：结构性编辑与撤销必须一起回滚，否则时间轴与译文会错位。"""
     return {lang: track.copy() for lang, track in tracks.items()}
-
-
-def _join_cue_texts(parts: list[str]) -> str:
-    """合并字幕时拼文本：日文/中文直接相连，两侧都是西文单词时才补一个空格。"""
-    out = ""
-    for raw in parts:
-        text = str(raw or "").strip()
-        if not text:
-            continue
-        if not out:
-            out = text
-            continue
-        prev, nxt = out[-1], text[0]
-        if prev.isascii() and prev.isalnum() and nxt.isascii() and nxt.isalnum():
-            out += " " + text
-        else:
-            out += text
-    return out
 
 
 # 每个语种独立保留多少步"上一次的译文"。译文不走 review_cues 的撤销栈（D-3），
@@ -102,6 +87,102 @@ class TranslationTrack:
             base=[str(t or "") for t in (data.get("base") or [])],
             created_at=float(data.get("created_at") or time.time()),
             entry=str(data.get("entry") or "in-app"),
+        )
+
+
+# --------------------------------------------------------------------------- 第二版本
+#
+# 第二引擎整片稿是**参考文档**，不是核对基线：它不进 50 步 history，也不允许
+# 在复核页直接改；采用哪一句永远回核对台做。但它必须按媒体身份落盘，否则
+# 「切到别的片再切回来」第二版就丢了（Q11）。
+
+ALT_REVIEW_VERSION = 1
+
+
+def media_cache_key(media_path: str | Path) -> str:
+    """媒体身份：绝对路径 + 文件大小 + mtime（文件不存在时只按路径）。"""
+    path = Path(str(media_path or "")).expanduser()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    try:
+        stat = resolved.stat()
+        fingerprint = f"{resolved}|{stat.st_size}|{int(stat.st_mtime_ns)}"
+    except OSError:
+        fingerprint = str(resolved)
+    return hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:16]
+
+
+def alt_cache_path(output_dir: str | Path, media_path: str | Path) -> Path:
+    """第二版边车文件：放在工作草稿缓存目录（output_dir），按媒体身份分段。"""
+    stem = Path(str(media_path or "")).stem or "subtitles"
+    key = media_cache_key(media_path)
+    return Path(output_dir) / f"{stem}.{key}.autosave_draft.alt.json"
+
+
+@dataclass
+class AltReview:
+    """一份第二引擎整片稿。``source`` 与 ``review_source`` 同构。"""
+
+    engine: str
+    cues: list[SubtitleCue]
+    source: dict = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    params: dict = field(default_factory=dict)
+    media_path: str = ""
+
+    def copy(self) -> "AltReview":
+        return AltReview(
+            engine=self.engine,
+            cues=_copy(self.cues),
+            source=dict(self.source),
+            created_at=self.created_at,
+            params=copy.deepcopy(self.params),
+            media_path=self.media_path,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "version": ALT_REVIEW_VERSION,
+            "engine": self.engine,
+            "cues": [
+                {"start": cue.start, "end": cue.end, "text": cue.text} for cue in self.cues
+            ],
+            "source": dict(self.source),
+            "created_at": self.created_at,
+            "params": copy.deepcopy(self.params),
+            "media_path": self.media_path,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AltReview | None":
+        if not isinstance(data, dict):
+            return None
+        raw_cues = data.get("cues")
+        if not isinstance(raw_cues, list):
+            return None
+        cues: list[SubtitleCue] = []
+        for item in raw_cues:
+            if not isinstance(item, dict):
+                return None
+            try:
+                cues.append(
+                    SubtitleCue(
+                        start=float(item.get("start") or 0.0),
+                        end=float(item.get("end") or 0.0),
+                        text=str(item.get("text") or ""),
+                    )
+                )
+            except (TypeError, ValueError):
+                return None
+        return cls(
+            engine=str(data.get("engine") or ""),
+            cues=cues,
+            source=dict(data.get("source") or {}),
+            created_at=float(data.get("created_at") or time.time()),
+            params=dict(data.get("params") or {}),
+            media_path=str(data.get("media_path") or ""),
         )
 
 
@@ -155,6 +236,10 @@ class Session:
     # 每个语种自己的撤回栈：只服务检查器里的「撤销译文」按钮（一次退回上一版），
     # 不再是全局 ⌘Z 的存储；全局撤销统一走 history 快照。
     translation_undo: dict[str, list[TranslationTrack]] = field(default_factory=dict)
+    # 第二引擎整片稿（参考文档，不进 history）。切换媒体时按边车文件恢复。
+    alt_review: AltReview | None = None
+    # 当前 alt_review 属于哪个媒体身份（media_cache_key）。空串表示没有同步过。
+    alt_review_key: str = ""
     # 当前媒体路径：撤销质检状态时要按它把 .qa.json 写回磁盘。
     media_path: str = ""
     # 质检队列的当前整份 payload（会话缓存）；随历史快照一起回滚。
@@ -563,15 +648,15 @@ class Session:
             merged = SubtitleCue(
                 start=span[0].start,
                 end=span[-1].end,
-                text=_join_cue_texts([cue.text for cue in span]),
+                text=join_cue_texts([cue.text for cue in span]),
             )
             self.review_cues[first:last + 1] = [merged]
             count = last - first + 1
             for track in self.translations.values():
                 texts = track.texts[first:last + 1]
                 bases = track.base[first:last + 1]
-                track.texts[first:last + 1] = [_join_cue_texts(texts)]
-                track.base[first:last + 1] = [_join_cue_texts(bases)]
+                track.texts[first:last + 1] = [join_cue_texts(texts)]
+                track.base[first:last + 1] = [join_cue_texts(bases)]
             self._drop_translation_undo()
             self._record(f"合并 {count} 条字幕")
             return first
@@ -588,8 +673,13 @@ class Session:
             self._record(label)
 
     def reset_for_media(self) -> None:
-        """换片：清空上一部片的所有字幕、译文、历史与来源，绝不串片。"""
+        """换片：清空上一部片的所有字幕、译文、历史与来源，绝不串片。
+
+        第二版稿只在**内存**里清掉；磁盘边车保留，切回原片时还能恢复。
+        """
         with self.lock:
+            self.alt_review = None
+            self.alt_review_key = ""
             self.review_cues = []
             self.latest_cues = []
             self.translations.clear()
@@ -601,6 +691,111 @@ class Session:
             self.history = []
             self.history_cursor = -1
             self.updated_at = time.time()
+
+    # -- 第二版本（alt_review）---------------------------------------------
+
+    def _reset_alt_memory(self) -> None:
+        self.alt_review = None
+        self.alt_review_key = ""
+
+    def sync_alt_review(
+        self,
+        *,
+        media_path: str,
+        output_dir: str | Path,
+        restore: bool = True,
+    ) -> bool:
+        """切媒体时的第二版同步：先清内存，再尝试恢复新城媒体的边车。
+
+        返回是否发生了「媒体身份变化」（调用方据此决定要不要刷新界面）。
+        同一个媒体重复调用是幂等的，不会把刚写进内存的第二版冲掉。
+        """
+        path = str(media_path or "")
+        key = media_cache_key(path)
+        with self.lock:
+            if key == self.alt_review_key:
+                return False
+            self._reset_alt_memory()
+            self.alt_review_key = key
+            if not restore:
+                return True
+            cache = alt_cache_path(output_dir, path) if path else None
+            if cache is not None and cache.exists():
+                data = _load_alt_file(cache)
+                alt = AltReview.from_dict(data) if data else None
+                if alt is not None:
+                    alt.media_path = path
+                    self.alt_review = alt
+            return True
+
+    def set_alt_review(
+        self,
+        *,
+        engine: str,
+        cues: list[SubtitleCue],
+        source: dict | None = None,
+        params: dict | None = None,
+        media_path: str = "",
+        output_dir: str | Path,
+    ) -> AltReview:
+        """写入第二版并立刻落盘（边车文件），核对台一个字都不动。"""
+        with self.lock:
+            alt = AltReview(
+                engine=str(engine or ""),
+                cues=_copy(cues),
+                source=dict(source or {}),
+                created_at=time.time(),
+                params=copy.deepcopy(params or {}),
+                media_path=str(media_path or ""),
+            )
+            self.alt_review = alt
+            self.alt_review_key = media_cache_key(media_path) if media_path else ""
+            if media_path:
+                target = alt_cache_path(output_dir, media_path)
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    write_text_atomic(
+                        target, json.dumps(alt.to_dict(), ensure_ascii=False, indent=2) + "\n"
+                    )
+                except OSError:
+                    # 落盘失败不能影响本次转写结果：内存里仍然可用，下次转写会再写。
+                    pass
+            self.updated_at = time.time()
+            return alt
+
+    def clear_alt_review(
+        self,
+        *,
+        media_path: str = "",
+        output_dir: str | Path = "",
+        remove_cache: bool = True,
+    ) -> bool:
+        """丢弃第二版：内存必清，磁盘边车默认一起删（下次切回不再出现）。"""
+        with self.lock:
+            existed = self.alt_review is not None
+            self._reset_alt_memory()
+            if remove_cache and media_path and output_dir:
+                target = alt_cache_path(output_dir, media_path)
+                try:
+                    if target.exists():
+                        target.unlink()
+                except OSError:
+                    pass
+            self.updated_at = time.time()
+            return existed
+
+    def alt_review_summary(self) -> dict:
+        with self.lock:
+            alt = self.alt_review
+            if alt is None:
+                return {"exists": False, "count": 0, "engine": "", "source": {}, "created_at": 0}
+            return {
+                "exists": True,
+                "engine": alt.engine,
+                "count": len(alt.cues),
+                "source": dict(alt.source),
+                "created_at": alt.created_at,
+            }
 
     # -- 译文轨 -------------------------------------------------------------
 
@@ -692,6 +887,18 @@ class Session:
         if track is None:
             return []
         return stale_indices(self.review_cues, track.base)
+
+
+def _load_alt_file(path: Path) -> dict | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 class SessionStore:

@@ -25,6 +25,7 @@ def align_model_srt(
     cues,
     *,
     reject_hint: str = "漏翻",
+    scope_label: str = "",
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """把模型回吐的 SRT 对齐成 ``[(before, after)]``。
 
@@ -35,8 +36,9 @@ def align_model_srt(
     if not parsed:
         raise client.AiError("没有从粘贴内容里解析到字幕：确认贴的是完整 SRT（含序号与时间戳）")
     if len(parsed) != len(cues):
+        scope = f"{scope_label}，" if scope_label else ""
         raise client.AiError(
-            f"条数对不上：解析到 {len(parsed)} 条，当前字幕 {len(cues)} 条。"
+            f"{scope}条数对不上：解析到 {len(parsed)} 条，期望 {len(cues)} 条。"
             f"常见原因是模型合并/拆分了句子或{reject_hint}——请让它按原序号逐条输出"
         )
 

@@ -33,6 +33,8 @@ class TemplateCreate(BaseModel):
     name: str = Field(default="新模板", max_length=60)
     description: str = Field(default="", max_length=200)
     content: str = Field(min_length=1, max_length=prompt_store.MAX_CONTENT)
+    # polish_single / polish_dual / translate；缺省按翻译（旧客户端兼容）
+    category: str = prompt_store.DEFAULT_CATEGORY
 
 
 def settings_path_for(request: Request) -> Path:
@@ -62,6 +64,7 @@ def create_prompt(payload: TemplateCreate, request: Request) -> dict:
             payload.name,
             payload.content,
             payload.description,
+            category=prompt_store.normalize_category(payload.category),
             path=prompts_path_for(request),
         )
     except ValueError as exc:
@@ -89,14 +92,19 @@ def update_prompt(template_id: str, payload: TemplatePatch, request: Request) ->
 
 
 @router.post("/api/prompts/{template_id}/select")
-def select_prompt(template_id: str, request: Request) -> dict:
+def select_prompt(template_id: str, request: Request, category: str = "") -> dict:
     library = prompt_store.load_library(path=prompts_path_for(request))
     try:
         saved = prompt_store.set_selected(
-            library, template_id, path=prompts_path_for(request)
+            library,
+            template_id,
+            category=category,
+            path=prompts_path_for(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="模板不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**saved, "path": str(prompts_path_for(request))}
 
 

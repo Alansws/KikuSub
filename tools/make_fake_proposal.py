@@ -3,7 +3,7 @@
 
 M1 的验收要求「手写一份提案 → 双栏对照 → 应用」。几百条手写不现实，这个脚本
 按 `desktop/resources/skill/kikusub-subtitle/references/proposal.schema.json` 造一份**合法**提案，改动几条，
-并在 note 里写明「示例改动」，用来验证 AiView 的加载 / 采纳 / 应用 / ⌘Z 全链路。
+并在 note 里写明「示例改动」，用来验证润色页的加载 / 采纳 / 应用 / ⌘Z 全链路。
 
 改动内容是人为的，**不代表真实修正质量**；它只用来把界面点亮。
 
