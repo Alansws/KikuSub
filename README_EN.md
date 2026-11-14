@@ -78,7 +78,7 @@ Everything except the optional AI features is local inference.
 - **The QA panel no longer covers the picture**: it docks into a "QA" tab in the right inspector by default; click "pop out" when you want it beside the source, then drag/resize it, reset it, or dock it back.
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
 - **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
-- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 translate / ⌘7 export**.
+- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 re-segment / ⌘7 translate / ⌘8 export**.
 - Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
 **QA queue**

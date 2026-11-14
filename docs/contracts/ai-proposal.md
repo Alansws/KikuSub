@@ -212,3 +212,36 @@
   `DELETE /api/ai/structure`、`GET /api/ai/structure/prompt`（复制结构检查提示词）。
 - **纯函数**：解析/校验/冲突/原子应用都在 `core/ai_structure.py`；路由不得另写一份。
   用例：`tests/test_ai_structure.py`、`tests/test_server_structure.py`。
+
+#### 3.7.6 断句重排（整份换稿，2026-11）
+
+第三条车道，和上面两条**不共用文件、不共用应用路径**：
+
+| 车道 | 能改什么 | 落点 |
+| --- | --- | --- |
+| 润色提案（3.7.3） | 只换文本，条数与时间轴固定 1:1 | `apply_polish()` |
+| 结构建议（3.7.5） | 只改模型点名的几处（ops） | `apply_selected()` |
+| **断句重排** | 条数、切分、时间码、文字都能变 | `Session.replace_range()` |
+
+- **只收标准 SRT**（序号 + `-->` 时间码 + 文本）。纯文本一律 422「缺少时间码」——
+  **不做「按原稿重算时间轴」**：时间码就是模型给的，程序只体检、不替模型改数。
+- **体检不拦路**：重叠 / 倒序 / 超长（>9s 或 >24 字）/ 越界（分段时超出本段 ±1s）/
+  空白 / 与原稿完全一致，都只标注，允许照样应用。只有「不是一份字幕」（空、负数、
+  结束早于开始、超过 5000 条）才 422。
+- **应用锚点是原稿索引区间** `(from_index, to_index)`，不是模型给的时间边界：分段时
+  两段的交界由原稿的切法决定，模型的时间漂移不该误删邻段。分段计划在进页时算一次即
+  **冻结**，之后每段按「前面已覆盖段的条数差」平移（`currentRangeFor()`），段轨上的
+  `1–141` 不会自己跳数字。
+- **digest 守卫**：解析时服务端返回整表 `digest`（复用 `source_digest`），apply 必须
+  带上；对不上（原稿在解析后被改过）→ 409「请重新粘贴一次」，绝不错位覆盖。
+- **译文轨**：条数变化时旧轨无法逐条对齐，与 `replace_review()` 同口径——丢弃并在
+  响应里回报 `dropped_translations`，界面给一条轻提示；`⌘Z` 可整步退回。
+- **分段**：A+B 超过 600 条 / 6 万字才切（润色是 300 条），每段 150 条；短片一次跑完、
+  一次覆盖。分段覆盖只动本段，其余段原样保留。
+- **提示词**：`prompt_store` 的 `reshape_single` / `reshape_dual` 两个分类（内置模板
+  在 `core/prompts.py`），「只改几处」仍用 `ai_structure.build_prompt()`。两类模板
+  互不顶替：1:1 模板发去整份重写会得到一份不能应用的稿。
+- **接口**：`GET /api/ai/reshape/prompt`、`POST /api/ai/reshape/from-text`、
+  `POST /api/ai/reshape/apply`。纯函数（解析 / 体检 / 摘要）在 `core/reshape.py`，
+  区间替换在 `server/sessions.py`，路由不得另写一份。
+  用例：`tests/test_reshape.py`。

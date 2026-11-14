@@ -49,8 +49,8 @@ desktop/
         ├── lib/store.svelte.ts   状态与动作（runes）
         ├── components/       Sidebar / Toolbar / Inspector / StatusBar / Icon /
         │                     ParamPanel / QaPanel / FirstRun / QuitPrompt
-        └── views/            Import / Transcribe / Review / AiView / PromptView /
-                              ExportView / Report / Settings
+        └── views/            Import / Transcribe / Review / Dual / Polish /
+                              Reshape / Translate / Prompt / Export / Report / Settings
 ```
 
 ## 自截图（不打扰桌面）

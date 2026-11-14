@@ -44,7 +44,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 | 路径 | 职责 |
 | --- | --- |
-| `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 七视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
+| `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 八视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
 | `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
 | `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
 | `server/` | **服务层（FastAPI）**。`python -m server` 启动。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
@@ -75,7 +75,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 把界面键映射成引擎 dataclass 字段。新增引擎参数只改这里，前端不用动。 |
 | `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
 | `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |
-| `core/prompts.py` | 提示词模板库：三分类、`{{SRT_A}}` / `{{SRT_B}}` 等占位符、原子读写。 |
+| `core/prompts.py` | 提示词模板库：五分类、`{{SRT_A}}` / `{{SRT_B}}` 等占位符、原子读写。 |
 | `server/routes_prompts.py` | 提示词模板接口：`/api/prompts`（读取/新建/改/选中/删除/恢复内置）。 |
 | `core/video_export.py` | 成片导出：探测、分辨率/码率规划、Pillow 字幕精灵 + ffmpeg crop/overlay 硬字幕、软字幕/仅封装。 |
 | `server/routes_export.py` | 成片导出接口：`/api/export/options`、`/api/export/plan`、`/api/export`。 |
@@ -90,7 +90,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | --- | --- | --- |
 | 核对台交互、字幕块聚合、选区、时间线缩放、主题令牌、历史、查找替换、TTS | [docs/contracts/review-console.md](docs/contracts/review-console.md) | 单击/框选阈值、50 步统一历史、`duration/69` 缩放、主题覆盖块、选区 clamp |
 | 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关 | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关 |
-| AI 提案 / 双源 / 结构建议 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
+| AI 提案 / 双源 / 结构建议 / 断句重排 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
 | 提示词模板、成片导出、手动代理、媒体 Range | [docs/contracts/export-and-prompt.md](docs/contracts/export-and-prompt.md) | 导出设置必须走 `setExport*`、代理写 `*.part.mp4` 再 rename |
 | 参数规格、预设、引擎绑定 | [docs/contracts/params-and-presets.md](docs/contracts/params-and-presets.md) | 保存/载入都必须带引擎、跨引擎 409、种子预设 = 当前默认值 |
 | 想理解「为什么这么定规矩」/接手这套流程 | [docs/contracts/engineering-practice.md](docs/contracts/engineering-practice.md) | 五类失控的对照、五道护栏落点、规则→测试的三级升级、多模型协作 |
