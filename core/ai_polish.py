@@ -430,7 +430,9 @@ def proposal_from_srt(
             "i": idx,
             "before": source_texts[idx - 1],
             "after": after_texts[idx - 1],
-            "note": "手动粘贴" if after_texts[idx - 1] != source_texts[idx - 1] else "",
+            # 外部模型只回吐 SRT，没有「修改理由」；不要每行都写「手动粘贴」冒充理由。
+            # 来源由提案的 entry=manual / model=manual-paste 表达。
+            "note": "",
         }
         for idx in range(1, total + 1)
     ]

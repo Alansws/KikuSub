@@ -480,8 +480,41 @@ def test_from_srt_builds_polish_proposal(ctx):
     assert body["count"] == len(TEXTS)
     assert body["proposal"]["kind"] == "polish"
     assert [it["after"] for it in body["proposal"]["items"]] == TEXTS
+    # 手动粘贴没有逐条理由：note 全为空，来源只看 entry
+    assert body["proposal"]["entry"] == "manual"
+    assert all(it["note"] == "" for it in body["proposal"]["items"])
     # 只解析，不改字幕
     assert _texts(client) == TEXTS
+
+
+def test_pasted_polish_proposal_can_be_applied_inline(ctx):
+    """前端把解析结果随 apply 一起带上时，不依赖磁盘上已有提案文件。"""
+    client, path = ctx
+    changed_srt = SRT_POLISHED.replace("今日は雨だ", "今日は飴だ")
+    proposal = client.post(
+        "/api/ai/from-srt",
+        headers=AUTH,
+        json={"kind": "polish", "lang": "", "text": changed_srt},
+    ).json()["proposal"]
+    assert not path.exists()
+
+    applied = client.post(
+        "/api/ai/apply",
+        headers=AUTH,
+        json={"kind": "polish", "proposal": proposal},
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["changed"] == 1
+    assert [c["text"] for c in applied.json()["cues"]] == [
+        "おはよう",
+        "今日は飴だ",
+        "行ってきます",
+    ]
+    # 时间码逐条不变
+    cues = client.get("/api/cues", headers=AUTH).json()["cues"]
+    assert [(c["start"], c["end"]) for c in cues] == [
+        (c["start"], c["end"]) for c in CUES
+    ]
 
 
 def test_pasted_proposal_can_be_applied(ctx):

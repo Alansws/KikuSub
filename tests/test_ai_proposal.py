@@ -115,6 +115,17 @@ def test_validate_warns_when_changed_without_note():
     assert any("没有写理由" in w for w in check.warnings)
 
 
+def test_validate_manual_entry_does_not_require_note():
+    """手动粘贴只有 SRT，没有理由；不能因此刷一串「没有写理由」。"""
+    data = proposal_for(
+        after=["おはよう", "今日は飴だ", "行ってきます"], entry="manual"
+    )
+    data["model"] = "manual-paste"
+    check = ap.validate_proposal(data, TEXTS)
+    assert check.ok
+    assert not any("没有写理由" in w for w in check.warnings)
+
+
 def test_validate_falls_back_on_empty_text():
     data = proposal_for(after=["おはよう", "", "行ってきます"])
     check = ap.validate_proposal(data, TEXTS)

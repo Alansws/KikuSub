@@ -195,6 +195,9 @@ def validate_proposal(
     warnings: list[str] = []
     effective: dict[int, str] = {}
     changed = 0
+    # 手动粘贴通道只有 SRT，没有修改理由；逐条提示「没有写理由」只会刷屏。
+    # 来源仍然由 entry=manual 表达，不靠每条的 note。
+    need_note = kind == "polish" and str(data.get("entry") or "") != "manual"
 
     for item in items:
         if not isinstance(item, dict):
@@ -216,7 +219,7 @@ def validate_proposal(
             warnings.append(f"第 {idx} 条：{note}")
         if text != texts[idx - 1]:
             changed += 1
-            if kind == "polish" and not str(item.get("note") or "").strip():
+            if need_note and not str(item.get("note") or "").strip():
                 warnings.append(f"第 {idx} 条改动了但没有写理由")
 
     missing = sorted(set(range(1, n + 1)) - seen)

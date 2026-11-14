@@ -170,6 +170,7 @@ def test_from_srt_maps_segment_by_order(srt):
     )
     assert [it["after"] for it in proposal["items"]] == ["おはよう", "今日は飴だ", "行ってきます"]
     assert any("回填" in w for w in warnings)
+    assert all(it["note"] == "" for it in proposal["items"])
 
 
 def test_from_srt_segment_count_mismatch_is_diagnosable():
