@@ -127,9 +127,15 @@ export function planAiSegments() {
     ai.segmentIndex = 0;
     return;
   }
-  ai.longMode = needsSegments(app.cues, dual.cues);
-  ai.segments = ai.longMode ? planSegments(app.cues, dual.cues) : [];
-  ai.segmentIndex = Math.min(ai.segmentIndex, Math.max(0, ai.segments.length - 1));
+  // 注意：这里刻意用局部变量算完后一次性写回。如果写成「先写 ai.segments、
+  // 再从 ai.segments.length 取上限」，调用方是 $effect 时就会自读自写同一份
+  // state，Svelte 5 会一直重跑这个 effect 到 effect_update_depth_exceeded，
+  // 表现是页面巨卡、点了分段按钮高亮不动。
+  const longMode = needsSegments(app.cues, dual.cues);
+  const segments = longMode ? planSegments(app.cues, dual.cues) : [];
+  ai.longMode = longMode;
+  ai.segments = segments;
+  ai.segmentIndex = Math.min(ai.segmentIndex, Math.max(0, segments.length - 1));
 }
 
 export function resetAi() {
