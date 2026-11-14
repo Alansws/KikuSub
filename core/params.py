@@ -271,9 +271,10 @@ SPECS: tuple[ParamSpec, ...] = (
         help="调大把相邻语音段合并成连贯大段送模。",
     ),
     ParamSpec(
-        "sensevoice.max_segment_s", "送模音频窗口 (s)", SENSEVOICE, "float", 16.0,
+        "sensevoice.max_segment_s", "送模音频窗口 (s)", SENSEVOICE, "float", 10.0,
         group="VAD", minimum=5.0, maximum=25.0, step=1.0, config_field="max_segment_s",
-        help="SenseVoice 适合 10–20 秒窗口；太长会明显变慢。",
+        help="实测 10s 一档在中文 vlog 上兼顾文本与切分（8–16s 的 CER 差在 0.5pt 噪声内）；"
+        "窗口越长越省时间，但段边界吃字的概率越高。",
     ),
     ParamSpec(
         "sensevoice.min_pause_s", "断句停顿 (s)", SENSEVOICE, "float", 0.20,
@@ -286,9 +287,10 @@ SPECS: tuple[ParamSpec, ...] = (
         help="调小字幕切换紧凑；调大长句整体展示。",
     ),
     ParamSpec(
-        "sensevoice.max_cue_chars", "单条最多字数", SENSEVOICE, "int", 18,
+        "sensevoice.max_cue_chars", "单条最多字数", SENSEVOICE, "int", 14,
         group="断句与字幕", minimum=8, maximum=35, step=1, config_field="max_cue_chars",
-        help="中文两行字幕通常 14–20 字；超出会按标点或停顿平滑折断。",
+        help="参考片作者字幕的中位长度是 10 字；14 字与它的 p90 对齐，切点优先落在标点/"
+        "停顿/词首，不会把「办理」劈成「办 / 理」。",
     ),
     ParamSpec(
         "sensevoice.cue_pad_s", "字幕前后留白 (s)", SENSEVOICE, "float", 0.10,
@@ -339,9 +341,10 @@ SPECS: tuple[ParamSpec, ...] = (
         help="该模型不输出逐字时间戳；合并得短一些，字幕时间轴更贴停顿。",
     ),
     ParamSpec(
-        "firered.max_segment_s", "送模音频窗口 (s)", FIRERED, "float", 14.0,
+        "firered.max_segment_s", "送模音频窗口 (s)", FIRERED, "float", 20.0,
         group="VAD", minimum=5.0, maximum=25.0, step=1.0, config_field="max_segment_s",
-        help="窗口越短、按字分时越准，但上下文更碎。",
+        help="该模型没有时间戳，窗口边界就是「按字分时」的边界；窗口太短时段首会被切掉"
+        "半个词（实测 10s / 14s / 20s 的 CER 是 6.45% / 6.31% / 5.91%），所以比 SenseVoice 长。",
     ),
     ParamSpec(
         "firered.min_pause_s", "断句停顿 (s)", FIRERED, "float", 0.24,
@@ -354,9 +357,15 @@ SPECS: tuple[ParamSpec, ...] = (
         help="调小字幕切换紧凑；调大长句整体展示。",
     ),
     ParamSpec(
-        "firered.max_cue_chars", "单条最多字数", FIRERED, "int", 18,
+        "firered.max_cue_chars", "单条最多字数", FIRERED, "int", 14,
         group="断句与字幕", minimum=8, maximum=35, step=1, config_field="max_cue_chars",
-        help="中文两行字幕通常 14–20 字；超出会按停顿平滑折断。",
+        help="与 SenseVoice 同口径：14 字对齐参考片作者节奏，切点优先标点/停顿/词首。",
+    ),
+    ParamSpec(
+        "firered.energy_align", "能量对齐（无时间戳时）", FIRERED, "bool", True,
+        group="断句与字幕", config_field="energy_align",
+        help="该模型不返回逐字时间。开启后用能量找停顿，把字铺在「有声区间」上，"
+        "字幕边界更贴发声；关闭则按整段均分（旧行为）。",
     ),
     ParamSpec(
         "firered.cue_pad_s", "字幕前后留白 (s)", FIRERED, "float", 0.10,

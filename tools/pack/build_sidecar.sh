@@ -49,6 +49,7 @@ rm -rf "$OUT/dist/$NAME"
   --collect-all sherpa_onnx \
   --hidden-import onnxruntime \
   --collect-all onnxruntime \
+  --collect-all jieba \
   --exclude-module matplotlib \
   --exclude-module tkinter \
   --distpath "$OUT/dist" \
