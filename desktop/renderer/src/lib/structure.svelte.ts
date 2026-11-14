@@ -106,12 +106,13 @@ export function closeStructurePanel() {
   structure.open = false;
 }
 
-export async function copyStructurePrompt(preferred?: 'single' | 'dual') {
+/** 复制结构检查提示词；返回是否真的复制成功（页面据此展开粘贴框）。 */
+export async function copyStructurePrompt(preferred?: 'single' | 'dual'): Promise<boolean> {
   if (!app.cues.length) {
     toast('当前没有可检查的字幕', 'warn');
-    return;
+    return false;
   }
-  if (structure.promptLoading) return;
+  if (structure.promptLoading) return false;
   structure.promptLoading = true;
   try {
     // 页面上的「源」开关优先；没传时退回旧行为（有第二版就吃双源）。
@@ -130,8 +131,10 @@ export async function copyStructurePrompt(preferred?: 'single' | 'dual') {
         ? `已复制结构检查提示词：${res.count} 条 A + ${res.alt_count} 条 B 参考`
         : `已复制结构检查提示词：${res.count} 条字幕`,
     );
+    return true;
   } catch (err) {
     toast((err as Error).message, 'error');
+    return false;
   } finally {
     structure.promptLoading = false;
   }

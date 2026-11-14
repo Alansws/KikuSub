@@ -68,15 +68,18 @@ def _span(session: Session, from_index: int, to_index: int | None) -> tuple[int,
     return start, end
 
 
-def _alt_block(session: Session, cues: list, start: int, end: int, full: bool) -> str:
+def _alt_block(session: Session, cues: list, start: int, end: int, full: bool) -> tuple[str, int]:
+    """B 参考稿的 SRT 片段 + 实际纳入了几条（界面上要显示这一段的参考条数，
+    不是整片条数——分段复制时写「参考 764 条」会让人以为整份 B 都塞进去了）。"""
     alt = session.alt_review
     if alt is None or not alt.cues:
-        return ""
+        return "", 0
     if full:
-        return ai_polish.srt_block(alt.cues)
+        return ai_polish.srt_block(alt.cues), len(alt.cues)
     t0 = cues[start - 1].start
     t1 = cues[end - 1].end
-    return ai_polish.srt_block(alt.cues, ai_polish.dual_context_cues(alt.cues, t0, t1))
+    indices = ai_polish.dual_context_cues(alt.cues, t0, t1)
+    return ai_polish.srt_block(alt.cues, indices), len(indices)
 
 
 @router.get("/api/ai/reshape/prompt")
@@ -103,7 +106,7 @@ def get_reshape_prompt(
     full = (start, end) == (1, total)
     indices = list(range(start - 1, end))
     srt_a = ai_polish.srt_block(cues, indices)
-    srt_b = _alt_block(session, cues, start, end, full) if mode == "dual" else ""
+    srt_b, alt_count = _alt_block(session, cues, start, end, full) if mode == "dual" else ("", 0)
     range_text = (
         f"这次只处理第 {start}–{end} 条（全片共 {total} 条）。"
         "输出里只保留这些条目的内容，不要带上其它段。"
@@ -144,7 +147,7 @@ def get_reshape_prompt(
         "mode": mode,
         "from": start,
         "to": end,
-        "alt_count": len(session.alt_review.cues) if session.alt_review else 0,
+        "alt_count": alt_count,
         "template_id": template["id"],
         "template_name": template["name"],
         "category": category,

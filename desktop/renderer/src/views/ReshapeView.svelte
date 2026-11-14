@@ -153,8 +153,12 @@
   }
 
   async function copyPrompt() {
-    if (reshape.mode === 'ops') await copyStructurePrompt(reshape.source);
-    else await copyReshapePrompt();
+    if (reshape.mode === 'ops') {
+      // 复制完直接把粘贴框打开：仓库里没有别的入口告诉用户「贴哪里」。
+      if (await copyStructurePrompt(reshape.source)) opsPasting = true;
+      return;
+    }
+    await copyReshapePrompt();
   }
 
   async function parsePaste() {
@@ -165,7 +169,10 @@
   async function applyDraft() {
     if (reshape.mode === 'ops') {
       const applied = await applyStructureOps();
-      if (applied) afterApply();
+      if (applied) {
+        opsPasting = false;
+        afterApply();
+      }
       return;
     }
     const ok = await applyReshapeDraft();
@@ -241,6 +248,16 @@
     const minutes = Math.floor((total % 3600) / 60);
     const seconds = total % 60;
     const body = `${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`;
+    return hours ? `${hours}:${body}` : body;
+  }
+
+  /** 段轨用的短时钟：`mm:ss`，超过一小时带小时位。 */
+  function shortClock(value: number): string {
+    const total = Math.max(0, Number(value) || 0);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = Math.floor(total % 60);
+    const body = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     return hours ? `${hours}:${body}` : body;
   }
 
@@ -346,7 +363,7 @@
 
     {#if reshape.mode === 'rewrite' && reshape.longMode}
       <span class="progress-title">已覆盖 {appliedCount()}/{reshape.segments.length} 段</span>
-    {:else if reshape.mode === 'rewrite' && app.cues.length}
+    {:else if app.cues.length}
       <span class="progress-title">{app.cues.length} 条</span>
     {/if}
   </div>
@@ -359,21 +376,21 @@
           class="rail-item"
           class:on={index === reshape.segmentIndex}
           class:done={state === 'done'}
-          style="flex: {Math.max(0.15, item.end - item.start)} 1 0"
           onclick={() => setSegment(index)}
           title={`第 ${item.count} 条 · 复制与粘贴都只作用于这一段`}
         >
           <span class="rail-no">{String(index + 1).padStart(2, '0')}</span>
           <span class="rail-body">
-            <span class="rail-count">{item.count} 条</span>
-            <span class="rail-time">{tcShort(item.start)}–{tcShort(item.end)}</span>
+            <!-- 已覆盖段显示覆盖后的条数（计划条数 + 这一段的增减），否则段轨会说谎 -->
+            <span class="rail-count"
+              >{item.count + (reshape.applied[segmentKey(item)]?.delta ?? 0)} 条</span
+            >
+            <span class="rail-time">{shortClock(item.start)}–{shortClock(item.end)}</span>
           </span>
           {#if state === 'done'}
-            <span class="rail-flag"><Icon name="check" size={11} /></span>
+            <span class="rail-flag done" title="已覆盖"><Icon name="check" size={11} /></span>
           {:else if state === 'ready'}
-            <span class="rail-flag ready">待覆盖</span>
-          {:else}
-            <span class="rail-flag">未开始</span>
+            <span class="rail-flag ready" title="已贴回，待覆盖">●</span>
           {/if}
         </button>
       {/each}
@@ -509,7 +526,13 @@
           <span class="chip" class:warn={note.level === 'warn'}>{note.text}</span>
         {/each}
         <div class="spacer"></div>
-        <button class="link" onclick={openPastePanel}>重新粘贴</button>
+        <button
+          class="link"
+          onclick={() => {
+            discardDraft();
+            openPastePanel();
+          }}
+        >重新粘贴</button>
       </div>
 
       <div class="draft-list">
@@ -714,8 +737,9 @@
     min-width: 0;
   }
   .rail-item {
-    flex: 0 1 auto;
-    min-width: 118px;
+    /* 按内容定宽、不按比例撑开：比例宽度在段数一多时必然溢出，把最后一格切掉更像 bug */
+    flex: 0 0 auto;
+    min-width: 112px;
     display: flex;
     align-items: center;
     gap: 7px;
@@ -778,16 +802,18 @@
     margin-left: auto;
     font-size: 11px;
     line-height: 16px;
-    color: var(--text-3);
     white-space: nowrap;
+    flex: 0 0 auto;
   }
-  .rail-item.done .rail-flag {
+  /* 状态用点/勾代替「未开始」三个字：段一多，文字会把每格撑得放不下 */
+  .rail-flag.done {
     color: var(--success);
     display: grid;
     place-items: center;
   }
   .rail-flag.ready {
     color: var(--accent);
+    font-size: 9px;
   }
 
   /* ---- 步骤：一眼看出现在走哪一步 ---- */

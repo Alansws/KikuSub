@@ -228,7 +228,10 @@ def test_prompt_dual_includes_reference_b(client: TestClient) -> None:
     )
     res = client.get("/api/ai/reshape/prompt?mode=dual", headers=HEADERS)
     assert res.status_code == 200, res.text
-    assert "今日は飴だ" in res.json()["prompt"]
+    data = res.json()
+    assert "今日は飴だ" in data["prompt"]
+    # 参考条数是「这一段实际纳入的 B」，不是整片条数
+    assert data["alt_count"] == 2
 
 
 def test_from_text_returns_diagnostics_and_digest(client: TestClient) -> None:
