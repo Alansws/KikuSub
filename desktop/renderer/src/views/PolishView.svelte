@@ -391,7 +391,7 @@
         class="paste-box struct-box"
         bind:value={structure.text}
         spellcheck="false"
-        placeholder={'{"ops":[{"op":"merge","from":3,"to":4,"text":"初めてのお客さんですねぇ","reason":"碎轴"},{"op":"retime","i":22,"start":85.829,"end":89.486}]}'}
+        placeholder={'粘贴外部模型返回的 {"ops": [...]} JSON；序号按当前字幕 1-based'}
       ></textarea>
       <div class="paste-actions">
         <button
