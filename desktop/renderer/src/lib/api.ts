@@ -968,12 +968,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({
         ...payload,
-        // 全局勾选只在区间任务上生效；整片转写即使误勾也不带这个字段。
-        separate_vocals:
-          payload.separate_vocals ??
-          (vocalSeparation.enabled && payload.start != null && payload.end != null
-            ? true
-            : undefined),
+        // 全局勾选对整片与区间都生效：整片由服务端按 0..总时长分离。
+        separate_vocals: payload.separate_vocals ?? (vocalSeparation.enabled || undefined),
       }),
     }),
 

@@ -15,6 +15,15 @@
     toast,
     tuning,
   } from '../lib/store.svelte';
+  import {
+    type ApplyMode,
+    applyChoices,
+    applyHint,
+    confirmDestructiveText,
+    isDestructiveChoice,
+    needsAbsoluteTimeline,
+    resolveApplyChoice,
+  } from '../lib/applyMode';
   import { altEngineLabel, deleteAltReview, dual, refreshAltReview } from '../lib/dualReview.svelte';
   import { parseTimeInput } from '../lib/time';
   import { vocalSeparation } from '../lib/vocalSeparation.svelte';
@@ -25,7 +34,12 @@
   let startText = $state('');
   let endText = $state('');
   let absolute = $state(true);
-  let applyMode = $state<'auto' | 'replace' | 'append'>('auto');
+  /**
+   * 「结果处理」不再是 自动/覆盖/追加 三选一：没有「自动」这一档，档位按
+   * 「这次是不是整片」变（区间多一档「替换选区」），默认值永远是不破坏已有
+   * 字幕的那个。判断与文案都在 `lib/applyMode.ts`，这里只存用户的选择。
+   */
+  let applyMode = $state<ApplyMode>('replace_range');
   let presetName = $state('');
   let picked = $state('');
   /** 核对台非空时的整片结果去向：覆盖第一版 / 放进第二列。 */
@@ -59,16 +73,32 @@
     const endCovers = end === null || end >= duration - 0.5;
     return startCovers && endCovers;
   });
-  const canChooseDest = $derived(app.cues.length > 0 && fullCover && applyMode !== 'append');
-  /** 人声分离只做区间：没有完整起止时间就不让勾。 */
+  /** 「结果处理」的档位表：整片两档，区间三档（见 lib/applyMode.ts 的文件头）。 */
+  const applyCtx = $derived({ fullCover, start: startText, end: endText });
+  const applyOptions = $derived(applyChoices(applyCtx));
+  /** 档位在当前范围下不成立时（如整片下的「替换选区」）退回该范围的默认档。 */
+  const effectiveApply = $derived(resolveApplyChoice(applyMode, applyCtx));
+  const applyHintText = $derived(applyHint(effectiveApply, applyCtx));
+  const destructive = $derived(isDestructiveChoice(effectiveApply, applyCtx));
+  /** 「替换选区」必须走原片绝对时间轴，否则新区间字幕会落到片头（见 applyMode.ts）。 */
+  const absoluteLocked = $derived(needsAbsoluteTimeline(effectiveApply));
+  const effectiveAbsolute = $derived(absoluteLocked ? true : absolute);
+  const canChooseDest = $derived(app.cues.length > 0 && fullCover && effectiveApply !== 'append');
+  /**
+   * 人声分离对整片 / 区间都生效：知道总时长（有媒体）或填了完整区间就能勾。
+   * 整片由服务端按 0..总时长分离；长片会自动分段，不再拦截。
+   */
   const canSeparate = $derived.by(() => {
     const start = parseTimeInput(startText);
     const end = parseTimeInput(endText);
-    return start !== null && end !== null && end > start + 0.2;
+    if (start !== null && end !== null && end > start + 0.2) return true;
+    return (app.media?.duration || 0) > 0;
   });
 
-  // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
+  // 核对台「同步到转写页」：把框选/⇧ 连选的区间带过来。nonce 变一次填一次，
   // 不能每次渲染都覆盖用户手输的内容。
+  // 带过来时把「结果处理」定到「替换选区」：用户同步一个区间过来，意图就是重做
+  // 这一段（40:20–44:24 的歌词段换引擎重听），不是把整张表冲掉。
   let seenSlice = 0;
   $effect(() => {
     const req = app.slice;
@@ -76,7 +106,7 @@
     seenSlice = req.nonce;
     startText = req.start;
     endText = req.end;
-    applyMode = 'auto';
+    applyMode = 'replace_range';
   });
 
   // 默认去向：引擎不同 → 第二列；引擎相同（含主稿来源未知）→ 覆盖。
@@ -121,9 +151,10 @@
   });
 
   function go() {
-    if (vocalSeparation.enabled && !canSeparate) {
-      toast('人声分离只对区间生效：请先填写起止时间', 'warn');
-      return;
+    // 区间任务里选「覆盖整片」会清掉区间外的全部字幕。这是用户报障过的那个坑
+    // （选覆盖 → 整张表只剩选区结果），破坏性动作必须显式确认一次。
+    if (destructive && app.cues.length > 0) {
+      if (!window.confirm(confirmDestructiveText(applyCtx))) return;
     }
     startTranscribe(
       {
@@ -131,8 +162,10 @@
         outputFormat,
         startText,
         endText,
-        absoluteTimeline: absolute,
-        apply: applyMode === 'auto' ? undefined : applyMode,
+        // 「替换选区」由 applyMode.ts 强制原片绝对时间轴：相对时间轴会让新区间
+        // 的字幕从 0 秒起编号，结果是选区旧句被删、新句子插到片头。
+        absoluteTimeline: effectiveAbsolute,
+        apply: effectiveApply,
         altReview: destination === 'alt' && fullCover,
       },
       parseTimeInput,
@@ -228,25 +261,44 @@
             <input class="mono" bind:value={endText} placeholder="片尾" />
           </div>
           <button class="btn ghost" onclick={fillFull} title="填入完整时长">全片</button>
-          <label class="check">
-            <input type="checkbox" bind:checked={absolute} />
+          <label
+            class="check"
+            title={absoluteLocked
+              ? '「替换选区」必须用原片绝对时间轴：相对时间轴会让新区间的字幕从 0 秒开始编号，插入位置就错了'
+              : '用原片时间轴编号，而不是从区间起点重新计时'}
+          >
+            <input
+              type="checkbox"
+              checked={effectiveAbsolute}
+              disabled={absoluteLocked}
+              onchange={(e) => (absolute = e.currentTarget.checked)}
+            />
             绝对时间轴
           </label>
         </div>
 
         <label>人声分离</label>
         <div class="sep-row">
-          <label class="check" title="只对已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用">
+          <label
+            class="check"
+            title="对整片或已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用。长片自动分段分离，单次长度不再设上限，代价是耗时随长度增长"
+          >
             <input
               id="sep"
               type="checkbox"
               bind:checked={vocalSeparation.enabled}
-              disabled={!canSeparate && !vocalSeparation.enabled}
+              disabled={!canSeparate}
             />
             强 BGM / 歌曲
           </label>
           <span class="hint">
-            {canSeparate ? '先分离区间人声再识别；换引擎重转复用缓存' : '先填写起止时间'}
+            {#if !canSeparate}
+              先导入媒体或填写起止时间
+            {:else if fullCover}
+              整片先分离人声再识别（长片自动分段）
+            {:else}
+              先分离区间人声再识别；换引擎重转复用缓存
+            {/if}
           </span>
         </div>
 
@@ -260,17 +312,18 @@
         <label for="apply">结果处理</label>
         <div class="apply-row">
           <div class="seg">
-            <button class:on={applyMode === 'auto'} onclick={() => (applyMode = 'auto')}>自动</button>
-            <button class:on={applyMode === 'replace'} onclick={() => (applyMode = 'replace')}>
-              覆盖
-            </button>
-            <button class:on={applyMode === 'append'} onclick={() => (applyMode = 'append')}>
-              追加
-            </button>
+            {#each applyOptions as opt (opt.key)}
+              <button
+                class:on={effectiveApply === opt.key}
+                class:danger-opt={opt.key === 'replace' && !fullCover}
+                onclick={() => (applyMode = opt.key)}
+                title={applyHint(opt.key, applyCtx)}
+              >
+                {opt.label}
+              </button>
+            {/each}
           </div>
-          <span class="hint">
-            {applyMode === 'auto' ? '整片覆盖核对台，区间去重后追加' : applyMode === 'replace' ? '用本次结果替换整张表' : '与现有时间轴合并去重'}
-          </span>
+          <span class="hint" class:warn-hint={destructive}>{applyHintText}</span>
         </div>
 
         {#if canChooseDest}
@@ -664,6 +717,15 @@
     flex: 1 1 140px;
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+  /* 「覆盖整片」在区间任务里是唯一会丢数据的档位：靠令牌给一点警示色，
+     让它在被点之前就与另外两档区分开（点下去还有一次确认）。 */
+  .seg button.danger-opt,
+  .seg button.danger-opt.on {
+    color: var(--warn);
+  }
+  .apply-row .hint.warn-hint {
+    color: var(--warn);
   }
   .alt-state {
     display: flex;

@@ -33,6 +33,7 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 
@@ -126,12 +127,14 @@ export const app = $state({
   jobMeta: null as null | {
     scope: 'full' | 'range';
     apply: 'replace' | 'append' | 'replace_range';
+    /** 谁发起的：转写页的区间任务完成后跳核对台，核对台的原地修正停在原处。 */
+    origin: 'transcribe' | 'review';
     start: number;
     end: number;
     label: string;
   },
 
-  /** 从核对台「填入转写」带过去的区间；nonce 变一次，转写页就填一次。 */
+  /** 从核对台「同步到转写页」带过去的区间；nonce 变一次，转写页就填一次。 */
   slice: null as null | { start: string; end: string; nonce: number },
 
   // 提示
@@ -2505,27 +2508,10 @@ export interface TranscribeOptions {
   startText: string;
   endText: string;
   absoluteTimeline: boolean;
-  /** 结果如何进入核对台。整片默认覆盖，区间默认追加。 */
+  /** 结果如何进入核对台；档位与文案见 `lib/applyMode.ts`。区间默认 `replace_range`。 */
   apply?: 'replace' | 'append' | 'replace_range';
   /** 整片且核对台非空时：true = 写进双引擎复核第二列，不覆盖核对台。 */
   altReview?: boolean;
-}
-
-function optimisticJob(stage: string): JobSnapshot {
-  return {
-    id: '',
-    kind: 'transcribe',
-    status: 'queued',
-    ratio: 0,
-    percent: 0,
-    stage,
-    error: '',
-    created_at: Date.now() / 1000,
-    started_at: 0,
-    finished_at: 0,
-    elapsed: 0,
-    result: null,
-  };
 }
 
 function engineEnabled(key: string): boolean {
@@ -2558,7 +2544,8 @@ export async function startTranscribe(
   const coversFull =
     (start === null || start <= 0.001) && (end === null || end >= duration - 0.5);
   const isRange = !coversFull;
-  const apply = opts.apply ?? (isRange ? 'append' : 'replace');
+  // 区间默认「替换选区」（删旧、写新、其余不动）；以前默认 append，区间重听会叠字幕。
+  const apply = opts.apply ?? (isRange ? 'replace_range' : 'replace');
 
   // 乐观态：请求本身可能因为服务端首次预热而慢一拍，
   // 但用户必须在 300ms 内看到反馈（规划 §5 指标 6）
@@ -2566,11 +2553,12 @@ export async function startTranscribe(
   app.jobMeta = {
     scope: isRange ? 'range' : 'full',
     apply,
+    origin: 'transcribe',
     start: start ?? 0,
     end: end ?? app.media.duration,
     label: isRange ? `${start ?? 0}s – ${end ?? '片尾'}` : '整片',
   };
-  app.job = optimisticJob('正在启动内核…');
+  app.job = optimisticTranscribeJob('正在启动内核…');
   logEvent('info', 'transcribe-start', `${opts.engine} | ${isRange ? 'range' : 'full'} | ${apply}`, {
     start,
     end,
@@ -2641,11 +2629,12 @@ export async function transcribeRange(args: {
   app.jobMeta = {
     scope: 'range',
     apply,
+    origin: 'review',
     start,
     end,
     label: args.label ?? `${start.toFixed(2)}s – ${end.toFixed(2)}s`,
   };
-  app.job = optimisticJob('正在识别选区…');
+  app.job = optimisticTranscribeJob('正在识别选区…');
   logEvent('info', 'transcribe-range', `${args.engine} | ${start.toFixed(2)}-${end.toFixed(2)} | ${apply}`, {
     label: args.label,
     params: { ...(tuning.values[args.engine] ?? {}) },
@@ -2815,16 +2804,17 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
       app.qaFillId = '';
       await qaAction({ id: fillId, action: 'mark', status: 'done', resolution: 'filled' });
     }
-    const saved = app.lastSavedPath ? '，已自动保存到导出文件夹' : '';
-    if (added && removed) {
-      toast(`局部转写完成：替换 ${removed} 条、新增 ${added} 条，时间轴共 ${total} 条${saved}`);
-    } else if (removed) {
-      toast(`局部转写完成：更新该区间 ${removed} 条，时间轴共 ${total} 条${saved}`);
-    } else if (added) {
-      toast(`局部转写完成：新增 ${added} 条，时间轴共 ${total} 条${saved}`);
-    } else {
-      toast(`局部转写完成：该区间已有相同字幕，时间轴共 ${total} 条${saved}`);
-    }
+    toast(
+      rangeDoneText({
+        origin: meta.origin,
+        added,
+        removed,
+        total,
+        saved: Boolean(app.lastSavedPath),
+      }),
+    );
+    // 转写页的区间任务要把用户带到核对台（结果只在那里）；核对台的原地修正不跳页。
+    if (meta.origin === 'transcribe') setView('review');
     return;
   }
 

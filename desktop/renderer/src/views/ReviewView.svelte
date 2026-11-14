@@ -54,7 +54,19 @@
   import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
-  import { cueIndexAtTime, indicesForLaneKeys, indicesInRange, laneKey, stepSelection } from '../lib/selection';
+  import {
+    type CueBlock,
+    cueBlockAtX,
+    cueDragTimes,
+    cueIndexAtTime,
+    deleteTargets,
+    indicesForLaneKeys,
+    indicesInRange,
+    keysInRange,
+    laneKey,
+    rangeSelection,
+    stepSelection,
+  } from '../lib/selection';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -119,6 +131,12 @@
   } | null>(null);
   /** 底部字幕轨道多选：存块 key（`start:end`），双语同区间算一块。 */
   let laneSelection = $state<string[]>([]);
+  /**
+   * ⇧ 连选的锚点行：最近一次普通单击 / ⌘ 单击的那一行。连选后**不移动**锚点，
+   * 这样连续按 ⇧ 调整终点时始终从同一句开始扩（和 Finder 一致）。
+   * 不用 `play.selected`：它会跟着播放头走，锚点会被播放悄悄改掉。
+   */
+  let rangeAnchor = -1;
   /** 只保留仍存在的块：整表被转写/导入替换后，旧 key 会让工具条卡住、行也不高亮。 */
   const multiKeys = $derived(laneSelection.filter((key) => app.cues.some((cue) => laneKey(cue) === key)));
   /** 「以此句音频新建音色」浮层：命名 + 可选参考文本。 */
@@ -798,8 +816,6 @@
   let panStartX = 0;
   let panStartView = 0;
 
-  type CueBlock = { key: string; start: number; end: number; indices: number[] };
-
   let cueDrag: {
     indices: number[];
     start: number;
@@ -871,38 +887,6 @@
   }
 
   /**
-   * 底部轨道上 x 处的字幕块。
-   * 双语 SRT 的日/中两行共享同一区间，必须作为一块整体移动；这里返回整块的下标。
-   */
-  function cueBlockAt(x: number): CueBlock | null {
-    const seen = new Set<string>();
-    let bestKey = '';
-    let bestSpan = Infinity;
-    for (const cue of app.cues) {
-      const key = `${cue.start}:${cue.end}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const x0 = xOf(cue.start);
-      const x1 = xOf(cue.end);
-      if (x < x0 - 1 || x > x1 + 1) continue;
-      const span = x1 - x0;
-      if (span < bestSpan) {
-        bestSpan = span;
-        bestKey = key;
-      }
-    }
-    if (!bestKey) return null;
-    const indices: number[] = [];
-    app.cues.forEach((cue, i) => {
-      if (`${cue.start}:${cue.end}` === bestKey) indices.push(i);
-    });
-    if (!indices.length) return null;
-    const first = app.cues[indices[0]];
-    return { key: bestKey, start: first.start, end: first.end, indices };
-  }
-
-
-  /**
    * ⌘ 单击选一块字幕（表格行 / 波形主体 / 底部轨道条共用）。
    *
    * 基准是「当前句」：用户已经选中第 3 句，⌘ 点第 4 句就是 {3,4}，不需要先 ⌘ 点在 3 上。
@@ -916,9 +900,30 @@
     laneSelection = step.keys;
     const first = step.kept ? i : indicesForLaneKeys(app.cues, step.keys)[0];
     const target = first >= 0 ? first : i;
+    rangeAnchor = i;
     play.selected = target;
     // 播放头也要过去：否则「按播放头同步当前行」的 effect 会把当前行抢回上一句。
     seek(app.cues[target].start + 0.02);
+    requestAnimationFrame(draw);
+  }
+
+  /**
+   * ⇧ 单击（表格行 / 底部轨道块共用）：从锚点到这一句整段连选（含两端），
+   * 并把时间选区设成「首块起点 → 末块终点」，方便在音轨上微调后同步到转写页。
+   * 不 seek：跟随模式下跟过去会把视窗从选中的这一大段上带走。
+   */
+  function rangeSelectTo(i: number): void {
+    const anchor =
+      rangeAnchor >= 0 && rangeAnchor < app.cues.length ? rangeAnchor : play.selected;
+    rangeAnchor = anchor;
+    const range = rangeSelection(app.cues, anchor, i);
+    if (!range) return;
+    laneSelection = range.keys;
+    selection = { start: range.start, end: range.end };
+    // 默认视窗是全片，长选区两端拖不住：只在选区比视窗宽时缩到刚好装下（不放大、不 seek）。
+    const span = range.end - range.start;
+    if (span > viewSpan) setView(range.start - Math.max(0.2, span * 0.06), span * 1.12);
+    play.selected = i;
     requestAnimationFrame(draw);
   }
 
@@ -967,26 +972,11 @@
     if (block.indices.length) play.selected = block.indices[0];
   }
 
-  const roundMs = (v: number) => Math.round(v * 1000) / 1000;
-
   function updateCueDrag(t: number) {
     const drag = cueDrag;
     if (!drag) return;
     const max = duration > 0 ? duration : Math.max(drag.end, t0());
-    let start = drag.start;
-    let end = drag.end;
-    const minDur = 0.05;
-    if (drag.edge === 'move') {
-      const dur = drag.end - drag.start;
-      start = Math.max(0, Math.min(Math.max(0, max - dur), drag.start + (t - drag.anchorT)));
-      end = start + dur;
-    } else if (drag.edge === 'start') {
-      start = Math.max(0, Math.min(drag.end - minDur, t));
-    } else {
-      end = Math.min(max, Math.max(drag.start + minDur, t));
-    }
-    start = roundMs(start);
-    end = roundMs(end);
+    const { start, end } = cueDragTimes(drag, t, max);
     if (drag.curStart === start && drag.curEnd === end) return;
     drag.curStart = start;
     drag.curEnd = end;
@@ -1040,7 +1030,7 @@
       return;
     }
     if (pt.y >= pt.h - RESIZE_H - LANE_H) {
-      const block = cueBlockAt(pt.x);
+      const block = cueBlockAtX(app.cues, pt.x, xOf);
       if (!block) {
         if (hoverKey) hoverKey = '';
         waveCursor = 'crosshair';
@@ -1097,15 +1087,21 @@
 
     // 3) 底部字幕轨道：拖块体移动整句，拖两端改时间戳
     if (pt.y >= pt.h - RESIZE_H - LANE_H) {
-      const block = cueBlockAt(pt.x);
+      const block = cueBlockAtX(app.cues, pt.x, xOf);
       if (block) {
-        // ⌘ 单击 = 多选（再按一次取消）；普通点击仍保持原来的拖动 / 跳转。
+        // ⌘ 单击 = 多选（再按一次取消）；⇧ 单击 = 从锚点连选。
         if (e.metaKey || e.ctrlKey) {
           metaSelect(block.indices[0]);
           dragMode = 'none';
           return;
         }
+        if (e.shiftKey) {
+          rangeSelectTo(block.indices[0]);
+          dragMode = 'none';
+          return;
+        }
         laneSelection = [block.key];
+        rangeAnchor = block.indices[0];
         beginCueDrag(e, block, pt.x);
         return;
       }
@@ -1167,11 +1163,13 @@
     if (!selection) return;
     if (dragMode === 'resize-l') {
       selection = { start: Math.min(t, selection.end - 0.05), end: selection.end };
+      if (laneSelection.length > 1) laneSelection = keysInRange(app.cues, selection.start, selection.end);
       dragMoved = true;
       return;
     }
     if (dragMode === 'resize-r') {
       selection = { start: selection.start, end: Math.max(t, selection.start + 0.05) };
+      if (laneSelection.length > 1) laneSelection = keysInRange(app.cues, selection.start, selection.end);
       dragMoved = true;
       return;
     }
@@ -1279,12 +1277,7 @@
       toast('当前没有可删除的字幕', 'warn');
       return;
     }
-    const fromLane = indicesForLaneKeys(app.cues, laneSelection);
-    const indices = fromLane.length
-      ? fromLane
-      : play.selected >= 0 && play.selected < app.cues.length
-        ? [play.selected]
-        : [];
+    const indices = deleteTargets(app.cues, laneSelection, play.selected);
     if (!indices.length) {
       toast('先在底部字幕轨道点选一条，⌘ 点击可以多选', 'warn');
       return;
@@ -1466,6 +1459,7 @@
 
   function selectCue(i: number, doSeek = true) {
     play.selected = i;
+    rangeAnchor = i;
     // 普通单击 = 单选。集合必须同步成 {这一句}，否则之后 ⌘ 点第二句只能得到一条。
     laneSelection = app.cues[i] ? [laneKey(app.cues[i])] : [];
     if (doSeek) seek(app.cues[i].start + 0.02);
@@ -1968,7 +1962,7 @@
     };
     app.view = 'transcribe';
     app.inspectorOpen = false;
-    toast('已把选区时间填入转写页，可直接开始局部转写');
+    toast('已把时间选区同步到转写页，可直接开始局部转写');
   }
 
   /** 用户正在输入框里打字时，不要自动改选中行，否则会把草稿换掉。 */
@@ -2533,9 +2527,14 @@
             class:row-cur={currentFind?.cue === i}
             class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
             data-i={i}
+            onmousedown={(e) => e.shiftKey && e.preventDefault()}
             onclick={(e) => {
               if (e.metaKey || e.ctrlKey) {
                 metaSelect(i);
+                return;
+              }
+              if (e.shiftKey) {
+                rangeSelectTo(i);
                 return;
               }
               selectCue(i);
@@ -2544,7 +2543,7 @@
             ondblclick={() => previewRange(cue.start, cue.end)}
             role="button"
             tabindex="-1"
-            title="单击跳转 · ⌘ 单击多选（可批量复核） · 双击试听"
+            title="单击跳转 · ⌘ 单击多选 · ⇧ 单击连选 · 双击试听"
           >
             <div class="c-idx">{i + 1}</div>
             <div class="c-t">{tcShort(cue.start)}</div>
