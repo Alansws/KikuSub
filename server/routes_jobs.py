@@ -58,6 +58,9 @@ class TranscribeJobRequest(BaseModel):
     params: dict = Field(default_factory=dict)
     # kind=compare 时用它；每条一个字幕窗口，最多 core.second_opinion.MAX_WINDOWS 条
     ranges: list[CompareRange] = Field(default_factory=list)
+    # 整片转写且核对台非空时：true = 写进「双引擎复核」第二列，不覆盖核对台。
+    # 是否真的走第二列由服务端按「核对台非空 + apply=replace」再判一次。
+    alt_review: bool = False
 
     @field_validator("engine")
     @classmethod
@@ -184,6 +187,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。
         write_audit=payload.apply != "replace_range",
+        param_values=dict(values),
     )
 
 
@@ -239,8 +243,16 @@ async def create_job(
                 loop=loop,
             )
         else:
+            transcribe_request = _build_request(request, payload)
+            # 只有「整片覆盖 + 核对台已有稿」才允许写第二列；区间/追加任务
+            # 写第二列只会得到一份残缺的「整片稿」，所以服务端直接忽略。
+            transcribe_request.alt_review = bool(
+                payload.alt_review
+                and payload.apply == "replace"
+                and session.review_cues
+            )
             job = manager.start_transcribe(
-                _build_request(request, payload),
+                transcribe_request,
                 session=session,
                 apply=payload.apply,
                 session_id=session.id,

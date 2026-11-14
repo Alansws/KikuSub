@@ -133,6 +133,11 @@ class TranscribeRequest:
     # 局部转写不该覆盖整片的质检队列：否则「重转这一句」会把用户刚核对完的
     # 待核进度全部冲掉。服务层在区间任务里置 False。
     write_audit: bool = True
+    # 双引擎：本次整片结果写入第二版（不覆盖核对台）。服务层只在「核对台非空 +
+    # 整片覆盖」时置 True；具体写内存/落盘由 server.jobs 负责。
+    alt_review: bool = False
+    # 本次任务的原始参数值（写进第二版边车，复核页展示「参数来源」）。
+    param_values: dict = field(default_factory=dict)
 
     @property
     def is_qwen(self) -> bool:

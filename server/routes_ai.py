@@ -67,12 +67,18 @@ class AiJobRequest(BaseModel):
     context_cues: int | None = None
     lang: str = "ja"
     dst_lang: str = ""
+    # polish 专用：single = 只吃 A；dual = 同时参考第二版 B（要求会话里有 alt_review）
+    mode: str = "single"
 
 
 class PasteSrtRequest(BaseModel):
     kind: str = "translate"
     lang: str = "zh-Hans"
     text: str = Field(min_length=1, description="从别处粘贴回来的完整 SRT")
+    # 长片分段粘贴：本段覆盖第 from_index..to_index 条（1 基、含两端）；缺省整片。
+    from_index: int = 1
+    to_index: int | None = None
+    mode: str = "single"
 
 
 class ImportRequest(BaseModel):
@@ -235,6 +241,13 @@ async def create_ai_job(
     dst_lang = (payload.dst_lang or "").strip()
     if kind == "translate" and not dst_lang:
         raise HTTPException(status_code=422, detail="翻译任务必须指定目标语种")
+    mode = (payload.mode or "single").strip().lower()
+    if mode not in ("single", "dual"):
+        raise HTTPException(status_code=422, detail=f"未知的润色模式：{payload.mode}")
+    if kind == "polish" and mode == "dual":
+        alt = session.alt_review
+        if alt is None or not alt.cues:
+            raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核")
 
     stem = _media_stem(request, session) or "subtitles"
     out_path = proposals.proposal_path(_output_dir(request), stem, kind, dst_lang)
@@ -272,6 +285,7 @@ async def create_ai_job(
             lang=(payload.lang or "ja").strip(),
             source_path="",
             out_path=out_path,
+            dual=(kind == "polish" and mode == "dual"),
             session_id=session.id,
             loop=asyncio.get_running_loop(),
         )
@@ -286,6 +300,9 @@ def get_manual_prompt(
     kind: str = "translate",
     lang: str = "zh-Hans",
     template_id: str = "",
+    mode: str = "single",
+    from_index: int = 1,
+    to_index: int | None = None,
     session: Session = Depends(get_session),
 ) -> dict:
     """「一键复制提示词」：把当前字幕整成 SRT 塞进所选模板，供用户粘到任意聊天窗。
@@ -297,34 +314,94 @@ def get_manual_prompt(
     cues = session.review_cues
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕")
-    srt = cues_to_srt(cues)
+    mode = (mode or "single").strip().lower()
+    if mode not in ("single", "dual"):
+        raise HTTPException(status_code=422, detail=f"未知的润色模式：{mode}")
+    alt = session.alt_review
+    if kind == "polish" and mode == "dual" and (alt is None or not alt.cues):
+        raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核")
+
+    total = len(cues)
+    start = max(1, int(from_index or 1))
+    end = total if to_index is None else min(total, int(to_index))
+    if start > end:
+        raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
+    span = (start, end)
+    full = span == (1, total)
     if kind == "polish":
         # 润色也支持「复制提示词 → 网页版模型 → 粘回来」；不绑定 AI 优化。
-        prompt = ai_polish.build_manual_prompt(srt)
+        indices = list(range(start - 1, end))
+        srt_a = ai_polish.srt_block(cues, indices)
+        srt_b = ""
+        if mode == "dual" and alt is not None:
+            if full:
+                srt_b = ai_polish.srt_block(alt.cues)
+            else:
+                t0 = cues[start - 1].start
+                t1 = cues[end - 1].end
+                b_indices = ai_polish.dual_context_cues(alt.cues, t0, t1)
+                srt_b = ai_polish.srt_block(alt.cues, b_indices)
+        range_text = (
+            f"本片段第 {start}–{end} 条（共 {total} 条）；只输出这些条目。"
+            if not full
+            else f"全片共 {total} 条。"
+        )
+        category = (
+            prompt_store.CATEGORY_POLISH_DUAL
+            if mode == "dual"
+            else prompt_store.CATEGORY_POLISH_SINGLE
+        )
+        prompt, template = prompt_store.render_prompt(
+            srt_a,
+            "",
+            template_id=template_id or None,
+            category=category,
+            srt_a=srt_a,
+            srt_b=srt_b,
+            range_text=range_text,
+            settings_path=settings_path(request),
+        )
+        if template is None:
+            # 提示词库异常时退回内置文案，绝不返回空提示词。
+            prompt = ai_polish.build_manual_prompt(
+                srt_a, srt_b=srt_b, range_hint=range_text, dual=(mode == "dual")
+            )
+            template = {"id": "builtin-polish", "name": "内置润色提示词", "category": category}
         return {
             "prompt": prompt,
-            "count": len(cues),
+            "count": end - start + 1,
+            "total": total,
             "lang": "",
             "chars": len(prompt),
-            "template_id": "builtin-polish",
-            "template_name": "内置润色提示词",
+            "mode": mode,
+            "from": start,
+            "to": end,
+            "template_id": template["id"],
+            "template_name": template["name"],
+            "category": category,
         }
-    store_path = settings_path(request)
+    srt = cues_to_srt(cues)
     prompt, template = prompt_store.render_prompt(
         srt,
         ai_translate.lang_name(lang),
         template_id=template_id or None,
-        settings_path=store_path,
+        category=prompt_store.CATEGORY_TRANSLATE,
+        settings_path=settings_path(request),
     )
     if template is None:
         raise HTTPException(status_code=500, detail="提示词库为空")
     return {
         "prompt": prompt,
         "count": len(cues),
+        "total": len(cues),
         "lang": lang,
         "chars": len(prompt),
+        "mode": "single",
+        "from": 1,
+        "to": len(cues),
         "template_id": template["id"],
         "template_name": template["name"],
+        "category": prompt_store.CATEGORY_TRANSLATE,
     }
 
 
@@ -342,14 +419,40 @@ def proposal_from_pasted_srt(
     cues = session.review_cues
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕")
+    mode = (payload.mode or "single").strip().lower()
+    if mode not in ("single", "dual"):
+        raise HTTPException(status_code=422, detail=f"未知的润色模式：{payload.mode}")
+    alt = session.alt_review
+    if kind == "polish" and mode == "dual":
+        if alt is None or not alt.cues:
+            raise HTTPException(status_code=409, detail="当前没有第二版字幕，无法做双源润色")
+    texts_b = [cue.text for cue in alt.cues] if (kind == "polish" and alt is not None) else None
+    start = max(1, int(payload.from_index or 1))
+    end = len(cues) if payload.to_index is None else min(len(cues), int(payload.to_index))
+    if start > end:
+        raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
     try:
         if kind == "polish":
-            proposal, warnings = ai_polish.proposal_from_srt(payload.text, cues)
+            proposal, warnings = ai_polish.proposal_from_srt(
+                payload.text,
+                cues,
+                from_index=start,
+                to_index=end,
+                texts_b=texts_b if mode == "dual" else None,
+            )
         else:
             proposal, warnings = ai_translate.proposal_from_srt(payload.text, cues, lang)
     except ai_client.AiError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"proposal": proposal, "warnings": warnings, "count": len(proposal["items"])}
+    return {
+        "proposal": proposal,
+        "warnings": warnings,
+        "count": len(proposal["items"]),
+        "mode": mode,
+        "from": start,
+        "to": end,
+        "expected": end - start + 1,
+    }
 
 
 @router.get("/api/ai/proposal")
@@ -369,7 +472,8 @@ def get_proposal(
             detail=f"还没有提案文件：{path.name}。先让 AI 生成，或从外部导入一份。",
         )
     texts = _current_texts(session)
-    check = proposals.validate_proposal(data, texts)
+    alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
+    check = proposals.validate_proposal(data, texts, alt_texts)
     return {
         "path": str(path),
         "proposal": data,
@@ -404,7 +508,8 @@ def save_proposal(
     if kind == "translate":
         data["dst_lang"] = data.get("dst_lang") or lang
 
-    check = proposals.validate_proposal(data, texts)
+    alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
+    check = proposals.validate_proposal(data, texts, alt_texts)
     if not check.ok:
         return _rejected(check)
 
@@ -461,7 +566,8 @@ def import_proposal(
     if kind == "translate":
         data["dst_lang"] = data.get("dst_lang") or lang
 
-    check = proposals.validate_proposal(data, texts)
+    alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
+    check = proposals.validate_proposal(data, texts, alt_texts)
     if not check.ok:
         return _rejected(check)
 
@@ -498,7 +604,8 @@ def apply_proposal(
         if data is None:
             raise HTTPException(status_code=409, detail="找不到提案文件，请先生成或导入一份")
 
-    check = proposals.validate_proposal(data, _current_texts(session))
+    alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
+    check = proposals.validate_proposal(data, _current_texts(session), alt_texts)
     if not check.ok:
         return _rejected(check)
 

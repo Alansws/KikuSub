@@ -354,6 +354,7 @@ class JobManager:
         lang: str,
         source_path: str,
         out_path: Path,
+        dual: bool = False,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
@@ -374,6 +375,7 @@ class JobManager:
                 "chunk_cues": chunk_cues,
                 "context_cues": context_cues,
                 "source_path": source_path,
+                "dual": bool(dual),
             },
             out_path,
         )
@@ -443,6 +445,10 @@ class JobManager:
                     on_progress=progress,
                 )
             else:
+                dual = bool(params.get("dual"))
+                alt = getattr(session, "alt_review", None) if dual else None
+                if dual and (alt is None or not alt.cues):
+                    raise ai_client.AiError("当前没有第二版字幕，无法做双源润色")
                 proposal, warnings = ai_polish.run_polish(
                     texts,
                     config,
@@ -452,6 +458,9 @@ class JobManager:
                     model=config.model,
                     entry="in-app",
                     source_path=str(params.get("source_path") or ""),
+                    texts_b=[cue.text for cue in alt.cues] if alt is not None else None,
+                    cues_a=list(getattr(session, "review_cues", []) or []),
+                    cues_b=list(alt.cues) if alt is not None else None,
                     cancel=job.token,
                     on_progress=progress,
                 )
@@ -472,6 +481,7 @@ class JobManager:
                 "chunks": int(proposal.get("chunks") or 1),
                 "warnings": list(warnings or [])[:5],
                 "pending_apply": True,
+                "mode": "dual" if params.get("dual") else "single",
             }
             if kind == "translate":
                 job.result["dst_lang"] = str(proposal.get("dst_lang") or "")
@@ -764,7 +774,10 @@ class JobManager:
             # 会话是服务端唯一真源：任务跑完必须把字幕写回去，否则前端
             # `/api/cues` 永远是空的（表现为「转写完成但核对台没有字幕」）。
             if session is not None:
-                job.result.update(self._apply_cues(session, request, result.cues, apply, job))
+                if getattr(request, "alt_review", False):
+                    job.result.update(self._apply_alt_review(session, request, result.cues, job))
+                else:
+                    job.result.update(self._apply_cues(session, request, result.cues, apply, job))
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             if engine_key:
@@ -841,6 +854,7 @@ class JobManager:
             if apply != "replace_range" and job is not None:
                 source = {
                     "kind": "transcription",
+                    "engine": str(getattr(request, "engine_key", "") or ""),
                     "name": Path(str(job_result.get("out_filename") or "")).name,
                     "path": str(job_result.get("out_path") or ""),
                     "job_id": job.id,
@@ -863,6 +877,46 @@ class JobManager:
                 "removed": max(0, before + len(fresh) - len(merged)),
                 # 这次应在核对台选中的第一条新字幕（0 基）；无结果时 None
                 "target_index": target_index,
+            }
+
+    def _apply_alt_review(self, session, request, cues, job=None) -> dict:
+        """把一次整片转写写进「双引擎复核」第二列，**核对台零改动**。
+
+        第二版按媒体身份落盘（sidecar），切走再切回会自动恢复；它不进 50 步
+        history——参考文档不是工作区状态。
+        """
+        from core.cues import _unique_sorted_cues
+
+        fresh = _unique_sorted_cues(cues)
+        job_result = getattr(job, "result", None) or {}
+        with session.lock:
+            source = {
+                "kind": "transcription",
+                "engine": str(getattr(request, "engine_key", "") or ""),
+                "name": Path(str(job_result.get("out_filename") or "")).name,
+                "path": str(job_result.get("out_path") or ""),
+                "job_id": job.id if job is not None else "",
+                "at": time.time(),
+                "apply": "alt_review",
+            }
+            media_path = session.media_path or str(getattr(request, "media_path", "") or "")
+            session.set_alt_review(
+                engine=str(getattr(request, "engine_key", "") or ""),
+                cues=fresh,
+                source=source,
+                params=dict(getattr(request, "param_values", {}) or {}),
+                media_path=media_path,
+                output_dir=self._output_dir,
+            )
+            return {
+                "applied": "alt_review",
+                "alt_review": True,
+                "alt_engine": str(getattr(request, "engine_key", "") or ""),
+                "alt_count": len(fresh),
+                "cue_count": len(session.review_cues),
+                "added": 0,
+                "removed": 0,
+                "target_index": None,
             }
 
     def _progress(self, job: JobRecord, ratio: float, stage: str) -> None:

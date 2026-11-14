@@ -27,6 +27,7 @@ from .config import ServerConfig
 from .jobs import JobManager
 from .media import MediaError, MediaStore
 from .routes_ai import router as ai_router
+from .routes_alt_review import router as alt_review_router
 from .routes_cues import router as cues_router
 from .routes_export import router as export_router
 from .routes_jobs import router as jobs_router
@@ -206,6 +207,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(session_router)
     app.include_router(settings_router)
     app.include_router(ai_router)
+    app.include_router(alt_review_router)
     app.include_router(translations_router)
     # 本机 TTS 的音频流走 /media/tts/*（?token= 鉴权），必须在 media 路由之后也不冲突
     app.include_router(tts_router)
