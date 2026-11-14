@@ -42,6 +42,7 @@ export type View =
   | 'review'
   | 'dual'
   | 'polish'
+  | 'reshape'
   | 'translate'
   | 'prompts'
   | 'export'

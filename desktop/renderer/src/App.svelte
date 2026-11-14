@@ -14,6 +14,7 @@
   import ReviewView from './views/ReviewView.svelte';
   import DualView from './views/DualView.svelte';
   import PolishView from './views/PolishView.svelte';
+  import ReshapeView from './views/ReshapeView.svelte';
   import TranslateView from './views/TranslateView.svelte';
   import ReportView from './views/ReportView.svelte';
   import PromptView from './views/PromptView.svelte';
@@ -375,6 +376,9 @@
       case 'view.polish':
         setView('polish');
         return;
+      case 'view.reshape':
+        setView('reshape');
+        return;
       case 'view.translate':
         setView('translate');
         return;
@@ -521,6 +525,8 @@
           <DualView />
         {:else if app.view === 'polish'}
           <PolishView />
+        {:else if app.view === 'reshape'}
+          <ReshapeView />
         {:else if app.view === 'translate'}
           <TranslateView />
         {:else if app.view === 'prompts'}

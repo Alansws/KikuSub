@@ -459,13 +459,18 @@ export async function copyPromptTemplateForCategory(id: string, category: Prompt
     return false;
   }
   const kind = category === 'translate' ? 'translate' : 'polish';
-  const mode: AiMode = category === 'polish_dual' ? 'dual' : 'single';
+  const mode: AiMode =
+    category === 'polish_dual' || category === 'reshape_dual' ? 'dual' : 'single';
   if (mode === 'dual' && !dual.exists) {
     toast('双源模板需要第二版字幕：先把另一引擎的稿放进双引擎复核', 'warn');
     return false;
   }
   try {
-    const res = await api.getAiPrompt(kind, ai.lang, id, { mode });
+    // 断句重排走自己的接口：它的提示词不是 1:1 提案，混用会把润色模板发出去。
+    const res =
+      category === 'reshape_single' || category === 'reshape_dual'
+        ? await api.getReshapePrompt(mode, 1, null, id)
+        : await api.getAiPrompt(kind, ai.lang, id, { mode });
     if (window.kikusub?.writeClipboard) {
       await window.kikusub.writeClipboard(res.prompt);
     } else if (navigator.clipboard) {

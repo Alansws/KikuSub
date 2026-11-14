@@ -84,8 +84,8 @@ export interface SettingsPayload {
 
 export interface PromptTemplate {
   id: string;
-  /** polish_single / polish_dual / translate；旧模板缺省按 translate。 */
-  category?: 'polish_single' | 'polish_dual' | 'translate';
+  /** polish_single / polish_dual / reshape_single / reshape_dual / translate；旧模板缺省按 translate。 */
+  category?: 'polish_single' | 'polish_dual' | 'reshape_single' | 'reshape_dual' | 'translate';
   name: string;
   description: string;
   content: string;
@@ -99,6 +99,8 @@ export interface PromptLibrary {
   selected: string;
   selected_polish_single: string;
   selected_polish_dual: string;
+  selected_reshape_single?: string;
+  selected_reshape_dual?: string;
   templates: PromptTemplate[];
   path: string;
 }
@@ -528,6 +530,67 @@ export interface StructureApplyPayload extends CueSnapshot {
   changed: number;
   applied: number;
   output_count: number;
+}
+
+/** 断句重排（整份换稿）：一条行内提示，`index` 是新稿里的 1-based 行号。 */
+export interface ReshapeIssue {
+  index: number;
+  kind: 'overlap' | 'out_of_order' | 'too_long' | 'too_short' | 'out_of_range' | 'empty_text';
+  label: string;
+}
+
+export interface ReshapeNote {
+  text: string;
+  level: 'plain' | 'warn';
+}
+
+export interface ReshapeDiagnostics {
+  count: number;
+  count_before: number;
+  chars: number;
+  span: { start: number; end: number };
+  issues: ReshapeIssue[];
+  totals: Record<string, number>;
+  identical: boolean;
+}
+
+/** 解析粘贴 SRT 的结果：整份新稿 + 体检 + 覆盖区间 + 源指纹。 */
+export interface ReshapeDraft {
+  format: 'srt';
+  cues: Cue[];
+  diagnostics: ReshapeDiagnostics;
+  notes: ReshapeNote[];
+  digest: string;
+  range: { from: number; to: number; start: number; end: number; full: boolean };
+}
+
+export interface ReshapeReplaceInfo {
+  from: number;
+  to: number;
+  replaced: number;
+  inserted: number;
+  count: number;
+  count_before: number;
+  changed: boolean;
+  dropped_translations: string[];
+}
+
+export interface ReshapeApplyPayload extends CueSnapshot {
+  replace: ReshapeReplaceInfo;
+}
+
+export interface ReshapePromptPayload {
+  prompt: string;
+  count: number;
+  total: number;
+  chars: number;
+  mode: 'single' | 'dual';
+  from: number;
+  to: number;
+  alt_count: number;
+  template_id: string;
+  template_name: string;
+  category: string;
 }
 
 export interface JobSnapshot {
@@ -1125,7 +1188,12 @@ export const api = {
     name: string;
     description?: string;
     content: string;
-    category?: 'polish_single' | 'polish_dual' | 'translate';
+    category?:
+      | 'polish_single'
+      | 'polish_dual'
+      | 'reshape_single'
+      | 'reshape_dual'
+      | 'translate';
   }) =>
     req<PromptLibrary & { created: string }>('/api/prompts', {
       method: 'POST',
@@ -1481,6 +1549,40 @@ export const api = {
     req<{ prompt: string; count: number; chars: number; mode: string; alt_count: number }>(
       `/api/ai/structure/prompt?mode=${mode}`,
     ),
+
+  // ---- 断句重排（整份换稿：条数与时间码都可变）----------------------------
+  getReshapePrompt: (
+    mode: 'single' | 'dual',
+    from = 1,
+    to: number | null = null,
+    templateId = '',
+  ) => {
+    const query = new URLSearchParams({
+      mode,
+      from_index: String(from),
+    });
+    if (to !== null) query.set('to_index', String(to));
+    if (templateId) query.set('template_id', templateId);
+    return req<ReshapePromptPayload>(`/api/ai/reshape/prompt?${query.toString()}`);
+  },
+
+  parseReshape: (text: string, from: number, to: number | null) =>
+    req<ReshapeDraft>('/api/ai/reshape/from-text', {
+      method: 'POST',
+      body: JSON.stringify({ text, from_index: from, to_index: to }),
+    }),
+
+  applyReshape: (payload: {
+    cues: Cue[];
+    from_index: number;
+    to_index: number | null;
+    digest: string;
+    label?: string;
+  }) =>
+    req<ReshapeApplyPayload>('/api/ai/reshape/apply', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   qaAction: (cmd: { id: string; action: string; status?: string; resolution?: string }) =>
     req<{

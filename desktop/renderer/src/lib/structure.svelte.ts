@@ -106,7 +106,7 @@ export function closeStructurePanel() {
   structure.open = false;
 }
 
-export async function copyStructurePrompt() {
+export async function copyStructurePrompt(preferred?: 'single' | 'dual') {
   if (!app.cues.length) {
     toast('当前没有可检查的字幕', 'warn');
     return;
@@ -114,7 +114,10 @@ export async function copyStructurePrompt() {
   if (structure.promptLoading) return;
   structure.promptLoading = true;
   try {
-    const mode: 'single' | 'dual' = dual.exists ? 'dual' : 'single';
+    // 页面上的「源」开关优先；没传时退回旧行为（有第二版就吃双源）。
+    const wantsDual =
+      preferred === 'dual' ? dual.exists : preferred === 'single' ? false : dual.exists;
+    const mode: 'single' | 'dual' = wantsDual ? 'dual' : 'single';
     const res = await api.getStructurePrompt(mode);
     if (window.kikusub?.writeClipboard) {
       await window.kikusub.writeClipboard(res.prompt);

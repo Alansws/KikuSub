@@ -1,16 +1,22 @@
 /**
  * 提示词模板库的前端状态。
  *
- * 从 `store.svelte.ts` 拆出来（那个文件有行数预算，只许变短）。模板分三类：
- * 单源润色 / 双源润色 / 翻译，**各自记住自己的当前选中**；旧版只有翻译，
- * 所以服务端会把没有分类的模板归入翻译，这里不需要兼容分支。
+ * 从 `store.svelte.ts` 拆出来（那个文件有行数预算，只许变短）。模板分五类：
+ * 单源润色 / 双源润色 / 断句重排（单源、双源）/ 翻译，**各自记住自己的当前选中**；
+ * 前四类是「在稿子上改」，翻译是「另起一轨」。旧版只有翻译，所以服务端会把
+ * 没有分类的模板归入翻译，这里不需要兼容分支。
  */
 
 import { api, type PromptLibrary, type PromptTemplate } from './api';
 import { app } from './store.svelte';
 import { toast } from './store.svelte';
 
-export type PromptCategory = 'polish_single' | 'polish_dual' | 'translate';
+export type PromptCategory =
+  | 'polish_single'
+  | 'polish_dual'
+  | 'reshape_single'
+  | 'reshape_dual'
+  | 'translate';
 
 export const prompts = $state({
   items: [] as PromptTemplate[],
@@ -18,17 +24,26 @@ export const prompts = $state({
   selected: '',
   selectedPolishSingle: '',
   selectedPolishDual: '',
+  selectedReshapeSingle: '',
+  selectedReshapeDual: '',
   path: '',
   loading: false,
   error: '',
 });
 
+const SELECTED_FIELD: Record<PromptCategory, string> = {
+  translate: 'selected',
+  polish_single: 'selectedPolishSingle',
+  polish_dual: 'selectedPolishDual',
+  reshape_single: 'selectedReshapeSingle',
+  reshape_dual: 'selectedReshapeDual',
+};
+
 let promptsLoaded = false;
 
 export function promptSelectedId(category: PromptCategory = 'translate'): string {
-  if (category === 'polish_single') return prompts.selectedPolishSingle;
-  if (category === 'polish_dual') return prompts.selectedPolishDual;
-  return prompts.selected;
+  const field = SELECTED_FIELD[category] ?? 'selected';
+  return String((prompts as Record<string, unknown>)[field] ?? '');
 }
 
 export function promptItemsFor(category: PromptCategory): PromptTemplate[] {
@@ -40,6 +55,8 @@ export function applyPromptLibrary(lib: PromptLibrary) {
   prompts.selected = lib.selected || '';
   prompts.selectedPolishSingle = lib.selected_polish_single || '';
   prompts.selectedPolishDual = lib.selected_polish_dual || '';
+  prompts.selectedReshapeSingle = lib.selected_reshape_single || '';
+  prompts.selectedReshapeDual = lib.selected_reshape_dual || '';
   prompts.path = lib.path || '';
   prompts.error = '';
 }
