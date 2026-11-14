@@ -175,11 +175,13 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
 
 ## 7. 进行中的专项（跨会话必须能接上）
 
-- **转录引擎标定**：两个日语引擎都已完成一轮。
+- **转录引擎标定**：日语两个已完成一轮。
   - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)
     （分窗 VAD、默认参数、句首尾发声剔除与边界收口）。
   - Qwen3-ASR + CTC：[转录标定-Qwen-2026-11.md](docs/转录标定-Qwen-2026-11.md)
     （分窗 VAD 从「整段一次跑」改过来是最大收益；参数与「建议内存 16GB 标错」一并修正）。
+  - 中文两个引擎：[转录标定-中文-2026-11.md](docs/转录标定-中文-2026-11.md)
+    （四处修复；SenseVoice CER 69.4%→6.8%；脚本在 `tune/zh`）。
   - **通用对齐层已落地**（`core/align_layer.py`）：借 Qwen 的 acoustic-only CTC 头给任意
     日语文本打逐字时间，Anime Whisper 侧是 `whisper.use_ctc_alignment`（默认关）。
     实现是两遍：先 `engine.release()` 卸掉 Whisper 再装对齐器（实测峰值 6.2GB 而不是 11.8GB），

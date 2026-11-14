@@ -34,6 +34,7 @@
 | 2 | 主题色裸值 → 令牌：`ExportView.svelte:1029` `#8fa6ff`、`:1281` `#14161c`，以及 `themes.ts` 的 swatch 与 `app.css` 双写 | 审计 P2-3 | `style-drift.test.cjs` 增加"组件内不得出现 hex"规则并绿。**⏸ 暂缓（2026-11-13）：同上** |
 | 3 | 大文件：`store.svelte.ts` 3933 行、`ReviewView.svelte` 3933 行（`SettingsView.svelte` 2056、`main.cjs` 1570） | engineering-practice §5 | **不做一次性大重构**（动正在跑的核对台，风险高）。改成"随功能抽"：`tests/test_big_file_budget.py` 冻结行数，只能变短——加功能前先把这次要用的纯逻辑抽到 `lib/`。`SettingsView` / `main.cjs` 暂不设预算，等它们真被改到再说 |
 | 4 | 机械化测试清理：81 个单断言用例抽检过，多数合理 | 审计 P2-… | 扫一遍删掉"删了没人疼"的用例 |
+| 5 | **中文术语表 / ITN 后处理**：FireRed 把 eSIM 写成 `E SIM`、`10月3号` 写成 `十月三号`；SenseVoice 把 eSIM 听成「一信」。这是词表问题，不是参数问题（[标定文档](转录标定-中文-2026-11.md) §2） | 2026-11-14 中文引擎标定：剩余错误集中在专名与数字写法 | 用户可编辑的热词表（术语 → 规范写法）生效后，同一素材的 CER 再降 ≥1pt，且不影响未被映射的句子；与日语侧 P1-3 词表共用一套界面 |
 
 ---
 
@@ -52,6 +53,7 @@
 
 | 日期 | 项 | 提交 |
 | --- | --- | --- |
+| 2026-11-14 | 中文引擎（SenseVoice / FireRed）首轮标定：修 sherpa 相对时间戳当绝对时间（SenseVoice CER 69.41%→6.80%）、`_extend_to_marks` 双重 start（39 字/5.8s 条）、空格切点与 `E / SIM` 劈词；新增能量对齐（FireRed 边界 F1 0.511→0.543）与 jieba 词边界兜底（词内切点 3.7%→1.0%）；默认参数 sensevoice 10s/14 字、firered 20s/14 字。记录：[转录标定-中文-2026-11.md](转录标定-中文-2026-11.md) | 见 `git log` |
 | 2026-11-13 | FireRed 原生接 FireRedPunc 标点恢复（ONNX 162 MB，随引擎下载到 `punc/`）；无句读时在切字幕前补标点，中文分句加 soft-max（标点只晚几个字时把当前条放长，不硬切词） | 见 `git log` |
 | 2026-11-13 | 新增两个可选装中文引擎：SenseVoice-Small（230 MB，token 时间戳）与 FireRedASR2-AED（1.2 GB，无时间戳按字分时）；走 sherpa-onnx / ONNX / CPU，默认停用、权重按需下载；注册表 + `family` 分派让未知引擎不再静默退回 Whisper | 见 `git log` |
 | 2026-11-13 | 导入页「最近打开」支持图标画廊（列表 / 图标切换、偏好持久化、封面悬停浮层）；顺带修掉冷启动时缩略图请求早于握手、401 后永久消失的 bug | 见 `git log` |
