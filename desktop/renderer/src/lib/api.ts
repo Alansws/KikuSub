@@ -485,6 +485,51 @@ export interface AiProposalPayload {
   current_count: number;
 }
 
+/** 结构建议（Phase 1）：外部模型只给 ops，本地绑定 digest/revision。 */
+export interface StructureOpView {
+  id: number;
+  op: 'merge' | 'retime' | 'replace_text' | 'insert' | 'delete';
+  reason: string;
+  conflict: string[];
+  before: string;
+  after: string;
+  text: string;
+  old_start: number | null;
+  old_end: number | null;
+  new_start: number | null;
+  new_end: number | null;
+  index_label: string;
+  from_index: number | null;
+  to_index: number | null;
+  after_index: number | null;
+}
+
+export interface StructureSummary {
+  input_count: number;
+  output_count: number;
+  total_ops: number;
+  conflicts: number;
+  counts: Record<string, number>;
+}
+
+export interface StructurePayload {
+  exists: boolean;
+  path: string;
+  revision: string;
+  source: { path?: string; count: number; digest: string };
+  current_count: number;
+  digest_match: boolean;
+  ops: StructureOpView[];
+  warnings: string[];
+  summary: StructureSummary;
+}
+
+export interface StructureApplyPayload extends CueSnapshot {
+  changed: number;
+  applied: number;
+  output_count: number;
+}
+
 export interface JobSnapshot {
   id: string;
   kind: string;
@@ -1408,6 +1453,30 @@ export const api = {
       changed: number;
       warnings: string[];
     }>('/api/ai/apply', { method: 'POST', body: JSON.stringify(payload) }),
+
+
+  // ---- 结构建议（Phase 1：合并 / 改时间 / 改文字 / 新增 / 删除）------------
+  getStructure: () => req<StructurePayload>('/api/ai/structure'),
+
+  parseStructure: (text: string) =>
+    req<StructurePayload>('/api/ai/structure/from-json', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+
+  applyStructure: (payload: { accept: number[]; revision: string }) =>
+    req<StructureApplyPayload>('/api/ai/structure/apply', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  deleteStructure: () =>
+    req<{ removed: boolean; path: string }>('/api/ai/structure', { method: 'DELETE' }),
+
+  getStructurePrompt: (mode: 'single' | 'dual' = 'single') =>
+    req<{ prompt: string; count: number; chars: number; mode: string; alt_count: number }>(
+      `/api/ai/structure/prompt?mode=${mode}`,
+    ),
 
   qaAction: (cmd: { id: string; action: string; status?: string; resolution?: string }) =>
     req<{

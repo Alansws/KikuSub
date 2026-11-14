@@ -9,6 +9,7 @@
    * 整列）都走 `apply_polish()`，一次 ⌘Z 全退。
    */
   import Icon from '../components/Icon.svelte';
+  import type { StructureOpView } from '../lib/api';
   import {
     ai,
     applyAiAcceptedDiffs,
@@ -31,9 +32,22 @@
     startAiPolish,
     toggleAiAccept,
   } from '../lib/aiWorkspace.svelte';
+  import {
+    applyStructureOps,
+    closeStructurePanel,
+    copyStructurePrompt,
+    discardStructure,
+    loadStructure,
+    openStructurePanel,
+    parseStructurePaste,
+    selectedStructureCount,
+    setAllStructureOps,
+    structure,
+    toggleStructureOp,
+  } from '../lib/structure.svelte';
   import { altEngineLabel, dual, loadAltDiff, refreshAltReview } from '../lib/dualReview.svelte';
   import { loadPrompts, promptItemsFor, prompts, selectPromptTemplate } from '../lib/promptStore.svelte';
-  import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
+  import { app, focusRange, jumpToCue, loadTranslations, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -93,6 +107,20 @@
   const hasNotes = $derived(rows.some((r) => r.note.trim().length > 0));
   const filledCount = $derived(ai.segments.filter((seg) => ai.filled[segmentKey(seg)]).length);
 
+  /** 结构建议按操作类型分组；空组不显示。 */
+  const structureGroups = $derived.by(() => {
+    const defs = [
+      { key: 'merge', label: '合并连续句', ops: [] as StructureOpView[] },
+      { key: 'retime', label: '改时间', ops: [] as StructureOpView[] },
+      { key: 'replace_text', label: '改文字', ops: [] as StructureOpView[] },
+      { key: 'insert', label: '新增', ops: [] as StructureOpView[] },
+      { key: 'delete', label: '删除', ops: [] as StructureOpView[] },
+    ];
+    const map = new Map(defs.map((item) => [item.key, item]));
+    for (const op of structure.ops) map.get(op.op)?.ops.push(op);
+    return defs.filter((item) => item.ops.length > 0);
+  });
+
   $effect(() => {
     void app.connected;
     void app.media?.id;
@@ -118,6 +146,14 @@
       }
       planAiSegments();
     }
+  });
+
+  $effect(() => {
+    // 结构建议按「媒体 + 字幕版本」恢复；切页回来不会丢，字幕改过后会自动失效。
+    void app.connected;
+    void app.media?.id;
+    void app.cuesRevision;
+    if (app.connected) void loadStructure();
   });
 
   function goto(row: { i: number; start: number; end: number }) {
@@ -164,6 +200,37 @@
 
   function timeRange(start: number, end: number): string {
     return `${tcShort(start)}–${tcShort(end)}`;
+  }
+
+  function opLabel(op: string): string {
+    return ({ merge: '合并', retime: '改时间', replace_text: '改文字', insert: '新增', delete: '删除' } as Record<string, string>)[op] ?? op;
+  }
+
+  function opTime(op: StructureOpView): string {
+    const fmt = (value: number | null) => (value === null ? '—' : tcShort(value));
+    if (op.op === 'insert') return `${fmt(op.new_start)}–${fmt(op.new_end)}`;
+    if (op.op === 'retime') return `${fmt(op.old_start)} → ${fmt(op.new_start)}`;
+    if (op.op === 'merge') return `${fmt(op.old_start)}–${fmt(op.old_end)}`;
+    return fmt(op.old_start);
+  }
+
+  function openStruct() {
+    if (structure.open) {
+      closeStructurePanel();
+      return;
+    }
+    ai.pasteOpen = false;
+    openStructurePanel();
+  }
+
+  async function onApplyStructure() {
+    const applied = await applyStructureOps();
+    if (applied) {
+      // 结构改了原文/时间轴：润色建议与译文轨的准确性都要重新拉一次。
+      void loadAiProposal(true);
+      void loadTranslations();
+      void refreshAltReview();
+    }
   }
 </script>
 
@@ -240,7 +307,10 @@
 
     <button
       class="btn ghost"
-      onclick={copyAiPrompt}
+      onclick={() => {
+        structure.open = false;
+        void copyAiPrompt();
+      }}
       disabled={!app.cues.length}
       title={ai.longMode ? '复制当前分段的提示词' : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
     >
@@ -249,14 +319,26 @@
     <button class="btn ghost" onclick={() => setView('prompts')} title="打开提示词库">提示词库</button>
     <button
       class="btn ghost"
-      onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
+      onclick={() => {
+        structure.open = false;
+        ai.pasteOpen = !ai.pasteOpen;
+      }}
       disabled={!app.cues.length}
       title={ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
     >
       {ai.longMode ? '粘贴本段结果…' : '粘贴结果…'}
     </button>
-    {#if ai.proposal}<div class="tb-div"></div>{/if}
-    {#if ai.proposal}
+    <button
+      class="btn ghost"
+      onclick={openStruct}
+      disabled={!app.cues.length}
+      title="给外部模型的「结构检查提示词」会要求只返回 ops JSON；解析后先预览再原子应用"
+    >
+      结构建议…
+      {#if structure.ops.length}<span class="count">{structure.ops.length}</span>{/if}
+    </button>
+    {#if ai.proposal && !structure.open}<div class="tb-div"></div>{/if}
+    {#if ai.proposal && !structure.open}
       <button class="btn ghost" onclick={startAiPolish} disabled={ai.generating || !app.cues.length} title="生成一份润色建议（不修改字幕）">
         生成建议
       </button>
@@ -283,6 +365,124 @@
     {/if}
   </div>
 
+  {#if structure.open}
+    <div class="struct">
+      <div class="struct-head">
+        <span class="struct-title">结构建议</span>
+        <span class="dim">只改断句 / 时间轴 / 文字，不走润色提案</span>
+        <div class="spacer"></div>
+        <button class="link" onclick={() => void copyStructurePrompt()} disabled={structure.promptLoading}>
+          {structure.promptLoading ? '复制中…' : '复制结构检查提示词'}
+        </button>
+        {#if structure.ops.length}
+          <button class="link danger" onclick={discardStructure}>丢弃</button>
+        {/if}
+        <button class="link" onclick={closeStructurePanel}>收起</button>
+      </div>
+
+      {#if ai.proposal}
+        <div class="note warn">
+          <Icon name="warn" size={11} />
+          <span>当前还有润色建议：结构应用后原文/条数会变，润色建议可能失效；建议先应用或丢弃它。</span>
+        </div>
+      {/if}
+
+      <textarea
+        class="paste-box struct-box"
+        bind:value={structure.text}
+        spellcheck="false"
+        placeholder={'{"ops":[{"op":"merge","from":3,"to":4,"text":"初めてのお客さんですねぇ","reason":"碎轴"},{"op":"retime","i":22,"start":85.829,"end":89.486}]}'}
+      ></textarea>
+      <div class="paste-actions">
+        <button
+          class="btn primary"
+          onclick={parseStructurePaste}
+          disabled={structure.parsing || !structure.text.trim()}
+        >
+          {structure.parsing ? '解析中…' : '解析建议'}
+        </button>
+        <span class="paste-hint">
+          只接受 &#123;"ops": [...]&#125;；序号按当前字幕 1-based；模型不需要输出 digest / version
+        </span>
+      </div>
+
+      {#if structure.errors.length}
+        <div class="note err"><Icon name="warn" size={11} /><span>{structure.errors[0]}</span></div>
+      {/if}
+      {#if structure.warnings.length}
+        <div class="note warn">
+          <Icon name="warn" size={11} />
+          <span>{structure.warnings.slice(0, 3).join('；')}{structure.warnings.length > 3 ? ' …' : ''}</span>
+        </div>
+      {/if}
+
+      {#if structure.ops.length}
+        <div class="struct-summary">
+          <span>共 <b>{structure.ops.length}</b> 项</span>
+          {#if structure.summary}
+            <span>结果 <b>{structure.summary.input_count}</b> → <b>{structure.summary.output_count}</b> 条</span>
+            {#if structure.summary.conflicts}
+              <span class="conflict">冲突 <b>{structure.summary.conflicts}</b></span>
+            {/if}
+          {/if}
+          <div class="spacer"></div>
+          <button class="link" onclick={() => setAllStructureOps(true)}>全选</button>
+          <button class="link" onclick={() => setAllStructureOps(false)}>全不选</button>
+        </div>
+
+        <div class="struct-list">
+          {#each structureGroups as group (group.key)}
+            <div class="struct-group">
+              <div class="struct-group-title">{group.label} <b>{group.ops.length}</b></div>
+              {#each group.ops as op (op.id)}
+                <label class="struct-row" class:conflict={op.conflict.length > 0}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(structure.selected[op.id])}
+                    disabled={op.conflict.length > 0}
+                    onchange={() => toggleStructureOp(op.id)}
+                  />
+                  <span class="op-badge">{opLabel(op.op)}</span>
+                  <span class="op-idx">{op.index_label}</span>
+                  <span class="op-body">
+                    <span class="op-line">
+                      {#if op.op === 'retime' || op.op === 'insert' || op.before === op.after}
+                        {op.after}
+                      {:else}
+                        {op.before}
+                        <span class="arrow">→</span>
+                        {#if op.op === 'delete'}<span class="muted">（删除）</span>{:else}{op.after}{/if}
+                      {/if}
+                    </span>
+                    {#if op.reason}<span class="op-reason">{op.reason}</span>{/if}
+                    {#if op.conflict.length}<span class="op-conflict">{op.conflict.join('；')}</span>{/if}
+                  </span>
+                  <span class="op-time">{opTime(op)}</span>
+                </label>
+              {/each}
+            </div>
+          {/each}
+        </div>
+
+        <div class="struct-actions">
+          <button
+            class="btn primary"
+            onclick={onApplyStructure}
+            disabled={structure.applying || selectedStructureCount() === 0}
+          >
+            {structure.applying ? '应用中…' : `应用所选${selectedStructureCount() ? `（${selectedStructureCount()}）` : ''}`}
+          </button>
+          <span class="paste-hint">⌘Z 一次整批撤回；应用后这份建议会丢弃</span>
+        </div>
+      {:else if !structure.loading}
+        <div class="struct-empty">
+          还没有解析出结构建议：先复制上面的提示词给外部模型，再把 &#123;"ops": [...]&#125; 粘回来。
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if !structure.open}
   {#if ai.proposal}
     <div class="bar">
       <span>共 <b>{app.cues.length}</b> 条</span>
@@ -483,6 +683,7 @@
       {/each}
     </div>
   {/if}
+  {/if}
 </div>
 
 <style>
@@ -671,6 +872,180 @@
   .seg-chip.filled b {
     color: var(--success);
   }
+  .count {
+    margin-left: 5px;
+    font-size: 11px;
+    line-height: 16px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .struct {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--separator);
+    background: var(--bg-inspector);
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+  .struct-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+  }
+  .struct-title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .struct-head .link.danger {
+    color: var(--danger);
+  }
+  .struct-box {
+    min-height: 84px;
+  }
+  .struct .note {
+    padding: 4px 0;
+    border-bottom: 0;
+    background: transparent;
+  }
+  .struct .note.err {
+    background: var(--danger-soft);
+    padding: 4px 6px;
+    border-radius: 4px;
+  }
+  .struct .note.warn {
+    background: var(--warn-soft);
+    padding: 4px 6px;
+    border-radius: 4px;
+  }
+  .struct-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-size: 12px;
+    color: var(--text-2);
+    flex-wrap: wrap;
+  }
+  .struct-summary b {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .struct-summary .conflict,
+  .struct-summary .conflict b {
+    color: var(--danger);
+  }
+  .struct-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+  .struct-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .struct-group-title {
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.02em;
+  }
+  .struct-group-title b {
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .struct-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 6px 8px;
+    border: 1px solid var(--separator);
+    border-radius: 6px;
+    background: var(--bg-content);
+    cursor: pointer;
+  }
+  .struct-row:hover {
+    background: var(--row-hover);
+  }
+  .struct-row.conflict {
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+    background: color-mix(in srgb, var(--danger) 6%, var(--bg-content));
+    cursor: default;
+  }
+  .struct-row input {
+    margin-top: 3px;
+  }
+  .op-badge {
+    flex: 0 0 auto;
+    font-size: 11px;
+    line-height: 18px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--fill);
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .op-idx {
+    flex: 0 0 auto;
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 11px;
+    line-height: 18px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .op-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .op-line {
+    font-size: 12.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .op-line .arrow {
+    color: var(--text-3);
+    margin: 0 5px;
+  }
+  .op-line .muted {
+    color: var(--text-3);
+  }
+  .op-reason {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .op-conflict {
+    font-size: 11px;
+    color: var(--danger);
+  }
+  .op-time {
+    flex: 0 0 auto;
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 11px;
+    line-height: 18px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .struct-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+  }
+  .struct-empty {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-3);
+  }
+
   .paste {
     display: flex;
     flex-direction: column;
