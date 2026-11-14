@@ -303,6 +303,26 @@ def test_replace_range_only_touches_that_span(make_client, tmp_path):
     assert snapshot["result"]["added"] == 0
 
 
+def test_replace_range_without_start_is_rejected(make_client, tmp_path):
+    """没填起点的「替换选区」必须 422。
+
+    `_apply_cues` 里 `replace_range` 只在 `start_s is not None` 时走合并，
+    否则会落进 `else: merged = fresh`——整张表被换成这一次的结果，正是用户
+    报障的「全片字幕只剩这一段」。请求层拦掉，不许静默降级。
+    """
+    client = make_client(_FixedRunner(tmp_path, [SubtitleCue(0.0, 1.0, "x")]))
+    media_id = _import_media(client, tmp_path)
+    resp = client.post(
+        "/api/jobs",
+        headers=AUTH_SESSION,
+        json={"media_id": media_id, "apply": "replace_range"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "替换选区" in resp.text
+    # 拦在请求层：不应该起任何任务
+    assert client.get("/api/jobs", headers=AUTH_SESSION).json()["active"] is None
+
+
 def test_partial_job_does_not_reset_qa_payload(make_client, tmp_path):
     """局部重转不能把整片质检队列冲掉（写盘由 core.pipeline 负责）。"""
     seen: dict = {}

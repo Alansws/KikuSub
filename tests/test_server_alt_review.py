@@ -353,17 +353,36 @@ def test_dual_polish_allows_a83_b89(make_client, tmp_path):
     assert body["proposal"]["source"]["digest_b"]
 
 
-def test_separate_vocals_requires_range_and_reaches_pipeline(make_client, tmp_path):
+def test_separate_vocals_full_film_is_not_rejected(make_client, tmp_path):
+    """整片勾「人声分离」不再 422：2026-11-15 起由 pipeline 按 0..总时长分段分离。"""
     client = make_client([])
     media_id = _new_media(client, tmp_path)
 
-    bad = client.post(
+    created = client.post(
         "/api/jobs",
         headers=AUTH,
         json={"media_id": media_id, "separate_vocals": True},
     )
-    assert bad.status_code == 422
-    assert "起止时间" in bad.text
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+    for _ in range(200):
+        snapshot = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snapshot["status"] in {"done", "error", "cancelled"}:
+            break
+        import time
+
+        time.sleep(0.01)
+    assert snapshot["status"] == "done", snapshot
+    request = client.app.state.jobs._runner.last_request
+    assert request.separate_vocals is True
+    assert request.start_s is None and request.end_s is None
+    # 服务层把 ffprobe 到的总时长带给 pipeline（1 字节假媒体探不到 → 0，pipeline 会报错让填区间）
+    assert request.media_duration_s == 0.0
+
+
+def test_separate_vocals_range_reaches_pipeline(make_client, tmp_path):
+    client = make_client([])
+    media_id = _new_media(client, tmp_path)
 
     created = client.post(
         "/api/jobs",

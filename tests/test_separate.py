@@ -60,12 +60,38 @@ def test_ensure_vocals_wav_rejects_empty_or_reversed_range(tmp_path):
         audio_cache.ensure_vocals_wav(media, start=5.0, end=5.0, separator=lambda *a, **k: None)
 
 
-def test_separate_rejects_overlong_range(tmp_path):
+def test_separate_rejects_reversed_range(tmp_path):
     media = _media(tmp_path)
-    with pytest.raises(ValueError, match="最多 30 分钟"):
-        separate.separate_to_wav(
-            media, tmp_path / "out.wav", start=0.0, end=separate.MAX_RANGE_S + 1
-        )
+    with pytest.raises(ValueError, match="结束必须大于开始"):
+        separate.separate_to_wav(media, tmp_path / "out.wav", start=5.0, end=5.0)
+
+
+def test_plan_chunks_splits_long_ranges_with_crossfade():
+    total = 30 * 60
+    plan = separate.plan_chunks(total)
+    assert len(plan) == 2
+    assert [p[0] for p in plan] == [0.0, separate.CHUNK_S]
+    # 核心区间首尾相接、覆盖整段；read 区间两侧各多一个交叉淡化长度
+    assert plan[0][1] == plan[1][0]
+    assert plan[-1][1] == total
+    assert plan[0][2] == 0.0
+    assert plan[0][3] == separate.CHUNK_S + separate.CROSSFADE_S
+    assert plan[1][2] == separate.CHUNK_S - separate.CROSSFADE_S
+    assert plan[1][3] == total
+
+
+def test_plan_chunks_keeps_short_range_as_one_chunk():
+    plan = separate.plan_chunks(4 * 60 + 5)
+    assert plan == [(0.0, 245.0, 0.0, 245.0)]
+
+
+def test_plan_chunks_clamps_last_chunk_to_total():
+    total = 20 * 60 + 3
+    plan = separate.plan_chunks(total)
+    assert len(plan) == 2
+    assert plan[-1][1] == total
+    assert plan[-1][3] == total
+    assert all(0.0 <= p[2] <= p[0] < p[1] <= p[3] <= total for p in plan)
 
 
 def test_checkpoint_lives_under_managed_models_dir(monkeypatch, tmp_path):

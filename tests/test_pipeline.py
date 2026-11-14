@@ -297,9 +297,65 @@ def test_separate_vocals_routes_engine_to_cached_vocals(media, tmp_path, monkeyp
     assert result.out_filename.startswith("episode_00m10s-00m20s")
 
 
-def test_separate_vocals_requires_range(media, tmp_path, monkeypatch):
+def test_separate_vocals_full_film_uses_whole_duration(media, tmp_path, monkeypatch):
     _patch_dirs(monkeypatch, tmp_path)
-    with pytest.raises(ValueError, match="人声分离只支持"):
+    from core import audio_cache, separate
+
+    vocals = tmp_path / "vocals.wav"
+    vocals.write_bytes(b"RIFF")
+    seen = {}
+
+    def fake_ensure(media_path, *, start, end, separator, cancel_event=None, progress_cb=None):
+        seen.update(start=start, end=end)
+        return vocals
+
+    monkeypatch.setattr(audio_cache, "ensure_vocals_wav", fake_ensure)
+    monkeypatch.setattr(separate, "available", lambda: True)
+
+    engine = _FakeEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media, media_duration_s=123.5, separate_vocals=True
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+
+    assert seen == {"start": 0.0, "end": 123.5}
+    assert engine.media_path == vocals
+    # 整片仍然是「整片」：引擎不传切片、文件名不带区间后缀
+    assert engine.received["start_time_s"] is None
+    assert engine.received["end_time_s"] is None
+    assert engine.received["time_offset"] == 0.0
+    assert result.slice_tag == ""
+    assert result.out_filename == "episode.srt"
+
+
+def test_separation_range_fills_missing_edges_from_duration():
+    from core.pipeline import TranscribeRequest, separation_range
+
+    def req(**kw):
+        return TranscribeRequest(media_path=Path("episode.mkv"), **kw)
+
+    assert separation_range(req(media_duration_s=100.0)) == (0.0, 100.0)
+    assert separation_range(req(media_duration_s=100.0, start_s=10.0)) == (10.0, 100.0)
+    assert separation_range(req(media_duration_s=100.0, end_s=20.0)) == (0.0, 20.0)
+    assert separation_range(req(start_s=10.0, end_s=20.0)) == (10.0, 20.0)
+    # 用户填的尾部超过影片时长：夹到片尾
+    assert separation_range(req(media_duration_s=100.0, start_s=10.0, end_s=999.0)) == (
+        10.0,
+        100.0,
+    )
+
+
+def test_separate_vocals_full_film_without_duration_asks_for_range(
+    media, tmp_path, monkeypatch
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import proxy
+
+    monkeypatch.setattr(proxy, "probe_duration", lambda _path: 0.0)
+    with pytest.raises(ValueError, match="无法确定影片总时长"):
         pipeline.run_transcription(
             pipeline.TranscribeRequest(media_path=media, separate_vocals=True),
             output_dir=tmp_path,
