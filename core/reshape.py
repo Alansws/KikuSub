@@ -217,7 +217,11 @@ def diagnose(
     if before_texts is not None and before_texts:
         joined = "".join(str(cue.text or "").strip() for cue in block)
         original = "".join(str(text or "").strip() for text in before_texts)
-        result.identical = bool(joined) and joined == original
+        # 只有「条数与文字都没变」才算模型没动手。纯合并稿的文字拼起来本来就等于原稿，
+        # 只看文字会把它误报成「模型没改」。
+        result.identical = (
+            bool(joined) and joined == original and len(block) == len(before_texts)
+        )
     return result
 
 

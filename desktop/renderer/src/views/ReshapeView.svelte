@@ -61,6 +61,8 @@
 
   let editing = $state(0);
   let editingText = $state('');
+  /** 已确认过一次的草稿 digest：条数腰斩时要再点一下才真覆盖。 */
+  let armed = $state('');
   /** 「只改几处」的粘贴卡是否展开（不能靠 text 是否为空判断，否则清空输入框就整块消失）。 */
   let opsPasting = $state(false);
 
@@ -216,6 +218,10 @@
     }, 180);
   }
 
+  function jumpToFirstIssue() {
+    document.querySelector('.row.flagged')?.scrollIntoView({ block: 'center' });
+  }
+
   function beginEdit(index: number, text: string) {
     editing = index;
     editingText = text;
@@ -278,6 +284,35 @@
     return fmt(op.old_start);
   }
 
+  /** 覆盖前后的条数差；0 表示没变，界面不显示。 */
+  /**
+   * 条数掉一半以上（或翻倍）时要求二次确认。
+   *
+   * 正常重排 208→127 不触发；但只贴了半份、或把 Prompt 的示例内容粘进来时，
+   * 一键覆盖会把整份稿换掉——这类错误一次就够痛，值得多一次点击。
+   */
+  const needsArm = $derived.by(() => {
+    if (!draft) return false;
+    const before = draft.diagnostics.count_before;
+    if (!before) return false;
+    return draft.cues.length < before * 0.5 || draft.cues.length > before * 2;
+  });
+  const isArmed = $derived(Boolean(draft && armed === draft.digest));
+
+  function onApplyClick() {
+    if (!draft) return;
+    if (needsArm && !isArmed) {
+      armed = draft.digest;
+      return;
+    }
+    void applyDraft();
+  }
+
+  function countDelta(): number {
+    if (!draft) return 0;
+    return draft.cues.length - draft.diagnostics.count_before;
+  }
+
   const metaText = $derived.by(() => {
     const info = reshape.prompt;
     if (!info) return '';
@@ -309,6 +344,7 @@
   </header>
 
   <div class="config">
+    <span class="dim">做法</span>
     <div class="segs" role="tablist" aria-label="做法">
       <button
         role="tab"
@@ -328,7 +364,8 @@
       >只改几处</button>
     </div>
 
-    <span class="dim">源</span>
+    <span class="config-sep" aria-hidden="true"></span>
+    <span class="dim">底稿</span>
     <div class="segs" role="group" aria-label="参考来源">
       <button
         class="seg"
@@ -363,7 +400,7 @@
 
     {#if reshape.mode === 'rewrite' && reshape.longMode}
       <span class="progress-title">已覆盖 {appliedCount()}/{reshape.segments.length} 段</span>
-    {:else if app.cues.length}
+    {:else if app.cues.length && !draft}
       <span class="progress-title">{app.cues.length} 条</span>
     {/if}
   </div>
@@ -497,7 +534,7 @@
             bind:value={structure.text}
             onpaste={onPaste}
             spellcheck="false"
-            placeholder={'{"ops": [{"op": "merge", "from": 3, "to": 4, "reason": "被硬切了"}]}'}
+            placeholder={'把模型回复的 ops JSON 粘在这里'}
           ></textarea>
           <div class="paste-actions">
             <button class="btn primary" onclick={() => void parsePaste()} disabled={structure.parsing || !structure.text.trim()}>
@@ -523,9 +560,15 @@
       <!-- ---------------- 整份重写：预览 ---------------- -->
       <div class="preview-bar">
         {#each draft.notes as note (note.text)}
-          <span class="chip" class:warn={note.level === 'warn'}>{note.text}</span>
+          {#if note.level === 'warn'}
+            <button class="chip warn" onclick={jumpToFirstIssue} title="跳到第一处有问题的地方">
+              {note.text}
+            </button>
+          {:else}
+            <span class="chip">{note.text}</span>
+          {/if}
         {/each}
-        <div class="spacer"></div>
+        <span class="preview-hint">双击改字</span>
         <button
           class="link"
           onclick={() => {
@@ -539,6 +582,9 @@
         {#each draft.cues as cue, index (index)}
           {@const number = index + 1}
           <div class="row" class:flagged={Boolean(draft.issues[number])}>
+            <span class="row-mark">
+              {#if draft.issues[number]}<Icon name="warn" size={12} />{/if}
+            </span>
             <div class="row-time" title={`第 ${number} 条 · ${tcShort(cue.start)} → ${tcShort(cue.end)}`}>
               <span class="tc">{shortTime(cue.start)}</span>
               <span class="tc end">– {shortTime(cue.end)}</span>
@@ -554,11 +600,11 @@
                 ></textarea>
               {:else}
                 <span class="txt">{cue.text}</span>
-                {#if draft.issues[number]}
-                  <span class="row-flag"><Icon name="warn" size={10} />{draft.issues[number]}</span>
-                {/if}
               {/if}
             </div>
+            <span class="row-flag">
+              {#if draft.issues[number] && editing !== number}{draft.issues[number]}{/if}
+            </span>
             <button
               class="row-del"
               onclick={() => removeDraftCue(number)}
@@ -570,15 +616,32 @@
       </div>
 
       <div class="apply-bar">
-        <button class="btn primary apply" onclick={() => void applyDraft()} disabled={reshape.applying || !draft.cues.length}>
-          {reshape.applying
-            ? '覆盖中…'
-            : draft.range.full
-              ? `覆盖核对台 · ${draft.cues.length} 条`
-              : `覆盖这一段 · ${draft.cues.length} 条`}
+        <button
+          class="btn primary apply"
+          class:armed={needsArm && isArmed}
+          onclick={onApplyClick}
+          disabled={reshape.applying || !draft.cues.length}
+        >
+          {#if reshape.applying}
+            覆盖中…
+          {:else if needsArm && isArmed}
+            再点一次：覆盖 {draft.cues.length} 条
+          {:else if needsArm}
+            确认覆盖 · {draft.cues.length} 条
+          {:else if draft.range.full}
+            覆盖核对台 · {draft.cues.length} 条
+          {:else}
+            覆盖这一段 · {draft.cues.length} 条
+          {/if}
         </button>
-        <button class="btn ghost" onclick={() => discardDraft()} disabled={reshape.applying}>丢弃</button>
+        {#if countDelta()}
+          <span class="delta" class:less={countDelta() < 0}>
+            {countDelta() > 0 ? '多' : '少'} {Math.abs(countDelta())} 条
+          </span>
+        {/if}
         <span class="hint">⌘Z 一次整批撤回{draft.range.full ? '' : '；只替换这一段，其余段不动'}</span>
+        <div class="spacer"></div>
+        <button class="btn ghost" onclick={() => discardDraft()} disabled={reshape.applying}>丢弃</button>
       </div>
     {:else if reshape.pasteOpen}
       <!-- ---------------- 整份重写：粘贴 ---------------- -->
@@ -592,7 +655,7 @@
           bind:value={reshape.text}
           onpaste={onPaste}
           spellcheck="false"
-          placeholder={'1\n00:00:00,500 --> 00:00:02,100\n我想我以后应该再也不会碰\n\n2\n…'}
+          placeholder={'把模型回复的整段 SRT 粘在这里（必须带时间码）'}
         ></textarea>
         <div class="paste-actions">
           <button class="btn primary" onclick={() => void parsePaste()} disabled={reshape.parsing || !reshape.text.trim()}>
@@ -629,6 +692,9 @@
           {/if}
         </p>
         <button class="link" onclick={openPastePanel} disabled={!app.cues.length}>已有结果？直接粘贴</button>
+        {#if appliedCount() && !draft}
+          <button class="link" onclick={() => setView('review')}>刚才覆盖过，去核对台看看</button>
+        {/if}
       </div>
     {/if}
   </div>
@@ -704,7 +770,7 @@
   .seg:disabled {
     color: var(--text-3);
     cursor: default;
-    opacity: 0.6;
+    opacity: 0.4;
   }
   .dim {
     font-size: var(--fs-label);
@@ -872,7 +938,7 @@
     background: color-mix(in srgb, var(--success) 45%, transparent);
   }
   .step-meta {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -967,6 +1033,9 @@
   .btn.primary:hover {
     background: var(--btn-primary-hover);
   }
+  .btn.primary.armed {
+    background: var(--danger);
+  }
   .btn.ghost {
     background: transparent;
   }
@@ -1030,7 +1099,7 @@
   }
   .hint {
     margin-left: auto;
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-3);
   }
 
@@ -1045,7 +1114,7 @@
     flex-wrap: wrap;
   }
   .chip {
-    font-size: 11.5px;
+    font-size: 12px;
     line-height: 18px;
     padding: 0 7px;
     border-radius: 999px;
@@ -1066,7 +1135,8 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 84px minmax(0, 1fr) 22px;
+    /* 正文列封顶 520（一行约 40 字），提示列从固定 x 起排：告警原因也能成一条竖轴 */
+    grid-template-columns: 14px 84px minmax(0, 520px) minmax(0, 1fr) 22px;
     align-items: start;
     gap: 10px;
     padding: 5px var(--sp-4) 5px 13px;
@@ -1083,6 +1153,12 @@
   .row.flagged {
     border-left-color: color-mix(in srgb, var(--warn) 75%, transparent);
     background: color-mix(in srgb, var(--warn) 6%, var(--paper));
+  }
+  .row-mark {
+    display: grid;
+    place-items: center;
+    color: var(--warn);
+    margin-top: 1px;
   }
   .row-time {
     display: flex;
@@ -1126,17 +1202,16 @@
     color: var(--text);
     outline: none;
   }
-  /* 提示跟在正文后面，而不是甩到右边：右边离文字太远，还会被截断。 */
+  /* 提示独立成列：正文封顶后，所有告警原因从同一个 x 起排，扫一列就能看完 */
   .row-flag {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    margin-left: 7px;
-    font-size: 11px;
-    line-height: 16px;
+    display: block;
+    font-size: 12px;
+    line-height: 1.5;
     color: var(--warn);
     white-space: nowrap;
-    vertical-align: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-top: 1px;
   }
   .row-del {
     width: 20px;
@@ -1164,6 +1239,7 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
+    min-width: 0;
     padding: 10px var(--sp-4);
     border-top: 1px solid var(--separator);
     background: var(--bg-inspector);
@@ -1172,6 +1248,34 @@
   .btn.apply {
     height: var(--ctl-h-lg);
     padding: 0 var(--sp-4);
+  }
+  .delta {
+    font-size: 12px;
+    line-height: 18px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--fill);
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .delta.less {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+  .preview-hint {
+    margin-left: auto;
+    margin-right: var(--sp-2);
+    font-size: 12px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .config-sep {
+    width: 1px;
+    height: 14px;
+    background: var(--separator);
+    margin: 0 2px;
+    flex: 0 0 1px;
   }
 
   /* ---- ops 面板 ---- */

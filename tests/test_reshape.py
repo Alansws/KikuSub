@@ -92,6 +92,14 @@ def test_diagnose_detects_identical_draft() -> None:
     assert any("模型没改" in note["text"] for note in reshape.summary_notes(diag))
 
 
+def test_merge_only_draft_is_not_reported_as_unchanged() -> None:
+    """纯合并稿（条数变了、文字拼起来一样）不该被误报成「模型没改」。"""
+    block = [Cue(1.0, 2.0, "おはよう"), Cue(2.0, 3.0, "今日は雨だ")]
+    diag = reshape.diagnose(block, before_texts=["おはよう", "今日は雨", "だ"])
+    assert diag.identical is False
+    assert not any("模型没改" in note["text"] for note in reshape.summary_notes(diag))
+
+
 def test_summary_notes_are_compact() -> None:
     diag = reshape.diagnose([Cue(1.0, 2.0, "a")], before_texts=["x", "y", "z"])
     texts = [note["text"] for note in reshape.summary_notes(diag)]
