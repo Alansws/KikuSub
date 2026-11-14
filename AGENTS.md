@@ -1,6 +1,6 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-14 15:35
+updated: 2026-11-14 20:05
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
@@ -92,6 +92,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关 | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关 |
 | AI 提案 / 双源 / 结构建议 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
 | 提示词模板、成片导出、手动代理、媒体 Range | [docs/contracts/export-and-prompt.md](docs/contracts/export-and-prompt.md) | 导出设置必须走 `setExport*`、代理写 `*.part.mp4` 再 rename |
+| 参数规格、预设、引擎绑定 | [docs/contracts/params-and-presets.md](docs/contracts/params-and-presets.md) | 保存/载入都必须带引擎、跨引擎 409、种子预设 = 当前默认值 |
 | 想理解「为什么这么定规矩」/接手这套流程 | [docs/contracts/engineering-practice.md](docs/contracts/engineering-practice.md) | 五类失控的对照、五道护栏落点、规则→测试的三级升级、多模型协作 |
 | （历史参考）已移除的 Gradio 面板 | [docs/archive/gradio-legacy.md](docs/archive/gradio-legacy.md) | **禁止照它改代码** |
 
@@ -175,24 +176,23 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
 
 ## 7. 进行中的专项（跨会话必须能接上）
 
-- **转录引擎标定**：日语两个已完成一轮。
+- **转录引擎标定**：四引擎均已完成一轮。
   - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)
-    （分窗 VAD、默认参数、句首尾发声剔除与边界收口）。
+    （分窗 VAD、默认参数、句首尾发声剔除）。
   - Qwen3-ASR + CTC：[转录标定-Qwen-2026-11.md](docs/转录标定-Qwen-2026-11.md)
-    （分窗 VAD 从「整段一次跑」改过来是最大收益；参数与「建议内存 16GB 标错」一并修正）。
+    （分窗 VAD 是最大收益；内存建议已修正）。
   - 中文两个引擎：[转录标定-中文-2026-11.md](docs/转录标定-中文-2026-11.md)
-    （四处修复；SenseVoice CER 69.4%→6.8%；脚本在 `tune/zh`）。
+    （四处修复；脚本在 `tune/zh`）。
+  - **四引擎标定完成**：默认参数固化为引擎绑定预设，旧预设已删除；见
+    [预设契约](docs/contracts/params-and-presets.md)。
   - **通用对齐层已落地**（`core/align_layer.py`）：借 Qwen 的 acoustic-only CTC 头给任意
     日语文本打逐字时间，Anime Whisper 侧是 `whisper.use_ctc_alignment`（默认关）。
-    实现是两遍：先 `engine.release()` 卸掉 Whisper 再装对齐器（实测峰值 6.2GB 而不是 11.8GB），
-    对齐完 `finally` 里卸载，MPS 回落到 0.03GB。
-    精度 p90 约 320ms——改善明显但**没到** ±150ms，所以没设成默认；
-    细节与数字见 Qwen 标定文档 §4，门槛仍在 `docs/backlog.md` P1-5。
+    实现是两遍（先 `engine.release()` 再装对齐器，峰值 6.2GB 而不是 11.8GB）。
+    精度 p90 约 320ms，没到 ±150ms 门槛，所以没设默认；细节见
+    [Qwen 标定文档](docs/转录标定-Qwen-2026-11.md) §4，门槛在 `docs/backlog.md` P1-5。
 - **日语引擎优化路线**（[docs/日语引擎优化路线-2026-11.md](docs/日语引擎优化路线-2026-11.md)）：
-  **P0-2 评测台已入库**——`tools/eval/` 的 `run_clip.py`（跑片出 scorecard）、
-  `probe_window.py`（qwen 逐窗直探）、`baseline.json`（第一遍数字 + 素材指纹），
-  用法在 `tools/eval/README.md`。素材与参考字幕**不随仓库**（`--fixtures` 指向），
-  基线只存数字与 sha1。
+  **P0-2 评测台已入库**：`tools/eval/` 的 `run_clip.py` / `probe_window.py` /
+  `baseline.json`，用法与素材口径见 `tools/eval/README.md`（素材不随仓库）。
   **P0-1 已完成**：`qwen.vad_onset_pad_ms` 默认 400（Test 二 CER 13.42%→11.47%、句首缺字
   5→1；Test 一 12.97%→12.22%；长片不劣化），whisper 同改法 CER +1.61pt，**不启用**。
   闸门 `onset_gate` 只在 A/B 里用、不进参数面板（实测按文档口径无效）。
@@ -200,4 +200,4 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
     诊断脚本 `tools/eval/qwen_confidence_diag.py`。
   - **P1-1 完成**：`kind="compare"` 只回文本；单句复核保留，批量复核入口已按双引擎重构删除；
     `transcribe_window()` + 空闲 180s 卸载。下一步 P1-3 词表 / P1-2 对齐 spike。
-  - **双引擎复核与工作流重构已完成**（S1–S4）：[需求文档](docs/双引擎复核与工作流-需求-2026-11.md) 为终稿；AI 契约见 `contracts/ai-proposal.md`。
+  - **双引擎复核与工作流重构已完成**（S1–S4）：见 [需求文档](docs/双引擎复核与工作流-需求-2026-11.md)。

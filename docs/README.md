@@ -10,6 +10,7 @@
 | [contracts/ai-proposal.md](contracts/ai-proposal.md) | 改 AI 提案 / 润色 / 翻译 / 技能之前必读：AI 这条线的**唯一现行契约**，含冻结决定 D-1～D-6 与验收断言 A1–A8。 |
 | [../AGENTS.md](../AGENTS.md) | **索引**：项目定位、仓库结构、红线与改动纪律、契约索引（2026-11-13 起瘦身为索引，正文拆到 `contracts/`）。 |
 | [contracts/engineering-practice.md](contracts/engineering-practice.md) | **方法论**：长期项目的五类失控与五道护栏在本仓库的落点、规则→测试的升级路径、多模型协作命令。新接手先读这份。 |
+| [contracts/params-and-presets.md](contracts/params-and-presets.md) | **参数与预设**：默认值唯一来源、预设必须绑定引擎、跨引擎载入 409、四套种子预设的素材条件与旧预设处理。改参数面板或 `presets.json` 前必读。 |
 | [contracts/](contracts/) | **分域契约正文**：`review-console.md`（核对台/内核边界/历史/主题）、`desktop-lifecycle.md`（启动/日志/退出清理）、`ai-proposal.md`（AI 提案 / 润色 / 翻译 / 技能，含冻结决定 D-1～D-6 与验收断言 A1–A8）、`export-and-prompt.md`（提示词/成片导出/代理）。改哪块先读哪份。 |
 | [review.md](review.md) | **合入前自审清单**：Review 四件事的可执行版本、本仓库的硬检查、单模型下的三个补偿动作（隔一轮再读 / 给置信度 / 换入口找问题）。配合 PR 模板用。 |
 | [backlog.md](backlog.md) | **待办唯一入口**：P1/P2 与「明确不做」的清单。发现的问题写这里，别只写在会话里；完成时移到「已完成」并留 commit。 |

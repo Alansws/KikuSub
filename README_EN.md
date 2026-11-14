@@ -47,7 +47,7 @@ Everything except the optional AI features is local inference.
 - Drag in video, audio or subtitles. MKV and HEVC — which Chromium cannot decode — get a 480p preview proxy built in the background.
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
-- All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. Six built-in presets, plus save / overwrite / delete.
+- All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. **Each engine ships one calibrated, engine-bound preset** (Japanese ASMR ×2, Chinese short-form ×2); the picker only lists presets for the selected engine, and cross-engine loads are rejected. Presets can be saved and deleted.
 - FFmpeg `dynaudnorm` is on by default (on quiet masters it is the difference between
   transcribing a line and dropping it); turn it off in the parameter panel if you prefer.
 - Silero VAD runs in 30 s windows: one long pass drifts and silently misses clear lines.
