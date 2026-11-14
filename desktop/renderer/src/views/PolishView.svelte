@@ -910,18 +910,18 @@
     min-height: 84px;
   }
   .struct .note {
-    padding: 4px 0;
+    padding: var(--sp-1) 0;
     border-bottom: 0;
     background: transparent;
   }
   .struct .note.err {
     background: var(--danger-soft);
-    padding: 4px 6px;
+    padding: var(--sp-1) 6px;
     border-radius: 4px;
   }
   .struct .note.warn {
     background: var(--warn-soft);
-    padding: 4px 6px;
+    padding: var(--sp-1) 6px;
     border-radius: 4px;
   }
   .struct-summary {
@@ -948,7 +948,7 @@
   .struct-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--sp-1);
   }
   .struct-group-title {
     font-size: 11px;
@@ -963,7 +963,7 @@
     display: flex;
     align-items: flex-start;
     gap: 7px;
-    padding: 6px 8px;
+    padding: 6px var(--sp-2);
     border: 1px solid var(--separator);
     border-radius: 6px;
     background: var(--bg-content);

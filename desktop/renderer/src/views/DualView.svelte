@@ -503,7 +503,7 @@
     background: color-mix(in srgb, var(--success) 24%, transparent);
   }
   .legend .sw + .sw {
-    margin-left: 4px;
+    margin-left: var(--sp-1);
   }
   .chk {
     display: inline-flex;
