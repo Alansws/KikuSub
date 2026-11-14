@@ -73,9 +73,12 @@ updated: 2026-11-14 20:05
 | 日语 ASMR：耳语·低底噪（Qwen3 默认） | `qwen` | 同上（两支日语引擎用同一支素材、同一份参照） |
 | 中文短视频：快节奏·带 BGM（SenseVoice 默认） | `sensevoice` | `中文_test_1.mp4`：345s 科技口播短视频，作者剪掉气口、语速快，**持续底噪/BGM**；画面烧字幕 OCR 后人工核对作参照 |
 | 中文短视频：快节奏·带 BGM（FireRed 默认） | `firered` | 同上 |
+| 歌曲 | `whisper` | 40:20–44:24 的强 BGM 歌曲段；`max_segment_s=15 / merge_gap_s=0.5 / min_silence_ms=300`，配合「人声分离」勾选使用 |
 
-四个预设的参数值都等于 `core/params.py` 的当前默认值，由
-`tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` 看守。
+前四个预设的参数值都等于 `core/params.py` 的当前默认值；「歌曲」是 Whisper 的
+同引擎第二方案（不是默认快照）。由
+`tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` 看守：
+每个引擎恰好一份默认快照，另允许 Whisper 的「歌曲」变体。
 素材、数字与结论分别在
 [转录标定-AnimeWhisper-2026-11.md](../转录标定-AnimeWhisper-2026-11.md)、
 [转录标定-Qwen-2026-11.md](../转录标定-Qwen-2026-11.md)、
@@ -119,6 +122,14 @@ names = {
 payload = {"版本": 1, "预设": {}}
 for engine, name in names.items():
     payload["预设"][name] = {"引擎": engine, "参数": params.defaults_for(engine)}
+# Whisper 的「歌曲」变体：默认值 + 3 个强 BGM 参数。
+song = params.defaults_for("whisper")
+song.update({
+    "whisper.vad_max_segment_s": 15.0,
+    "whisper.vad_merge_gap_s": 0.5,
+    "whisper.vad_min_silence_ms": 300,
+})
+payload["预设"]["歌曲"] = {"引擎": "whisper", "参数": song}
 with open("presets.json", "w", encoding="utf-8") as fh:
     json.dump(payload, fh, ensure_ascii=False, indent=2)
     fh.write("\n")
@@ -136,7 +147,7 @@ PY
 | 测试 | 守什么 |
 | --- | --- |
 | `tests/test_params.py::test_every_preset_key_exists_in_specs` | 种子文件里的键都在规格表里 |
-| `tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` | 四个引擎各恰好一份、值等于当前默认值 |
+| `tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` | 四个引擎各恰好一份默认快照；额外只允许 Whisper「歌曲」变体 |
 | `tests/test_presets.py::test_save_requires_engine` | 无引擎/非法引擎不能保存 |
 | `tests/test_presets.py::test_resolve_rejects_cross_engine_load` | 跨引擎载入被拒 |
 | `tests/test_presets.py::test_cannot_overwrite_another_engines_preset` | 同名跨引擎覆盖被拒 |

@@ -14,6 +14,8 @@
   - `polish_dual`（双源润色）：`{{SRT_A}}` / `{{SRT_B}}` / `{{RANGE_HINT}}`；
   - `translate`（翻译）：`{{SRT}}` / `{{LANG}}`。
   内置模板各分类至少一条；用户修改会持久化，删掉文件恢复出厂。
+  2026-11-15 起 `polish_dual` 多一条内置「歌曲歌词润色」：副歌重复段互校、
+  统一汉字/假名/英文用字，**仍保持 A 的条数与时间轴**（不开口子补句）。
 - 分类各自记住选中项：`selected`（翻译，兼容旧文件）、`selected_polish_single`、
   `selected_polish_dual`。旧 `prompts.json` 里没有 `category` 的模板归入 `translate`；
   跨分类 `select` 会 422。
