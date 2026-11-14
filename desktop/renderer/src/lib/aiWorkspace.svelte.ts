@@ -83,6 +83,38 @@ function aiContextKey(): string {
   return `${app.media?.id ?? ''}:${ai.kind}:${ai.lang}:${ai.mode}`;
 }
 
+/**
+ * 上下文切换（润色 ↔ 翻译、单源 ↔ 双源）时的本地编辑缓存。
+ *
+ * 切换上下文会重新从磁盘读提案；如果不缓存，用户刚勾掉的条目和双击改过的文本
+ * 会在切到翻译页再回来时全部回到「全选 + 模型原文」。按上下文 key 记住即可，
+ * 不参与磁盘提案（提案只存模型输出，人的编辑仍算 UI 草稿）。
+ */
+type AiDraftSnapshot = {
+  accept: Record<number, boolean>;
+  edits: Record<number, string>;
+  changedOnly: boolean;
+};
+
+const aiDraftCache = new Map<string, AiDraftSnapshot>();
+
+function takeDraftSnapshot(): AiDraftSnapshot {
+  return {
+    accept: { ...ai.accept },
+    edits: { ...ai.edits },
+    changedOnly: ai.changedOnly,
+  };
+}
+
+function restoreDraftSnapshot(key: string) {
+  if (!ai.proposal) return;
+  const saved = aiDraftCache.get(key);
+  if (!saved) return;
+  ai.accept = { ...saved.accept };
+  ai.edits = { ...saved.edits };
+  ai.changedOnly = saved.changedOnly;
+}
+
 export function segmentKey(segment: AiSegment): string {
   return `${segment.from}-${segment.to}`;
 }
@@ -170,9 +202,12 @@ function resetAiContextOnly() {
 }
 
 function switchAiContext(kind: 'polish' | 'translate', lang: string, mode: AiMode) {
+  const leavingKey = aiContextKey();
+  if (ai.proposal) aiDraftCache.set(leavingKey, takeDraftSnapshot());
   ai.kind = kind;
   ai.lang = lang;
   ai.mode = mode;
+  const nextKey = aiContextKey();
   ai.loadedFor = '';
   ai.accept = {};
   ai.edits = {};
@@ -180,6 +215,8 @@ function switchAiContext(kind: 'polish' | 'translate', lang: string, mode: AiMod
   void (async () => {
     if (aiLoadPromise) await aiLoadPromise;
     await loadAiProposal(true);
+    // 同一个上下文的钩选/手改从缓存恢复；没有缓存时保持 loadAiProposal 的全选默认。
+    restoreDraftSnapshot(nextKey);
   })();
 }
 
@@ -314,7 +351,15 @@ async function applyPolishWith(accept: number[] | null, label: string) {
   for (const [k, v] of Object.entries(ai.edits)) edits[Number(k)] = v;
   ai.applying = true;
   try {
-    const res = await api.applyAiProposal({ kind: ai.kind, lang: ai.lang, accept, edits });
+    // 必须把当前提案一起带上：手动粘贴 / 外部粘贴的提案在磁盘上可能还没有文件，
+    // 只传 kind 会让服务端退回“从磁盘读”，直接 409「找不到提案文件」。
+    const res = await api.applyAiProposal({
+      kind: ai.kind,
+      lang: ai.lang,
+      accept,
+      edits,
+      proposal: ai.proposal,
+    });
     applyCueSnapshot(res);
     if (res.changed) {
       scheduleDraftSave();
@@ -489,6 +534,19 @@ export async function parseAiPastedSrt() {
       } else {
         ai.accept[item.i] = true;
       }
+    }
+    // 解析结果立刻落盘：这份提案可能是「复制提示词 → 外部模型 → 粘回来」来的，
+    // 磁盘上原本没有对应文件。不落盘的话，切到翻译页再回来（或重开页面）时
+    // `loadAiProposal` 会读到 409，把刚解析好的整页内容清空。
+    try {
+      const saved = await api.saveAiProposal(proposal, ai.kind, ai.lang);
+      ai.path = saved.path;
+    } catch (err) {
+      ai.path = '';
+      ai.warnings = [
+        ...ai.warnings,
+        `解析成功，但没能写入提案文件：${(err as Error).message}（切页前请先点「另存」）`,
+      ];
     }
     if (segment) {
       ai.filled[segmentKey(segment)] = true;
