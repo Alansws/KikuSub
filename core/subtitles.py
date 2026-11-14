@@ -80,6 +80,28 @@ def remove_ellipsis_only_cues(cues: list[SubtitleCue]) -> list[SubtitleCue]:
     return [cue for cue in cues if not is_ellipsis_only(cue.text)]
 
 
+def join_cue_texts(parts: list[str]) -> str:
+    """合并字幕时拼文本：日文/中文直接相连，两侧都是西文单词时才补一个空格。
+
+    结构建议的 `merge` 与核对台的手工合并共用这一条规则；改拼接口径只改这里，
+    否则「手工合并」和「AI 结构建议合并」会产出两种文本。
+    """
+    out = ""
+    for raw in parts:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if not out:
+            out = text
+            continue
+        prev, nxt = out[-1], text[0]
+        if prev.isascii() and prev.isalnum() and nxt.isascii() and nxt.isalnum():
+            out += " " + text
+        else:
+            out += text
+    return out
+
+
 def parse_srt_timestamp(value: str) -> float:
     time_part, millis_part = re.split(r"[,.]", value.strip(), maxsplit=1)
     hours, minutes, seconds = (int(part) for part in time_part.split(":"))

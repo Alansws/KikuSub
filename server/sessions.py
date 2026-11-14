@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.subtitles import SubtitleCue
+from core.subtitles import SubtitleCue, join_cue_texts
 from core.textio import write_text_atomic
 
 # 可回溯历史：最多保留 50 步**操作**（另加一条「起始状态」）。
@@ -39,24 +39,6 @@ def _copy(cues: list[SubtitleCue]) -> list[SubtitleCue]:
 def _copy_tracks(tracks: dict[str, "TranslationTrack"]) -> dict[str, "TranslationTrack"]:
     """译文轨快照：结构性编辑与撤销必须一起回滚，否则时间轴与译文会错位。"""
     return {lang: track.copy() for lang, track in tracks.items()}
-
-
-def _join_cue_texts(parts: list[str]) -> str:
-    """合并字幕时拼文本：日文/中文直接相连，两侧都是西文单词时才补一个空格。"""
-    out = ""
-    for raw in parts:
-        text = str(raw or "").strip()
-        if not text:
-            continue
-        if not out:
-            out = text
-            continue
-        prev, nxt = out[-1], text[0]
-        if prev.isascii() and prev.isalnum() and nxt.isascii() and nxt.isalnum():
-            out += " " + text
-        else:
-            out += text
-    return out
 
 
 # 每个语种独立保留多少步"上一次的译文"。译文不走 review_cues 的撤销栈（D-3），
@@ -666,15 +648,15 @@ class Session:
             merged = SubtitleCue(
                 start=span[0].start,
                 end=span[-1].end,
-                text=_join_cue_texts([cue.text for cue in span]),
+                text=join_cue_texts([cue.text for cue in span]),
             )
             self.review_cues[first:last + 1] = [merged]
             count = last - first + 1
             for track in self.translations.values():
                 texts = track.texts[first:last + 1]
                 bases = track.base[first:last + 1]
-                track.texts[first:last + 1] = [_join_cue_texts(texts)]
-                track.base[first:last + 1] = [_join_cue_texts(bases)]
+                track.texts[first:last + 1] = [join_cue_texts(texts)]
+                track.base[first:last + 1] = [join_cue_texts(bases)]
             self._drop_translation_undo()
             self._record(f"合并 {count} 条字幕")
             return first
