@@ -113,6 +113,27 @@ def test_every_preset_key_exists_in_specs():
         assert not unknown, f"预设「{name}」里有规格表不认识的键：{unknown}"
 
 
+def test_shipped_presets_cover_every_engine_with_its_defaults():
+    """仓库里的种子预设 = 每个引擎一份「当前默认参数」快照，且都绑定到该引擎。
+
+    这条守住 2026-11-14 的约定：四个引擎各有一份标定后的默认预设；
+    预设不能跨引擎混用，也不允许把别的引擎的键混进来。
+    """
+    store = PresetStore(Path(__file__).resolve().parent.parent / "presets.json")
+    assert not store.load_error, store.load_error
+    listed = store.list()
+    assert len(listed) == len(params.ENGINES), f"种子预设应每个引擎恰好一份：{listed}"
+
+    for engine in params.ENGINES:
+        names = [name for name, bound in listed if bound == engine]
+        assert len(names) == 1, f"引擎 {engine} 应恰好有一份预设，实际：{names}"
+        entry = store.get(names[0])
+        assert entry["引擎"] == engine
+        assert entry["参数"] == params.defaults_for(engine), (
+            f"预设「{names[0]}」不是 {engine} 的当前默认参数"
+        )
+
+
 def test_schema_shape():
     data = params.schema()
     assert {e["key"] for e in data["engines"]} == set(params.ENGINES)

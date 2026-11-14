@@ -289,13 +289,29 @@ def test_preset_roundtrip(client: TestClient, tmp_path: Path, monkeypatch: pytes
     client.app.state.presets.reload()
 
     assert client.post("/api/presets", headers=auth(),
-                       json={"name": "冒烟", "engine": "whisper", "values": {"whisper.beam_size": 5}}
+                       json={"name": "冒烟", "engine": "whisper", "values": {"whisper.vad_threshold": 0.3}}
                        ).status_code == 201
     items = client.get("/api/presets", headers=auth()).json()["items"]
     assert items == [{"name": "冒烟", "engine": "whisper"}]
+    assert client.get("/api/presets?engine=whisper", headers=auth()).json()["items"] == items
+    assert client.get("/api/presets?engine=qwen", headers=auth()).json()["items"] == []
 
-    got = client.get("/api/presets/冒烟", headers=auth()).json()
-    assert got["values"]["whisper.beam_size"] == 5
+    got = client.get("/api/presets/冒烟?engine=whisper", headers=auth()).json()
+    assert got["engine"] == "whisper"
+    assert got["values"]["whisper.vad_threshold"] == 0.3
+
+    # 预设与引擎强绑定：选着 Qwen 时不能加载 Whisper 的预设
+    wrong = client.get("/api/presets/冒烟?engine=qwen", headers=auth())
+    assert wrong.status_code == 409
+    # 同名也不能改成别的引擎，避免把原方案覆盖掉
+    clash = client.post(
+        "/api/presets",
+        headers=auth(),
+        json={"name": "冒烟", "engine": "qwen", "values": {"qwen.max_cue_chars": 12}},
+    )
+    assert clash.status_code == 409
+    # 加载必须声明当前引擎，避免“先拿一份参数再套到别的面板上”
+    assert client.get("/api/presets/冒烟", headers=auth()).status_code == 422
 
     assert client.put("/api/presets/冒烟", headers=auth(), json={"new_name": "改名"}).json()["renamed"] is True
     assert client.delete("/api/presets/改名", headers=auth()).json()["deleted"] == "改名"
@@ -305,7 +321,9 @@ def test_preset_roundtrip(client: TestClient, tmp_path: Path, monkeypatch: pytes
 def test_preset_invalid_name_is_422(client: TestClient, tmp_path: Path) -> None:
     client.app.state.presets.path = tmp_path / "presets.json"
     client.app.state.presets.reload()
-    resp = client.post("/api/presets", headers=auth(), json={"name": "  ", "values": {}})
+    resp = client.post(
+        "/api/presets", headers=auth(), json={"name": "  ", "engine": "whisper", "values": {}}
+    )
     assert resp.status_code == 422
 
 

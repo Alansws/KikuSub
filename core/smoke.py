@@ -85,9 +85,11 @@ def main() -> int:
     _section("4. 预设存储（临时文件）")
     with tempfile.TemporaryDirectory() as tmp:
         store = presets.PresetStore(Path(tmp) / "presets.json")
-        store.save("冒烟预设", {"whisper.beam_size": 5}, engine="whisper")
-        assert store.get("冒烟预设")["参数"]["whisper.beam_size"] == 5
-        assert store.list() == [("冒烟预设", "whisper")]
+        store.save("冒烟预设", {"whisper.vad_threshold": 0.3}, engine="whisper")
+        assert store.get("冒烟预设")["参数"]["whisper.vad_threshold"] == 0.3
+        assert store.resolve("冒烟预设", "whisper")["引擎"] == "whisper"
+        assert store.list("whisper") == [("冒烟预设", "whisper")]
+        assert store.list("qwen") == []
         store.rename("冒烟预设", "改名后")
         store.delete("改名后")
         assert store.names() == []

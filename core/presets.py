@@ -2,6 +2,15 @@
 
 用于保存、加载、改名和删除参数预设。
 对应数据文件：presets.json
+
+**预设与引擎强绑定**（2026-11-14）：参数键本来就带引擎前缀（`qwen.*` /
+`sensevoice.*`），把 Qwen 的预设套到 Whisper 上只会得到一份半生效的配置。
+所以这里的规则是：
+
+- 保存时必须给出合法引擎，落盘前用 `core.params.normalize()` 收敛成该引擎的
+  完整参数快照（补默认值、丢掉别的引擎的键）；
+- 读取时必须带上当前选中的引擎，引擎不一致直接拒绝（`PresetEngineMismatch`）；
+- 同名预设不能跨引擎改写，避免「保存」把另一套引擎的方案静默覆盖。
 """
 
 from __future__ import annotations
@@ -12,6 +21,7 @@ import re
 import tempfile
 from pathlib import Path
 
+from . import params
 from .engines import KEYS as ENGINE_KEYS
 from .paths import PRESETS_PATH
 
@@ -24,6 +34,14 @@ INVALID_NAME_CHARS = re.compile(r"[\x00-\x1f\x7f/\\]")
 
 class PresetError(ValueError):
     """预设名不合法或操作失败异常。"""
+
+
+class PresetNotFound(PresetError):
+    """按名字找不到预设。"""
+
+
+class PresetEngineMismatch(PresetError):
+    """预设绑定的引擎与当前选中的引擎不一致。"""
 
 
 def clean_name(raw: str | None) -> str:
@@ -64,21 +82,22 @@ class PresetStore:
 
     @staticmethod
     def _normalize(entry: dict) -> dict | None:
+        """兼容两种历史格式：`{"引擎", "参数"}` 与直接平铺参数的旧文件。"""
         if not isinstance(entry, dict):
             return None
-        params = entry.get("参数")
-        if params is None:
-            params, engine = entry, None
+        params_block = entry.get("参数")
+        if params_block is None:
+            params_block, engine = entry, None
         else:
             engine = entry.get("引擎")
             if engine not in PresetStore.ENGINE_KEYS:
                 engine = None
-        if not isinstance(params, dict):
+        if not isinstance(params_block, dict):
             return None
-        engine = engine or PresetStore._infer_engine(params)
+        engine = engine or PresetStore._infer_engine(params_block)
         return {
             "引擎": engine if engine in PresetStore.ENGINE_KEYS else None,
-            "参数": {str(k): v for k, v in params.items()},
+            "参数": {str(k): v for k, v in params_block.items()},
         }
 
     def reload(self) -> None:
@@ -104,41 +123,80 @@ class PresetStore:
     def names(self) -> list[str]:
         return list(self._presets)
 
-    def list(self) -> list[tuple[str, str | None]]:
+    def list(self, engine: str | None = None) -> list[tuple[str, str | None]]:
+        """列出预设；给了 `engine` 就只返回与该引擎绑定的那些。"""
         out = []
         for name in sorted(self._presets):
-            entry = self._normalize(self._presets[name])
-            out.append((name, entry["引擎"] if entry else None))
+            entry = self.get(name)
+            if entry is None:
+                continue
+            bound = entry.get("引擎")
+            if engine is not None and bound != engine:
+                continue
+            out.append((name, bound))
         return out
 
     def get(self, name: str) -> dict | None:
-        return self._normalize(self._presets.get(name))
+        """按名字取预设；绑定引擎的预设会收敛成该引擎的完整参数。"""
+        entry = self._normalize(self._presets.get(name))
+        if entry is None:
+            return None
+        engine = entry.get("引擎")
+        if engine:
+            entry["参数"] = params.normalize(engine, entry["参数"])
+        return entry
+
+    def resolve(self, name: str, engine: str) -> dict:
+        """取预设并校验引擎绑定；不匹配时抛 `PresetEngineMismatch`。"""
+        if engine not in self.ENGINE_KEYS:
+            raise PresetError(f"未知引擎「{engine}」，预设必须绑定在已注册的引擎上。")
+        entry = self.get(name)
+        if entry is None:
+            raise PresetNotFound(f"未找到预设「{name}」。")
+        bound = entry.get("引擎")
+        if bound != engine:
+            label = bound or "未绑定"
+            raise PresetEngineMismatch(
+                f"预设「{name}」属于「{label}」引擎，不能加载到「{engine}」上。"
+                "请选择当前引擎自己的预设。"
+            )
+        return entry
 
     def save(self, raw_name: str, values: dict, engine: str | None = None) -> tuple[str, bool]:
+        """保存预设；必须给引擎，值会被收敛成该引擎的完整参数快照。"""
         name = clean_name(raw_name)
+        if engine not in self.ENGINE_KEYS:
+            raise PresetError("预设必须绑定一个识别引擎；未指定引擎的预设不再允许保存。")
+        if not isinstance(values, dict):
+            raise PresetError("预设参数必须是键值对。")
+        existing = self.get(name)
+        if existing is not None and existing.get("引擎") and existing["引擎"] != engine:
+            raise PresetEngineMismatch(
+                f"预设「{name}」已绑定「{existing['引擎']}」引擎，不能保存成「{engine}」。"
+                "请换一个名字，避免把另一套引擎的方案覆盖掉。"
+            )
         created = name not in self._presets
-        self._presets[name] = {"引擎": engine, "参数": dict(values)}
+        self._presets[name] = {"引擎": engine, "参数": params.normalize(engine, values)}
         self._flush()
         return name, created
 
     def rename(self, old_name: str, raw_name: str) -> tuple[str, bool]:
         old_name = clean_name(old_name)
         if old_name not in self._presets:
-            raise PresetError(f"未找到预设「{old_name}」。")
+            raise PresetNotFound(f"未找到预设「{old_name}」。")
         new_name = clean_name(raw_name)
-        values = self._presets.pop(old_name)
+        if new_name == old_name:
+            return new_name, False
         if new_name in self._presets:
-            self._presets[new_name] = values
-            self._flush()
-            return new_name, True
-        self._presets[new_name] = values
+            raise PresetError(f"已存在同名预设「{new_name}」。")
+        self._presets[new_name] = self._presets.pop(old_name)
         self._flush()
         return new_name, False
 
     def delete(self, name: str) -> str:
         name = clean_name(name)
         if name not in self._presets:
-            raise PresetError(f"未找到预设「{name}」。")
+            raise PresetNotFound(f"未找到预设「{name}」。")
         del self._presets[name]
         self._flush()
         return name

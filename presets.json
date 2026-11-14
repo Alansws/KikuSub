@@ -1,106 +1,81 @@
 {
   "版本": 1,
   "预设": {
-    "Qwen耳语转录识别": {
-      "引擎": "qwen",
-      "参数": {
-        "qwen.enable_loudnorm": false,
-        "qwen.vad_threshold": 0.18,
-        "qwen.vad_speech_pad_ms": 150,
-        "qwen.merge_gap_s": 0.3,
-        "qwen.max_cue_dur": 4.3,
-        "qwen.max_cue_chars": 22,
-        "qwen.min_pause_s": 0.15,
-        "qwen.max_segment_s": 15,
-        "qwen.use_alignment": true,
-        "qwen.cue_pad_start_s": 0.08,
-        "qwen.cue_pad_end_s": 0.08
-      }
-    },
-    "Whisper-MLX 对标参数预设": {
-      "引擎": "whisper",
-      "参数": {
-        "whisper.no_repeat_ngram_size": 5,
-        "whisper.repetition_penalty": 1.1,
-        "whisper.vad_threshold": 0.3,
-        "whisper.vad_min_speech_ms": 120,
-        "whisper.vad_min_silence_ms": 250,
-        "whisper.vad_speech_pad_ms": 200,
-        "whisper.vad_merge_gap_s": 0.8,
-        "whisper.vad_max_segment_s": 20,
-        "whisper.vad_min_speech_s": 0.08,
-        "whisper.cue_pad_s": 0.05,
-        "whisper.enable_sentence_split": true,
-        "whisper.enable_loudnorm": true
-      }
-    },
-    "常用推荐：高灵敏切分": {
+    "日语 ASMR：耳语·低底噪（Whisper 默认）": {
       "引擎": "whisper",
       "参数": {
         "whisper.enable_sentence_split": true,
-        "whisper.enable_loudnorm": false,
-        "whisper.vad_threshold": 0.2,
-        "whisper.vad_min_speech_ms": 120,
-        "whisper.vad_min_silence_ms": 150,
-        "whisper.vad_speech_pad_ms": 200,
+        "whisper.enable_loudnorm": true,
+        "whisper.vad_threshold": 0.25,
+        "whisper.vad_speech_pad_ms": 250,
+        "whisper.vad_onset_pad_ms": 0,
+        "whisper.vad_min_silence_ms": 200,
+        "whisper.vad_min_speech_ms": 80,
         "whisper.vad_merge_gap_s": 0.3,
-        "whisper.vad_max_segment_s": 12.0,
+        "whisper.vad_max_segment_s": 9.0,
         "whisper.vad_min_speech_s": 0.08,
         "whisper.cue_pad_s": 0.02,
+        "whisper.strip_nonverbal_edges": true,
+        "whisper.use_ctc_alignment": false,
         "whisper.no_repeat_ngram_size": 5,
         "whisper.repetition_penalty": 1.15
       }
     },
-    "电影推荐：Qwen3 逐字对齐": {
+    "日语 ASMR：耳语·低底噪（Qwen3 默认）": {
       "引擎": "qwen",
       "参数": {
-        "qwen.vad_threshold": 0.28,
+        "qwen.enable_loudnorm": true,
+        "qwen.use_alignment": true,
+        "qwen.vad_threshold": 0.3,
         "qwen.vad_min_speech_ms": 100,
         "qwen.vad_min_silence_ms": 200,
-        "qwen.vad_speech_pad_ms": 150,
+        "qwen.vad_speech_pad_ms": 250,
+        "qwen.vad_onset_pad_ms": 400,
         "qwen.merge_gap_s": 0.5,
+        "qwen.max_segment_s": 12.0,
+        "qwen.min_pause_s": 0.12,
         "qwen.max_cue_dur": 4.3,
         "qwen.max_cue_chars": 21,
-        "qwen.min_pause_s": 0.12,
-        "qwen.max_segment_s": 16,
-        "qwen.use_alignment": true,
-        "qwen.enable_loudnorm": true,
-        "qwen.cue_pad_start_s": 0.12,
-        "qwen.cue_pad_end_s": 0.12
+        "qwen.cue_pad_start_s": 0.2,
+        "qwen.cue_pad_end_s": 0.45,
+        "qwen.strip_nonverbal_edges": true
       }
     },
-    "电影推荐：高召回防漏音": {
-      "引擎": "whisper",
+    "中文短视频：快节奏·带 BGM（SenseVoice 默认）": {
+      "引擎": "sensevoice",
       "参数": {
-        "whisper.no_repeat_ngram_size": 4,
-        "whisper.repetition_penalty": 1.15,
-        "whisper.vad_threshold": 0.28,
-        "whisper.vad_min_speech_ms": 100,
-        "whisper.vad_min_silence_ms": 200,
-        "whisper.vad_speech_pad_ms": 150,
-        "whisper.vad_merge_gap_s": 0.5,
-        "whisper.vad_max_segment_s": 15,
-        "whisper.vad_min_speech_s": 0.08,
-        "whisper.cue_pad_s": 0.05,
-        "whisper.enable_sentence_split": true,
-        "whisper.enable_loudnorm": true
+        "sensevoice.enable_loudnorm": true,
+        "sensevoice.use_itn": true,
+        "sensevoice.num_threads": 2,
+        "sensevoice.vad_threshold": 0.3,
+        "sensevoice.vad_min_speech_ms": 100,
+        "sensevoice.vad_min_silence_ms": 200,
+        "sensevoice.vad_speech_pad_ms": 150,
+        "sensevoice.merge_gap_s": 0.5,
+        "sensevoice.max_segment_s": 10.0,
+        "sensevoice.min_pause_s": 0.2,
+        "sensevoice.max_cue_dur": 4.3,
+        "sensevoice.max_cue_chars": 14,
+        "sensevoice.cue_pad_s": 0.1
       }
     },
-    "耳语whisper识别【极高灵敏】": {
-      "引擎": "whisper",
+    "中文短视频：快节奏·带 BGM（FireRed 默认）": {
+      "引擎": "firered",
       "参数": {
-        "whisper.enable_sentence_split": true,
-        "whisper.enable_loudnorm": false,
-        "whisper.vad_threshold": 0.18,
-        "whisper.vad_speech_pad_ms": 300,
-        "whisper.vad_min_silence_ms": 150,
-        "whisper.vad_min_speech_ms": 80,
-        "whisper.vad_merge_gap_s": 0.3,
-        "whisper.vad_max_segment_s": 12,
-        "whisper.cue_pad_s": 0.02,
-        "whisper.no_repeat_ngram_size": 5,
-        "whisper.repetition_penalty": 1.15,
-        "whisper.vad_min_speech_s": 0.08
+        "firered.enable_loudnorm": true,
+        "firered.use_punc": true,
+        "firered.num_threads": 2,
+        "firered.vad_threshold": 0.3,
+        "firered.vad_min_speech_ms": 100,
+        "firered.vad_min_silence_ms": 200,
+        "firered.vad_speech_pad_ms": 150,
+        "firered.merge_gap_s": 0.35,
+        "firered.max_segment_s": 20.0,
+        "firered.min_pause_s": 0.24,
+        "firered.max_cue_dur": 4.3,
+        "firered.max_cue_chars": 14,
+        "firered.energy_align": true,
+        "firered.cue_pad_s": 0.1
       }
     }
   }
