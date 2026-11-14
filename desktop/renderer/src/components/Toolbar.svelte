@@ -110,8 +110,12 @@
           : `${app.cues.length} 条 · 待转写`;
       case 'review':
         return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
-      case 'ai':
-        return '建议对照 · 逐条采纳后整批应用';
+      case 'dual':
+        return '双引擎对照 · 只读比较，编辑回核对台';
+      case 'polish':
+        return '润色 · 单源 / 双源三栏对照';
+      case 'translate':
+        return '翻译 · 原文定稿后生成译文轨';
       case 'prompts':
         return '提示词库 · 单击选中 / 双击编辑';
       case 'export':
@@ -161,11 +165,11 @@
   {#if app.view === 'review'}
     <button
       class="btn ghost top-act"
-      onclick={() => setView('ai')}
+      onclick={() => setView('polish')}
       title="按全片语境修正识别错误：左原文、右 AI 建议，时间码不变"
-      aria-label="AI 优化"
+      aria-label="润色"
     >
-      <Icon name="sparkle" size={12} /><span class="act-label">AI 优化</span>
+      <Icon name="sparkle" size={12} /><span class="act-label">润色</span>
     </button>
     <button
       class="btn ghost top-act"
@@ -683,7 +687,7 @@
   }
 
   /* 紧凑模式（≤900px）：标题让位给主路径，副标与引擎分段先后收起，
-     「AI 优化 / 导出」只留图标（title + aria-label 仍在）。 */
+     「润色 / 翻译 / 导出」只留图标（title + aria-label 仍在）。 */
   @media (max-width: 900px) {
     .toolbar {
       gap: 6px;

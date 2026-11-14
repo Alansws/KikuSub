@@ -22,7 +22,7 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 
 # 2026-11-13 冻结值。只许下调；上调要在提交信息里说明为什么这次没法抽。
 BUDGET = {
-    "lib/store.svelte.ts": 3928,
+    "lib/store.svelte.ts": 3328,
     "views/ReviewView.svelte": 3910,
 }
 

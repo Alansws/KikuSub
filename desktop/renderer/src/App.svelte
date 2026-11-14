@@ -12,7 +12,9 @@
   import ImportView from './views/ImportView.svelte';
   import TranscribeView from './views/TranscribeView.svelte';
   import ReviewView from './views/ReviewView.svelte';
-  import AiView from './views/AiView.svelte';
+  import DualView from './views/DualView.svelte';
+  import PolishView from './views/PolishView.svelte';
+  import TranslateView from './views/TranslateView.svelte';
   import ReportView from './views/ReportView.svelte';
   import PromptView from './views/PromptView.svelte';
   import ExportView from './views/ExportView.svelte';
@@ -41,6 +43,7 @@
     type View,
   } from './lib/store.svelte';
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
+  import { refreshAltReview } from './lib/dualReview.svelte';
 
   let engine = $state('whisper');
   let review: {
@@ -231,6 +234,17 @@
     return () => mq.removeEventListener('change', onChange);
   });
 
+  // ---------------- 第二版徽标 ----------------
+  // 第二版存在时侧栏要显示差异行数；核对台改一句后也要更新统计（防抖）。
+  $effect(() => {
+    void app.connected;
+    void app.media?.id;
+    void app.cuesRevision;
+    if (!app.connected) return;
+    const id = window.setTimeout(() => void refreshAltReview(), 350);
+    return () => window.clearTimeout(id);
+  });
+
   // ---------------- 菜单 ----------------
   $effect(() => {
     return window.kikusub.onMenu((ev) => {
@@ -355,8 +369,14 @@
       case 'view.review':
         setView('review');
         return;
-      case 'view.ai':
-        setView('ai');
+      case 'view.dual':
+        setView('dual');
+        return;
+      case 'view.polish':
+        setView('polish');
+        return;
+      case 'view.translate':
+        setView('translate');
         return;
       case 'view.export':
         setView('export');
@@ -497,8 +517,12 @@
           <TranscribeView bind:engine />
         {:else if app.view === 'review'}
           <ReviewView bind:this={review} {engine} />
-        {:else if app.view === 'ai'}
-          <AiView />
+        {:else if app.view === 'dual'}
+          <DualView />
+        {:else if app.view === 'polish'}
+          <PolishView />
+        {:else if app.view === 'translate'}
+          <TranslateView />
         {:else if app.view === 'prompts'}
           <PromptView />
         {:else if app.view === 'export'}

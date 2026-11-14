@@ -2240,7 +2240,7 @@
     </div>
 
     <!-- 第二行只放「看时间轴」的工具：缩放、全景、聚焦、跟随。
-         AI 优化 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
+         润色 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
     <div class="tl-tools">
       <div class="zoom-group">
         <button class="zbtn" onclick={() => zoomAt(play.time, 1.5)} title="缩小波形" aria-label="缩小波形">

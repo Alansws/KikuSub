@@ -4,16 +4,11 @@
    *
    * 从 `ReviewView.svelte` 抽出来的原因有两条：
    * - 那个文件有行数预算（只许变短），而这一块是一个完整的小界面单元；
-   * - 「另一引擎复核」的批量入口本来就要挂在这条工具条上，抽出来之后复核的 UI
-   *   不再散落在两个文件里。
+   * - 批量复核入口已按产品决定删除（Q1/R1）；单句复核仍留在检查器与质检面板。
    *
    * 组件不拥有状态：选区归 ReviewView 管，这里只读 + 回调。
    */
   import Icon from './Icon.svelte';
-  import { app } from '../lib/store.svelte';
-  import { indicesForLaneKeys, indicesInRange } from '../lib/selection';
-  import { runSecondOpinion, secondOpinion } from '../lib/secondOpinion.svelte';
-  import { jobBusy } from '../lib/jobState';
   import { tcShort } from '../lib/time';
 
   let {
@@ -39,15 +34,6 @@
     onClearLane: () => void;
     onClearSelection: () => void;
   } = $props();
-
-  function reviewLane(): void {
-    runSecondOpinion(indicesForLaneKeys(app.cues, laneSelection));
-  }
-
-  function reviewSelection(): void {
-    if (!selection) return;
-    runSecondOpinion(indicesInRange(app.cues, selection.start, selection.end));
-  }
 </script>
 
 {#if laneSelection.length > 1}
@@ -58,13 +44,6 @@
     </span>
     <button class="btn tiny danger" onclick={onDelete} title="删除选中的全部字幕（⌘Z 可撤销）">
       <Icon name="trash" size={10} />删除
-    </button>
-    <button
-      class="btn tiny"
-      onclick={reviewLane}
-      disabled={jobBusy() || secondOpinion.status === 'running' || laneSelection.length > 40}
-      title={laneSelection.length > 40 ? '一次最多 40 条' : '用另一个引擎把选中的字幕各听一遍'}>
-      {#if secondOpinion.status === 'running'}<span class="spin"></span>复核中{:else}🎧 复核 {laneSelection.length} 条{/if}
     </button>
     <div class="tl-spacer"></div>
     <button class="btn tiny ghost" onclick={onClearLane} title="取消多选">
@@ -89,11 +68,6 @@
     </button>
     <button class="btn tiny" onclick={onSendSelection} title="填到转写页的区间">填入转写</button>
     <button class="btn tiny" onclick={onFocus} title="放大到选区">聚焦</button>
-    <button
-      class="btn tiny"
-      onclick={reviewSelection}
-      disabled={jobBusy() || secondOpinion.status === 'running'}
-      title="把选区里的字幕送给另一个引擎各听一遍">🎧 复核选区</button>
     <div class="tl-spacer"></div>
     <button class="btn tiny ghost" onclick={onClearSelection} title="清除选区">
       <Icon name="close" size={10} />

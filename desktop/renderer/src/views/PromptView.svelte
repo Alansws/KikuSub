@@ -8,19 +8,31 @@
   import { tick } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
+  import { copyPromptTemplateForCategory } from '../lib/aiWorkspace.svelte';
   import {
-    app,
-    copyPromptTemplate,
     createPromptTemplate,
     deletePromptTemplate,
     loadPrompts,
     prompts,
+    promptItemsFor,
+    promptSelectedId,
     resetPromptTemplate,
     savePromptTemplate,
     selectPromptTemplate,
-    setView,
-    toast,
-  } from '../lib/store.svelte';
+    type PromptCategory,
+  } from '../lib/promptStore.svelte';
+  import { app, setView, toast } from '../lib/store.svelte';
+
+  const CATEGORIES: { id: PromptCategory; label: string; hint: string }[] = [
+    { id: 'polish_single', label: '单源润色', hint: '使用 {{SRT}}，只修正识别错误，不改写风格。' },
+    { id: 'polish_dual', label: '双源润色', hint: '使用 {{SRT_A}} / {{SRT_B}}；以 A 为骨架，参考 B 修正错听与漏字。' },
+    { id: 'translate', label: '翻译', hint: '使用 {{SRT}} / {{LANG}}；只在原文定稿后使用。' },
+  ];
+
+  let category = $state<PromptCategory>('translate');
+  const activeCategory = $derived(CATEGORIES.find((item) => item.id === category) ?? CATEGORIES[2]);
+  const items = $derived(promptItemsFor(category));
+  const selectedId = $derived(promptSelectedId(category));
 
   let editingId = $state('');
   let draftName = $state('');
@@ -41,6 +53,7 @@
     isNew ? null : (prompts.items.find((item) => item.id === editingId) ?? null),
   );
   const canCopy = $derived(app.cues.length > 0);
+  const canCopyDual = $derived(canCopy);
 
   $effect(() => {
     if (!app.connected) {
@@ -58,7 +71,11 @@
       draftName = '新模板';
       draftDescription = '';
       draftContent =
-        '请将以下 SRT 日语字幕翻译为{{LANG}}：\n\n内容如下：\n{{SRT}}';
+        category === 'polish_dual'
+          ? '你是日语影视字幕校对员。请以 A 为主稿、参考 B 修正识别错误；\n严格沿用 A 的序号与时间轴，只输出修订后的 SRT。\n{{RANGE_HINT}}\n\n【A】\n{{SRT_A}}\n\n【B】\n{{SRT_B}}'
+          : category === 'polish_single'
+            ? '你是日语影视字幕校对员。只修正明显的识别错误，不改写风格。\n严格保留原序号与时间戳，只输出修正后的 SRT。\n{{RANGE_HINT}}\n{{SRT}}'
+            : '请将以下 SRT 日语字幕翻译为{{LANG}}：\n\n内容如下：\n{{SRT}}';
     } else {
       const item = prompts.items.find((entry) => entry.id === id);
       if (!item) return;
@@ -90,10 +107,11 @@
           draftName.trim() || '新模板',
           draftContent,
           draftDescription,
+          category,
         );
         if (created) {
           editingId = '';
-          await selectPromptTemplate(created);
+          await selectPromptTemplate(created, category);
         }
       } else if (editingItem) {
         const ok = await savePromptTemplate(editingId, {
@@ -131,7 +149,17 @@
       toast('当前还没有字幕；导入并转写后再复制', 'warn');
       return;
     }
-    await copyPromptTemplate(itemId);
+    if (category === 'polish_dual' && !canCopyDual) {
+      toast('双源模板需要第二版字幕', 'warn');
+      return;
+    }
+    await copyPromptTemplateForCategory(itemId, category);
+  }
+
+  function switchCategory(next: PromptCategory) {
+    if (next === category) return;
+    if (editingId) cancelEdit();
+    category = next;
   }
 
   function onKey(e: KeyboardEvent) {
@@ -157,13 +185,32 @@
     subtitle={'单击选中、双击编辑；复制时自动填入当前字幕与目标语种。'}
   >
     <span class="cue-meta">{app.cues.length} 条字幕</span>
-    <button class="btn ghost" onclick={() => setView('ai')} title="回到 AI 优化台">
-      <Icon name="doc" size={11} />AI 优化台
+    <button class="btn ghost" onclick={() => setView('polish')} title="回到润色页">
+      <Icon name="doc" size={11} />润色页
+    </button>
+    <button class="btn ghost" onclick={() => setView('translate')} title="回到翻译页">
+      <Icon name="quote" size={11} />翻译页
     </button>
     <button class="btn primary" onclick={() => beginEdit('__new__')} disabled={Boolean(editingId)}>
       <Icon name="plus" size={11} />新建模板
     </button>
   </PageHeader>
+
+  <div class="tabs" role="tablist" aria-label="提示词分类">
+    {#each CATEGORIES as item (item.id)}
+      <button
+        role="tab"
+        aria-selected={category === item.id}
+        class="tab"
+        class:on={category === item.id}
+        onclick={() => switchCategory(item.id)}
+      >
+        {item.label}
+        <span class="tab-count">{promptItemsFor(item.id).length}</span>
+      </button>
+    {/each}
+    <span class="tab-hint">{activeCategory.hint}</span>
+  </div>
 
   {#if prompts.error}
     <div class="note err"><Icon name="warn" size={12} /><span>{prompts.error}</span></div>
@@ -171,7 +218,7 @@
 
   {#if prompts.loading && !prompts.items.length}
     <div class="loading">正在读取提示词模板…</div>
-  {:else if !prompts.items.length}
+  {:else if !items.length}
     <div class="empty">
       <Icon name="doc" size={22} />
       <div>还没有提示词模板</div>
@@ -179,13 +226,13 @@
     </div>
   {:else}
     <div class="grid">
-      {#each prompts.items as item (item.id)}
+      {#each items as item (item.id)}
         <article
           class="card"
-          class:selected={item.id === prompts.selected}
+          class:selected={item.id === selectedId}
           class:editing={editingId === item.id}
           onclick={() => {
-            if (!editingId) void selectPromptTemplate(item.id);
+            if (!editingId) void selectPromptTemplate(item.id, category);
           }}
           ondblclick={(e) => {
             e.preventDefault();
@@ -194,7 +241,7 @@
           role="button"
           tabindex="0"
           onkeydown={(e) => {
-            if (e.key === 'Enter' && !editingId) void selectPromptTemplate(item.id);
+            if (e.key === 'Enter' && !editingId) void selectPromptTemplate(item.id, category);
             if (e.key === 'F2' && !editingId) void beginEdit(item.id);
           }}
           title="单击选中；双击编辑"
@@ -202,7 +249,7 @@
           <div class="card-top">
             <div class="card-name">
               <b>{item.name}</b>
-              {#if item.id === prompts.selected}
+              {#if item.id === selectedId}
                 <span class="badge">使用中</span>
               {:else if item.builtin}
                 <span class="tag">内置</span>
@@ -275,8 +322,8 @@
               </button>
               <span class="chars">{item.content.length.toLocaleString()} 字符</span>
               <div class="spacer"></div>
-              {#if item.id !== prompts.selected}
-                <button class="btn tiny" onclick={(e) => { e.stopPropagation(); void selectPromptTemplate(item.id); }}>
+              {#if item.id !== selectedId}
+                <button class="btn tiny" onclick={(e) => { e.stopPropagation(); void selectPromptTemplate(item.id, category); }}>
                   设为当前
                 </button>
               {/if}
@@ -334,7 +381,8 @@
     </div>
 
     <div class="footnote">
-      复制出来的提示词可以粘到任意聊天窗，再把模型回复的 SRT 粘回「AI 优化台 → 粘贴结果」逐条对照。
+      复制出来的提示词可以粘到任意聊天窗，再把模型回复的 SRT 粘回对应的「润色」或「翻译」页逐条对照。
+      三个分类互不混杂：润色只读自己的分类，翻译只读翻译分类。
     </div>
   {/if}
 </div>
@@ -349,6 +397,49 @@
     grid-template-columns: minmax(0, 1120px);
     justify-content: center;
     align-content: start;
+  }
+  .tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    margin-bottom: var(--sp-3);
+    padding-bottom: var(--sp-2);
+    border-bottom: 1px solid var(--separator-soft);
+    flex-wrap: wrap;
+  }
+  .tab {
+    border: 0;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 11px;
+    border-radius: 7px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tab:hover {
+    background: var(--fill);
+  }
+  .tab.on {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .tab-count {
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .tab.on .tab-count {
+    color: var(--accent);
+  }
+  .tab-hint {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-3);
   }
   .hint code {
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);

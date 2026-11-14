@@ -1,14 +1,19 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { app, setView, type View } from '../lib/store.svelte';
+  import { dual } from '../lib/dualReview.svelte';
   import appIcon from '../assets/app-icon.png';
 
-  const items: { view: View; icon: string; label: string }[] = [
-    { view: 'import', icon: 'tray', label: '导入' },
-    { view: 'transcribe', icon: 'wave', label: '转写' },
-    { view: 'review', icon: 'listcheck', label: '核对台' },
-    { view: 'ai', icon: 'sparkle', label: 'AI 优化' },
-    { view: 'export', icon: 'export', label: '导出' },
+  // 按工作流顺序：导入 → 转写 → 核对 → 双引擎复核 → 润色 → 翻译 → 导出。
+  // ⌘1..⌘7 与这张表一一对应（见 lib/shortcuts.svelte.ts）。
+  const items: { view: View; icon: string; label: string; key: string }[] = [
+    { view: 'import', icon: 'tray', label: '导入', key: '⌘1' },
+    { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
+    { view: 'review', icon: 'listcheck', label: '核对台', key: '⌘3' },
+    { view: 'dual', icon: 'rows', label: '双引擎复核', key: '⌘4' },
+    { view: 'polish', icon: 'sparkle', label: '润色', key: '⌘5' },
+    { view: 'translate', icon: 'quote', label: '翻译', key: '⌘6' },
+    { view: 'export', icon: 'export', label: '导出', key: '⌘7' },
   ];
 </script>
 
@@ -28,13 +33,17 @@
       class="sb-item"
       class:active={app.view === item.view}
       onclick={() => setView(item.view)}
-      title={item.label}
-      aria-label={item.label}
+      title={`${item.label}（${item.key}）`}
+      aria-label={`${item.label}（${item.key}）`}
     >
       <span class="ico"><Icon name={item.icon} /></span>
       <span>{item.label}</span>
       {#if item.view === 'review' && app.cues.length}
         <span class="sb-count">{app.cues.length}</span>
+      {:else if item.view === 'dual' && dual.exists}
+        <span class="sb-count alt" title="文本差异行数（+ / − 漏句在页内单独显示）">
+          {dual.stats?.badge ?? 0}
+        </span>
       {/if}
     </button>
   {/each}
@@ -151,6 +160,14 @@
   }
   .sb-item.active .sb-count {
     color: var(--accent);
+  }
+  .sb-count.alt {
+    min-width: 17px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    text-align: center;
   }
 
   .sb-spacer {
