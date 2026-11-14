@@ -33,8 +33,10 @@ class _FakeEngine:
         self.last_align_stats: dict = {}
         self.last_stats = _FakeStats()
         self.received: dict = {}
+        self.media_path = None
 
     def transcribe_file(self, media_path, **kwargs):
+        self.media_path = media_path
         self.received = kwargs
         cb = kwargs["progress_cb"]
         for i in range(1, 4):
@@ -254,4 +256,52 @@ def test_engine_family_comes_from_registry(media, tmp_path, monkeypatch):
         pipeline.run_transcription(
             pipeline.TranscribeRequest(media_path=media, engine_key="sensevoice-pro"),
             output_dir=tmp_path,
+        )
+
+
+def test_separate_vocals_routes_engine_to_cached_vocals(media, tmp_path, monkeypatch):
+    """勾选人声分离：引擎拿到的是区间 vocals，时间轴仍按原片绝对时间。"""
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import audio_cache, separate
+
+    vocals = tmp_path / "vocals.wav"
+    vocals.write_bytes(b"RIFF" + b"x" * 100)
+    seen: dict = {}
+
+    def fake_ensure(media_path, *, start, end, separator, cancel_event=None, progress_cb=None):
+        seen.update(start=start, end=end)
+        if progress_cb:
+            progress_cb(0.5, "fake sep")
+        return vocals
+
+    monkeypatch.setattr(audio_cache, "ensure_vocals_wav", fake_ensure)
+    monkeypatch.setattr(separate, "available", lambda: True)
+
+    engine = _FakeEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media,
+            start_s=10.0,
+            end_s=20.0,
+            separate_vocals=True,
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+
+    assert seen == {"start": 10.0, "end": 20.0}
+    assert engine.media_path == vocals
+    assert engine.received["start_time_s"] is None
+    assert engine.received["end_time_s"] is None
+    assert engine.received["time_offset"] == 10.0
+    assert result.out_filename.startswith("episode_00m10s-00m20s")
+
+
+def test_separate_vocals_requires_range(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match="人声分离只支持"):
+        pipeline.run_transcription(
+            pipeline.TranscribeRequest(media_path=media, separate_vocals=True),
+            output_dir=tmp_path,
+            engine=_FakeEngine(),
         )

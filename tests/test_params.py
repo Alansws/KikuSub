@@ -118,20 +118,30 @@ def test_shipped_presets_cover_every_engine_with_its_defaults():
 
     这条守住 2026-11-14 的约定：四个引擎各有一份标定后的默认预设；
     预设不能跨引擎混用，也不允许把别的引擎的键混进来。
+
+    2026-11-15 起 Whisper 额外带一份「歌曲」变体（强 BGM / 歌曲区间用），
+    它不是默认快照，只是同引擎的第二个命名方案；除此之外仍只允许每引擎一份默认值。
     """
     store = PresetStore(Path(__file__).resolve().parent.parent / "presets.json")
     assert not store.load_error, store.load_error
     listed = store.list()
-    assert len(listed) == len(params.ENGINES), f"种子预设应每个引擎恰好一份：{listed}"
 
-    for engine in params.ENGINES:
-        names = [name for name, bound in listed if bound == engine]
-        assert len(names) == 1, f"引擎 {engine} 应恰好有一份预设，实际：{names}"
-        entry = store.get(names[0])
-        assert entry["引擎"] == engine
-        assert entry["参数"] == params.defaults_for(engine), (
-            f"预设「{names[0]}」不是 {engine} 的当前默认参数"
-        )
+    defaults = [
+        name
+        for name, bound in listed
+        if store.get(name)["参数"] == params.defaults_for(bound)
+    ]
+    assert len(defaults) == len(params.ENGINES), (
+        f"每个引擎应恰好有一份等于当前默认值的预设：{listed}"
+    )
+
+    extras = [name for name, _bound in listed if name not in defaults]
+    assert set(extras) == {"歌曲"}, f"除每引擎默认预设外只允许「歌曲」变体：{extras}"
+    assert store.get("歌曲")["引擎"] == "whisper"
+    song = store.get("歌曲")["参数"]
+    assert song["whisper.vad_max_segment_s"] == 15.0
+    assert song["whisper.vad_merge_gap_s"] == 0.5
+    assert song["whisper.vad_min_silence_ms"] == 300
 
 
 def test_schema_shape():

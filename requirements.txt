@@ -1,6 +1,9 @@
 # 日语影片字幕转录工作台 依赖清单
 torch>=2.1.0,<3
 torchaudio>=2.1.0,<3
+# 人声分离（强 BGM / 歌曲区间）：Demucs htdemucs。权重按需下到
+# <models>/demucs/，不随包；只用 htdemucs，不引入 UVR / BS-RoFormer。
+demucs==4.0.1
 # Qwen3-ASR 原生支持（AutoModelForMultimodalLM / apply_transcription_request）需要 5.13+
 transformers>=5.13.0,<6
 huggingface_hub>=0.23.0

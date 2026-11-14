@@ -61,6 +61,9 @@ class TranscribeJobRequest(BaseModel):
     # 整片转写且核对台非空时：true = 写进「双引擎复核」第二列，不覆盖核对台。
     # 是否真的走第二列由服务端按「核对台非空 + apply=replace」再判一次。
     alt_review: bool = False
+    # 强 BGM / 歌曲：只对 start/end 区间做 Demucs 人声分离。必须给区间；
+    # 分离结果缓存在 audio_cache，换引擎重转直接复用。
+    separate_vocals: bool = False
 
     @field_validator("engine")
     @classmethod
@@ -138,6 +141,11 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         raise HTTPException(status_code=422, detail="起始时间不能为负")
     if payload.start is not None and payload.end is not None and payload.end <= payload.start:
         raise HTTPException(status_code=422, detail="结束时间必须大于起始时间")
+    if payload.separate_vocals and (payload.start is None or payload.end is None):
+        raise HTTPException(
+            status_code=422,
+            detail="人声分离只支持填写了起止时间的区间转写（不要分离整部影片）",
+        )
 
     # 参数键用 core.params 的规格键（whisper.vad_threshold 这种），
     # 与预设文件里的键天然一致；缺失补默认、越界夹紧都由 normalize 负责。
@@ -183,6 +191,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
+        separate_vocals=payload.separate_vocals,
         # 只有核对台里的「单句/选区修正」保留原队列；转写页的整片或区间任务
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。

@@ -26,8 +26,11 @@ OUT="build/pack"
 export PYINSTALLER_CONFIG_DIR="$REPO_ROOT/$OUT/.pyinstaller"
 mkdir -p "$PYINSTALLER_CONFIG_DIR"
 
-rm -rf "$OUT/dist/$NAME"
+rm -rf "$OUT/dist/$NAME" "$OUT/work/$NAME"
 
+# 人声分离只用 demucs.pretrained/apply；--collect-data 带 remote 权重索引。
+# torchvision/onnx/ml_dtypes/Cython 是实验环境的可选包，运行时不参与；
+# torchvision 若被打进冻结包，会让 transformers.image_utils 导入失败。
 "$PYTHON" -m PyInstaller \
   --noconfirm \
   --onedir \
@@ -50,6 +53,29 @@ rm -rf "$OUT/dist/$NAME"
   --hidden-import onnxruntime \
   --collect-all onnxruntime \
   --collect-all jieba \
+  --collect-data demucs \
+  --collect-data certifi \
+  --hidden-import core.separate \
+  --hidden-import demucs.pretrained \
+  --hidden-import demucs.apply \
+  --hidden-import demucs.repo \
+  --hidden-import demucs.states \
+  --hidden-import demucs.htdemucs \
+  --hidden-import demucs.hdemucs \
+  --hidden-import demucs.demucs \
+  --hidden-import demucs.spec \
+  --hidden-import demucs.transformer \
+  --hidden-import demucs.utils \
+  --hidden-import openunmix.filtering \
+  --hidden-import dora.log \
+  --hidden-import julius \
+  --hidden-import einops \
+  --hidden-import omegaconf \
+  --exclude-module torchcodec \
+  --exclude-module torchvision \
+  --exclude-module onnx \
+  --exclude-module ml_dtypes \
+  --exclude-module Cython \
   --exclude-module matplotlib \
   --exclude-module tkinter \
   --distpath "$OUT/dist" \

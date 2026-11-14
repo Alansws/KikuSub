@@ -133,6 +133,9 @@ class TranscribeRequest:
     # 局部转写不该覆盖整片的质检队列：否则「重转这一句」会把用户刚核对完的
     # 待核进度全部冲掉。服务层在区间任务里置 False。
     write_audit: bool = True
+    # 强 BGM / 歌曲：只对 start_s-end_s 做 Demucs 人声分离，再送 ASR。
+    # 必须同时有起止时间；分离结果由 audio_cache 复用，换引擎重转不重复跑。
+    separate_vocals: bool = False
     # 双引擎：本次整片结果写入第二版（不覆盖核对台）。服务层只在「核对台非空 +
     # 整片覆盖」时置 True；具体写内存/落盘由 server.jobs 负责。
     alt_review: bool = False
@@ -260,39 +263,67 @@ def run_transcription(
         req.output_format,
         req.keep_absolute_timeline,
     )
+    audio_path = media_path
+    audio_start, audio_end = req.start_s, req.end_s
+    if req.separate_vocals:
+        if req.start_s is None or req.end_s is None:
+            raise ValueError("人声分离只支持填写了起止时间的区间转写。")
+        from . import separate as separate_mod
+        from .audio_cache import ensure_vocals_wav
+
+        if not separate_mod.available():
+            raise RuntimeError("人声分离依赖未安装（缺少 demucs）。")
+        # 分离器与 ASR 不同时常驻：先让出当前引擎，分离器用完会自行 release。
+        release_engine(req.engine_key)
+        cb(0.01, "正在准备人声分离（Demucs htdemucs）…")
+
+        def _sep_progress(ratio: float, message: str) -> None:
+            cb(0.01 + 0.06 * max(0.0, min(1.0, float(ratio))), message)
+
+        audio_path = ensure_vocals_wav(
+            media_path,
+            start=req.start_s,
+            end=req.end_s,
+            separator=separate_mod.separate_to_wav,
+            cancel_event=cancel_event,
+            progress_cb=_sep_progress,
+        )
+        audio_start, audio_end = None, None
+        log.info("人声分离就绪 | %s", audio_path.name)
+
     if is_sherpa:
         cues = engine.transcribe_file(
-            media_path,
+            audio_path,
             progress_cb=cb,
             config=req.sherpa_config,
             cancel_event=cancel_event,
-            start_time_s=req.start_s,
-            end_time_s=req.end_s,
+            start_time_s=audio_start,
+            end_time_s=audio_end,
             time_offset=req.time_offset,
         )
         stats_note = ""
     elif is_qwen:
         cues = engine.transcribe_file(
-            media_path,
+            audio_path,
             progress_cb=cb,
             use_alignment=req.use_alignment,
             config=req.qwen_config,
             cancel_event=cancel_event,
-            start_time_s=req.start_s,
-            end_time_s=req.end_s,
+            start_time_s=audio_start,
+            end_time_s=audio_end,
             time_offset=req.time_offset,
         )
         stats_note = ""
     else:
         cues = engine.transcribe_file(
-            media_path,
+            audio_path,
             config=req.whisper_config,
             no_repeat_ngram_size=req.no_repeat_ngram_size,
             repetition_penalty=req.repetition_penalty,
             progress_cb=cb,
             cancel_event=cancel_event,
-            start_time_s=req.start_s,
-            end_time_s=req.end_s,
+            start_time_s=audio_start,
+            end_time_s=audio_end,
             time_offset=req.time_offset,
         )
         stats_note = f"\n\n`{engine.last_stats.describe()}`"

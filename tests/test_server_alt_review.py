@@ -36,8 +36,10 @@ class _Runner:
     def __init__(self, cues: list[SubtitleCue], tmp_path: Path) -> None:
         self.cues = cues
         self.tmp_path = tmp_path
+        self.last_request = None
 
     def __call__(self, request, *, on_progress, cancel_event, output_dir):
+        self.last_request = request
         out = self.tmp_path / "episode.srt"
         out.write_text("", encoding="utf-8")
         on_progress(1.0, "完成")
@@ -349,3 +351,38 @@ def test_dual_polish_allows_a83_b89(make_client, tmp_path):
     assert len(body["proposal"]["items"]) == 83
     assert body["proposal"]["source"]["count_b"] == 89
     assert body["proposal"]["source"]["digest_b"]
+
+
+def test_separate_vocals_requires_range_and_reaches_pipeline(make_client, tmp_path):
+    client = make_client([])
+    media_id = _new_media(client, tmp_path)
+
+    bad = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={"media_id": media_id, "separate_vocals": True},
+    )
+    assert bad.status_code == 422
+    assert "起止时间" in bad.text
+
+    created = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={
+            "media_id": media_id,
+            "start": 1.0,
+            "end": 2.0,
+            "separate_vocals": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+    for _ in range(200):
+        snapshot = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snapshot["status"] in {"done", "error", "cancelled"}:
+            break
+        import time
+
+        time.sleep(0.01)
+    assert snapshot["status"] == "done", snapshot
+    assert client.app.state.jobs._runner.last_request.separate_vocals is True

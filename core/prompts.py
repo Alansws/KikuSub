@@ -48,6 +48,7 @@ LEGACY_ID = "legacy"
 LOCALIZATION_ID = "localization"
 POLISH_SINGLE_ID = "polish-single"
 POLISH_DUAL_ID = "polish-dual"
+SONG_POLISH_DUAL_ID = "song-polish-dual"
 RESHAPE_SINGLE_ID = "reshape-single"
 RESHAPE_DUAL_ID = "reshape-dual"
 
@@ -122,6 +123,23 @@ POLISH_DUAL_CONTENT = """你是日语影视字幕校对员。下面提供同一�
 2. 只能采用 B 中与 A 同一时间段对应的内容；禁止把 B 的句子拼接或追加到 A，导致重复或时间轴错位。
 3. 没有把握的地方保留 A 原文；不要改写风格、不要翻译、不要加括号说明。
 4. 只输出与 A 逐条对应的修订后 SRT（序号沿用 A），不要解释、不要 markdown 代码块。
+{{RANGE_HINT}}
+
+【A（主稿）】
+{{SRT_A}}
+
+【B（参考稿）】
+{{SRT_B}}"""
+
+SONG_POLISH_DUAL_CONTENT = """你是日语歌词字幕校对员。A 是主稿（核对台当前版本），B 是另一引擎对同一段音频的参考稿。
+只修正 A 的识别错误，保持 A 的条数、序号与时间轴不变；不要新增、删除、拆分或合并条目。
+
+歌词特有规则：
+1. 副歌重复段互校：同一段歌词在 A 中多次出现时，把所有出现放在一起比较，取「多数一致 + 语义通顺」的写法，并把结论应用到每一次出现（仍逐条对应 A 的序号）。
+2. 用字统一：同一词在全篇只保留一种写法（汉字/假名/拉丁字母），例如 Lady/レイディ、君/キミ、僕/ボク、小降り/小ぶり；优先采用与作品风格一致、且 B 也支持的写法。
+3. 同音/近音错字按歌词语义修正（例：小ぶり→小降り、銃やと→常夜灯）；没有把握就保留 A 原文。
+4. B 只用于同一时间段的对照；禁止把 B 的整句拼接/追加到 A，禁止新增 B 独有的句子（漏句留给「结构建议」处理）。
+5. 只输出与 A 逐条对应的修订后 SRT，序号沿用 A；不要解释、不要 markdown 代码块。
 {{RANGE_HINT}}
 
 【A（主稿）】
@@ -211,6 +229,14 @@ DEFAULT_TEMPLATES: list[dict] = [
         "name": "双源润色（默认）",
         "description": "以 A 为骨架、参考 B 修复错听与漏字；禁止拼接重复。",
         "content": POLISH_DUAL_CONTENT,
+        "builtin": True,
+    },
+    {
+        "id": SONG_POLISH_DUAL_ID,
+        "category": CATEGORY_POLISH_DUAL,
+        "name": "歌曲歌词润色",
+        "description": "副歌重复段互校、统一汉字/假名/英文用字；仍保持 A 的条数与时间轴。",
+        "content": SONG_POLISH_DUAL_CONTENT,
         "builtin": True,
     },
     {
