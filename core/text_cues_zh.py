@@ -81,6 +81,9 @@ def word_starts(text: str) -> set[int]:
         return set()
     try:
         import jieba
+
+        # 默认 INFO 会把「Building prefix dict …」打进 sidecar stderr/诊断日志。
+        jieba.setLogLevel(30)
     except Exception:  # noqa: BLE001 - 分词是增强项，缺了不能影响转写
         return set()
     starts = {0}
