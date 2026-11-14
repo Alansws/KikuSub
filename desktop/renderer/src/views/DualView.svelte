@@ -76,8 +76,19 @@
     }
   }
 
+  /**
+   * 逐字高亮只在两份文本“确实像同一句”时才有意义。
+   *
+   * 两个引擎断句不同时，1:1 配对可能把 A 的整句和 B 的另半句放在一行；
+   * 此时逐字 diff 会把大半行都染成红色，看起来像“这些字要被删掉”，
+   * 反而盖住了真正的差异。相似度低于这个阈值就只保留整行 `~`，不做逐字染色。
+   */
+  const CHAR_HIGHLIGHT_MIN_RATIO = 0.35;
+
   function opText(row: (typeof dual.rows)[number], side: 'a' | 'b'): { op: string; text: string }[] {
-    if (!row.char_ops) return [{ op: 'eq', text: side === 'a' ? row.a_text : row.b_text }];
+    if (!row.char_ops || row.ratio < CHAR_HIGHLIGHT_MIN_RATIO) {
+      return [{ op: 'eq', text: side === 'a' ? row.a_text : row.b_text }];
+    }
     return row.char_ops
       .filter((op) => (side === 'a' ? op.op !== 'ins' : op.op !== 'del'))
       .map((op) => ({ op: op.op, text: op.text }));
@@ -145,6 +156,13 @@
           <span class="chip only-a">− 仅 A <b>{stats?.only_a ?? 0}</b></span>
           <span class="chip only-b">+ 仅 B <b>{stats?.only_b ?? 0}</b></span>
         </div>
+        <span
+          class="legend"
+          title="逐条配对后，这一行内只出现在 A / 只出现在 B 的字。A 列只读，不会被改动；整列覆盖只有右侧按钮才会执行。"
+        >
+          <i class="sw del"></i>本行 A 独有
+          <i class="sw ins"></i>本行 B 独有
+        </span>
         <div class="spacer"></div>
         <label class="chk">
           <input type="checkbox" bind:checked={dual.onlyDiff} />
@@ -210,7 +228,7 @@
               {#if row.a_indices.length}
                 {#if row.char_ops}
                   {#each opText(row, 'a') as op}
-                    {#if op.op === 'del'}<mark class="del">{op.text}</mark>{:else}{op.text}{/if}
+                    {#if op.op === 'del'}<mark class="del" title="只在 A 中出现（第二版这里没有对应文字）">{op.text}</mark>{:else}{op.text}{/if}
                   {/each}
                 {:else}
                   {row.a_text}
@@ -243,7 +261,7 @@
               {#if row.b_indices.length}
                 {#if row.char_ops}
                   {#each opText(row, 'b') as op}
-                    {#if op.op === 'ins'}<mark class="ins">{op.text}</mark>{:else}{op.text}{/if}
+                    {#if op.op === 'ins'}<mark class="ins" title="只在第二版中出现">{op.text}</mark>{:else}{op.text}{/if}
                   {/each}
                 {:else}
                   {row.b_text}
@@ -463,6 +481,30 @@
   .spacer {
     flex: 1;
   }
+  .legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    line-height: 22px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .legend .sw {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .legend .sw.del {
+    background: color-mix(in srgb, var(--danger) 20%, transparent);
+  }
+  .legend .sw.ins {
+    background: color-mix(in srgb, var(--success) 24%, transparent);
+  }
+  .legend .sw + .sw {
+    margin-left: 4px;
+  }
   .chk {
     display: inline-flex;
     align-items: center;
@@ -589,8 +631,7 @@
     color: inherit;
   }
   mark.del {
-    background: color-mix(in srgb, var(--danger) 24%, transparent);
-    text-decoration: line-through;
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
   }
   mark.ins {
     background: color-mix(in srgb, var(--success) 26%, transparent);
