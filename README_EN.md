@@ -32,7 +32,7 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **Transcribe** — Silero VAD segments the speech, then a switchable Japanese engine produces timed subtitles.
 - **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
 - **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
-- **AI polish / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. Translations live in a parallel track and export as source, target or bilingual.
+- **AI polish / translate / structure suggestions** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A separate structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically. Translations live in a parallel track and export as source, target or bilingual.
 - **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
 - **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
 - **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality share one history with subtitles, translations, QA state and AI suggestion edits; ⌘Z always undoes the most recent step, and the history panel is a single list.
@@ -88,11 +88,11 @@ Everything except the optional AI features is local inference.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
 
-**Dual-engine review, polish & translation**
+**Dual-engine review, polish, structure suggestions & translation**
 
 ![Dual review: two read-only columns marked = / ~ / + / −](docs/images/dual-view.jpg)
 
-- A second engine's full transcript goes into a read-only column and **never overwrites the review desk**. Rows are aligned live 1:1 and marked `=` / `~` / `+` / `−`, with character-level highlighting on `~`. **The two versions may have different line counts**; extra lines show up as their own `+` / `−` rows instead of being hidden.
+- A second engine's full transcript goes into a read-only column and **never overwrites the review desk**. Rows are aligned live 1:1 and marked `=` / `~` / `+` / `−`, with a soft character-level tint on `~` (no strikethrough; low-similarity rows keep only the row marker). **The two versions may have different line counts**; extra lines show up as their own `+` / `−` rows instead of being hidden.
 - The second version is cached per media file and restored when you switch back. Drop it, or confirm once to replace the whole review desk with B (one ⌘Z reverts everything).
 - The sidebar badge counts text-diff rows only; `+` / `−` missing lines are shown inside the page.
 
@@ -100,10 +100,13 @@ Everything except the optional AI features is local inference.
 
 - Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
-- **Structure suggestions (Phase 1)** — the external model only returns `{"ops":[...]}` (merge / retime / replace text / insert / delete); the app binds the source digest on paste, previews every op, and applies the selection as one history step (⌘Z). No digest or version is requested from the model, and the polish timeline contract is untouched.
 - With a second version you can switch between **single-source / dual-source**: A | B | AI final, with B collapsible. **B does not need the same line count as A** (different engines segment differently); the AI final still follows A's indices and timeline exactly. Accept per item, apply all changed rows, or apply the whole column — all through the same `apply_polish()`, one history entry.
 - Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap, with per-segment copy / paste and completion tracking.
 - Applying is one history entry — ⌘Z reverts the whole batch. A digest / digest_b mismatch is rejected without touching a single byte.
+
+![Structure suggestions: paste ops JSON, preview merge / retime / replace text / insert / delete](docs/images/structure-view.jpg)
+
+- **Structure suggestions (Phase 1)** — the external model only returns `{"ops":[...]}` (merge / retime / replace text / insert / delete); the app binds the source digest on paste, previews every op, and applies the selection as one history step (⌘Z). No digest or version is requested from the model, and the polish timeline contract is untouched. Conflicting ops are red and cannot be selected; count-changing merge / insert / delete are rejected when a non-empty translation track exists.
 - Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
 - Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`). Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
 - **Video export**: hard subs use a Pillow sprite + ffmpeg overlay (no libass needed); soft subs are toggleable in MP4; "copy only" skips re-encoding entirely.
