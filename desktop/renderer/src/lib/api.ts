@@ -847,12 +847,16 @@ export const api = {
     }>('/api/params'),
 
   // ---- 预设 ----
-  listPresets: () =>
-    req<{ items: { name: string; engine: string | null }[]; load_error: string }>('/api/presets'),
+  listPresets: (engine?: string) => {
+    const q = engine ? `?engine=${encodeURIComponent(engine)}` : '';
+    return req<{ items: { name: string; engine: string | null }[]; load_error: string }>(
+      `/api/presets${q}`,
+    );
+  },
 
-  getPreset: (name: string) =>
+  getPreset: (name: string, engine: string) =>
     req<{ name: string; engine: string | null; values: Record<string, number | boolean> }>(
-      `/api/presets/${encodeURIComponent(name)}`,
+      `/api/presets/${encodeURIComponent(name)}?engine=${encodeURIComponent(engine)}`,
     ),
 
   savePreset: (name: string, engine: string, values: Record<string, unknown>) =>

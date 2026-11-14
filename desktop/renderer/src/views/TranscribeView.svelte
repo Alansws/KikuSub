@@ -92,10 +92,26 @@
     if (app.connected) void refreshAltReview();
   });
 
-  // 只列出当前引擎可用的预设
+  // 只列出与当前引擎绑定的预设；未绑定/别的引擎的一律不显示，免得选错。
   const presetsForEngine = $derived(
-    tuning.presets.filter((p) => !p.engine || p.engine === engine),
+    tuning.presets.filter((p) => p.engine === engine),
   );
+  /** 当前引擎自己的「已载入预设」；切引擎后不能把上一个引擎的预设当成可删对象。 */
+  const deletablePreset = $derived(
+    picked || (tuning.activePresetEngine === engine ? tuning.activePreset : ''),
+  );
+
+  // 换引擎时清掉上一套引擎的选中项；参数面板本身按引擎分开存，不互相污染。
+  let lastPresetEngine = engine;
+  $effect(() => {
+    if (lastPresetEngine === engine) return;
+    lastPresetEngine = engine;
+    picked = '';
+    if (tuning.activePresetEngine && tuning.activePresetEngine !== engine) {
+      tuning.activePreset = '';
+      tuning.activePresetEngine = '';
+    }
+  });
 
   function go() {
     startTranscribe(
@@ -125,7 +141,9 @@
 
   async function onPick(name: string) {
     picked = name;
-    if (name) await applyPreset(name);
+    if (!name) return;
+    const ok = await applyPreset(name, engine);
+    if (!ok) picked = '';
   }
 
   async function onSave() {
@@ -134,7 +152,9 @@
   }
 
   async function onDelete() {
-    await deletePreset(picked || tuning.activePreset);
+    const target = deletablePreset;
+    if (!target) return;
+    await deletePreset(target);
     picked = '';
   }
 
@@ -360,7 +380,11 @@
     <section class="right">
       <div class="preset-bar">
         <span class="pb-label">预设</span>
-        <select value={picked} onchange={(e) => onPick(e.currentTarget.value)}>
+        <select
+          value={picked}
+          title="只显示与当前识别引擎绑定的预设"
+          onchange={(e) => onPick(e.currentTarget.value)}
+        >
           <option value="">（未选择）</option>
           {#each presetsForEngine as p (p.name)}
             <option value={p.name}>{p.name}</option>
@@ -378,7 +402,7 @@
         <button class="btn" onclick={onSave} disabled={!presetName.trim() && !picked}>
           <Icon name="check" size={11} />保存
         </button>
-        <button class="btn ghost" onclick={onDelete} disabled={!picked && !tuning.activePreset}>
+        <button class="btn ghost" onclick={onDelete} disabled={!deletablePreset}>
           <Icon name="trash" size={11} />
         </button>
       </div>

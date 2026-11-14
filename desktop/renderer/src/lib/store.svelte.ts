@@ -877,6 +877,7 @@ export const tuning = $state({
   values: {} as Record<string, Record<string, number | boolean>>,
   presets: [] as { name: string; engine: string | null }[],
   activePreset: '',
+  activePresetEngine: '', // 属于哪个引擎；切引擎时清掉，避免拿 A 的预设删 B
   loading: false,
 });
 
@@ -2879,7 +2880,7 @@ export async function loadTuning() {
 export function setParam(engine: string, key: string, value: number | boolean) {
   if (!tuning.values[engine]) tuning.values[engine] = {};
   tuning.values[engine][key] = value;
-  tuning.activePreset = ''; // 手改之后就不再算「某个预设」了
+  tuning.activePreset = tuning.activePresetEngine = ''; // 手改之后就不再算「某个预设」了
   persistTuning();
 }
 
@@ -2887,7 +2888,7 @@ export function resetParams(engine: string) {
   const entry = tuning.schema?.find((e) => e.key === engine);
   if (!entry) return;
   tuning.values[engine] = { ...entry.defaults };
-  tuning.activePreset = '';
+  tuning.activePreset = tuning.activePresetEngine = '';
   persistTuning();
 }
 
@@ -2902,9 +2903,9 @@ function persistTuning() {
   }
 }
 
-export async function refreshPresets() {
+export async function refreshPresets(engine?: string) {
   try {
-    const data = await api.listPresets();
+    const data = await api.listPresets(engine);
     tuning.presets = data.items;
     if (data.load_error) toast(`预设文件读取异常：${data.load_error}`, 'warn');
   } catch {
@@ -2912,20 +2913,19 @@ export async function refreshPresets() {
   }
 }
 
-export async function applyPreset(name: string) {
-  if (!name) return;
+export async function applyPreset(name: string, engine: string): Promise<boolean> {
+  if (!name || !engine) return false;
   try {
-    const preset = await api.getPreset(name);
-    const engine = preset.engine || 'whisper';
-    tuning.values[engine] = {
-      ...(tuning.values[engine] || {}),
-      ...preset.values,
-    };
-    tuning.activePreset = name;
+    const preset = await api.getPreset(name, engine);
+    if (preset.engine !== engine) throw new Error(`预设「${name}」不属于当前引擎`); // 双保险
+    tuning.values[engine] = { ...preset.values }; // 完整快照：替换而不是合并
+    tuning.activePreset = tuning.activePresetEngine = name;
     persistTuning();
     toast(`已载入预设「${name}」`);
+    return true;
   } catch (err) {
     toast((err as Error).message, 'error');
+    return false;
   }
 }
 
@@ -2938,7 +2938,7 @@ export async function savePresetAs(name: string, engine: string) {
   try {
     const values = tuning.values[engine] || {};
     await api.savePreset(trimmed, engine, values);
-    tuning.activePreset = trimmed;
+    tuning.activePreset = trimmed; tuning.activePresetEngine = engine; // 同名不同引擎由服务端拒绝
     await refreshPresets();
     toast(`已保存预设「${trimmed}」`);
   } catch (err) {
@@ -2950,7 +2950,7 @@ export async function deletePreset(name: string) {
   if (!name) return;
   try {
     await api.deletePreset(name);
-    if (tuning.activePreset === name) tuning.activePreset = '';
+    if (tuning.activePreset === name) tuning.activePreset = tuning.activePresetEngine = '';
     await refreshPresets();
     toast(`已删除预设「${name}」`);
   } catch (err) {
