@@ -1,4 +1,4 @@
-# AI 提案与 AI 优化台（M1–M4）
+# AI 提案、润色与翻译（M1–M4）
 
 > 从 `AGENTS.md` 拆出（2026-11-13）。提案契约、模型调用、译文平行轨、Agent 技能。
 > **本文件是 AI 这条线的唯一现行契约**；总索引见 [AGENTS.md](../../AGENTS.md)。
@@ -16,7 +16,7 @@
 
 | 编号 | 决定 | 理由 / 落点 |
 | --- | --- | --- |
-| **D-1** | 时间戳由**结构**保证，不靠提示词：模型只收发 `{i, text}`，`start/end` 一律取自当前 `review_cues` | 「应用前后时间码逐条精确相等」的唯一可靠保证（见下面 §3.7 第一条） |
+| **D-1** | 时间戳由**结构**保证，不靠提示词：模型只收发 `{i, text}`，`start/end` 一律取自当前 `review_cues` | 「应用前后时间码逐条精确相等」的唯一可靠保证（见下面 §3.7 第一条）。**双源例外说明**：双源润色会把带时间戳的 A/B 作为**对齐参考**放进提示词，但输出与应用仍只认 `{i, text}` 和 A 的 cue。 |
 | **D-2** | 一个提案层、两个生成入口（in-app / skill），前端**不关心**提案是谁生成的 | 界面不必为来源开分支 |
 | **D-3** | 译文存平行轨 `Session.translations[lang]`，**永不**写进 `review_cues.text` | 见 §3.7.2 |
 | **D-4** | 双语两种排版**不能混用**：交付文件每语种一条（`bilingual_entries`），烧录/叠加层一条两行（`bilingual_cues`） | 2026-11 修订；用户报障过重新导入被 `nowrap` 压成一行 |
@@ -35,10 +35,12 @@
 | **A6** | 原文/译文/双语三态切换，画面字幕行数正确 | 手动 |
 | **A7** | 退出清理不把 `*.{lang}.srt` / `*.bilingual.srt` 当碎片 | `desktop/test/files.test.cjs` |
 | **A8** | API Key 不出现在任何日志、`settings.json`、WS 快照里 | 人工 grep 日志 + 代码审查 |
+| **A9** | 双源提案应用后 `(start, end)` 仍逐条浮点精确相等 | `tests/test_ai_dual.py` |
+| **A10** | 双源提案只改 B 的 digest → 409，字幕零变化 | `tests/test_ai_dual.py` |
 
 ---
 
-### 3.7 AI 提案与 AI 优化台（2026-11 M1，后续里程碑会扩展）
+### 3.7 AI 提案、润色与翻译（2026-11 M1，后续里程碑会扩展）
 
 - **时间码由结构保证，不靠提示词**：提案里只有 `{i, text}`，**没有时间戳**。应用时
   `start/end` 一律取自当前 `review_cues`，提案里的任何时间字段都不参与。任何把时间码塞进
@@ -127,7 +129,30 @@
   删除原文用 `POST /api/cues/clear`（连同无法再对齐的译文轨，一步历史）；删除译文仍走
   `DELETE /api/translations/{lang}`。转写页两张文件卡、核对台「⋯」与检查器译文区都复用
   这三个入口，不要再各写一套导入逻辑。
-#### 3.7.3 Agent 技能（2026-11 M4）
+#### 3.7.3 双源润色（2026-11 新增）
+
+- **提案契约扩展但保持向后兼容**：双源润色时 `source` 额外带 `count_b` 与
+  `digest_b`；单源提案**没有**这两个字段，照旧只校验 A。`build_proposal(texts_b=…)`
+  是唯一构造入口，`validate_proposal(data, texts, texts_b=None)` 是唯一校验入口。
+- **校验顺序**：结构（422）优先，其次 A digest（409），最后 B digest（409）。
+  带 `digest_b` 的提案在「当前没有第二版」或「B 文本已变」时一律 409，
+  `review_cues` 一个字节都不改。**B 的条数不要求等于 A**（两个引擎断句本来就可能
+  不同），只校验 `digest_b`；提案的 `items` 条数仍然必须严格等于 A。
+- **应用仍走 `apply_polish()`**：只按 `{i, after}` 覆盖 A 的文本，时间码取自 A。
+  三种采用粒度（逐条 / 全部差异 / 整列）都只是 `accept` 子集不同，**一次历史**。
+- **提示词分类**：`core/prompts.py` 分 `polish_single` / `polish_dual` / `translate`；
+  旧 `prompts.json` 的模板没有 `category` 时归入 `translate`。分类各自记住选中项
+  （`selected` / `selected_polish_single` / `selected_polish_dual`）。
+- **应用内分块（Q9）**：A 块用全局序号 + 时间戳；B 只取 `[t0-2s, t1+2s]` 内
+  的上下文，避免整片两次 fork 造成 token 爆炸。
+- **外部复制 / 粘贴分段**：`GET /api/ai/prompt` 支持 `mode/from_index/to_index`；
+  `POST /api/ai/from-srt` 支持同一区间回填。解析仍只按顺序取文本，序号可以是全局
+  `k..m` 或本段相对 `1..X`；条数不符整段拒绝，文案必须给出
+  「本段期望第 k–m 条（共 X 条），实际解析到 Y 条」。分段边界由
+  `desktop/renderer/src/lib/aiSegments.ts` 的纯函数在 A/B 静音间隙最大处选择。
+- **不变**：翻译仍只吃定稿后的 A 一列；第二版不进 50 步历史；随包技能不需要重写。
+
+#### 3.7.4 Agent 技能（2026-11 M4）
 
 - 技能包在 `desktop/resources/skill/kikusub-subtitle/`，装到 `~/.agents/skills/`（DSH 会扫描的
   用户级技能根）。`KIKUSUB_SKILL_ROOT` 可覆盖根目录，测试用它。

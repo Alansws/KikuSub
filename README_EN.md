@@ -78,7 +78,7 @@ Everything except the optional AI features is local inference.
 - **The QA panel no longer covers the picture**: it docks into a "QA" tab in the right inspector by default; click "pop out" when you want it beside the source, then drag/resize it, reset it, or dock it back.
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
 - **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
-- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action (play/pause, prev/next, view switching, AI polish/translate tabs).
+- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 translate / ⌘7 export**.
 - Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
 **QA queue**
@@ -88,14 +88,21 @@ Everything except the optional AI features is local inference.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
 
-**AI polish & translation**
+**Dual-engine review, polish & translation**
 
-![AI view: source on the left, suggestion on the right, applied as one batch](docs/images/ai-view.jpg)
+![Dual review: two read-only columns marked = / ~ / + / −](docs/images/dual-view.jpg)
+
+- A second engine's full transcript goes into a read-only column and **never overwrites the review desk**. Rows are aligned live 1:1 and marked `=` / `~` / `+` / `−`, with character-level highlighting on `~`. **The two versions may have different line counts**; extra lines show up as their own `+` / `−` rows instead of being hidden.
+- The second version is cached per media file and restored when you switch back. Drop it, or confirm once to replace the whole review desk with B (one ⌘Z reverts everything).
+- The sidebar badge counts text-diff rows only; `+` / `−` missing lines are shown inside the page.
+
+![Dual-source polish: A | B (collapsible) | AI final](docs/images/polish-view.jpg)
 
 - Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
-- Two columns: source is read-only, the suggestion is editable on double-click. Accept or reject item by item; filter to changed rows only.
-- Applying is one history entry — ⌘Z reverts the whole batch. A digest mismatch (different media or edited source) is rejected without touching a single byte.
+- With a second version you can switch between **single-source / dual-source**: A | B | AI final, with B collapsible. **B does not need the same line count as A** (different engines segment differently); the AI final still follows A's indices and timeline exactly. Accept per item, apply all changed rows, or apply the whole column — all through the same `apply_polish()`, one history entry.
+- Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap, with per-segment copy / paste and completion tracking.
+- Applying is one history entry — ⌘Z reverts the whole batch. A digest / digest_b mismatch is rejected without touching a single byte.
 - Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
 - Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`). Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
 - **Video export**: hard subs use a Pillow sprite + ffmpeg overlay (no libass needed); soft subs are toggleable in MP4; "copy only" skips re-encoding entirely.

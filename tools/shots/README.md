@@ -18,7 +18,7 @@ bash tools/shots/capture_matrix.sh --out /tmp/shots --size 1440x960 --states "re
 bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline
 ```
 
-状态名：`transcribe` `review` `settings` `export` `ai` `prompts`。`review` 用
+状态名：`transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。`review` 用
 `tools/shots/seed.json` 造 12 条字幕（不需要真跑转写）；其余状态靠 `KIKUSUB_DEV_EVAL`
 点侧栏切换，所以截图里显示的是真实页面而不是空壳。
 

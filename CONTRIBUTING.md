@@ -57,7 +57,7 @@ python -m server --port 0
 | 路径 | 改动入口 |
 | --- | --- |
 | `desktop/main/` | Electron 主进程：窗口、菜单、sidecar 生命周期、首次启动、退出清理、密钥存储、技能安装 |
-| `desktop/renderer/src/` | Svelte 5 渲染层：`views/` 是四个工作区 + AI 优化台 + 设置，`lib/store.svelte.ts` 是状态与动作 |
+| `desktop/renderer/src/` | Svelte 5 渲染层：`views/` 是按工作流排列的七个视图 + 设置，`lib/store.svelte.ts` 是工作区状态、`lib/aiWorkspace.svelte.ts` 是提案与双源润色 |
 | `server/` | FastAPI 服务层：`/api/*`、`/media/*`、`/ws/jobs/*`；路由按领域拆在 `routes_*.py` |
 | `core/` | 算法内核（无 UI 依赖）：VAD、引擎、断句、覆盖率、提案、翻译、设置、日志 |
 | `core/ai_proposal.py` | 提案契约：digest、结构校验、`apply_polish()`。**前端不得自己算 digest 或另写校验** |

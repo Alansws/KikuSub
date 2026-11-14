@@ -9,10 +9,17 @@
 #### 3.8.1 提示词模板库
 
 - 模板是普通 JSON，默认与 `settings.json` 同级（`prompts.json`，
-  `KIKUSUB_PROMPTS_PATH` 可覆盖）。内置两条：`legacy`（原有模板）与
-  `localization`（成熟汉化组）；用户对内置模板的修改会持久化，删掉文件恢复出厂。
-- 正文占位符只有 `{{SRT}}` 与 `{{LANG}}`（兼容旧版 `__SRT__` / `__LANG__`）。
-  **没有 `{{SRT}}` 时自动把当前字幕追加到末尾**，所以纯指令模板也能直接用。
+  `KIKUSUB_PROMPTS_PATH` 可覆盖）。**2026-11 起分三个互不混杂的分类**：
+  - `polish_single`（单源润色）：`{{SRT}}` / `{{RANGE_HINT}}`；
+  - `polish_dual`（双源润色）：`{{SRT_A}}` / `{{SRT_B}}` / `{{RANGE_HINT}}`；
+  - `translate`（翻译）：`{{SRT}}` / `{{LANG}}`。
+  内置模板各分类至少一条；用户修改会持久化，删掉文件恢复出厂。
+- 分类各自记住选中项：`selected`（翻译，兼容旧文件）、`selected_polish_single`、
+  `selected_polish_dual`。旧 `prompts.json` 里没有 `category` 的模板归入 `translate`；
+  跨分类 `select` 会 422。
+- 正文占位符兼容旧版 `__SRT__` / `__LANG__`。**没有 SRT 占位符时自动把当前字幕
+  追加到末尾**，所以纯指令模板也能直接用。分段提示词会替换
+  `{{RANGE}}` / `{{RANGE_HINT}}`；旧模板没有范围占位符时，范围说明会加在正文最前面。
 - 手动通道 `GET /api/ai/prompt` 现在接受 `template_id`，缺省用当前选中模板；
   解析回来的 SRT 仍然**只按顺序取文本**，序号/时间戳全部丢弃（D-1 不破）。
 - 界面：侧栏「提示词库」；单击选中、双击就地编辑；保存后 AI 优化台的
