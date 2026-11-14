@@ -100,6 +100,7 @@ Everything except the optional AI features is local inference.
 
 - Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
+- **Structure suggestions (Phase 1)** — the external model only returns `{"ops":[...]}` (merge / retime / replace text / insert / delete); the app binds the source digest on paste, previews every op, and applies the selection as one history step (⌘Z). No digest or version is requested from the model, and the polish timeline contract is untouched.
 - With a second version you can switch between **single-source / dual-source**: A | B | AI final, with B collapsible. **B does not need the same line count as A** (different engines segment differently); the AI final still follows A's indices and timeline exactly. Accept per item, apply all changed rows, or apply the whole column — all through the same `apply_polish()`, one history entry.
 - Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap, with per-segment copy / paste and completion tracking.
 - Applying is one history entry — ⌘Z reverts the whole batch. A digest / digest_b mismatch is rejected without touching a single byte.

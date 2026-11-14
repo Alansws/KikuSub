@@ -1,6 +1,6 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-14 13:20
+updated: 2026-11-14 15:35
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
@@ -46,14 +46,14 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | --- | --- |
 | `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 七视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
 | `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
-| `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢（`KIKUSUB_MODELS_DIR` / `KIKUSUB_OUTPUT_DIR` / `KIKUSUB_PRESETS_PATH` 可覆盖）；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
-| `server/` | **服务层（FastAPI）**。`python -m server` 启动，stdout 首行输出 `{"event":"ready","port":…,"token":…}` 供 Electron 主进程握手。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
-| `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import（含双源与分段参数）。 |
+| `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
+| `server/` | **服务层（FastAPI）**。`python -m server` 启动。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
+| `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import；结构建议在 `routes_structure.py`。 |
 | `server/routes_alt_review.py` / `core/dual_review.py` | 第二版接口（GET/DELETE/整列覆盖）与实时对齐 diff（纯函数）。 |
 | `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
 | `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 零样本克隆、音色仓库、懒加载/空闲卸载、权重下载。**不 import fastapi / gradio**；torch 只在 `load()` 延迟导入。 |
 | `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、从视频切片建音色、上传/重命名/删除、模型下载、`/media/tts/*` 音频流。 |
-| `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`。前端不得自己算 digest 或另写校验。 |
+| `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`；结构建议在 `ai_structure.py`。 |
 | `core/ai_client.py` | OpenAI 兼容的纯 urllib 客户端（不引 SDK），只管传输与 JSON 解析。 |
 | `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间。 |
 | `core/i18n.py` | 双语排版的唯一构造：`bilingual_cues()`（一条两行，烧录/叠加层）与 `bilingual_entries()`（每语种一条，字幕交付文件）。 |
@@ -90,7 +90,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | --- | --- | --- |
 | 核对台交互、字幕块聚合、选区、时间线缩放、主题令牌、历史、查找替换、TTS | [docs/contracts/review-console.md](docs/contracts/review-console.md) | 单击/框选阈值、50 步统一历史、`duration/69` 缩放、主题覆盖块、选区 clamp |
 | 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关 | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关 |
-| AI 提案 / 双源 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10 |
+| AI 提案 / 双源 / 结构建议 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
 | 提示词模板、成片导出、手动代理、媒体 Range | [docs/contracts/export-and-prompt.md](docs/contracts/export-and-prompt.md) | 导出设置必须走 `setExport*`、代理写 `*.part.mp4` 再 rename |
 | 想理解「为什么这么定规矩」/接手这套流程 | [docs/contracts/engineering-practice.md](docs/contracts/engineering-practice.md) | 五类失控的对照、五道护栏落点、规则→测试的三级升级、多模型协作 |
 | （历史参考）已移除的 Gradio 面板 | [docs/archive/gradio-legacy.md](docs/archive/gradio-legacy.md) | **禁止照它改代码** |

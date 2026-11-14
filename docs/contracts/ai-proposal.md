@@ -180,3 +180,35 @@
   再回来时 `GET /api/ai/proposal` 会 409，页面被清空。应用时 `/api/ai/apply` 同时带上
   **内联 `proposal`**，不完全依赖磁盘上是否已有文件。手动粘贴的提案 `entry=manual`、
   `model=manual-paste`，没有逐条理由（`note` 一律为空，校验也不再刷「没有写理由」）。
+
+#### 3.7.5 结构建议（Phase 1，2026-11）
+
+- **独立车道**：结构建议不是润色提案，单独 `{output_dir}/{stem}.ai-structure.json`，
+  不经过 `ai_proposal.apply_polish()`，也不改 D-1。润色提案仍然只认 `{i, after}`。
+- **外部模型只给 ops**：`{"ops":[...]}`。**不要**要求模型输出 `version/kind/digest`；
+  网页版模型算不出本地哈希、抄也容易错。`version/kind/source.digest/source.count/revision`
+  全部由服务端在 `POST /api/ai/structure/from-json` 时本地绑定。
+- **下标基准**：所有 `from/to/i/after` 都是**应用前当前字幕的 1-based 原序号**。
+  apply 一次从原列表生成新列表，只压 1 步历史；禁止边应用边重算下标。
+- **支持的操作**：`merge`、`retime`、`replace_text`、`insert`、`delete`。
+  - `merge`：`from/to`（含两端），可选 `text`；缺省用 `core.subtitles.join_cue_texts()`
+    拼接原句，时间取区间 `min(start)…max(end)`。手工合并与结构建议共用这条拼接口径。
+  - `retime`：`i/start/end`，只改时间不改文本；必须 `0 ≤ start < end`，且不能与相邻句重叠。
+  - `replace_text`：`i/after`，只改文本不改时间；`after` 不能为空（删整条用 delete）。
+  - `insert`：`after/start/end/text`；`after=0` 表示插在第 1 条之前（允许）；
+    必须给 `start/end/text`，且不能与相邻句重叠。
+  - `delete`：`i`。
+  - **不做 split**：需要拆分的句子保留原样。Phase 2/3/4（整段 SRT 反推、本地语法检测、
+    润色改时间轴开关）明确不做。
+- **冲突**：合并区间重叠/区间内再改删、同一条重复操作、insert 落在合并区间内部、
+  retime/insert 时间重叠或越界 → 对应 op 标红且不可勾选；apply 对**选中子集**重新
+  校验，有冲突整批 409，字幕零改动。
+- **译文保护**：存在非空译文轨时，`merge/insert/delete` 会改变条数 → 409 并提示先处理
+  译文；`replace_text/retime` 不改条数，仍允许。**不自动丢弃译文轨。**
+- **应用后丢弃**：apply 成功即删除结构建议文件；剩余未选中的 ops 下标已经不可信，
+  下一轮重新粘贴。`⌘Z` 一次退回整批。
+- **接口**：`GET /api/ai/structure`（恢复预览）、`POST /api/ai/structure/from-json`
+  （解析+绑定+落盘）、`POST /api/ai/structure/apply`（原子应用）、
+  `DELETE /api/ai/structure`、`GET /api/ai/structure/prompt`（复制结构检查提示词）。
+- **纯函数**：解析/校验/冲突/原子应用都在 `core/ai_structure.py`；路由不得另写一份。
+  用例：`tests/test_ai_structure.py`、`tests/test_server_structure.py`。
