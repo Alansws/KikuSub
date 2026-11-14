@@ -89,6 +89,8 @@
   const changedCount = $derived(rows.filter((r) => r.changed).length);
   const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
   const visible = $derived(ai.changedOnly ? rows.filter((r) => r.changed) : rows);
+  /** 外部粘贴的 SRT 没有逐条理由：此时整列「理由」不出现，避免满屏「手动粘贴」。 */
+  const hasNotes = $derived(rows.some((r) => r.note.trim().length > 0));
   const filledCount = $derived(ai.segments.filter((seg) => ai.filled[segmentKey(seg)]).length);
 
   $effect(() => {
@@ -221,11 +223,17 @@
     {/if}
 
     {#if ai.proposal}
-      <span class="badge">
-        {ai.proposal.entry === 'skill' ? '外部 agent' : ai.proposal.entry === 'manual' ? '手动粘贴' : '本机生成'}
+      <span class="badge" title={ai.proposal.entry === 'manual'
+        ? '从外部模型（网页版 / 聊天窗）复制提示词、再把回复粘回来的结果'
+        : ai.proposal.entry === 'skill'
+          ? '由随包 Agent 技能写出的提案文件'
+          : '在本机「生成建议」里调用模型得到的结果'}>
+        {ai.proposal.entry === 'skill' ? '外部 Agent' : ai.proposal.entry === 'manual' ? '外部粘贴' : '本机生成'}
       </span>
       {#if ai.proposal.source.digest_b}<span class="badge quiet">双源</span>{/if}
-      {#if ai.proposal.model}<span class="dim">{ai.proposal.model}</span>{/if}
+      {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
+        <span class="dim">{ai.proposal.model}</span>
+      {/if}
     {/if}
 
     <div class="spacer"></div>
@@ -421,14 +429,14 @@
       <div class="es">{ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}</div>
     </div>
   {:else}
-    <div class="cols" class:dual={ai.mode === 'dual' && !bCollapsed}>
+    <div class="cols" class:dual={ai.mode === 'dual' && !bCollapsed} class:no-notes={!hasNotes}>
       <span class="c-time">时间码</span>
       <span class="c-side">A · 原文（只读）</span>
       {#if ai.mode === 'dual' && !bCollapsed}
         <span class="c-side">B · 第二引擎（只读）</span>
       {/if}
       <span class="c-side">AI 终稿（双击可改）</span>
-      <span class="c-note">理由</span>
+      {#if hasNotes}<span class="c-note">理由</span>{/if}
       <span></span>
     </div>
     <div class="list">
@@ -436,6 +444,7 @@
         <div
           class="row"
           class:dual={ai.mode === 'dual' && !bCollapsed}
+          class:no-notes={!hasNotes}
           class:changed={row.changed}
           class:off={!row.accepted}
         >
@@ -461,7 +470,7 @@
               {#if ai.edits[row.i] !== undefined}<span class="tag">已手改</span>{/if}
             {/if}
           </div>
-          <div class="c-note">{row.note}</div>
+          {#if hasNotes}<div class="c-note">{row.note}</div>{/if}
           <button
             class="pin"
             class:on={row.accepted}
@@ -735,6 +744,14 @@
   .cols.dual,
   .row.dual {
     grid-template-columns: 92px minmax(0, 0.95fr) minmax(0, 0.95fr) minmax(0, 1.1fr) 78px 26px;
+  }
+  .cols.no-notes,
+  .row.no-notes {
+    grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr) 26px;
+  }
+  .cols.dual.no-notes,
+  .row.dual.no-notes {
+    grid-template-columns: 92px minmax(0, 0.95fr) minmax(0, 0.95fr) minmax(0, 1.1fr) 26px;
   }
   .cols {
     position: sticky;
