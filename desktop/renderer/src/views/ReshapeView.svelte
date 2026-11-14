@@ -975,12 +975,12 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    /* 贴顶留一点呼吸：整屏居中会让唯一一个按钮浮在一片空白中间，像页面坏了 */
+    /* 左对齐到步骤 1 下面：和步骤条共用一条轴线，动作读起来是「下一步」而不是浮在空白里 */
+    align-items: flex-start;
     justify-content: flex-start;
     gap: 10px;
     padding: 44px var(--sp-6) var(--sp-10);
-    text-align: center;
+    text-align: left;
   }
   .cta-title {
     margin: 0;
@@ -995,6 +995,9 @@
     line-height: 1.6;
     color: var(--text-3);
     max-width: 420px;
+  }
+  .cta-meta {
+    max-width: 460px;
   }
   .cta-meta code {
     font-family: var(--font-mono);
