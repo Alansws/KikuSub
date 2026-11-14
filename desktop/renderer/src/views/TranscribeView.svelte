@@ -17,6 +17,7 @@
   } from '../lib/store.svelte';
   import { altEngineLabel, deleteAltReview, dual, refreshAltReview } from '../lib/dualReview.svelte';
   import { parseTimeInput } from '../lib/time';
+  import { vocalSeparation } from '../lib/vocalSeparation.svelte';
 
   let { engine = $bindable('whisper') }: { engine?: string } = $props();
 
@@ -59,6 +60,12 @@
     return startCovers && endCovers;
   });
   const canChooseDest = $derived(app.cues.length > 0 && fullCover && applyMode !== 'append');
+  /** 人声分离只做区间：没有完整起止时间就不让勾。 */
+  const canSeparate = $derived.by(() => {
+    const start = parseTimeInput(startText);
+    const end = parseTimeInput(endText);
+    return start !== null && end !== null && end > start + 0.2;
+  });
 
   // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
   // 不能每次渲染都覆盖用户手输的内容。
@@ -114,6 +121,10 @@
   });
 
   function go() {
+    if (vocalSeparation.enabled && !canSeparate) {
+      toast('人声分离只对区间生效：请先填写起止时间', 'warn');
+      return;
+    }
     startTranscribe(
       {
         engine,
@@ -221,6 +232,22 @@
             <input type="checkbox" bind:checked={absolute} />
             绝对时间轴
           </label>
+        </div>
+
+        <label>人声分离</label>
+        <div class="sep-row">
+          <label class="check" title="只对已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用">
+            <input
+              id="sep"
+              type="checkbox"
+              bind:checked={vocalSeparation.enabled}
+              disabled={!canSeparate && !vocalSeparation.enabled}
+            />
+            强 BGM / 歌曲
+          </label>
+          <span class="hint">
+            {canSeparate ? '先分离区间人声再识别；换引擎重转复用缓存' : '先填写起止时间'}
+          </span>
         </div>
 
         <label for="fmt">输出格式</label>
@@ -424,10 +451,12 @@
 
   .cols {
     display: grid;
-    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    /* 左栏原来 360px：区间行 + 结果处理提示会横向被切。这里把宽屏下原本空着的
+       左侧留白收进内容区（max-width 1120 → 1280），并给左栏 440px；右栏仍可伸缩。 */
+    grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
     gap: var(--sp-8);
     width: 100%;
-    max-width: 1120px;
+    max-width: 1280px;
     margin: 0 auto;
     min-height: 0;
     flex: 1;
@@ -435,6 +464,7 @@
 
   .left {
     overflow-y: auto;
+    min-width: 0;
     padding-right: var(--sp-1);
   }
 
@@ -442,6 +472,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
+    min-width: 0;
     min-height: 0;
     border-left: 1px solid var(--separator-soft);
     padding-left: 22px;
@@ -521,6 +552,12 @@
   }
   .check input {
     margin: 0;
+  }
+  .sep-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
   }
 
   .actions {
@@ -620,6 +657,13 @@
     align-items: center;
     gap: var(--sp-2);
     flex-wrap: wrap;
+  }
+  /* 提示文字是 flex 子项：不给 min-width:0 时它会按整句宽度把左栏顶出可视区。 */
+  .apply-row .hint,
+  .dest .hint {
+    flex: 1 1 140px;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .alt-state {
     display: flex;

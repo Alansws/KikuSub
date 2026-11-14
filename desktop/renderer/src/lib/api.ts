@@ -6,6 +6,8 @@
  * 改走 `?token=`（与 `server/security.py` 的双通道一致）。
  */
 
+import { vocalSeparation } from './vocalSeparation.svelte';
+
 export interface MediaInfo {
   id: string;
   name: string;
@@ -959,8 +961,21 @@ export const api = {
     keep_absolute_timeline?: boolean;
     apply?: 'replace' | 'append' | 'replace_range';
     alt_review?: boolean;
+    separate_vocals?: boolean;
     params?: Record<string, unknown>;
-  }) => req<JobSnapshot>('/api/jobs', { method: 'POST', body: JSON.stringify(payload) }),
+  }) =>
+    req<JobSnapshot>('/api/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...payload,
+        // 全局勾选只在区间任务上生效；整片转写即使误勾也不带这个字段。
+        separate_vocals:
+          payload.separate_vocals ??
+          (vocalSeparation.enabled && payload.start != null && payload.end != null
+            ? true
+            : undefined),
+      }),
+    }),
 
   /** 用另一个引擎把若干字幕窗口各听一遍；服务端只回文本、不落盘。 */
   createCompareJob: (payload: {

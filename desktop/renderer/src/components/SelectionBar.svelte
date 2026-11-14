@@ -10,6 +10,7 @@
    */
   import Icon from './Icon.svelte';
   import { tcShort } from '../lib/time';
+  import { vocalSeparation } from '../lib/vocalSeparation.svelte';
 
   let {
     selection = null,
@@ -59,6 +60,13 @@
     <button class="btn tiny" onclick={onSeekSelection} title="只播放选区">
       <Icon name="play" size={10} />试听
     </button>
+    <label
+      class="sel-sep"
+      title="人声分离（强 BGM / 歌曲）：只对本次选区生效；首次会下载约 80MB 权重，分离结果会缓存"
+    >
+      <input type="checkbox" bind:checked={vocalSeparation.enabled} />
+      分离
+    </label>
     <button class="btn tiny primary" onclick={onTranscribe} disabled={rangeBusy}>
       {#if rangeBusy}
         <span class="spin"></span>转写中
@@ -115,6 +123,18 @@
     font-weight: 600;
     margin-left: 3px;
   }
+  .sel-sep {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    font-size: 12px;
+    color: var(--text-2);
+    white-space: nowrap;
+    cursor: default;
+  }
+  .sel-sep input {
+    margin: 0;
+  }
   .tiny {
     height: 22px;
     font-size: 12px;
@@ -142,6 +162,9 @@
     /* 窄窗口里选区工具条会挤出右边界：只留时长，把时间范围让给按钮 */
     .sel-range {
       display: none;
+    }
+    .sel-sep {
+      font-size: 0;
     }
   }
 </style>
