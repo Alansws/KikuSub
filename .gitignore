@@ -50,13 +50,17 @@ coverage.xml
 cover/
 
 # Environments
+# 只忽略**仓库根**的虚拟环境。`env/` 不加前导 `/` 会匹配任意层级同名目录：
+# 2026-11-15 它把 desktop/renderer/src/components/settings/env/ 下的 3 个 Svelte 组件
+# 悄悄吞掉（本地构建正常，CI 干净 checkout 报 Could not resolve … 直接红）。
+# 守卫是 tests/test_source_not_ignored.py，改这里之前先看那条用例。
 .env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+/.venv
+/env/
+/venv/
+/ENV/
+/env.bak/
+/venv.bak/
 
 # KikuSub Runtime Models & Outputs (Local Only)
 models/
