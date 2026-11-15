@@ -54,6 +54,23 @@ node tools/shots/capture_ai_workbench.mjs --out /tmp/ai-current --compare docs/i
 `dual`（双引擎差异表）。输出名 `<state>-<theme>-<1360x838>.png`，与 `capture_matrix.sh` 一致。
 夹具在系统临时目录生成，固定了提案与 B 版边车的时间戳，因此同一台机器上可逐像素复现。
 
+## 断句重排分段计划回归
+
+用户报障过的交互（2026-11-15「覆盖两段后切单源再切回双源，4 段变 3 段」）有专门的行为回归：
+501 条 A + 516 条 B，在真实界面里跑「切换源 / 覆盖两段 / ⌘Z 撤回 / 核对台删一条」，
+断言段轨、勾选、失效横幅与出口按钮。
+
+```bash
+# 两个场景（flow：冻结与 ⌘Z 同步；stale：外部改动横幅）
+node tools/shots/verify_reshape_flow.mjs
+
+# 只跑一个场景
+node tools/shots/verify_reshape_flow.mjs --scenario stale
+```
+
+同样走 `--screenshot` 静默路径（`showInactive` + `capturePage` + `app.exit`，不抢焦点），
+断言失败退出码非 0。契约口径见 `docs/contracts/ai-proposal.md` §3.7.6。
+
 ## 设置页专用矩阵
 
 设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：
