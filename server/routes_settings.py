@@ -49,7 +49,6 @@ CLIENT_LEVELS = {
 
 class SettingsPatch(BaseModel):
     enabled_engines: list[str] | None = None
-    auto_proxy: bool | None = None
     # 空字符串表示恢复默认（应用输出目录 / 跟随字幕导出目录）。非空必须是绝对路径。
     export_dir: str | None = None
     video_export_dir: str | None = None
@@ -189,8 +188,6 @@ def patch_settings(payload: SettingsPatch, request: Request) -> dict:
         if unknown:
             raise HTTPException(status_code=422, detail=f"未知引擎：{', '.join(unknown)}")
         patch["enabled_engines"] = payload.enabled_engines
-    if payload.auto_proxy is not None:
-        patch["auto_proxy"] = payload.auto_proxy
     if payload.export_dir is not None:
         patch["export_dir"] = _validate_dir(payload.export_dir, "导出文件夹")
     if payload.video_export_dir is not None:

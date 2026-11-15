@@ -49,18 +49,29 @@ def test_settings_lists_engines_and_paths(client: TestClient, tmp_path: Path) ->
 
 def test_patch_settings_persists_and_reaches_config(client: TestClient, tmp_path: Path) -> None:
     resp = client.patch(
-        "/api/settings", headers=AUTH, json={"enabled_engines": ["qwen"], "auto_proxy": False}
+        "/api/settings", headers=AUTH, json={"enabled_engines": ["qwen"]}
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["settings"]["enabled_engines"] == ["qwen"]
-    assert data["settings"]["auto_proxy"] is False
+    # 自动代理已移除：设置快照里不能再出现这个键（旧客户端多传会被忽略）
+    assert "auto_proxy" not in data["settings"]
     assert (tmp_path / "settings.json").exists()
 
     config = client.get("/api/config", headers=AUTH).json()
     assert config["settings"]["enabled_engines"] == ["qwen"]
     flags = {e["key"]: e["enabled"] for e in config["engines"]}
     assert flags == {key: key == "qwen" for key in engines.KEYS}
+
+
+def test_legacy_auto_proxy_key_is_dropped(client: TestClient, tmp_path: Path) -> None:
+    """旧 settings.json 里残留的 auto_proxy 不影响启动，也不再出现在快照里。"""
+    (tmp_path / "settings.json").write_text(
+        '{"enabled_engines": ["whisper"], "auto_proxy": false}\n', encoding="utf-8"
+    )
+    data = client.get("/api/settings", headers=AUTH).json()
+    assert data["settings"]["enabled_engines"] == ["whisper"]
+    assert "auto_proxy" not in data["settings"]
 
 
 def test_patch_settings_rejects_unknown_engine(client: TestClient) -> None:
