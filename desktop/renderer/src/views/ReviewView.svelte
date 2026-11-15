@@ -2069,7 +2069,7 @@
     const t0 = performance.now();
     const step = (now: number) => {
       const k = Math.min(1, (now - t0) / 120);
-      rowsEl!.scrollTop = from + dist * (1 - Math.pow(1 - k, 3));
+      if (rowsEl) rowsEl.scrollTop = from + dist * (1 - Math.pow(1 - k, 3)); // 导入新媒体时视图可能已卸载
       if (k < 1) revealRaf = requestAnimationFrame(step);
     };
     revealRaf = requestAnimationFrame(step);

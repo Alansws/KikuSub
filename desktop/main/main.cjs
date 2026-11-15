@@ -538,11 +538,18 @@ function startSidecar() {
 
   const exe = pythonPath();
   const args = IS_DEV ? ['-m', 'server', '--port', '0'] : ['--port', '0'];
-  const cwd = IS_DEV ? REPO_ROOT : path.join(process.resourcesPath, 'python');
 
   // 开发模式沿用仓库目录（与 sidecar、CLI 共用同一份 outputs/presets，
   // 三个入口看到的是同一套数据）；打包后才切到 Application Support。
   const base = IS_DEV ? REPO_ROOT : ensureDataDirs();
+
+  // cwd 绝不能指进 .app 里面。打包脚本是 `rm -rf KikuSub.app` 后重新装配，
+  // 而 sidecar 是 detached 的（父进程退出它不会跟着死）：装配那一刻它的 cwd
+  // 就变成一个已删除的 inode，之后每次 os.getcwd() 都是 ENOENT。
+  // torch 在 import 期就会调（torch/_dynamo/config.py: default_debug_dir_root），
+  // 于是任意一次 Whisper/Qwen 转写都会在 0.5 秒内失败，界面只剩一句
+  // "[Errno 2] No such file or directory"。数据目录不会被重装替换，用它才安全。
+  const cwd = IS_DEV ? REPO_ROOT : base;
   let models = modelsDir();
   try {
     models = ensureWritableDir(models);
