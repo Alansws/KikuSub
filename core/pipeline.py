@@ -26,7 +26,7 @@ from typing import Callable
 from . import engines as engine_registry
 from .audit import build_audit_items, make_audit_payload, write_audit_payload
 from .cues import cues_to_table
-from .paths import OUTPUT_DIR
+from .paths import OUTPUT_DIR, ensure_usable_cwd
 from .report import (
     _missed_hidden_count,
     _visible_missed_spans,
@@ -281,6 +281,11 @@ def run_transcription(
     `engine` 可显式注入：调用方（旧界面 / 测试）可能自己持有引擎实例或替身，
     不传时按 `req.engine_key` 取进程内单例。
     """
+    # cwd 可能在应用运行期间被删掉（打包脚本原地重建 .app 就是这样）。等到引擎
+    # 懒加载 torch 时才炸，报错只有一句 "[Errno 2] No such file or directory"，
+    # 所以在动重活之前查一次；定位问题的那条 warning 由 helper 自己打。
+    ensure_usable_cwd()
+
     media_path = Path(req.media_path)
     engine = engine if engine is not None else resolve_engine(req.engine_key)
     family = engine_family(req.engine_key)
