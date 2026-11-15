@@ -557,10 +557,12 @@ export async function parseAiPastedSrt() {
     }
     if (segment) {
       ai.filled[segmentKey(segment)] = true;
-      const next = ai.segments.findIndex((item, index) => index > ai.segmentIndex && !ai.filled[segmentKey(item)]);
-      ai.segmentIndex = next >= 0 ? next : ai.segmentIndex;
+      // 停在这段看刚回填的 diff：分段模式下表格只画当前段，自动跳到下一段
+      // 会让结果立刻从眼前消失（看起来像没粘上）。下一段由用户点分段轨继续。
+      ai.pasteOpen = false;
       ai.pasteText = '';
-      toast(`第 ${segment.from}–${segment.to} 段已回填（${segment.count} 条）`);
+      const position = ai.segments.findIndex((item) => segmentKey(item) === segmentKey(segment)) + 1;
+      toast(`第 ${position} 段（第 ${segment.from}–${segment.to} 条）已回填`);
     } else {
       ai.pasteOpen = false;
       ai.pasteText = '';

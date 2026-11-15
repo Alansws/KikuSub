@@ -24,6 +24,11 @@ export const dual = $state({
   error: '',
   /** 只看差异（= / ~ / + / − 里只留 ~ + −）。 */
   onlyDiff: true,
+  /**
+   * 刚从对照表点走的那一行（`a-b` 索引）。回来后高亮它，让用户一眼看到
+   * 「刚才看的就是这一句」；B 版换了就没有意义了，重新拉取时清掉。
+   */
+  anchor: '',
   /** 进入页面时接管的媒体 id：换片后自动重拉。 */
   mediaId: '',
 });
@@ -53,6 +58,18 @@ export function altParamsLabel(): string {
     .join(' · ');
 }
 
+/**
+ * 认领「这是哪一份 B」：媒体 id + 生成时间。
+ * 换了人，之前点过的那一行就作废（横幅高亮不能挂到新表的同号行上）。
+ */
+function adoptAltIdentity(createdAt: number) {
+  const nextMedia = app.media?.id ?? '';
+  const nextCreatedAt = createdAt ?? 0;
+  if (dual.mediaId !== nextMedia || dual.createdAt !== nextCreatedAt) dual.anchor = '';
+  dual.createdAt = nextCreatedAt;
+  dual.mediaId = nextMedia;
+}
+
 export function resetAltReview() {
   dual.exists = false;
   dual.engine = '';
@@ -64,6 +81,7 @@ export function resetAltReview() {
   dual.rows = [];
   dual.stats = null;
   dual.error = '';
+  dual.anchor = '';
   dual.mediaId = app.media?.id ?? '';
 }
 
@@ -80,9 +98,8 @@ export async function refreshAltReview() {
     dual.cues = data.cues ?? [];
     dual.source = data.source ?? {};
     dual.params = data.params ?? {};
-    dual.createdAt = data.created_at ?? 0;
     dual.stats = data.stats ?? null;
-    dual.mediaId = app.media?.id ?? '';
+    adoptAltIdentity(data.created_at ?? 0);
     if (!data.exists) dual.rows = [];
   } catch (err) {
     dual.error = (err as Error).message;
@@ -109,10 +126,9 @@ export async function loadAltDiff() {
     dual.cues = data.cues ?? [];
     dual.source = data.source ?? {};
     dual.params = data.params ?? {};
-    dual.createdAt = data.created_at ?? 0;
     dual.rows = data.rows ?? [];
     dual.stats = data.stats ?? null;
-    dual.mediaId = app.media?.id ?? '';
+    adoptAltIdentity(data.created_at ?? 0);
   } catch (err) {
     dual.error = (err as Error).message;
   } finally {

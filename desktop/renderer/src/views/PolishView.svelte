@@ -40,6 +40,8 @@
   import { api, type AiConfig } from '../lib/api';
   import { bRefsFor } from '../lib/previewDiff';
   import { loadPrompts, promptItemsFor, prompts, selectPromptTemplate } from '../lib/promptStore.svelte';
+  import { rowsInSegment } from '../lib/aiSegments';
+  import { recallScroll, rememberScroll } from '../lib/scrollMemory';
   import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
@@ -53,6 +55,8 @@
   let aiConfig = $state<AiConfig | null>(null);
   /** `null` = 还没问到；false = 主进程明确说没有 Key。 */
   let keyReady = $state<boolean | null>(null);
+  /** 表格滚动容器：从核对台回来要停在同一段、同一句附近。 */
+  let listEl = $state<HTMLDivElement | null>(null);
 
   const polishTemplates = $derived(
     promptItemsFor(ai.mode === 'dual' ? 'polish_dual' : 'polish_single'),
@@ -86,17 +90,34 @@
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
   const changedCount = $derived(rows.filter((r) => r.changed).length);
   const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
-  const visible = $derived(
-    ai.proposal && ai.changedOnly ? rows.filter((r) => r.changed) : rows,
-  );
-  const filledCount = $derived(ai.segments.filter((seg) => ai.filled[segmentKey(seg)]).length);
-  const hasAnyNotes = $derived(Boolean(ai.proposal) && rows.some((row) => row.note.trim().length > 0));
-  const dualVisible = $derived(ai.mode === 'dual' && !bCollapsed);
   const activeSegment = $derived(
     ai.longMode && ai.segments.length
       ? ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]
       : null,
   );
+  /**
+   * 分段模式下表格只画当前段：分段的意义是「一段一段复制 / 回填」，段外的行
+   * 既没有这次回填的结果，也不在粘贴范围内，混在同一张表里会让分段轨看起来
+   * 没生效（用户报障）。断句重排页是同一口径。
+   */
+  const segmentRows = $derived(
+    ai.longMode && activeSegment ? rowsInSegment(rows, activeSegment) : rows,
+  );
+  const visible = $derived(
+    ai.proposal && ai.changedOnly ? segmentRows.filter((r) => r.changed) : segmentRows,
+  );
+  /**
+   * 这一段有没有可看的终稿：手工回填过，或提案本身就是整片生成的
+   * （in-app / 技能 / 导入的提案按契约必须覆盖 A 的全部条目）。
+   * 只有手动粘贴通道需要逐段攒，`filled` 记的就是这个进度。
+   */
+  function segmentFilled(segment: (typeof ai.segments)[number]): boolean {
+    if (ai.filled[segmentKey(segment)]) return true;
+    return Boolean(ai.proposal) && ai.proposal?.entry !== 'manual';
+  }
+  const filledCount = $derived(ai.segments.filter((seg) => segmentFilled(seg)).length);
+  const hasAnyNotes = $derived(Boolean(ai.proposal) && rows.some((row) => row.note.trim().length > 0));
+  const dualVisible = $derived(ai.mode === 'dual' && !bCollapsed);
   const aiNeedsSetup = $derived(
     aiConfig !== null && (!aiConfig.enabled || keyReady === false),
   );
@@ -107,6 +128,45 @@
         ? '外部 Agent'
         : '本机生成',
   );
+
+  /**
+   * 表格滚动位置的 key：换片 / 换源 / 换分段都算另一张表，各自记忆。
+   * 点时间码去核对台再回来时（`{#key app.view}` 会重建页面）恢复到离开处。
+   */
+  const listKey = $derived(
+    `polish:${app.media?.id ?? ''}:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}`,
+  );
+  let restoredKey = '';
+
+  $effect(() => {
+    const key = listKey;
+    if (!listEl || restoredKey === key) return;
+    restoredKey = key;
+    const target = recallScroll(key);
+    const apply = () => {
+      if (!listEl) return;
+      listEl.scrollTop = target;
+      rememberScroll(key, listEl.scrollTop);
+    };
+    apply();
+    // 行高在首帧后才量稳（content-visibility），第二帧再对齐一次。
+    requestAnimationFrame(apply);
+  });
+
+  function onListScroll() {
+    if (listEl) rememberScroll(listKey, listEl.scrollTop);
+  }
+
+  /**
+   * 点分段轨：换一段看。粘贴框只有一份，换段时必须清掉，否则会把上一段的
+   * 回复贴到这一段（条数恰好相同时服务端也拦不住）。
+   */
+  function selectSegment(index: number) {
+    if (index === ai.segmentIndex) return;
+    ai.segmentIndex = index;
+    ai.pasteText = '';
+    ai.pasteOpen = false;
+  }
 
   $effect(() => {
     void app.connected;
@@ -193,7 +253,7 @@
   }
 
   function railStatus(segment: (typeof ai.segments)[number]): 'done' | 'todo' {
-    return ai.filled[segmentKey(segment)] ? 'done' : 'todo';
+    return segmentFilled(segment) ? 'done' : 'todo';
   }
 </script>
 
@@ -309,8 +369,8 @@
         segments={ai.segments}
         active={ai.segmentIndex}
         status={railStatus}
-        onselect={(index) => (ai.segmentIndex = index)}
-        hint="复制 / 粘贴只作用于当前段"
+        onselect={selectSegment}
+        hint="点分段切换表格 · 复制 / 粘贴只作用于当前段"
       />
     {/if}
   </header>
@@ -373,7 +433,14 @@
   {/if}
 
   <div class="aiw-subbar">
-    <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
+    {#if activeSegment}
+      <span class="aiw-chip accent" title="表格、复制提示词、粘贴回填都只作用于这一段">
+        第 <b>{ai.segmentIndex + 1}</b>/<b>{ai.segments.length}</b> 段 · 第 <b>{activeSegment.from}–{activeSegment.to}</b> 条
+      </span>
+      <span class="aiw-chip" title="全片条数">全片 <b>{app.cues.length}</b> 条</span>
+    {:else}
+      <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
+    {/if}
     {#if ai.proposal}
       <span class="aiw-chip">改动 <b class:hot={changedCount > 0}>{changedCount}</b></span>
       <span class="aiw-chip accent">采纳 <b>{acceptedCount}</b></span>
@@ -469,7 +536,7 @@
         <span></span>
       </div>
 
-      <div class="aiw-list">
+      <div class="aiw-list" bind:this={listEl} onscroll={onListScroll}>
         {#if !visible.length}
           <div class="aiw-inline-empty">
             <Icon name="check" size={16} />

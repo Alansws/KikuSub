@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { needsSegments, planSegments } from '../renderer/src/lib/aiSegments.ts';
+import { needsSegments, planSegments, rowsInSegment } from '../renderer/src/lib/aiSegments.ts';
 
 function cues(count, gapAt = -1, gapSeconds = 0) {
   const out = [];
@@ -52,4 +52,26 @@ test('short input stays one segment', () => {
     { from: segments[0].from, to: segments[0].to },
     { from: 1, to: 80 },
   );
+});
+
+test('rowsInSegment keeps global cue indices but only the active segment', () => {
+  const rows = Array.from({ length: 420 }, (_, idx) => ({ i: idx + 1 }));
+  const segment = { from: 151, to: 300, start: 0, end: 0, count: 150 };
+
+  const picked = rowsInSegment(rows, segment);
+  assert.equal(picked.length, 150);
+  assert.equal(picked[0].i, 151);
+  assert.equal(picked.at(-1).i, 300);
+
+  // 短片 / 未分段：全量原样返回
+  assert.equal(rowsInSegment(rows, null).length, rows.length);
+});
+
+test('rowsInSegment clamps a segment that overruns the current rows', () => {
+  const rows = Array.from({ length: 10 }, (_, idx) => ({ i: idx + 1 }));
+  assert.deepEqual(
+    rowsInSegment(rows, { from: 8, to: 40, start: 0, end: 0, count: 33 }).map((row) => row.i),
+    [8, 9, 10],
+  );
+  assert.deepEqual(rowsInSegment(rows, { from: 20, to: 40, start: 0, end: 0, count: 21 }), []);
 });

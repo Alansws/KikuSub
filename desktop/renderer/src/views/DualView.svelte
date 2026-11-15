@@ -20,8 +20,12 @@
     replacePrimaryWithAlt,
   } from '../lib/dualReview.svelte';
   import { tcShort } from '../lib/time';
+  import { recallScroll, rememberScroll } from '../lib/scrollMemory';
+  import type { DualRow } from '../lib/api';
 
   let moreOpen = $state(false);
+  /** 对照表的滚动容器：去核对台看完一句再回来要停在同一句，而不是回到第 0 行。 */
+  let listEl = $state<HTMLDivElement | null>(null);
 
   const rows = $derived(
     dual.onlyDiff ? dual.rows.filter((row) => row.kind !== 'same') : dual.rows,
@@ -51,12 +55,46 @@
     if (app.connected) void loadAltDiff();
   });
 
-  function goto(row: { a_indices: number[]; start: number; end: number }) {
+  /** 一行的稳定 key：A/B 的全局序号组合，两列对齐后不会变。 */
+  function rowKey(row: DualRow): string {
+    return `${row.a_indices.join('-')}:${row.b_indices.join('-')}`;
+  }
+
+  /**
+   * 滚动位置按「哪份 B + 哪个过滤条件」分别记：换了第二版或切「只看差异」，
+   * 行集合就变了，沿用旧偏移只会停在无关的位置。
+   */
+  const listKey = $derived(
+    `dual:${dual.mediaId}:${dual.createdAt}:${dual.onlyDiff ? 'diff' : 'all'}`,
+  );
+  let restoredKey = '';
+
+  $effect(() => {
+    const key = listKey;
+    if (!listEl || !dual.rows.length || restoredKey === key) return;
+    restoredKey = key;
+    const target = recallScroll(key);
+    const apply = () => {
+      if (!listEl) return;
+      listEl.scrollTop = target;
+      rememberScroll(key, listEl.scrollTop);
+    };
+    apply();
+    // 行高首帧后才量稳（content-visibility），第二帧再对齐一次。
+    requestAnimationFrame(apply);
+  });
+
+  function onListScroll() {
+    if (listEl) rememberScroll(listKey, listEl.scrollTop);
+  }
+
+  function goto(row: DualRow) {
     const index = row.a_indices[0];
     if (index === undefined) {
       toast('这一行只有第二版有，先在核对台补上对应句子再定位', 'warn');
       return;
     }
+    dual.anchor = rowKey(row);
     setView('review');
     jumpToCue(index, { seek: false });
     focusRange(row.start, row.end);
@@ -225,9 +263,12 @@
         <div class="es">两份字幕逐条一致；取消「只看差异」可以看全量对照。</div>
       </div>
     {:else}
-      <div class="list">
-        {#each rows as row (`${row.a_indices.join('-')}:${row.b_indices.join('-')}`)}
-          <div class="row kind-{row.kind}">
+      <div class="list" bind:this={listEl} onscroll={onListScroll}>
+        {#each rows as row (rowKey(row))}
+          <div
+            class="row kind-{row.kind}"
+            class:anchor={dual.anchor === rowKey(row)}
+          >
             <button class="c-time" onclick={() => goto(row)} title={row.a_indices.length ? '回到核对台定位这一句' : 'B 独有的句子'}>
               <span class="tc">{tcShort(row.start)}</span>
               <span class="idx">
@@ -598,6 +639,11 @@
   }
   .row.kind-only_b {
     background: color-mix(in srgb, var(--accent) 5%, transparent);
+  }
+  /* 从核对台回来时标出「刚才看的就是这一句」：位置恢复之外再给一个视觉锚点。 */
+  .row.anchor {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
   }
   .c-time {
     display: flex;

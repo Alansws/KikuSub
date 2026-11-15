@@ -125,6 +125,21 @@ export function planSegments(
   return segments;
 }
 
+/**
+ * 分段表格的行：当前段在 A 的 1 基区间里对应的那些行。
+ *
+ * 断句重排与润色双源是同一套分段：表格一条一行、序号就是 A 的全局序号，
+ * 点分段轨只是换一段看，不是换一份数据。`segment` 为空（短片 / 未分段）时
+ * 返回全量，调用方不必自己写 if。
+ */
+export function rowsInSegment<T>(rows: T[], segment: AiSegment | null): T[] {
+  if (!segment) return rows;
+  const from = Math.max(1, Math.floor(segment.from));
+  const to = Math.min(rows.length, Math.floor(segment.to));
+  if (from > to) return [];
+  return rows.slice(from - 1, to);
+}
+
 function makeSegment(cuesA: Cue[], from: number, to: number): AiSegment {
   return {
     from,
