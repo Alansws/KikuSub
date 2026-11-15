@@ -24,11 +24,11 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 - Anime Whisper：重视自然、连贯的日语对话转写；
 - Qwen3-ASR + CTC：转写后利用自带的 CTC 对齐头取得逐字发声时间，并针对日语分句；
 - SenseVoice-Small / FireRedASR2-AED：两个**可选装**的中文引擎（ONNX / CPU，权重按需下载、默认停用）；
-- Silero VAD 分段、可选动态响度归一化、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
-- 视频 + 波形核对台、质检待核队列、SRT/VTT/TXT 导出、参数预设与完整任务报告；
-- AI 提案（润色 / 翻译平行轨）与随包 Agent 技能。
+- Silero VAD 分段、可选动态响度归一化、人声分离（整片 / 区间）、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
+- 视频 + 波形核对台、质检待核队列、批量清理标点、SRT/VTT/TXT 导出、参数预设与完整任务报告；
+- AI 提案（润色 / 翻译平行轨）、结构建议、断句重排与随包 Agent 技能。
 
-**主入口是 `desktop/`。** `app.py` 与 `static/` 已从仓库移除；旧 Gradio 界面归档在 Git 标签 `v0.9-gradio` 与本地独立目录 `~/Downloads/kikusub_gardio`，不再随本仓库演进。
+**主入口是 `desktop/`。** `app.py` 与 `static/` 已从仓库移除；旧 Gradio 界面归档在 Git 标签 `v0.9-gradio`，不再随本仓库演进。
 
 开发模式（安装 `requirements.txt`、`desktop/npm install` 与系统 `ffmpeg` 后）：
 
@@ -119,7 +119,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    `build_app.sh` 会因为 sidecar 比源码旧直接退出，这是有意的。
 10. **改前端必须真验证**：`cd desktop && npm run build`，然后实际过一遍单击跳转、抖动单击不建选区、
     缩放、保存；只看编译通过不算验证。
-11. **两个 4000 行文件只许变短**：改 `lib/store.svelte.ts` / `views/ReviewView.svelte` 前，先把
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3315 行 / `views/ReviewView.svelte` 3877 行）：
+    改它们前，先把
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
     `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
     变成"先读完 4000 行"。
@@ -137,7 +138,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 验证按**改动范围**跑，不必每次全量（见下面「验证时机」表）。全量 `pytest -q` 约 40s，
   但"改个文档也跑 423 例"会把注意力磨平；环境依赖的用例用 marker 排除
   （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
-- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 9 个真实类型错误已冻结成基线
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 6 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
@@ -187,7 +188,6 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
     [预设契约](docs/contracts/params-and-presets.md)。
   - **通用对齐层已落地**（`core/align_layer.py`）：借 Qwen 的 acoustic-only CTC 头给任意
     日语文本打逐字时间，Anime Whisper 侧是 `whisper.use_ctc_alignment`（默认关）。
-    实现是两遍（先 `engine.release()` 再装对齐器，峰值 6.2GB 而不是 11.8GB）。
     精度 p90 约 320ms，没到 ±150ms 门槛，所以没设默认；细节见
     [Qwen 标定文档](docs/转录标定-Qwen-2026-11.md) §4，门槛在 `docs/backlog.md` P1-5。
 - **日语引擎优化路线**（[docs/日语引擎优化路线-2026-11.md](docs/日语引擎优化路线-2026-11.md)）：

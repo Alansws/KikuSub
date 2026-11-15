@@ -48,6 +48,7 @@ Everything except the optional AI features is local inference.
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
 - Result handling depends on scope: a whole-file run offers *replace all / append*, a range run adds **replace selection** (default — rewrites that span only, every other cue stays). Picking *replace all* on a range asks for confirmation first.
+- **Vocal separation**: run it on the whole file or just a time range (most useful for songs and loud-BGM passages); with only one bound filled the other follows the start / end of the file, and long files are split automatically — no manual cutting required.
 - All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. **Each engine ships one calibrated, engine-bound preset** (Japanese ASMR ×2, Chinese short-form ×2); the picker only lists presets for the selected engine, and cross-engine loads are rejected. Presets can be saved and deleted.
 - FFmpeg `dynaudnorm` is on by default (on quiet masters it is the difference between
   transcribing a line and dropping it); turn it off in the parameter panel if you prefer.
@@ -79,6 +80,7 @@ Everything except the optional AI features is local inference.
 - **The QA panel no longer covers the picture**: it docks into a "QA" tab in the right inspector by default; click "pop out" when you want it beside the source, then drag/resize it, reset it, or dock it back.
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
 - **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
+- **Batch punctuation cleanup**: ASR models love to append `、` `。` at cue ends (sometimes mid-line); the review toolbar, `⌘⇧L`, or the Edit menu open the same popover. Leading / trailing marks are removed, mid-line marks become a single space, and ellipses plus `.` `,` inside numbers and Latin text are left alone. Source track only — the translation track is never touched — and the whole-track edit is one history step (⌘Z reverts it in one go).
 - The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 re-segment / ⌘7 translate / ⌘8 export**.
 - Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
@@ -89,7 +91,7 @@ Everything except the optional AI features is local inference.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
 
-**Dual-engine review, polish, structure suggestions & translation**
+**Dual-engine review, polish, structure suggestions, re-segmentation & translation**
 
 ![Dual review: two read-only columns marked = / ~ / + / −](docs/images/dual-view.jpg)
 
@@ -108,6 +110,7 @@ Everything except the optional AI features is local inference.
 ![Structure suggestions: paste ops JSON, preview merge / retime / replace text / insert / delete](docs/images/structure-view.jpg)
 
 - **Structure suggestions (Phase 1)** — the external model only returns `{"ops":[...]}` (merge / retime / replace text / insert / delete); the app binds the source digest on paste, previews every op, and applies the selection as one history step (⌘Z). No digest or version is requested from the model, and the polish timeline contract is untouched. Conflicting ops are red and cannot be selected; count-changing merge / insert / delete are rejected when a non-empty translation track exists.
+- **Re-segmentation (full re-script)** — the external model returns a complete SRT; pasting it replaces each original index range wholesale, so cue count, splitting, timecodes and text may all change. It is a third lane separate from polish (text only) and structure suggestions (named ops only). Health checks annotate but never block (overlap / out of order / too long / out of bounds); only a halved or doubled cue count (<50% or >200%) needs a second confirmation, and a digest mismatch refuses the paste.
 - Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
 - Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`). Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
 - **Video export**: hard subs use a Pillow sprite + ffmpeg overlay (no libass needed); soft subs are toggleable in MP4; "copy only" skips re-encoding entirely.
@@ -116,12 +119,13 @@ Everything except the optional AI features is local inference.
 
 **Settings & runtime**
 
-![Settings: engines, AI options, agent skill, appearance](docs/images/settings-ai.jpg)
+![Settings: engines & models, appearance & voice, AI & skills, environment & diagnostics](docs/images/settings-ai.jpg)
 
+- Settings is split into four tabs: **Engines & models / Appearance & voice / AI & skills / Environment & diagnostics**.
 - Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download. Anime Whisper / Qwen3 / OmniVoice share one progress track for **Verify / Fill gaps**: verification uses an indeterminate sweep, downloads use real percentages, and completion briefly turns green before collapsing.
-- Runtime lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
+- **Environment & diagnostics** lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
-- Two themes: Clear Sky (light / dark) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch in Settings. Waveform height is draggable from the review stage.
+- Three themes: Clear Sky light / Clear Sky dark (one skin, two schemes) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch by thumbnail under Settings → Appearance & voice. Waveform height is draggable from the review stage.
 
 ## Switchable engines
 
@@ -192,7 +196,7 @@ xattr -dr com.apple.quarantine /Applications/KikuSub.app
 
 **First launch** has two steps: pick a model folder (default `~/Library/Application Support/KikuSub/models`), then choose which models to download — Anime Whisper (recommended), Qwen3-ASR, and the optional **OmniVoice voice cloning**. **Set up selected** downloads them in order; **Not now** skips and leaves the same choices under Settings → Engines & Models. Models are not bundled; the default source is `hf-mirror.com` with resume support.
 
-The default TTS voice is still the macOS system voice (Kyoko etc.); you can switch the default to a cloned voice under Settings → TTS. OmniVoice only loads when a cloned voice is actually used.
+The default TTS voice is still the macOS system voice (Kyoko etc.); you can switch the default to a cloned voice under Settings → Appearance & voice. OmniVoice only loads when a cloned voice is actually used.
 
 ## Running from source
 
@@ -265,7 +269,7 @@ media file
 
 ## Configuring AI
 
-Under Settings → **AI options (experimental)** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek.
+Under Settings → **AI & skills → AI options** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek.
 
 - **The key never enters `settings.json` or the logs.** The main process encrypts it with a machine-local master key (AES-256-GCM) and stores the ciphertext in `preferences.json` under an `aik1:` prefix; the master key is `{dataDir}/.ai-key` with mode 0600. The renderer decrypts it only for the request and sends it once as `X-AI-Key`; the server layer never reads, writes or logs it.
 - Not using `safeStorage` is deliberate: the app ships as a DMG with ad-hoc signing, so the cdhash changes on every release and Keychain ACLs would invalidate every user's key on upgrade.

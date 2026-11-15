@@ -19,11 +19,10 @@
 | # | 项 | 出处 / 为什么 | 验收 |
 | --- | --- | --- | --- |
 | 1 | **环境钉版本**：加 `.python-version`（3.12）与 `desktop/package.json` 的 `engines.node`；把"venv 在工作区根 `../.venv`"写进 CONTRIBUTING | 审计 P1-3：本机 `python3` 是 3.14、CI 是 3.12，已经分叉（`server/__pycache__` 有 cpython-314 产物） | 新 clone 后按文档操作，`python3 -m pytest` 不会用到错解释器；CI 与本地版本一致 |
-| 2 | **svelte-check 清零并进 CI**：修掉 10 个存量类型错误 | 审计 P1-1；基线冻结在 `desktop/test/svelte-check-baseline.json` | `npm run check:svelte` 报 0 错，且成为 CI 的一步 |
+| 2 | **svelte-check 清零并进 CI**：修掉 6 个存量类型错误 | 审计 P1-1；基线冻结在 `desktop/test/svelte-check-baseline.json` | `npm run check:svelte` 报 0 错，且成为 CI 的一步 |
 | 3 | **`popIn` 未定义**（`QaPanel.svelte:398`）：`in:popIn` 指向不存在的函数，编译后是全局查找，质检浮窗的进场动画是死的 | 2026-11-13 接入 svelte-check 时发现；用户确认"先不用修" | 选定一种动画（缩放/淡入/去掉指令）并手点验证浮窗开合 |
 | 4 | **本页与代码的对账**：`tests/test_docs_health.py` 只覆盖文档结构与链接，不覆盖"契约里的数字/常量 vs 代码" | 审计 P1-5 | 至少一条对账（例如 `HISTORY_LIMIT=50` 与契约里的"50 步"）能在不一致时红 |
 | 5 | **Anime Whisper 逐字对齐**：已做通用对齐层（`core/align_layer.py`，借 Qwen 的 acoustic-only CTC 头 + 人工文本）。实测单句段起点 p90 320ms / 终点 p90 477ms（去掉人工提前/停留的系统性偏移后），比原来的字符比例分配（p90 1.35s）好 4 倍，但**仍未达到 ±150ms**，所以只作为可选层 `whisper.use_ctc_alignment`（默认关，多常驻一份 Qwen 权重 5.1GB）；300s 窗口实测 CER 5.96% → 5.30%、起点 p90 0.934s → 0.745s、字幕时长中位 3.48s → 2.13s（人工 2.46s）
-| 7 | **双引擎复核与工作流重构**：[双引擎复核与工作流-需求-2026-11.md](双引擎复核与工作流-需求-2026-11.md)。R1 删批量复核入口、R3 第二版本进第二列做 diff、R4 双源 AI 润色、R5 导航按工作流重排；替代路线文档 P1-1 里「多选批量复核」的界面部分（接口保留） | 2026-11-14 产品讨论：批量复核没有实际用处；双引擎对照 + 双源润色才是重点 | 按需求稿 §4 的 S1–S4 分期验收；每阶段先过 `pytest -q` + `npm run check` + 手点 |
 | 6 | **日语引擎优化路线**：[docs/日语引擎优化路线-2026-11.md](日语引擎优化路线-2026-11.md)。**P0-2 评测台已入库**（`tools/eval/`：`run_clip.py` / `ab_onset.py` / `probe_window.py` / `baseline.json`）→ **P0-1 已完成：qwen 句首提前默认 400 ms**（Test 二 CER 13.42%→11.47%、句首缺字 5→1；whisper 实测 CER +1.61pt，**不启用**，记为负结果）→ P0-3a 已诊断（AUC <0.75，不上线）→ **P1-1 段一/段二已完成**（`kind="compare"` 只回文本；核对台「当前条目」与质检条目可发起复核），段三（多选批量）已完成；P1 = 第二引擎按需复核 / ForcedAligner spike / 专名词表 | 2026-11 两片实测：9 个句首缺字样本扩窗直送全部恢复；两引擎错误互补；`mean_logprob` 已算但未接质检 | 按文档 §4 各项验收；S1 结束先交 A/B scorecard，再决定后续。**注意**：评测数字只在同一解释器内可比（`.venv` 与 anaconda 的 silero-vad 5.1/6.2 不同，同片 CER 可差 2pt），卡片已记 `env` 指纹 |
 
 ## P2：存量债（能做则做）
@@ -32,7 +31,7 @@
 | --- | --- | --- | --- |
 | 1 | 布局语义块合并：`.actions` 6 份、`.empty` 6 份、`.sec-head` 3 份、`.sec` 3 份 | `desktop/test/style-baseline.json` | 每合并一处就把基线数字调小，最终到 1。**⏸ 暂缓（2026-11-13）：动正在跑的界面，需单独一轮 + 截图 PSNR + 手点** |
 | 2 | 主题色裸值 → 令牌：`ExportView.svelte:1029` `#8fa6ff`、`:1281` `#14161c`，以及 `themes.ts` 的 swatch 与 `app.css` 双写 | 审计 P2-3 | `style-drift.test.cjs` 增加"组件内不得出现 hex"规则并绿。**⏸ 暂缓（2026-11-13）：同上** |
-| 3 | 大文件：`store.svelte.ts` 3933 行、`ReviewView.svelte` 3933 行（`SettingsView.svelte` 2056、`main.cjs` 1570） | engineering-practice §5 | **不做一次性大重构**（动正在跑的核对台，风险高）。改成"随功能抽"：`tests/test_big_file_budget.py` 冻结行数，只能变短——加功能前先把这次要用的纯逻辑抽到 `lib/`。`SettingsView` / `main.cjs` 暂不设预算，等它们真被改到再说 |
+| 3 | 大文件：`store.svelte.ts` 3315 行、`ReviewView.svelte` 3877 行（`SettingsView.svelte` 149、`main.cjs` 1581） | engineering-practice §5 | **不做一次性大重构**（动正在跑的核对台，风险高）。改成"随功能抽"：`tests/test_big_file_budget.py` 冻结行数，只能变短——加功能前先把这次要用的纯逻辑抽到 `lib/`。`SettingsView` 已拆到 149 行、不再需要预算；`main.cjs` 暂不设预算，等它真被改到再说 |
 | 4 | 机械化测试清理：81 个单断言用例抽检过，多数合理 | 审计 P2-… | 扫一遍删掉"删了没人疼"的用例 |
 | 5 | **中文术语表 / ITN 后处理**：FireRed 把 eSIM 写成 `E SIM`、`10月3号` 写成 `十月三号`；SenseVoice 把 eSIM 听成「一信」。这是词表问题，不是参数问题（[标定文档](转录标定-中文-2026-11.md) §2） | 2026-11-14 中文引擎标定：剩余错误集中在专名与数字写法 | 用户可编辑的热词表（术语 → 规范写法）生效后，同一素材的 CER 再降 ≥1pt，且不影响未被映射的句子；与日语侧 P1-3 词表共用一套界面 |
 
@@ -53,6 +52,12 @@
 
 | 日期 | 项 | 提交 |
 | --- | --- | --- |
+| 2026-11-15 | **设置页重构**：`SettingsView.svelte` 2032 行 → 149 行的页签骨架，四页签（引擎与模型 / 外观与朗读 / AI 与技能 / 环境与诊断）拆到 `views/settings/`，纯逻辑在 `lib/settings/`；三主题 × 四页签 + 680×900 取证矩阵。方案与验收：[sprints/2026-11-settings-redesign/](sprints/2026-11-settings-redesign/) | 见 `git log` |
+| 2026-11-15 | **断句重排（整份换稿）车道**：外部模型给完整 SRT，按原稿索引区间整段替换，条数/切分/时间码/文字均可变；体检只标注不拦路，条数腰斩二次确认，digest 守卫。契约：`contracts/ai-proposal.md` §3.7.6 | 见 `git log` |
+| 2026-11-15 | **核对台批量清理标点**：`lib/punctuation.ts` 纯规则（零 import）+ 浮层三入口（顶栏 / `⌘⇧L` / 编辑菜单），只清原文轨、整轨一步历史。契约：`contracts/review-console.md` §3.4.4 | 见 `git log` |
+| 2026-11-15 | **整片 / 区间人声分离**：`separation_range()` 统一算窗口（只填一端取片头/片尾、长片自动分段），区间「替换选区」补请求层校验（缺起点 422，不再误清整表）。契约：`contracts/review-console.md` §3.4（结果处理三档） | 见 `git log` |
+| 2026-11-15 | **双引擎复核与工作流重构 S1–S4**（原 P1-7）：删批量复核入口、第二版本进第二列做 diff、双源 AI 润色、导航按工作流重排。记录：[双引擎复核与工作流-需求-2026-11.md](双引擎复核与工作流-需求-2026-11.md) | 见 `git log` |
+| 2026-11-15 | svelte-check 存量类型错误从 10 降到 6（基线文件同步下调） | 见 `git log` |
 | 2026-11-14 | 中文引擎（SenseVoice / FireRed）首轮标定：修 sherpa 相对时间戳当绝对时间（SenseVoice CER 69.41%→6.80%）、`_extend_to_marks` 双重 start（39 字/5.8s 条）、空格切点与 `E / SIM` 劈词；新增能量对齐（FireRed 边界 F1 0.511→0.543）与 jieba 词边界兜底（词内切点 3.7%→1.0%）；默认参数 sensevoice 10s/14 字、firered 20s/14 字。记录：[转录标定-中文-2026-11.md](转录标定-中文-2026-11.md) | 见 `git log` |
 | 2026-11-13 | FireRed 原生接 FireRedPunc 标点恢复（ONNX 162 MB，随引擎下载到 `punc/`）；无句读时在切字幕前补标点，中文分句加 soft-max（标点只晚几个字时把当前条放长，不硬切词） | 见 `git log` |
 | 2026-11-13 | 新增两个可选装中文引擎：SenseVoice-Small（230 MB，token 时间戳）与 FireRedASR2-AED（1.2 GB，无时间戳按字分时）；走 sherpa-onnx / ONNX / CPU，默认停用、权重按需下载；注册表 + `family` 分派让未知引擎不再静默退回 Whisper | 见 `git log` |
