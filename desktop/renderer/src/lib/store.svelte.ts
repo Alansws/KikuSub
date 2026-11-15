@@ -2535,7 +2535,7 @@ export async function startTranscribe(
     toast('结束时间必须大于起始时间', 'warn');
     return;
   }
-  // 「全片」按钮会把 0 与完整时长填进两个输入框；那仍然算整片覆盖，
+  // 手填 0 与完整时长也算整片覆盖（「全片」按钮已改成清空区间），
   // 不能因为「填了时间」就误判成区间追加。
   const duration = app.media.duration || 0;
   const coversFull =

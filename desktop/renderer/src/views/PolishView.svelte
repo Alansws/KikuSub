@@ -187,7 +187,7 @@
         class:on={ai.mode === 'dual'}
         onclick={planDual}
         disabled={!dual.exists}
-        title={dual.exists ? '同时参考第二引擎稿（严格以 A 为骨架）' : '还没有第二版字幕'}
+        title={dual.exists ? '同时参考第二版稿（严格以 A 为骨架）' : '还没有第二版字幕（可转写或导入）'}
       >双源</button>
     </div>
 

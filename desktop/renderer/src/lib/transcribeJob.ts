@@ -48,3 +48,44 @@ export function rangeDoneText(input: RangeJobSummary): string {
   if (input.added) return `${done}：新增 ${input.added} 条${tail}`;
   return `${done}：该区间已有相同字幕${tail}`;
 }
+
+
+export interface AlignStats {
+  enabled?: boolean;
+  segments?: number;
+  aligned?: number;
+  noop?: number;
+  degraded?: number;
+  empty?: number;
+}
+
+/**
+ * 转写完成后进度卡里的「对齐说明」。
+ *
+ * 只在 Qwen（走 CTC）且确实有语音段时出现：Whisper 关闭 CTC、中文引擎走
+ * token 时间戳，它们不应该冒出一行 `0/0` 的逐字对齐汇总（用户明确要求）。
+ * 文案必须说清分母是「语音段」而不是字幕条数，否则 230/257 很容易被读成漏字。
+ */
+export function alignDoneText(
+  stats: AlignStats | null | undefined,
+  family: string,
+): string {
+  if (family !== 'qwen') return '';
+  if (!stats || stats.enabled === false) return '';
+  const total = Number(stats.segments ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return '';
+  const aligned = Number(stats.aligned ?? 0);
+  const rest = Math.max(0, total - aligned);
+  if (rest === 0) {
+    return `本次 ${total} 个语音段全部完成逐字对齐（语音段不是字幕条数）。`;
+  }
+  const parts: string[] = [];
+  const degraded = Number(stats.degraded ?? 0);
+  const noop = Number(stats.noop ?? 0);
+  const empty = Number(stats.empty ?? 0);
+  if (degraded > 0) parts.push(`对齐降级 ${degraded}`);
+  if (noop > 0) parts.push(`纯符号 ${noop}`);
+  if (empty > 0) parts.push(`无台词 ${empty}`);
+  const detail = parts.length ? parts.join('、') : '其他';
+  return `本次 ${total} 个语音段（不是字幕条数）：${aligned} 段完成逐字对齐；其余 ${rest} 段为${detail}。`;
+}

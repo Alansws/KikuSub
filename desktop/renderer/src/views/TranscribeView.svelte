@@ -25,6 +25,8 @@
     resolveApplyChoice,
   } from '../lib/applyMode';
   import { altEngineLabel, deleteAltReview, dual, refreshAltReview } from '../lib/dualReview.svelte';
+  import { type AlignStats, alignDoneText } from '../lib/transcribeJob';
+  import { takeSlice } from '../lib/transcribeSlice';
   import { parseTimeInput } from '../lib/time';
   import { vocalSeparation } from '../lib/vocalSeparation.svelte';
 
@@ -95,15 +97,15 @@
     return (app.media?.duration || 0) > 0;
   });
 
-  // 核对台「同步到转写页」：把框选/⇧ 连选的区间带过来。nonce 变一次填一次，
-  // 不能每次渲染都覆盖用户手输的内容。
+  // 核对台「同步到转写页」：把框选/⇧ 连选的区间带过来。
+  // **必须消费式读取**：`App.svelte` 用 `{#key app.view}` 重建视图，组件内的
+  // nonce 守卫会跟着归零；只靠它的话，整片转完自动跳核对台、再回转写页时，
+  // 旧区间会从 `app.slice` 里复活，输入框显示区间而实际提交的是整片（用户报障）。
   // 带过来时把「结果处理」定到「替换选区」：用户同步一个区间过来，意图就是重做
-  // 这一段（40:20–44:24 的歌词段换引擎重听），不是把整张表冲掉。
-  let seenSlice = 0;
+  // 这一段（40:20–44:25 的歌词段换引擎重听），不是把整张表冲掉。
   $effect(() => {
-    const req = app.slice;
-    if (!req || req.nonce === seenSlice) return;
-    seenSlice = req.nonce;
+    const req = takeSlice(app);
+    if (!req) return;
     startText = req.start;
     endText = req.end;
     applyMode = 'replace_range';
@@ -172,16 +174,38 @@
     );
   }
 
-  /** 把当前媒体的完整时长填进结束框，省得用户手算。 */
-  function fillFull() {
-    startText = '0';
-    if (app.media) {
-      const d = app.media.duration;
-      const m = Math.floor(d / 60);
-      const s = (d % 60).toFixed(2);
-      endText = `${m}:${s.padStart(5, '0')}`;
-    }
+  /**
+   * 「全片」= 不限制区间：清空起止输入与待填选区。
+   * 不再把 0–片尾填进两个框——那会让整片任务带上 `_00m00s-...s` 的区间后缀，
+   * 也会让「输入框里有时间」和「实际按整片转写」看起来互相矛盾。
+   */
+  function clearRange() {
+    startText = '';
+    endText = '';
+    app.slice = null;
   }
+
+  /** 本次任务提交时锁定的范围（来自 jobMeta，不跟随输入框，避免显示与执行不一致）。 */
+  const jobScopeText = $derived.by(() => {
+    const meta = app.jobMeta;
+    if (!meta) return '';
+    return meta.scope === 'full' ? '整片' : meta.label;
+  });
+
+  /**
+   * Qwen 的 CTC 对齐说明。非 CTC 引擎（关闭 CTC 的 Whisper、中文引擎）不显示，
+   * 更不会出现 `0/0` 的汇总行。
+   */
+  const alignNote = $derived(
+    alignDoneText(
+      (app.job?.result?.align_stats ?? null) as AlignStats | null,
+      String(
+        app.job?.result?.report?.quality?.engine_family ??
+          app.report?.quality?.engine_family ??
+          '',
+      ),
+    ),
+  );
 
   async function onPick(name: string) {
     picked = name;
@@ -260,7 +284,9 @@
           <div class="field mono" style="width:104px">
             <input class="mono" bind:value={endText} placeholder="片尾" />
           </div>
-          <button class="btn ghost" onclick={fillFull} title="填入完整时长">全片</button>
+          <button class="btn ghost" onclick={clearRange} title="清空起止时间 = 转写整片（不写区间后缀）">
+            全片
+          </button>
           <label
             class="check"
             title={absoluteLocked
@@ -421,6 +447,9 @@
           </div>
           <div class="pc-bar"><i style="width:{pct}%"></i></div>
           <div class="pc-meta">
+            {#if jobScopeText}
+              <span title="本次任务提交时锁定的范围，不随输入框变化">本次任务：{jobScopeText}</span>
+            {/if}
             {#if app.job.status === 'queued'}
               <span>正在唤醒推理内核，通常需要几秒</span>
             {:else if app.job.status === 'running'}
@@ -433,6 +462,14 @@
               <span>{app.job.status}</span>
             {/if}
           </div>
+          {#if app.job.status === 'done' && alignNote}
+            <div class="pc-note">
+              <span>{alignNote}</span>
+              {#if app.report?.job_id === app.job.id}
+                <button class="btn tiny ghost" onclick={() => setView('report')}>对齐明细</button>
+              {/if}
+            </div>
+          {/if}
           {#if app.job.status === 'done' && app.job.result?.alt_review}
             <div class="alt-done">
               <span class="saved-ok"><Icon name="check" size={10} />已放进双引擎复核</span>
@@ -811,6 +848,21 @@
     font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* 对齐说明：一句话解释 230/257 的口径，右侧给一个进报告页的入口。 */
+  .pc-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-3);
+  }
+
+  .pc-note .btn {
+    flex: 0 0 auto;
   }
 
   .saved-row {

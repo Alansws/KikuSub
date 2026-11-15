@@ -1147,7 +1147,7 @@ async function pickProposal(defaultDir) {
   return result.filePaths[0];
 }
 
-async function pickSubtitle(defaultDir) {
+async function pickSubtitle(defaultDir, title) {
   if (!win) return null;
   let defaultPath = typeof defaultDir === 'string' && defaultDir.trim() ? defaultDir.trim() : '';
   try {
@@ -1157,8 +1157,11 @@ async function pickSubtitle(defaultDir) {
   }
   if (!defaultPath) defaultPath = baseDir();
   const result = await dialog.showOpenDialog(win, {
-    title: '选择要导入核对台的字幕',
-    message: '从导出文件夹里选择上次转写的 .srt / .vtt',
+    title:
+      typeof title === 'string' && title.trim()
+        ? title.trim()
+        : '选择要导入核对台的字幕',
+    message: '从导出文件夹里选择 .srt / .vtt 字幕文件',
     defaultPath,
     properties: ['openFile'],
     filters: [
@@ -1266,7 +1269,9 @@ ipcMain.handle('app:info', () => ({
 }));
 
 ipcMain.handle('dialog:pick-media', () => pickMedia());
-ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir) => pickSubtitle(defaultDir));
+ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir, title) =>
+    pickSubtitle(defaultDir, title),
+  );
 ipcMain.handle('dialog:pick-audio', (_e, defaultDir) => pickAudio(defaultDir));
 ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultDir));
 

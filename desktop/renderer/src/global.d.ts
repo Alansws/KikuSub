@@ -64,7 +64,7 @@ declare global {
       onSidecarReady(cb: (payload: SidecarHandshake) => void): () => void;
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
       pickMedia(): Promise<string | null>;
-      pickSubtitle(defaultDir?: string): Promise<string | null>;
+      pickSubtitle(defaultDir?: string, title?: string): Promise<string | null>;
       /** TTS 克隆音色的参考音频（wav/mp3/…），返回绝对路径。 */
       pickAudio(defaultDir?: string): Promise<string[]>;
       pickProposal(defaultDir?: string): Promise<string | null>;

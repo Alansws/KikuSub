@@ -657,6 +657,8 @@ export interface ReportData {
     degraded: number;
     has_findings: boolean;
     qwen_limited: boolean;
+    /** whisper / qwen / sherpa：决定对齐文案用「逐字对齐」还是「token 时间戳」。 */
+    engine_family?: string;
   };
   sections: ReportSection[];
   raw_text: string;
@@ -1117,6 +1119,10 @@ export const api = {
   ) =>
     req<{
       path: string;
+      name: string;
+      requested_name: string;
+      /** 同名文件已有不同内容时，服务端自动改名为 `… (2).srt`。 */
+      renamed: boolean;
       text: string;
       format: string;
       count: number;
@@ -1332,6 +1338,20 @@ export const api = {
     req<AltReviewPayload>(`/api/alt-review${diff ? '?diff=1' : ''}`),
 
   deleteAltReview: () => req<{ removed: boolean; exists: boolean }>('/api/alt-review', { method: 'DELETE' }),
+
+  /** 把工作流里已经做好的另一版字幕直接导入第二列（与转写产出的 B 版同构）。 */
+  importAltReview: (path: string) =>
+    req<{
+      exists: boolean;
+      engine: string;
+      count: number;
+      source: Record<string, any>;
+      created_at: number;
+      warning: string;
+    }>('/api/alt-review/import', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
 
   replacePrimaryWithAlt: (clearAlt = true) =>
     req<CueSnapshot & { replaced: number; alt_cleared: boolean }>(

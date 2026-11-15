@@ -11,8 +11,10 @@
   import {
     altEngineLabel,
     altParamsLabel,
+    altIsImported,
     deleteAltReview,
     dual,
+    importAltReview,
     loadAltDiff,
     refreshAltReview,
     replacePrimaryWithAlt,
@@ -33,8 +35,14 @@
     const at = dual.createdAt
       ? new Date(dual.createdAt * 1000).toLocaleString()
       : '';
-    return [name, at ? `生成于 ${at}` : ''].filter(Boolean).join(' · ');
+    const when = at ? `${altIsImported() ? '导入于' : '生成于'} ${at}` : '';
+    return [name, when].filter(Boolean).join(' · ');
   });
+
+  async function importB() {
+    moreOpen = false;
+    await importAltReview();
+  }
 
   $effect(() => {
     void app.connected;
@@ -134,6 +142,7 @@
               <button class="menu-backdrop" aria-label="关闭菜单" onclick={() => (moreOpen = false)}></button>
               <div class="menu" role="menu">
                 <button class="menu-item" role="menuitem" onclick={refresh}>刷新对照</button>
+                <button class="menu-item" role="menuitem" onclick={importB}>导入字幕替换 B 版…</button>
                 <button class="menu-item danger" role="menuitem" onclick={discard}>丢弃第二版</button>
               </div>
             {/if}
@@ -187,11 +196,13 @@
       <span class="blank-icon"><Icon name="rows" size={24} /></span>
       <div class="et">还没有第二版字幕</div>
       <div class="es">
-        在转写页换一个引擎（或同一引擎换一组参数）再整片转一次，结果选「放进双引擎复核」即可。
-        第二版会按当前媒体自动保存在工作草稿目录，切走再切回来仍然在。
+        在转写页换一个引擎（或同一引擎换一组参数）再整片转一次，结果选「放进双引擎复核」；
+        也可以把工作流里已经做好的另一版字幕直接导入这里。第二版只做只读对照，
+        按当前媒体自动保存，切走再切回来仍然在。
       </div>
       <div class="ea">
         <button class="btn primary" onclick={() => setView('transcribe')}>去转写页</button>
+        <button class="btn ghost" onclick={importB}>导入已有字幕作为 B 版…</button>
       </div>
     </div>
   {:else}

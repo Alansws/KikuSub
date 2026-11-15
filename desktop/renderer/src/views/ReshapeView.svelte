@@ -148,7 +148,7 @@
 
   function switchSource(source: 'single' | 'dual') {
     if (source === 'dual' && !dual.exists) {
-      toast('还没有第二版字幕：先在转写页用另一个引擎转一次', 'warn');
+      toast('还没有第二版字幕：先在转写页用另一个引擎转一次，或到双引擎复核页导入一份', 'warn');
       return;
     }
     setSource(source);
@@ -378,7 +378,7 @@
         class:on={reshape.source === 'dual'}
         onclick={() => switchSource('dual')}
         disabled={!dual.exists}
-        title={dual.exists ? `同时参考第二引擎（${altEngineLabel()}，${dual.count} 条）` : '还没有第二版字幕'}
+        title={dual.exists ? `同时参考第二引擎（${altEngineLabel()}，${dual.count} 条）` : '还没有第二版字幕（可转写或导入）'}
       >+ 第二引擎</button>
     </div>
 
