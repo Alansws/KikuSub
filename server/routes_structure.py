@@ -268,7 +268,7 @@ def structure_prompt(
         if alt is None or not alt.cues:
             raise HTTPException(
                 status_code=409,
-                detail="还没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核",
+                detail="还没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核，或到双引擎复核页导入一份已有字幕",
             )
         alt_cues = alt.cues
     prompt = structure.build_prompt(cues, alt_cues)

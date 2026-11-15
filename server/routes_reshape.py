@@ -97,7 +97,7 @@ def get_reshape_prompt(
     if mode == "dual" and (session.alt_review is None or not session.alt_review.cues):
         raise HTTPException(
             status_code=409,
-            detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核",
+            detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核，或到双引擎复核页导入一份已有字幕",
         )
     total = len(cues)
     start, end = _span(session, from_index, to_index)

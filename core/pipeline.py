@@ -106,8 +106,17 @@ def engine_family(engine_key: str) -> str:
 
 
 def output_suffix(engine_key: str) -> str:
-    """Whisper 产物不加后缀，其余引擎加 `.key`，避免互相覆盖。"""
-    return "" if engine_key == "whisper" else f".{engine_key}"
+    """原始转写产物统一带引擎文件名标签，避免不同引擎互相覆盖。
+
+    标签来自 `core/engines.py` 的 `file_tag`（红线 #12：不许在这里再维护映射）：
+    `.AnimeWhisper` / `.Qwen3-ASR` / `.SenseVoice-Small` / `.FireRedASR2-AED`。
+    未知 key 退回 key 本身，保证测试替身与未来引擎也能落一个可区分的名字。
+    """
+    tag = engine_registry.file_tag_of(engine_key)
+    if tag:
+        return f".{tag}"
+    key = str(engine_key or "").strip()
+    return f".{key}" if key else ""
 
 
 @dataclass(slots=True)

@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from core import export_naming
 from core import settings as settings_store
 from core.audit import load_audit_payload
 from core.i18n import bilingual_entries, target_cues
@@ -27,7 +28,7 @@ from core.subtitles import (
     split_multiline_cues,
     srt_to_cues,
 )
-from core.textio import write_text_atomic
+from core.textio import next_available_path, write_text_atomic
 
 from .deps import get_session
 
@@ -227,7 +228,11 @@ def replace_cues(payload: CueList, session: Session = Depends(get_session)) -> d
 
 
 @router.post("/api/cues/import")
-def import_cues(payload: ImportPathRequest, session: Session = Depends(get_session)) -> dict:
+def import_cues(
+    payload: ImportPathRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
     """按路径导入 SRT / VTT 作为核对基线。
 
     与媒体导入同一个约定：传路径而不是上传内容——桌面端拿到的就是本地路径。
@@ -260,6 +265,11 @@ def import_cues(payload: ImportPathRequest, session: Session = Depends(get_sessi
         label=label,
         source={
             "kind": "import",
+            # 文件名里带引擎标签时（.AnimeWhisper / .Qwen3-ASR / 旧 .whisper / .qwen）
+            # 记下来：转写页的结果去向默认值与交付稿命名都靠它判断版本。
+            "engine": export_naming.engine_from_filename(
+                path.name, _media_stem(request, session)
+            ),
             "name": path.name,
             "path": str(path),
             "job_id": "",
@@ -659,10 +669,33 @@ def export_cues(
         Path(request.app.state.config.output_dir),
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{stem}{suffix}{ext}"
-    out_path.write_text(text, encoding="utf-8")
+    # 交付稿必须带版本身份，否则不同引擎的核对结果会写成同一个名字：
+    # `{stem}.{AnimeWhisper|Qwen3-ASR|...}.reviewed{track}{ext}`。
+    filename = export_naming.reviewed_filename(
+        stem,
+        session.review_source,
+        track_suffix=suffix,
+        ext=ext,
+        media_stem=stem,
+    )
+    requested = out_dir / filename
+    out_path = requested
+    renamed = False
+    if requested.exists():
+        try:
+            same = requested.read_text(encoding="utf-8-sig", errors="replace") == text
+        except OSError:
+            same = False
+        # 同名不同内容 = 另一份版本：编号另存，绝不静默覆盖。
+        if not same:
+            out_path = next_available_path(requested)
+            renamed = True
+    write_text_atomic(out_path, text)
     return {
         "path": str(out_path),
+        "name": out_path.name,
+        "requested_name": requested.name,
+        "renamed": renamed,
         "text": text,
         "format": fmt,
         "count": len(cues),

@@ -433,3 +433,65 @@ def test_import_rejects_unknown_suffix(client: TestClient, tmp_path: Path) -> No
     bad.write_text("whatever", encoding="utf-8")
     resp = client.post("/api/cues/import", headers=auth(), json={"path": str(bad)})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 交付字幕命名（不同引擎不许互相覆盖）
+# ---------------------------------------------------------------------------
+
+
+def _bind_media(client: TestClient, tmp_path: Path, name: str = "episode.mkv") -> str:
+    media = tmp_path / name
+    media.write_bytes(b"x")
+    media_id = client.post("/api/media", headers=auth(), json={"path": str(media)}).json()["id"]
+    resp = client.post("/api/session/bind", headers=auth(), json={"media_id": media_id})
+    assert resp.status_code == 200, resp.text
+    return media_id
+
+
+def _srt(*texts: str) -> str:
+    blocks = []
+    for index, text in enumerate(texts):
+        blocks.append(
+            f"{index + 1}\n00:00:0{index},000 --> 00:00:0{index + 1},000\n{text}\n"
+        )
+    return "\n".join(blocks) + "\n"
+
+
+def test_export_uses_engine_tag_and_never_overwrites(client: TestClient, tmp_path: Path):
+    _bind_media(client, tmp_path)
+    source = tmp_path / "episode.whisper.reviewed.srt"  # 历史标签也要能识别
+    source.write_text(_srt("テスト"), encoding="utf-8")
+    imported = client.post("/api/cues/import", headers=auth(), json={"path": str(source)})
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["review_source"]["engine"] == "whisper"
+
+    first = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+    assert first["name"] == "episode.AnimeWhisper.reviewed.srt"
+    assert first["renamed"] is False
+    assert "テスト" in Path(first["path"]).read_text(encoding="utf-8")
+
+    # 改一句再导出：同名不同内容必须另存 (2)，旧版本一个字都不许动
+    client.patch("/api/cues/0", headers=auth(), json={"text": "変更"})
+    second = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+    assert second["renamed"] is True
+    assert second["name"] == "episode.AnimeWhisper.reviewed (2).srt"
+    assert "テスト" in Path(first["path"]).read_text(encoding="utf-8")
+    assert "変更" in Path(second["path"]).read_text(encoding="utf-8")
+
+
+def test_export_names_differ_between_engines(client: TestClient, tmp_path: Path):
+    _bind_media(client, tmp_path)
+    whisper_srt = tmp_path / "episode.AnimeWhisper.srt"
+    whisper_srt.write_text(_srt("ウィスパー"), encoding="utf-8")
+    client.post("/api/cues/import", headers=auth(), json={"path": str(whisper_srt)})
+    whisper = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+
+    qwen_srt = tmp_path / "episode.Qwen3-ASR.srt"
+    qwen_srt.write_text(_srt("クウェン"), encoding="utf-8")
+    client.post("/api/cues/import", headers=auth(), json={"path": str(qwen_srt)})
+    qwen = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+
+    assert whisper["name"] == "episode.AnimeWhisper.reviewed.srt"
+    assert qwen["name"] == "episode.Qwen3-ASR.reviewed.srt"
+    assert whisper["path"] != qwen["path"]

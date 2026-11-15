@@ -84,7 +84,7 @@ def test_qwen_output_gets_its_own_suffix(media, tmp_path, monkeypatch):
         output_dir=tmp_path,
         engine=_FakeEngine(),
     )
-    assert result.out_filename == "episode.qwen.srt"
+    assert result.out_filename == "episode.Qwen3-ASR.srt"
 
 
 def test_slice_tag_lands_in_filename_and_report(media, tmp_path, monkeypatch):
@@ -95,7 +95,7 @@ def test_slice_tag_lands_in_filename_and_report(media, tmp_path, monkeypatch):
         engine=_FakeEngine(),
     )
     assert result.slice_tag == "_00m10s-01m05s"
-    assert result.out_filename.startswith("episode_00m10s-01m05s")
+    assert result.out_filename == "episode_00m10s-01m05s.AnimeWhisper.srt"
     assert "00m10s 至 01m05s" in result.report_text
     # 引擎必须收到同一组切片参数，否则字幕时间轴会和文件名对不上
     engine_kwargs = result and None
@@ -110,7 +110,7 @@ def test_interrupted_run_keeps_partial_file(media, tmp_path, monkeypatch):
         engine=_FakeEngine(interrupted=True),
     )
     assert result.interrupted is True
-    assert ".part_cancelled" in result.out_filename
+    assert result.out_filename == "episode.AnimeWhisper.part_cancelled.srt"
     assert result.status_summary.startswith("⚠️")
     assert "打断" in result.final_progress
 
@@ -233,7 +233,7 @@ def test_sensevoice_uses_sherpa_dispatch_and_own_suffix(media, tmp_path, monkeyp
 
     assert engine.received["config"].max_cue_chars == 16
     assert "use_alignment" not in engine.received
-    assert result.out_filename == "episode.sensevoice.srt"
+    assert result.out_filename == "episode.SenseVoice-Small.srt"
     assert result.report_data["quality"]["engine_family"] == "sherpa"
     assert "SenseVoice-Small" in result.report_text
 
@@ -245,7 +245,7 @@ def test_firered_output_gets_its_own_suffix(media, tmp_path, monkeypatch):
         output_dir=tmp_path,
         engine=_FakeEngine(),
     )
-    assert result.out_filename == "episode.firered.srt"
+    assert result.out_filename == "episode.FireRedASR2-AED.srt"
     assert "FireRedASR2-AED" in result.report_text
 
 
@@ -328,7 +328,7 @@ def test_separate_vocals_full_film_uses_whole_duration(media, tmp_path, monkeypa
     assert engine.received["end_time_s"] is None
     assert engine.received["time_offset"] == 0.0
     assert result.slice_tag == ""
-    assert result.out_filename == "episode.srt"
+    assert result.out_filename == "episode.AnimeWhisper.srt"
 
 
 def test_separation_range_fills_missing_edges_from_duration():

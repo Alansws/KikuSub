@@ -36,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core import engines  # noqa: E402
 from tools.eval.run_clip import run_one  # noqa: E402
 from tools.eval.score_srt import (  # noqa: E402
     normalize_text,
@@ -78,8 +79,9 @@ def _duplicate_cues(cues, min_chars: int = 4) -> int:
 
 
 def _candidate_path(out_dir: Path, media: Path, engine: str) -> Path:
-    suffix = "" if engine == "whisper" else f".{engine}"
-    return out_dir / f"{media.stem}{suffix}.srt"
+    # 与 pipeline.output_suffix() 同源：文件名标签只来自引擎注册表。
+    tag = engines.file_tag_of(engine) or engine
+    return out_dir / f"{media.stem}.{tag}.srt"
 
 
 def _parser() -> argparse.ArgumentParser:

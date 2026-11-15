@@ -119,8 +119,8 @@ def _sherpa_report():
     }
     return report.build_report_data(
         media_name="episode.mkv",
-        out_filename="episode.sensevoice.srt",
-        out_path="/tmp/episode.sensevoice.srt",
+        out_filename="episode.SenseVoice-Small.srt",
+        out_path="/tmp/episode.SenseVoice-Small.srt",
         engine_name="SenseVoice-Small 中文",
         output_format="SRT",
         elapsed_time=12.0,
@@ -144,7 +144,7 @@ def test_report_uses_sherpa_wording():
     assert "SenseVoice-Small / FireRedASR2-AED" in data["raw_text"]
     sections = {section["id"]: section for section in data["sections"]}
     assert sections["hallucination"].get("disabled") is True
-    assert sections["alignment"]["headline"].startswith("共 3 段")
+    assert sections["alignment"]["headline"].startswith("共 3 个语音段")
 
 
 def test_load_rebuilds_recognizer_with_the_per_call_config(monkeypatch, tmp_path):

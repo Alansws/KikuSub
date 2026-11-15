@@ -247,7 +247,7 @@ async def create_ai_job(
     if kind == "polish" and mode == "dual":
         alt = session.alt_review
         if alt is None or not alt.cues:
-            raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核")
+            raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核，或到双引擎复核页导入一份已有字幕")
 
     stem = _media_stem(request, session) or "subtitles"
     out_path = proposals.proposal_path(_output_dir(request), stem, kind, dst_lang)
@@ -319,7 +319,7 @@ def get_manual_prompt(
         raise HTTPException(status_code=422, detail=f"未知的润色模式：{mode}")
     alt = session.alt_review
     if kind == "polish" and mode == "dual" and (alt is None or not alt.cues):
-        raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核")
+        raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核，或到双引擎复核页导入一份已有字幕")
 
     total = len(cues)
     start = max(1, int(from_index or 1))

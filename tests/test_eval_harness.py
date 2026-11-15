@@ -336,8 +336,8 @@ def test_ab_onset_candidate_path_uses_engine_suffix(tmp_path):
     from tools.eval import ab_onset
 
     media = tmp_path / "Jap_test_2.mp4"
-    assert ab_onset._candidate_path(tmp_path, media, "whisper").name == "Jap_test_2.srt"
-    assert ab_onset._candidate_path(tmp_path, media, "qwen").name == "Jap_test_2.qwen.srt"
+    assert ab_onset._candidate_path(tmp_path, media, "whisper").name == "Jap_test_2.AnimeWhisper.srt"
+    assert ab_onset._candidate_path(tmp_path, media, "qwen").name == "Jap_test_2.Qwen3-ASR.srt"
 
 
 def test_probe_window_rejects_missing_media(tmp_path):
