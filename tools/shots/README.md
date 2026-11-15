@@ -22,6 +22,20 @@ bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline
 `tools/shots/seed.json` 造 12 条字幕（不需要真跑转写）；其余状态靠 `KIKUSUB_DEV_EVAL`
 点侧栏切换，所以截图里显示的是真实页面而不是空壳。
 
+## 设置页专用矩阵
+
+设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：
+
+```bash
+bash tools/shots/capture_settings_matrix.sh --out /tmp/kikusub-settings-shots
+# 只跑其中几张：
+bash tools/shots/capture_settings_matrix.sh --only light-engines,dark-env
+```
+
+产出 3 主题 × 4 页签 + 4 张展开态/窄视口，共 16 张 PNG。仓库里提交的是转成 WebP 的同一批
+（体积约 1/3），转换命令与当次结论见
+`docs/sprints/2026-11-settings-redesign/落地记录.md`。
+
 ## 基线
 
 `docs/images/shots/baseline/` 是 2026-11-13 的三屏基线（`transcribe` / `review` / `settings`，
