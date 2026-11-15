@@ -97,6 +97,7 @@ Everything except the optional AI features is local inference.
 
 - A second engine's full transcript goes into a read-only column and **never overwrites the review desk**. Rows are aligned live 1:1 and marked `=` / `~` / `+` / `−`, with a soft character-level tint on `~` (no strikethrough; low-similarity rows keep only the row marker). **The two versions may have different line counts**; extra lines show up as their own `+` / `−` rows instead of being hidden.
 - The second version is cached per media file and restored when you switch back. Drop it, or confirm once to replace the whole review desk with B (one ⌘Z reverts everything).
+- **Jump to the review desk from a timestamp, then come back with ⌘4 / the sidebar, and the table is still where you left it** (the row you left from stays highlighted), so long films do not need re-scrolling.
 - The sidebar badge counts text-diff rows only; `+` / `−` missing lines are shown inside the page.
 
 ![Dual-source polish: A | B (collapsible) | AI final](docs/images/polish-view.jpg)
@@ -104,7 +105,7 @@ Everything except the optional AI features is local inference.
 - Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
 - With a second version you can switch between **single-source / dual-source**: A | B | AI final, with B collapsible. **B does not need the same line count as A** (different engines segment differently); the AI final still follows A's indices and timeline exactly. Accept per item, apply all changed rows, or apply the whole column — all through the same `apply_polish()`, one history entry.
-- Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap, with per-segment copy / paste and completion tracking.
+- Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap. **Clicking a segment shows only that segment's cues** (the table, prompt copy and paste-back all share the same range), with per-segment copy / paste and completion tracking.
 - Applying is one history entry — ⌘Z reverts the whole batch. A digest / digest_b mismatch is rejected without touching a single byte.
 
 ![Structure suggestions: paste ops JSON, preview merge / retime / replace text / insert / delete](docs/images/structure-view.jpg)

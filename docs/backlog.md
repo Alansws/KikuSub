@@ -52,6 +52,7 @@
 
 | 日期 | 项 | 提交 |
 | --- | --- | --- |
+| 2026-11-15 | **AI 三页两处手感修复**：润色双源的分段轨点击只显示该段字幕（表格 / 复制 / 粘贴同一范围，解析后停在本段、不再自动跳段、换段清空粘贴框）；双引擎复核点时间码去核对台后，按 ⌘4 / 侧栏回来恢复滚动位置并高亮刚点的那一行（`lib/scrollMemory.ts`）。契约：`contracts/ai-proposal.md` §3.7.3 | 见 `git log` |
 | 2026-11-15 | **设置页重构**：`SettingsView.svelte` 2032 行 → 149 行的页签骨架，四页签（引擎与模型 / 外观与朗读 / AI 与技能 / 环境与诊断）拆到 `views/settings/`，纯逻辑在 `lib/settings/`；三主题 × 四页签 + 680×900 取证矩阵。方案与验收：[sprints/2026-11-settings-redesign/](sprints/2026-11-settings-redesign/) | 见 `git log` |
 | 2026-11-15 | **断句重排（整份换稿）车道**：外部模型给完整 SRT，按原稿索引区间整段替换，条数/切分/时间码/文字均可变；体检只标注不拦路，条数腰斩二次确认，digest 守卫。契约：`contracts/ai-proposal.md` §3.7.6 | 见 `git log` |
 | 2026-11-15 | **核对台批量清理标点**：`lib/punctuation.ts` 纯规则（零 import）+ 浮层三入口（顶栏 / `⌘⇧L` / 编辑菜单），只清原文轨、整轨一步历史。契约：`contracts/review-console.md` §3.4.4 | 见 `git log` |
