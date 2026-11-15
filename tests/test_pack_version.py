@@ -37,6 +37,20 @@ def test_server_api_version_matches_package_json():
     assert API_VERSION == _version(PACKAGE_JSON)
 
 
+def test_build_app_plist_version_comes_from_package_json():
+    """Info.plist 的短版本不能写死。
+
+    0.4.0 发版时这里还留着 `0.2.0`：About 与 tag 都是 0.4.0，访达「显示简介」
+    却是 0.2.0。装配脚本必须用 $APP_VERSION 生成 plist，并在写完后回读断言。
+    """
+    script = BUILD_APP.read_text(encoding="utf-8")
+
+    assert (
+        "<key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>" in script
+    ), "Info.plist 的 CFBundleShortVersionString 必须引用 $APP_VERSION，不能硬编码"
+    assert "Print :CFBundleShortVersionString" in script, "装配时应回读 plist 校验版本"
+
+
 def test_package_lock_matches_package_json():
     """package-lock 根版本落后会导致 `npm ci` 报错，是发版翻车的常见来源。"""
     assert PACKAGE_LOCK.exists(), "缺少 desktop/package-lock.json"

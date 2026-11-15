@@ -70,6 +70,11 @@ echo "== 2/7 改名主可执行文件 =="
 mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/KikuSub"
 
 echo "== 3/7 写入 Info.plist =="
+# 版本号只有一个来源：desktop/package.json。Info.plist 的 CFBundleShortVersionString
+# 与包内 package.json 必须同值，否则访达「显示简介」、About 面板与 tag 会各说各话
+# （0.4.0 发版前这里写死过 "0.2.0"，tests/test_pack_version.py 已加守卫）。
+APP_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' desktop/package.json | head -1)"
+[ -n "$APP_VERSION" ] || { echo "❌ 无法从 desktop/package.json 读到 version" >&2; exit 1; }
 # 每次构建给 CFBundleVersion 一个唯一值：Finder/IconServices 会按 bundle 版本
 # 缓存图标，版本永远不变时替换了 icon.icns 也可能继续显示旧图。
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
@@ -83,7 +88,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>KikuSub</string>
   <key>CFBundleIdentifier</key><string>com.kikusub.desktop</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleSignature</key><string>????</string>
   <key>CFBundleIconFile</key><string>icon.icns</string>
@@ -111,6 +116,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# 硬断言：plist 短版本必须等于 package.json。装配阶段就拦住，不等到用户看「显示简介」。
+PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[ "$PLIST_VERSION" = "$APP_VERSION" ] || {
+  echo "❌ Info.plist 版本 ${PLIST_VERSION:-<空>} 与 package.json ${APP_VERSION} 不一致" >&2
+  exit 1
+}
 
 echo "== 4/7 放入应用代码（main + renderer + package.json）=="
 mkdir -p "$APP/Contents/Resources/app"
@@ -118,10 +129,7 @@ cp -R desktop/main "$APP/Contents/Resources/app/main"
 cp -R desktop/renderer/dist "$APP/Contents/Resources/app/renderer-dist"
 mkdir -p "$APP/Contents/Resources/app/renderer"
 mv "$APP/Contents/Resources/app/renderer-dist" "$APP/Contents/Resources/app/renderer/dist"
-# 版本号只有一个来源：desktop/package.json（此前这里硬编码 "0.2.0"，
-# 与 package.json 双写，发版时极容易漂移；build_dmg.sh 也用同一个读法）。
-APP_VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' desktop/package.json | head -1)"
-[ -n "$APP_VERSION" ] || { echo "❌ 无法从 desktop/package.json 读到 version" >&2; exit 1; }
+# 包内 package.json 用同一个 APP_VERSION（第 3 步已读取并校验过）。
 cat > "$APP/Contents/Resources/app/package.json" <<JSON
 {
   "name": "kikusub-desktop",
