@@ -21,7 +21,7 @@
 
 ![Review desk: video monitor, waveform timeline, subtitle lane and inspector](docs/images/workbench.jpg)
 
-> The source and subtitles in the screenshots are demo data; the UI is from the current build.
+> The source and subtitles in the screenshots are demo data (footage: *The Garden of Words*); the UI is from the current build.
 
 ---
 
@@ -32,7 +32,7 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **Transcribe** — Silero VAD segments the speech, then a switchable Japanese engine produces timed subtitles.
 - **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
 - **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
-- **AI polish / translate / structure suggestions** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A separate structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically. Translations live in a parallel track and export as source, target or bilingual.
+- **AI polish / structure suggestions / re-segmentation / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically; a re-segmentation lane replaces whole index ranges from a complete SRT. Translations live in a parallel track and export as source, target or bilingual.
 - **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
 - **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
 - **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality share one history with subtitles, translations, QA state and AI suggestion edits; ⌘Z always undoes the most recent step, and the history panel is a single list.
@@ -62,9 +62,9 @@ Everything except the optional AI features is local inference.
 - **Import source and target tracks separately**: the Transcribe page's “existing subtitles” cards can load a source SRT/VTT or a target SRT/VTT aligned to the current source; the Review desk “⋯” menu can delete either track independently, so a restart no longer forces a full re-transcription just to restore translations.
 - Hallucination gate: segments transcribed but re-checked as empty are dropped, suspicious short cues are marked, and the per-segment details go into the task report.
 
-**Review desk**
-
 ![Parameters: engine, time range, output format and result handling](docs/images/transcribe.jpg)
+
+**Review desk**
 
 - Video, waveform, cue table and inspector stay in sync: when the playhead enters a cue, the table scrolls to it and selects it.
 - The waveform is fetched per visible window; scroll / pinch to zoom, two-finger pan or ⌥-drag to move. Zoom goes far enough to see a fraction of a second.
@@ -120,7 +120,7 @@ Everything except the optional AI features is local inference.
 
 **Settings & runtime**
 
-![Settings: engines & models, appearance & voice, AI & skills, environment & diagnostics](docs/images/settings-ai.jpg)
+![Settings: engines & models, appearance & voice, AI & skills, environment & diagnostics](docs/images/settings.jpg)
 
 - Settings is split into four tabs: **Engines & models / Appearance & voice / AI & skills / Environment & diagnostics**.
 - Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download. Anime Whisper / Qwen3 / OmniVoice share one progress track for **Verify / Fill gaps**: verification uses an indeterminate sweep, downloads use real percentages, and completion briefly turns green before collapsing.

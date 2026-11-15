@@ -49,8 +49,10 @@ cd desktop && npm run build && npm run test:main && cd ..
 git push origin app/macos          # CI: lint + pytest + smoke 必须绿
 
 # 3) bump 版本号（在开发分支上，作为一个独立提交）
-#    编辑 desktop/package.json 的 version + desktop/package-lock.json 的根版本
-git commit -am "chore(release): 0.3.0"
+#    三处必须一起改：desktop/package.json 的 version、desktop/package-lock.json 的根版本、
+#    server/__init__.py 的 API_VERSION（界面「生效参数 / About」读的是它，
+#    tests/test_pack_version.py 会拦不一致）
+git commit -am "chore(release): 0.4.0"
 
 # 4) 合入主线
 git checkout main
