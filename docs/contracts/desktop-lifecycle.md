@@ -105,6 +105,19 @@
   `*.autosave_draft.srt` / `*.reviewed.srt` / `*.clean.srt`：核对工作稿与成片不是临时碎片，
   不能因为媒体名里带区间标记就在退出时被默认删除。
 
+#### sidecar 的 cwd 与「原地重打包」（2026-11 修复）
+
+- **sidecar 的 cwd 绝不落在 `.app` 里面**：`tools/pack/build_app.sh` 是先 `rm -rf KikuSub.app`
+  再重新装配，而 sidecar 是 detached 的（父进程退出它也不跟着死）。装配那一刻它的 cwd 变成
+  一个已删除的 inode，之后每次 `os.getcwd()` 都抛 `ENOENT`——torch 在 import 期就会踩
+  （`torch/_dynamo/config.py: default_debug_dir_root`），一次 Whisper/Qwen 转写 1 秒内失败，
+  界面只剩一句 `[Errno 2] No such file or directory`，跟视频和模型都无关。打包态一律用数据目录
+  当 cwd（`startSidecar()` 里的 `cwd = base`）。
+- 两道兜底：`core/paths.ensure_usable_cwd()` 在 sidecar 启动、以及每次 `run_transcription()`
+  之前各查一次，cwd 坏了就 `chdir` 到 `outputs/`（回归 `tests/test_paths_cwd.py`）；
+  `build_app.sh` 在 `rm -rf "$APP"` 前先让同路径旧实例退出，退不掉就**报错退出**，
+  不许带着旧进程覆盖包体。
+
 #### 日志清理
 
 - `setup_logging()` 启动时调用 `prune_logs()`：只删 `*.log.N` 轮转备份，
