@@ -49,7 +49,6 @@ export interface EngineInfo {
 
 export interface AppSettings {
   enabled_engines: string[];
-  auto_proxy: boolean;
   /** 字幕默认导出目录；空字符串表示沿用应用输出目录。 */
   export_dir: string;
   /** 成片导出目录；空字符串表示跟随 export_dir。 */
@@ -1143,7 +1142,6 @@ export const api = {
 
   patchSettings: (patch: {
     enabled_engines?: string[];
-    auto_proxy?: boolean;
     export_dir?: string;
     video_export_dir?: string;
   }) =>

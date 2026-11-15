@@ -44,11 +44,11 @@
   );
   const proxyPct = $derived(app.jobKind === 'proxy' ? (app.job?.percent ?? 0) : 0);
   const proxyLabel = $derived(
-    proxyBusy ? `压制中 ${proxyPct}%` : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
+    proxyBusy ? '压制中…' : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
   );
   const proxyHint = $derived(
     proxyBusy
-      ? `正在后台压制 480p 监看代理（${proxyPct}%）`
+      ? '正在后台压制 480p 监看代理（进度见顶部蓝色进度条）'
       : app.media?.proxy_ready
         ? '480p 监看代理已就绪，无需再压'
         : '为高码率 / 特殊编码视频压制 480p 监看代理，拖动进度条更流畅',

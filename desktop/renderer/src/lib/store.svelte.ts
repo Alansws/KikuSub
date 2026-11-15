@@ -1245,7 +1245,7 @@ export async function applyDevSeed(seed: {
 }) {
   if (!seed?.mediaPath) return;
   try {
-    // 走真实的 openMedia 路径（含代理压制任务），这样截图/联调覆盖的是产品代码本身
+    // 走真实的 openMedia 路径（含代理提示，但不再自动开压制任务），这样截图/联调覆盖的是产品代码本身
     await openMedia(seed.mediaPath);
     if (seed.cues?.length) {
       await api.replaceCues(seed.cues);
@@ -1446,11 +1446,8 @@ export async function openMedia(
       size: info.size,
     });
 
-    // MKV / HEVC 在 Chromium 里放不出来：后台压代理，不挡用户操作。
-    // 已经有代理（包括刚挂载的）时不再重复压。
-    if (info.needs_proxy && !info.proxy_ready && (app.settings?.auto_proxy ?? true)) {
-      startProxyJob(info.id);
-    }
+    // 代理只在用户点按钮时压（黑屏画面里的提示 / 工具栏「⋯」），导入不再自动开任务：
+    // 高码率视频可能只是拖动卡，自动压会平白占一条重任务槽。
   } catch (err) {
     toast(`导入失败：${(err as Error).message}`, 'error');
   } finally {
@@ -3226,7 +3223,6 @@ export async function loadSettings(force = false) {
 
 export async function updateSettings(patch: {
   enabled_engines?: string[];
-  auto_proxy?: boolean;
   export_dir?: string;
   video_export_dir?: string;
 }) {

@@ -919,7 +919,7 @@ async function captureAndQuit() {
             const v = document.querySelector('video');
             return v ? { w: v.videoWidth, h: v.videoHeight, err: v.error && v.error.code, src: v.currentSrc.slice(-28) } : null;
           })(),
-          notice: document.querySelector('.notice')?.textContent?.trim() ?? null,
+          gate: document.querySelector('.gate')?.textContent?.trim() ?? null,
         })`,
       );
       console.log('[probe]', info);

@@ -165,7 +165,6 @@
   const engines = $derived(settings.data?.engines ?? []);
   const enabledCount = $derived(engines.filter((e) => e.enabled).length);
   const installedCount = $derived(engines.filter((e) => e.installed).length);
-  const autoProxy = $derived(settings.data?.settings.auto_proxy ?? true);
   const exportDir = $derived(
     settings.data?.paths.export_dir || diag?.paths.export_dir || app.config?.export_dir || '',
   );
@@ -502,10 +501,6 @@
 
   async function onToggle(engine: EngineInfo) {
     await toggleEngine(engine.key, !engine.enabled);
-  }
-
-  async function onAutoProxy() {
-    await updateSettings({ auto_proxy: !autoProxy });
   }
 
   async function cleanOldLogs() {
@@ -1358,25 +1353,6 @@
         <div class="sec-title">工作流与外观</div>
         <div class="sec-desc">这些偏好只影响当前这台机器。</div>
       </div>
-    </div>
-
-    <div class="pref">
-      <div>
-        <b>导入时自动压制 480p 监看代理</b>
-        <span>
-          MKV / HEVC 或码率高于 25 Mbps 的视频会自动压一份；关闭后仍可在核对台点
-          「压制代理」手动处理。高码率 H.264 有时能播但拖动很卡，自动判定难免有遗漏。
-        </span>
-      </div>
-      <button
-        class="switch"
-        class:on={autoProxy}
-        role="switch"
-        aria-checked={autoProxy}
-        onclick={onAutoProxy}
-      >
-        <span class="knob"></span>
-      </button>
     </div>
 
     <div class="pref">

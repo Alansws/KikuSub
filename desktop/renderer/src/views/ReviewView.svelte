@@ -19,6 +19,7 @@
    */
   import { tick as nextTick, untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
+  import ProxyGate from '../components/ProxyGate.svelte';
   import SelectionBar from '../components/SelectionBar.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
@@ -55,6 +56,12 @@
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
   import {
+    BLANK_FRAME_TIMEOUT_MS,
+    hasDecodedFrame,
+    needsBlankFrameWatch,
+    videoGateState,
+  } from '../lib/videoFallback';
+  import {
     type CueBlock,
     cueBlockAtX,
     cueDragTimes,
@@ -80,6 +87,11 @@
   let peaksSpan = $state(0);
   let loadingPeaks = $state(false);
   let videoFailed = $state(false);
+  /** 已经解出第一帧：黑屏兜底计时据此取消，提示也就不会再出现。 */
+  let videoDecoded = $state(false);
+  /** container / codec 片子的兜底计时已到；首帧一到立刻清掉。 */
+  let blankTimedOut = $state(false);
+  let blankTimer: number | undefined;
   let scrollTop = $state(0);
   let viewH = $state(0);
   let waveW = $state(0);
@@ -161,7 +173,59 @@
     app.jobKind === 'proxy' &&
       (app.job?.status === 'running' || app.job?.status === 'queued'),
   );
-  const proxyPct = $derived(app.jobKind === 'proxy' ? (app.job?.percent ?? 0) : 0);
+  const videoGate = $derived(
+    videoGateState({
+      hasMedia: Boolean(app.media),
+      hasVideo: Boolean(app.media?.has_video),
+      proxyReason: app.media?.proxy_reason ?? '',
+      proxyReady: Boolean(app.media?.proxy_ready),
+      proxyBusy,
+      failed: videoFailed,
+      blankTimedOut,
+    }),
+  );
+
+  /**
+   * 黑屏兜底：容器卡死时 `<video>` 可能既不报 error 也不触发 loadedmetadata，
+   * 所以计时从「拿到媒体 / 切到代理」开始，而不是等元数据。
+   * 首帧（loadeddata）一到立即取消；正常码率的片子不会进入这里。
+   */
+  $effect(() => {
+    void src; // 换片、代理就绪换源都要重新计时
+    const media = app.media;
+    // 复看/切回核对台时元素可能已经缓存了解好的帧，不要重新开计时。
+    const decodedNow = Boolean(
+      video && hasDecodedFrame(video.readyState, video.videoWidth),
+    );
+    videoFailed = false;
+    videoDecoded = decodedNow;
+    blankTimedOut = false;
+    if (blankTimer !== undefined) {
+      clearTimeout(blankTimer);
+      blankTimer = undefined;
+    }
+    if (
+      media &&
+      !decodedNow &&
+      needsBlankFrameWatch({
+        hasMedia: true,
+        hasVideo: Boolean(media.has_video),
+        proxyReason: media.proxy_reason,
+        proxyReady: Boolean(media.proxy_ready),
+      })
+    ) {
+      blankTimer = window.setTimeout(() => {
+        blankTimer = undefined;
+        if (!videoDecoded) blankTimedOut = true;
+      }, BLANK_FRAME_TIMEOUT_MS);
+    }
+    return () => {
+      if (blankTimer !== undefined) {
+        clearTimeout(blankTimer);
+        blankTimer = undefined;
+      }
+    };
+  });
 
   // 当前播放到的字幕。双语 SRT 的两行区间完全相同，必须一起显示。
   const captionLines = $derived.by(() => {
@@ -2126,6 +2190,10 @@
           playsinline
           onerror={(e) => {
             videoFailed = true;
+            if (blankTimer !== undefined) {
+              clearTimeout(blankTimer);
+              blankTimer = undefined;
+            }
             const el = e.currentTarget as HTMLVideoElement;
             logEvent('warn', 'video-error', `code=${el.error?.code ?? '?'} src=${el.currentSrc.slice(0, 160)}`);
           }}
@@ -2134,6 +2202,18 @@
             play.duration = e.currentTarget.duration || duration;
             const t = play.time;
             if (t > 0.2) e.currentTarget.currentTime = t;
+          }}
+          onloadeddata={(e) => {
+            // 首帧真正出来：兜底计时与提示都作废（慢盘误判最多闪一下）。
+            // videoWidth 为 0 说明容器读到了但视频轨道解不出来，仍要按黑屏处理。
+            if (!hasDecodedFrame(e.currentTarget.readyState, e.currentTarget.videoWidth)) return;
+            videoDecoded = true;
+            videoFailed = false;
+            blankTimedOut = false;
+            if (blankTimer !== undefined) {
+              clearTimeout(blankTimer);
+              blankTimer = undefined;
+            }
           }}
         ></video>
       {:else}
@@ -2148,56 +2228,12 @@
         </div>
       {/if}
 
-      {#if videoFailed || (app.media?.needs_proxy && !app.media?.proxy_ready)}
-        <div class="notice">
-          <Icon name="warn" size={13} />
-          <div class="notice-main">
-            {#if app.media?.proxy_ready}
-              Chromium 无法解码这个容器，代理已就绪但播放失败——请查看日志
-            {:else if proxyBusy}
-              <span>正在后台压制 480p 监看代理 · {proxyPct}%</span>
-              <div
-                class="notice-bar"
-                role="progressbar"
-                aria-label="代理压制进度"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow={proxyPct}
-              >
-                <i style="width:{Math.max(2, proxyPct)}%"></i>
-              </div>
-              <span class="notice-sub">完成后会自动切换；可以先让它在后台跑</span>
-            {:else if app.media?.needs_proxy}
-              {app.media.proxy_reason === 'bitrate'
-                ? `源视频码率约 ${((app.media.video_bitrate ?? 0) / 1_000_000).toFixed(1)} Mbps，直接拖进度条可能很卡`
-                : 'Chromium 可能无法解码这个视频的容器/编码'}
-              <span class="notice-sub">压一份 480p 代理后，核对台拖动会稳定很多。</span>
-            {:else}
-              画面加载失败，可以尝试压制一份 480p 代理
-            {/if}
-          </div>
-          {#if !app.media?.proxy_ready}
-            <div class="notice-actions">
-              <button
-                class="btn tiny"
-                onclick={() => startProxyJob()}
-                disabled={proxyBusy}
-              >
-                {proxyBusy ? `压制中 ${proxyPct}%` : '压制代理'}
-              </button>
-              {#if !proxyBusy}
-                <button
-                  class="btn tiny ghost"
-                  onclick={() => importProxyFromFile()}
-                  title="已经有压好的代理文件？直接挂到当前媒体，不再重新压制"
-                >
-                  导入代理…
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/if}
+      <ProxyGate
+        state={videoGate}
+        reason={app.media?.proxy_reason ?? ''}
+        onstart={() => void startProxyJob()}
+        onimport={() => void importProxyFromFile()}
+      />
     </div>
 
     <div class="transport">
@@ -2847,64 +2883,6 @@
     text-overflow: ellipsis;
   }
 
-  .notice {
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(6px);
-    color: #fff;
-    font-size: 12px;
-    padding: 5px 10px;
-    border-radius: 8px;
-    pointer-events: auto;
-    max-width: min(620px, 92%);
-  }
-
-  .notice-main {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-  }
-
-  .notice-sub {
-    color: rgba(255, 255, 255, 0.68);
-    font-size: 12px;
-  }
-
-  .notice .btn {
-    margin-left: var(--sp-1);
-    flex: 0 0 auto;
-  }
-  .notice-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-1);
-    flex: 0 0 auto;
-  }
-  .notice-actions .btn {
-    margin-left: 0;
-  }
-  .notice-bar {
-    height: 3px;
-    border-radius: 2px;
-    background: rgba(255, 255, 255, 0.22);
-    overflow: hidden;
-    margin-top: 2px;
-  }
-  .notice-bar > i {
-    display: block;
-    height: 100%;
-    border-radius: 2px;
-    background: #fff;
-    transition: width 320ms var(--ease);
-  }
-
   .transport {
     display: flex;
     align-items: center;
@@ -3175,16 +3153,6 @@
     color: var(--accent);
     font-weight: 600;
     margin-left: 3px;
-  }
-  .tiny {
-    height: 22px;
-    font-size: 12px;
-    padding: 0 7px;
-    background: var(--raise);
-  }
-  .btn.primary.tiny {
-    background: var(--btn-primary-bg);
-    color: var(--on-accent);
   }
   .spin {
     width: 9px;
