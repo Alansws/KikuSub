@@ -56,6 +56,33 @@ iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
 cp docs/app-icon.png desktop/build/icon.png
 
 echo "== 1/7 复制 Electron 框架 =="
+# 旧实例还在跑时 rm -rf 会把它的 cwd 和正在读的文件一起抽走：sidecar 是 detached 的，
+# 父进程退出它不会跟着死，之后它每一次 os.getcwd() 都是 ENOENT——torch 在 import 期
+# 就会踩（torch/_dynamo/config.py: default_debug_dir_root），于是界面上只剩一句
+# "[Errno 2] No such file or directory"，跟视频/模型毫无关系，极难排查。
+# rebuild.sh 里也有收尾，但排在这步**之后**；所以这里必须自己挡在前面。
+APP_EXE="$APP/Contents/MacOS/KikuSub"
+if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
+  echo "== 关闭正在运行的旧实例（避免装配时抽掉它的 cwd）=="
+  pkill -TERM -f "$APP_EXE" >/dev/null 2>&1 || true
+  for _ in $(seq 1 32); do
+    pgrep -f "$APP_EXE" >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+  if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
+    echo "⚠️ 旧实例没有及时退出（可能停在退出清理面板），强制结束" >&2
+    pkill -9 -f "$APP_EXE" >/dev/null 2>&1 || true
+    sleep 2
+  fi
+  if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
+    echo "❌ 旧实例仍在运行，拒绝删除 $APP" >&2
+    exit 1
+  fi
+  # 主进程没了也可能留下孤儿 sidecar（detached 进程组）；它会占着模型与日志句柄。
+  pkill -TERM -f "$APP/Contents/Resources/python/sidecar" >/dev/null 2>&1 || true
+  sleep 1
+fi
+
 rm -rf "$APP"
 mkdir -p "$(dirname "$APP")"
 # default_app.asar 是 Electron 的占位应用，会被我们自己的 app 取代；
