@@ -17,6 +17,7 @@
   import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
   import '../components/ai/ai-workbench.css';
+  import { untrack } from 'svelte';
   import type { StructureOpView } from '../lib/api';
   import type { AiSegment } from '../lib/aiSegments';
   import { alignPreviewRows, bRefsFor, type PreviewRow } from '../lib/previewDiff';
@@ -24,21 +25,26 @@
     activeDraft,
     appliedCount,
     applyReshapeDraft,
+    canKeepProgress,
     copyReshapePrompt,
     currentRangeFor,
     currentSegment,
     discardDraft,
     ensurePromptInfo,
     ensureReshapePlan,
+    latestRestorablePlan,
     parseReshapeText,
     promptCategory,
     removeDraftCue,
+    replanReshapeSegments,
     reshape,
-    resetReshape,
+    restoreReshapePlan,
+    segmentKey,
     segmentState,
     setMode,
     setSegment,
     setSource,
+    syncReshapeMedia,
     updateDraftCue,
   } from '../lib/reshape.svelte';
   import {
@@ -111,7 +117,7 @@
     if (reshape.longMode && reshape.segments.length) {
       // 覆盖过一段之后，段轨显示的是这一段的**新条数**；后续段的计划条数不变。
       return reshape.segments.map((item) => {
-        const delta = reshape.applied[`${item.from}-${item.to}`]?.delta ?? 0;
+        const delta = reshape.applied[segmentKey(item)]?.delta ?? 0;
         return delta ? { ...item, count: item.count + delta } : item;
       });
     }
@@ -188,6 +194,8 @@
   const countAfter = $derived(draft?.cues.length ?? 0);
   const countDelta = $derived(countAfter - countBefore);
   const previewDual = $derived(reshape.source === 'dual' && dual.exists);
+  /** 失效横幅上那个「恢复上一版分段」：只有表还是快照那一张时才有意义。 */
+  const restorablePlan = $derived(latestRestorablePlan());
 
   /**
    * 条数掉一半以上（或翻倍）时要求二次确认。
@@ -236,23 +244,39 @@
     return `覆盖第 ${segmentNo} 段 · ${draft.cues.length} 条`;
   });
 
-  // 换片 / 换源：清掉上一部片留下的草稿，否则段号和指纹都会对不上。
-  $effect(() => {
-    void app.media?.id;
-    resetReshape();
-    opsPasting = false;
-  });
-
-  // 分段计划：换片 / 换做法 / 换源 / 第二版变化时才重切，之后冻结。
+  /**
+   * 换片才重置整页。
+   *
+   * 原来这里是「进页就 resetReshape()」，而切视图会销毁重建本组件
+   * （`App.svelte` 的 `{#if app.view === 'reshape'}`）——「复制提示词 → 去核对台
+   * 看一眼 → 回来」就等于把分段计划、已覆盖勾选和在途草稿全部清掉。判断挪进
+   * `syncReshapeMedia()`，视图只负责通知。
+   */
   $effect(() => {
     void app.connected;
     void app.media?.id;
-    void app.cues.length;
+    if (!app.connected) return;
+    if (untrack(() => syncReshapeMedia())) opsPasting = false;
+  });
+
+  /**
+   * 分段计划：只在「换片 / 换做法 / 换了第二版 / 原稿被别处改过」时重定；
+   * 已经开工（有段被覆盖）时不重定，只挂「计划失效」横幅，由人决定下一步。
+   *
+   * 依赖里刻意**没有** `reshape.source`：单源双源只决定提示词里带不带 B，
+   * 不决定工作单元。这是 2026-11-15 那次 4 段变 3 段的根因。
+   * `untrack` 是因为 ensureReshapePlan 内部会读写同一批 state，让它们进依赖
+   * 会把 effect 自己跑成死循环（润色页踩过一次）。
+   */
+  $effect(() => {
+    void app.connected;
+    void app.media?.id;
+    void app.cuesRevision;
     void dual.exists;
-    void dual.count;
+    void dual.createdAt;
     void reshape.mode;
-    void reshape.source;
-    if (app.connected) ensureReshapePlan();
+    if (!app.connected) return;
+    untrack(() => ensureReshapePlan());
   });
 
   // 提示词元信息（条数 / 字数 / 模板名）：只用于界面显示，复制时复用同一份。
@@ -263,6 +287,7 @@
     void reshape.mode;
     void reshape.source;
     void reshape.segmentIndex;
+    void reshape.stale;
     void prompts.selectedReshapeSingle;
     void prompts.selectedReshapeDual;
     if (app.connected) void ensurePromptInfo();
@@ -300,6 +325,35 @@
 
   async function importB() {
     await importAltReview();
+  }
+
+  /**
+   * 计划失效后的唯一出口：重新定计划。
+   *
+   * 二次确认要把代价说清——**字幕里的成果不会被删**，只是段轨上的勾会重算；
+   * 已覆盖区域如果能完整落进新的一段，勾还留着（`canKeepProgress`）。
+   */
+  function confirmReplan() {
+    const done = appliedCount();
+    const total = app.cues.length;
+    const keep = canKeepProgress();
+    const lines = [`按当前稿（${total} 条）重新切段？`];
+    if (done > 0) {
+      lines.push(
+        '',
+        `· 段轨上已覆盖的 ${done} 段成果仍在字幕里，不会被删；`,
+        keep
+          ? '· 它们的区间照旧，勾选会尽量保留；'
+          : '· 但原稿被别处改过，这些区间已经不可信，勾选只能清空；',
+        '· 其余段未覆盖的粘贴稿会作废，需要重新粘。',
+      );
+    }
+    if (!window.confirm(lines.join('\n'))) return;
+    replanReshapeSegments({ keepProgress: keep });
+  }
+
+  function restorePlan(at: number) {
+    restoreReshapePlan(at);
   }
 
   async function copyPrompt() {
@@ -568,6 +622,29 @@
     {/if}
   </header>
 
+  {#if reshape.stale && !isOps}
+    <div class="note warn stale">
+      <Icon name="warn" size={11} />
+      <span class="note-text">
+        <b>分段计划已失效</b>：{reshape.staleReason}。
+        {#if appliedCount() > 0}
+          已覆盖的 <b>{appliedCount()}</b> 段成果还在字幕里，但段轨的区间不能再沿用。
+        {/if}
+        复制提示词与覆盖已暂停。
+      </span>
+      <div class="note-actions">
+        {#if restorablePlan}
+          <button
+            class="btn ghost sm"
+            onclick={() => restorePlan(restorablePlan.at)}
+            title="回到失效前那套分段（原稿与已覆盖进度都还原）"
+          >恢复上一版分段</button>
+        {/if}
+        <button class="btn sm primary" onclick={confirmReplan}>重新定计划</button>
+      </div>
+    </div>
+  {/if}
+
   {#if reshape.errors.length}
     <div class="note err"><Icon name="warn" size={11} /><span>{reshape.errors[0]}</span></div>
   {/if}
@@ -597,7 +674,9 @@
                 class="btn aiw-wide"
                 class:primary={step === 1}
                 onclick={() => void copyPrompt()}
-                disabled={!app.cues.length || (isOps ? structure.promptLoading : reshape.loadingPrompt)}
+                disabled={!app.cues.length ||
+                  (!isOps && reshape.stale) ||
+                  (isOps ? structure.promptLoading : reshape.loadingPrompt)}
               >
                 {isOps
                   ? structure.promptLoading
@@ -799,7 +878,7 @@
                     class="btn primary aiw-wide"
                     class:armed={needsArm && isArmed}
                     onclick={onApplyClick}
-                    disabled={reshape.applying || !draft.cues.length}
+                    disabled={reshape.applying || !draft.cues.length || reshape.stale}
                   >
                     {applyLabel}
                   </button>
@@ -1069,6 +1148,22 @@
   .note.err {
     background: var(--danger-soft);
     color: var(--danger);
+  }
+  /* 计划失效横幅：只提示不拦路，出口是两个按钮 */
+  .note.warn {
+    align-items: center;
+    background: var(--warn-soft);
+    color: var(--warn);
+    padding: var(--sp-2) 14px;
+  }
+  .note-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .note-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 6px;
   }
 
   .body {
