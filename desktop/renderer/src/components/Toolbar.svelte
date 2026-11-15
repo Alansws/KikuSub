@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import EngineSwitch from './EngineSwitch.svelte';
+  import PunctCleanPanel from './PunctCleanPanel.svelte';
   import {
     app,
     clearOriginalTrack,
@@ -18,6 +19,7 @@
     undo,
   } from '../lib/store.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
+  import { closePunctPanel, openPunctPanel, punctPanel } from '../lib/punctuationPanel.svelte';
 
   function clock(seconds: number) {
     return new Date(seconds * 1000).toLocaleTimeString('zh-CN', {
@@ -163,6 +165,20 @@
   <div class="tb-spacer"></div>
 
   {#if app.view === 'review'}
+    <div class="punct-wrap">
+      <button
+        class="btn ghost top-act"
+        class:on={punctPanel.open}
+        data-punct-trigger
+        aria-expanded={punctPanel.open}
+        onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
+        title="清理整轨原文里多余的 、，。…（只动原文，条数与时间轴不变；⌘⇧L）"
+        aria-label="清理标点"
+      >
+        <Icon name="punct" size={12} /><span class="act-label">清理标点</span>
+      </button>
+      <PunctCleanPanel />
+    </div>
     <button
       class="btn ghost top-act"
       onclick={() => setView('polish')}
@@ -479,6 +495,12 @@
   }
 
   .more-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  /* 清理标点的浮层从按钮正下方展开：与「⋯ 更多」同一套锚点，不再另起一层 */
+  .punct-wrap {
     position: relative;
     display: flex;
     align-items: center;

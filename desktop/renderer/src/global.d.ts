@@ -35,6 +35,9 @@ export interface MenuEvent {
     | 'play'
     | 'prev-cue'
     | 'next-cue'
+    | 'find'
+    | 'punct'
+    | 'shortcuts'
     | 'view';
   view?: string;
 }

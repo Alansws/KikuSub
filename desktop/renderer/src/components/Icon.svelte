@@ -50,6 +50,9 @@
       '<path d="M8 1.6v12.8" stroke-dasharray="2 1.7"/><path d="M5.4 4.2 2.6 6.9l2.8 2.7"/><path d="M10.6 4.2l2.8 2.7-2.8 2.7"/>',
     merge:
       '<path d="M2.6 4.2 5.4 6.9 2.6 9.6"/><path d="M13.4 4.2 10.6 6.9l2.8 2.7"/><path d="M5.4 6.9h5.2"/><path d="M8 8.4v5.6"/>',
+    // 「清理标点」：一道斜杠压在一个句点上（去掉句读的意象）
+    punct:
+      '<path d="M13.4 2.8 2.6 13.2"/><circle cx="4.9" cy="10.2" r="1.5" fill="currentColor" stroke="none"/>',
   };
 
   const FILL: Record<string, string> = {

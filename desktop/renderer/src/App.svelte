@@ -44,6 +44,7 @@
     type View,
   } from './lib/store.svelte';
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
+  import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
 
   let engine = $state('whisper');
@@ -283,6 +284,9 @@
         case 'find':
           openFind();
           break;
+        case 'punct':
+          openPunctPanel();
+          break;
         case 'shortcuts':
           shortcuts.open = true;
           break;
@@ -351,6 +355,9 @@
       }
       case 'review.find':
         openFind();
+        return;
+      case 'review.cleanPunct':
+        openPunctPanel();
         return;
       case 'review.findPrev':
         if (app.view === 'review') review?.api_findStep(-1);

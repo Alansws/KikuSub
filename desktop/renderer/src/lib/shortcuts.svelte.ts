@@ -82,6 +82,15 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     allowInTyping: true,
   },
   {
+    id: 'review.cleanPunct',
+    label: '清理标点',
+    group: '核对台',
+    // 从任意页面按 ⌘⇧L 都应切到核对台并展开清理浮层（⌘K 是快捷键面板，不能占）
+    scope: 'global',
+    def: 'mod+shift+l',
+    allowInTyping: true,
+  },
+  {
     id: 'review.findPrev',
     label: '查找：上一处',
     group: '查找',

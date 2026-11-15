@@ -1053,6 +1053,8 @@ function buildMenu() {
         // 快捷键由渲染层的可自定义表处理（默认 ⌘F），这里只保留菜单动作，
         // 否则用户把「查找」改成别的键后，旧 accelerator 仍然会抢先触发。
         { label: '查找与替换…', click: send('menu:find') },
+        // 与快捷键同一入口：渲染层管键，菜单只发动作
+        { label: '清理标点…', click: send('menu:punct') },
       ],
     },
     {
