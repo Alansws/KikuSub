@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import EngineSwitch from './EngineSwitch.svelte';
+  import PunctCleanPanel from './PunctCleanPanel.svelte';
   import {
     app,
     clearOriginalTrack,
@@ -18,6 +19,7 @@
     undo,
   } from '../lib/store.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
+  import { closePunctPanel, openPunctPanel, punctPanel } from '../lib/punctuationPanel.svelte';
 
   function clock(seconds: number) {
     return new Date(seconds * 1000).toLocaleTimeString('zh-CN', {
@@ -42,11 +44,11 @@
   );
   const proxyPct = $derived(app.jobKind === 'proxy' ? (app.job?.percent ?? 0) : 0);
   const proxyLabel = $derived(
-    proxyBusy ? `压制中 ${proxyPct}%` : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
+    proxyBusy ? '压制中…' : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
   );
   const proxyHint = $derived(
     proxyBusy
-      ? `正在后台压制 480p 监看代理（${proxyPct}%）`
+      ? '正在后台压制 480p 监看代理（进度见顶部蓝色进度条）'
       : app.media?.proxy_ready
         ? '480p 监看代理已就绪，无需再压'
         : '为高码率 / 特殊编码视频压制 480p 监看代理，拖动进度条更流畅',
@@ -113,7 +115,9 @@
       case 'dual':
         return '双引擎对照 · 只读比较，编辑回核对台';
       case 'polish':
-        return '润色 · 单源 / 双源三栏对照';
+        return '润色 · 单源 / 双源对照';
+      case 'reshape':
+        return '断句重排 · 可改条数与时间码';
       case 'translate':
         return '翻译 · 原文定稿后生成译文轨';
       case 'prompts':
@@ -163,6 +167,20 @@
   <div class="tb-spacer"></div>
 
   {#if app.view === 'review'}
+    <div class="punct-wrap">
+      <button
+        class="btn ghost top-act"
+        class:on={punctPanel.open}
+        data-punct-trigger
+        aria-expanded={punctPanel.open}
+        onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
+        title="清理整轨原文里多余的 、，。…（只动原文，条数与时间轴不变；⌘⇧L）"
+        aria-label="清理标点"
+      >
+        <Icon name="punct" size={12} /><span class="act-label">清理标点</span>
+      </button>
+      <PunctCleanPanel />
+    </div>
     <button
       class="btn ghost top-act"
       onclick={() => setView('polish')}
@@ -479,6 +497,12 @@
   }
 
   .more-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  /* 清理标点的浮层从按钮正下方展开：与「⋯ 更多」同一套锚点，不再另起一层 */
+  .punct-wrap {
     position: relative;
     display: flex;
     align-items: center;

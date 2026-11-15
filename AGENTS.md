@@ -1,6 +1,6 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-14 15:35
+updated: 2026-11-14 20:05
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
@@ -24,11 +24,11 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 - Anime Whisper：重视自然、连贯的日语对话转写；
 - Qwen3-ASR + CTC：转写后利用自带的 CTC 对齐头取得逐字发声时间，并针对日语分句；
 - SenseVoice-Small / FireRedASR2-AED：两个**可选装**的中文引擎（ONNX / CPU，权重按需下载、默认停用）；
-- Silero VAD 分段、可选动态响度归一化、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
-- 视频 + 波形核对台、质检待核队列、SRT/VTT/TXT 导出、参数预设与完整任务报告；
-- AI 提案（润色 / 翻译平行轨）与随包 Agent 技能。
+- Silero VAD 分段、可选动态响度归一化、人声分离（整片 / 区间）、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
+- 视频 + 波形核对台、质检待核队列、批量清理标点、SRT/VTT/TXT 导出、参数预设与完整任务报告；
+- AI 提案（润色 / 翻译平行轨）、结构建议、断句重排与随包 Agent 技能。
 
-**主入口是 `desktop/`。** `app.py` 与 `static/` 已从仓库移除；旧 Gradio 界面归档在 Git 标签 `v0.9-gradio` 与本地独立目录 `~/Downloads/kikusub_gardio`，不再随本仓库演进。
+**主入口是 `desktop/`。** `app.py` 与 `static/` 已从仓库移除；旧 Gradio 界面归档在 Git 标签 `v0.9-gradio`，不再随本仓库演进。
 
 开发模式（安装 `requirements.txt`、`desktop/npm install` 与系统 `ffmpeg` 后）：
 
@@ -44,12 +44,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 | 路径 | 职责 |
 | --- | --- |
-| `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 七视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
+| `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 八视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
 | `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
 | `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
 | `server/` | **服务层（FastAPI）**。`python -m server` 启动。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
 | `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import；结构建议在 `routes_structure.py`。 |
-| `server/routes_alt_review.py` / `core/dual_review.py` | 第二版接口（GET/DELETE/整列覆盖）与实时对齐 diff（纯函数）。 |
+| `server/routes_alt_review.py` / `core/dual_review.py` | 第二版接口（GET / 导入 / DELETE / 整列覆盖）与实时对齐 diff；导入稿同构 |
 | `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
 | `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 零样本克隆、音色仓库、懒加载/空闲卸载、权重下载。**不 import fastapi / gradio**；torch 只在 `load()` 延迟导入。 |
 | `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、从视频切片建音色、上传/重命名/删除、模型下载、`/media/tts/*` 音频流。 |
@@ -67,15 +67,15 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `tools/eval/` | 评测台：`score_srt.py` 纯标准库打分（CER/块准确率/劈词计数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 数字基线。改断句或 VAD 参数前后必须跑同一区间；素材用 `--fixtures` 指（不随仓库）。 |
 | `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配 → 打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
-| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）。设置页的引擎卡片与工具栏过滤都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
+| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）与 `file_tag` / `legacy_tags`（产物文件名标签）。设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
 | `core/sherpa_asr.py` | 两个中文引擎的推理外壳（SenseVoice-Small / FireRedASR2-AED，sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
 | `core/text_cues_zh.py` | 中文分句的唯一实现（纯函数，无 torch）：token→字符时间轴、标点/停顿/字数切条。改中文断句口径先改这里的测试。 |
 | `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补；按字符偏移插回原文（不改英文大小写）。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
 | `core/model_fetch.py` | 可选权重的 HF 下载入口（直连失败才走镜像）；SenseVoice / FireRed / FireRedPunc 共用，别再写第二份重试逻辑。 |
 | `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 把界面键映射成引擎 dataclass 字段。新增引擎参数只改这里，前端不用动。 |
-| `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
+| `core/settings.py` | 应用级设置（启用的引擎、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
 | `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |
-| `core/prompts.py` | 提示词模板库：三分类、`{{SRT_A}}` / `{{SRT_B}}` 等占位符、原子读写。 |
+| `core/prompts.py` | 提示词模板库：五分类、`{{SRT_A}}` / `{{SRT_B}}` 等占位符、原子读写。 |
 | `server/routes_prompts.py` | 提示词模板接口：`/api/prompts`（读取/新建/改/选中/删除/恢复内置）。 |
 | `core/video_export.py` | 成片导出：探测、分辨率/码率规划、Pillow 字幕精灵 + ffmpeg crop/overlay 硬字幕、软字幕/仅封装。 |
 | `server/routes_export.py` | 成片导出接口：`/api/export/options`、`/api/export/plan`、`/api/export`。 |
@@ -90,8 +90,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | --- | --- | --- |
 | 核对台交互、字幕块聚合、选区、时间线缩放、主题令牌、历史、查找替换、TTS | [docs/contracts/review-console.md](docs/contracts/review-console.md) | 单击/框选阈值、50 步统一历史、`duration/69` 缩放、主题覆盖块、选区 clamp |
 | 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关 | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关 |
-| AI 提案 / 双源 / 结构建议 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
+| AI 提案 / 双源 / 结构建议 / 断句重排 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
 | 提示词模板、成片导出、手动代理、媒体 Range | [docs/contracts/export-and-prompt.md](docs/contracts/export-and-prompt.md) | 导出设置必须走 `setExport*`、代理写 `*.part.mp4` 再 rename |
+| 参数规格、预设、引擎绑定 | [docs/contracts/params-and-presets.md](docs/contracts/params-and-presets.md) | 保存/载入都必须带引擎、跨引擎 409、种子预设 = 当前默认值 |
 | 想理解「为什么这么定规矩」/接手这套流程 | [docs/contracts/engineering-practice.md](docs/contracts/engineering-practice.md) | 五类失控的对照、五道护栏落点、规则→测试的三级升级、多模型协作 |
 | （历史参考）已移除的 Gradio 面板 | [docs/archive/gradio-legacy.md](docs/archive/gradio-legacy.md) | **禁止照它改代码** |
 
@@ -118,11 +119,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    `build_app.sh` 会因为 sidecar 比源码旧直接退出，这是有意的。
 10. **改前端必须真验证**：`cd desktop && npm run build`，然后实际过一遍单击跳转、抖动单击不建选区、
     缩放、保存；只看编译通过不算验证。
-11. **两个 4000 行文件只许变短**：改 `lib/store.svelte.ts` / `views/ReviewView.svelte` 前，先把
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3315 行 / `views/ReviewView.svelte` 3877 行）：
+    改它们前，先把
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
     `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
     变成"先读完 4000 行"。
-12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family`），推理对象与分派进 `core/pipeline.py`；
+12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag`），推理对象与分派进 `core/pipeline.py`；
     `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护一份引擎 key 白名单
     （加中文引擎时踩过：`if payload.engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
 
@@ -136,7 +138,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 验证按**改动范围**跑，不必每次全量（见下面「验证时机」表）。全量 `pytest -q` 约 40s，
   但"改个文档也跑 423 例"会把注意力磨平；环境依赖的用例用 marker 排除
   （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
-- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 9 个真实类型错误已冻结成基线
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 6 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
@@ -175,22 +177,22 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
 
 ## 7. 进行中的专项（跨会话必须能接上）
 
-- **转录引擎标定**：两个日语引擎都已完成一轮。
+- **转录引擎标定**：四引擎均已完成一轮。
   - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)
-    （分窗 VAD、默认参数、句首尾发声剔除与边界收口）。
+    （分窗 VAD、默认参数、句首尾发声剔除）。
   - Qwen3-ASR + CTC：[转录标定-Qwen-2026-11.md](docs/转录标定-Qwen-2026-11.md)
-    （分窗 VAD 从「整段一次跑」改过来是最大收益；参数与「建议内存 16GB 标错」一并修正）。
+    （分窗 VAD 是最大收益；内存建议已修正）。
+  - 中文两个引擎：[转录标定-中文-2026-11.md](docs/转录标定-中文-2026-11.md)
+    （四处修复；脚本在 `tune/zh`）。
+  - **四引擎标定完成**：默认参数固化为引擎绑定预设，旧预设已删除；见
+    [预设契约](docs/contracts/params-and-presets.md)。
   - **通用对齐层已落地**（`core/align_layer.py`）：借 Qwen 的 acoustic-only CTC 头给任意
     日语文本打逐字时间，Anime Whisper 侧是 `whisper.use_ctc_alignment`（默认关）。
-    实现是两遍：先 `engine.release()` 卸掉 Whisper 再装对齐器（实测峰值 6.2GB 而不是 11.8GB），
-    对齐完 `finally` 里卸载，MPS 回落到 0.03GB。
-    精度 p90 约 320ms——改善明显但**没到** ±150ms，所以没设成默认；
-    细节与数字见 Qwen 标定文档 §4，门槛仍在 `docs/backlog.md` P1-5。
+    精度 p90 约 320ms，没到 ±150ms 门槛，所以没设默认；细节见
+    [Qwen 标定文档](docs/转录标定-Qwen-2026-11.md) §4，门槛在 `docs/backlog.md` P1-5。
 - **日语引擎优化路线**（[docs/日语引擎优化路线-2026-11.md](docs/日语引擎优化路线-2026-11.md)）：
-  **P0-2 评测台已入库**——`tools/eval/` 的 `run_clip.py`（跑片出 scorecard）、
-  `probe_window.py`（qwen 逐窗直探）、`baseline.json`（第一遍数字 + 素材指纹），
-  用法在 `tools/eval/README.md`。素材与参考字幕**不随仓库**（`--fixtures` 指向），
-  基线只存数字与 sha1。
+  **P0-2 评测台已入库**：`tools/eval/` 的 `run_clip.py` / `probe_window.py` /
+  `baseline.json`，用法与素材口径见 `tools/eval/README.md`（素材不随仓库）。
   **P0-1 已完成**：`qwen.vad_onset_pad_ms` 默认 400（Test 二 CER 13.42%→11.47%、句首缺字
   5→1；Test 一 12.97%→12.22%；长片不劣化），whisper 同改法 CER +1.61pt，**不启用**。
   闸门 `onset_gate` 只在 A/B 里用、不进参数面板（实测按文档口径无效）。
@@ -198,4 +200,4 @@ CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一�
     诊断脚本 `tools/eval/qwen_confidence_diag.py`。
   - **P1-1 完成**：`kind="compare"` 只回文本；单句复核保留，批量复核入口已按双引擎重构删除；
     `transcribe_window()` + 空闲 180s 卸载。下一步 P1-3 词表 / P1-2 对齐 spike。
-  - **双引擎复核与工作流重构已完成**（S1–S4）：[需求文档](docs/双引擎复核与工作流-需求-2026-11.md) 为终稿；AI 契约见 `contracts/ai-proposal.md`。
+  - **双引擎复核与工作流重构已完成**（S1–S4）：见 [需求文档](docs/双引擎复核与工作流-需求-2026-11.md)。

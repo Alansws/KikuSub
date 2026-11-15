@@ -6,6 +6,8 @@
  * 改走 `?token=`（与 `server/security.py` 的双通道一致）。
  */
 
+import { vocalSeparation } from './vocalSeparation.svelte';
+
 export interface MediaInfo {
   id: string;
   name: string;
@@ -47,7 +49,6 @@ export interface EngineInfo {
 
 export interface AppSettings {
   enabled_engines: string[];
-  auto_proxy: boolean;
   /** 字幕默认导出目录；空字符串表示沿用应用输出目录。 */
   export_dir: string;
   /** 成片导出目录；空字符串表示跟随 export_dir。 */
@@ -84,8 +85,8 @@ export interface SettingsPayload {
 
 export interface PromptTemplate {
   id: string;
-  /** polish_single / polish_dual / translate；旧模板缺省按 translate。 */
-  category?: 'polish_single' | 'polish_dual' | 'translate';
+  /** polish_single / polish_dual / reshape_single / reshape_dual / translate；旧模板缺省按 translate。 */
+  category?: 'polish_single' | 'polish_dual' | 'reshape_single' | 'reshape_dual' | 'translate';
   name: string;
   description: string;
   content: string;
@@ -99,6 +100,8 @@ export interface PromptLibrary {
   selected: string;
   selected_polish_single: string;
   selected_polish_dual: string;
+  selected_reshape_single?: string;
+  selected_reshape_dual?: string;
   templates: PromptTemplate[];
   path: string;
 }
@@ -530,6 +533,67 @@ export interface StructureApplyPayload extends CueSnapshot {
   output_count: number;
 }
 
+/** 断句重排（整份换稿）：一条行内提示，`index` 是新稿里的 1-based 行号。 */
+export interface ReshapeIssue {
+  index: number;
+  kind: 'overlap' | 'out_of_order' | 'too_long' | 'too_short' | 'out_of_range' | 'empty_text';
+  label: string;
+}
+
+export interface ReshapeNote {
+  text: string;
+  level: 'plain' | 'warn';
+}
+
+export interface ReshapeDiagnostics {
+  count: number;
+  count_before: number;
+  chars: number;
+  span: { start: number; end: number };
+  issues: ReshapeIssue[];
+  totals: Record<string, number>;
+  identical: boolean;
+}
+
+/** 解析粘贴 SRT 的结果：整份新稿 + 体检 + 覆盖区间 + 源指纹。 */
+export interface ReshapeDraft {
+  format: 'srt';
+  cues: Cue[];
+  diagnostics: ReshapeDiagnostics;
+  notes: ReshapeNote[];
+  digest: string;
+  range: { from: number; to: number; start: number; end: number; full: boolean };
+}
+
+export interface ReshapeReplaceInfo {
+  from: number;
+  to: number;
+  replaced: number;
+  inserted: number;
+  count: number;
+  count_before: number;
+  changed: boolean;
+  dropped_translations: string[];
+}
+
+export interface ReshapeApplyPayload extends CueSnapshot {
+  replace: ReshapeReplaceInfo;
+}
+
+export interface ReshapePromptPayload {
+  prompt: string;
+  count: number;
+  total: number;
+  chars: number;
+  mode: 'single' | 'dual';
+  from: number;
+  to: number;
+  alt_count: number;
+  template_id: string;
+  template_name: string;
+  category: string;
+}
+
 export interface JobSnapshot {
   id: string;
   kind: string;
@@ -593,6 +657,8 @@ export interface ReportData {
     degraded: number;
     has_findings: boolean;
     qwen_limited: boolean;
+    /** whisper / qwen / sherpa：决定对齐文案用「逐字对齐」还是「token 时间戳」。 */
+    engine_family?: string;
   };
   sections: ReportSection[];
   raw_text: string;
@@ -847,12 +913,16 @@ export const api = {
     }>('/api/params'),
 
   // ---- 预设 ----
-  listPresets: () =>
-    req<{ items: { name: string; engine: string | null }[]; load_error: string }>('/api/presets'),
+  listPresets: (engine?: string) => {
+    const q = engine ? `?engine=${encodeURIComponent(engine)}` : '';
+    return req<{ items: { name: string; engine: string | null }[]; load_error: string }>(
+      `/api/presets${q}`,
+    );
+  },
 
-  getPreset: (name: string) =>
+  getPreset: (name: string, engine: string) =>
     req<{ name: string; engine: string | null; values: Record<string, number | boolean> }>(
-      `/api/presets/${encodeURIComponent(name)}`,
+      `/api/presets/${encodeURIComponent(name)}?engine=${encodeURIComponent(engine)}`,
     ),
 
   savePreset: (name: string, engine: string, values: Record<string, unknown>) =>
@@ -892,8 +962,17 @@ export const api = {
     keep_absolute_timeline?: boolean;
     apply?: 'replace' | 'append' | 'replace_range';
     alt_review?: boolean;
+    separate_vocals?: boolean;
     params?: Record<string, unknown>;
-  }) => req<JobSnapshot>('/api/jobs', { method: 'POST', body: JSON.stringify(payload) }),
+  }) =>
+    req<JobSnapshot>('/api/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...payload,
+        // 全局勾选对整片与区间都生效：整片由服务端按 0..总时长分离。
+        separate_vocals: payload.separate_vocals ?? (vocalSeparation.enabled || undefined),
+      }),
+    }),
 
   /** 用另一个引擎把若干字幕窗口各听一遍；服务端只回文本、不落盘。 */
   createCompareJob: (payload: {
@@ -1040,6 +1119,10 @@ export const api = {
   ) =>
     req<{
       path: string;
+      name: string;
+      requested_name: string;
+      /** 同名文件已有不同内容时，服务端自动改名为 `… (2).srt`。 */
+      renamed: boolean;
       text: string;
       format: string;
       count: number;
@@ -1065,7 +1148,6 @@ export const api = {
 
   patchSettings: (patch: {
     enabled_engines?: string[];
-    auto_proxy?: boolean;
     export_dir?: string;
     video_export_dir?: string;
   }) =>
@@ -1121,7 +1203,12 @@ export const api = {
     name: string;
     description?: string;
     content: string;
-    category?: 'polish_single' | 'polish_dual' | 'translate';
+    category?:
+      | 'polish_single'
+      | 'polish_dual'
+      | 'reshape_single'
+      | 'reshape_dual'
+      | 'translate';
   }) =>
     req<PromptLibrary & { created: string }>('/api/prompts', {
       method: 'POST',
@@ -1251,6 +1338,20 @@ export const api = {
     req<AltReviewPayload>(`/api/alt-review${diff ? '?diff=1' : ''}`),
 
   deleteAltReview: () => req<{ removed: boolean; exists: boolean }>('/api/alt-review', { method: 'DELETE' }),
+
+  /** 把工作流里已经做好的另一版字幕直接导入第二列（与转写产出的 B 版同构）。 */
+  importAltReview: (path: string) =>
+    req<{
+      exists: boolean;
+      engine: string;
+      count: number;
+      source: Record<string, any>;
+      created_at: number;
+      warning: string;
+    }>('/api/alt-review/import', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
 
   replacePrimaryWithAlt: (clearAlt = true) =>
     req<CueSnapshot & { replaced: number; alt_cleared: boolean }>(
@@ -1477,6 +1578,40 @@ export const api = {
     req<{ prompt: string; count: number; chars: number; mode: string; alt_count: number }>(
       `/api/ai/structure/prompt?mode=${mode}`,
     ),
+
+  // ---- 断句重排（整份换稿：条数与时间码都可变）----------------------------
+  getReshapePrompt: (
+    mode: 'single' | 'dual',
+    from = 1,
+    to: number | null = null,
+    templateId = '',
+  ) => {
+    const query = new URLSearchParams({
+      mode,
+      from_index: String(from),
+    });
+    if (to !== null) query.set('to_index', String(to));
+    if (templateId) query.set('template_id', templateId);
+    return req<ReshapePromptPayload>(`/api/ai/reshape/prompt?${query.toString()}`);
+  },
+
+  parseReshape: (text: string, from: number, to: number | null) =>
+    req<ReshapeDraft>('/api/ai/reshape/from-text', {
+      method: 'POST',
+      body: JSON.stringify({ text, from_index: from, to_index: to }),
+    }),
+
+  applyReshape: (payload: {
+    cues: Cue[];
+    from_index: number;
+    to_index: number | null;
+    digest: string;
+    label?: string;
+  }) =>
+    req<ReshapeApplyPayload>('/api/ai/reshape/apply', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   qaAction: (cmd: { id: string; action: string; status?: string; resolution?: string }) =>
     req<{

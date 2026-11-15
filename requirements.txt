@@ -1,6 +1,9 @@
 # 日语影片字幕转录工作台 依赖清单
 torch>=2.1.0,<3
 torchaudio>=2.1.0,<3
+# 人声分离（强 BGM / 歌曲区间）：Demucs htdemucs。权重按需下到
+# <models>/demucs/，不随包；只用 htdemucs，不引入 UVR / BS-RoFormer。
+demucs==4.0.1
 # Qwen3-ASR 原生支持（AutoModelForMultimodalLM / apply_transcription_request）需要 5.13+
 transformers>=5.13.0,<6
 huggingface_hub>=0.23.0
@@ -25,6 +28,9 @@ Pillow>=10
 sherpa-onnx>=1.12.27,<3
 # FireRedPunc 标点恢复走 ONNX Runtime（不额外拉 torch 模型；权重 162 MB 按需下载）
 onnxruntime>=1.31,<2
+# 中文断句的词边界（纯 Python + 5 MB 词典）：没有它就只能按字数硬切，
+# 会把「办理」劈成「办 / 理」。缺了这个包 core.text_cues_zh 会退化为旧口径。
+jieba>=0.42,<1
 
 # 本地零样本克隆 TTS（Apache-2.0，日语 + Apple Silicon MPS）。
 # 权重不随包分发：首次在界面点「下载克隆模型」下到 models/omnivoice（约 3.3GB）。

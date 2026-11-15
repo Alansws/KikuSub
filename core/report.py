@@ -156,7 +156,7 @@ def _align_stats_headline(stats: dict | None, family: str = "whisper") -> str:
         degraded_sherpa = int(stats.get("degraded", 0) or 0)
         empty_sherpa = int(stats.get("empty", 0) or 0)
         rate = (timed / total * 100) if total else 0.0
-        parts = [f"共 {total} 段：✅ {timed} 段带 token 时间戳（{rate:.1f}%）"]
+        parts = [f"共 {total} 个语音段：✅ {timed} 段带 token 时间戳（{rate:.1f}%）"]
         if empty_sherpa > 0:
             parts.append(f"✕ 空结果 {empty_sherpa} 段（已计入疑似漏句）")
         if degraded_sherpa > 0:
@@ -178,7 +178,7 @@ def _align_stats_headline(stats: dict | None, family: str = "whisper") -> str:
     rate = (aligned / total * 100) if total else 0.0
 
     parts = [
-        f"共 {total} 段：✅ {aligned} 段完成（{rate:.1f}%）",
+        f"共 {total} 个语音段：✅ {aligned} 段完成（{rate:.1f}%）",
         f"○ 无需对齐 {noop} 段",
         f"⚠️ 降级 {degraded} 段",
     ]
@@ -193,6 +193,35 @@ def _align_stats_headline(stats: dict | None, family: str = "whisper") -> str:
     if capped_repeat > 0:
         parts.append(f"复读吃满上限 {capped_repeat} 段（非截断，已跳过重跑）")
     return "｜".join(parts)
+
+
+def align_progress_note(stats: dict | None) -> str:
+    """进度条末尾的括号：把「230/257」说清是语音段，并给出未对齐的三类分项。
+
+    257 是 VAD 切出的语音段数，不是最终字幕条数（一段可能拆成多条字幕）。
+    分子只统计 CTC 对齐成功的段；其余三类必须分开说，否则用户会以为「漏了 27 段」。
+    """
+    if not stats or not stats.get("enabled", True):
+        return ""
+    total = int(stats.get("segments", 0) or 0)
+    if total <= 0:
+        return ""
+    aligned = int(stats.get("aligned", 0) or 0)
+    rest = max(0, total - aligned)
+    if rest == 0:
+        return f"（逐字对齐 {aligned}/{total} 个语音段）"
+    bits: list[str] = []
+    degraded = int(stats.get("degraded", 0) or 0)
+    noop = int(stats.get("noop", 0) or 0)
+    empty = int(stats.get("empty", 0) or 0)
+    if degraded:
+        bits.append(f"降级 {degraded}")
+    if noop:
+        bits.append(f"纯符号 {noop}")
+    if empty:
+        bits.append(f"无台词 {empty}")
+    tail = "、".join(bits) or "其他"
+    return f"（逐字对齐 {aligned}/{total} 个语音段；其余 {rest} 段：{tail}）"
 
 
 def write_missed_report(media_path, slice_tag: str, engine_key_name: str, spans: list[dict] | None) -> Path | None:
@@ -757,6 +786,14 @@ def build_report_data(
             "id": "alignment",
             "title": "逐字对齐" if family == "qwen" else "时间轴精度",
             "headline": align_headline,
+            "note": (
+                "「段」是 VAD 切出的语音段，不是字幕条数（一段可能拆成多条字幕）："
+                "✅=CTC 逐字对齐成功；○=文本里没有可对齐的发声字符（纯符号），无需对齐；"
+                "⚠️=有文本但对齐头没给出可信字符时间，句内按字数比例分配；"
+                "✕=没识别出文字，已剔除（其中疑似漏句会进质检队列）。"
+                if family == "qwen" and align_stats
+                else ""
+            ),
             "total_degraded": total_degraded,
             "items": [
                 {

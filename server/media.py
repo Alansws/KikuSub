@@ -78,7 +78,7 @@ class MediaInfo:
 
     @property
     def needs_proxy(self) -> bool:
-        """Chromium 直接播可能黑屏或拖动卡顿；前端据此提示/自动压制代理。"""
+        """Chromium 直接播可能黑屏或拖动卡顿；前端据此给手动压制代理的建议（不自动压）。"""
         return bool(self.proxy_reason)
 
     def to_dict(self) -> dict:

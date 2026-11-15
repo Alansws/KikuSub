@@ -33,6 +33,7 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 
@@ -42,6 +43,7 @@ export type View =
   | 'review'
   | 'dual'
   | 'polish'
+  | 'reshape'
   | 'translate'
   | 'prompts'
   | 'export'
@@ -125,12 +127,14 @@ export const app = $state({
   jobMeta: null as null | {
     scope: 'full' | 'range';
     apply: 'replace' | 'append' | 'replace_range';
+    /** 谁发起的：转写页的区间任务完成后跳核对台，核对台的原地修正停在原处。 */
+    origin: 'transcribe' | 'review';
     start: number;
     end: number;
     label: string;
   },
 
-  /** 从核对台「填入转写」带过去的区间；nonce 变一次，转写页就填一次。 */
+  /** 从核对台「同步到转写页」带过去的区间；nonce 变一次，转写页就填一次。 */
   slice: null as null | { start: string; end: string; nonce: number },
 
   // 提示
@@ -877,6 +881,7 @@ export const tuning = $state({
   values: {} as Record<string, Record<string, number | boolean>>,
   presets: [] as { name: string; engine: string | null }[],
   activePreset: '',
+  activePresetEngine: '', // 属于哪个引擎；切引擎时清掉，避免拿 A 的预设删 B
   loading: false,
 });
 
@@ -1240,7 +1245,7 @@ export async function applyDevSeed(seed: {
 }) {
   if (!seed?.mediaPath) return;
   try {
-    // 走真实的 openMedia 路径（含代理压制任务），这样截图/联调覆盖的是产品代码本身
+    // 走真实的 openMedia 路径（含代理提示，但不再自动开压制任务），这样截图/联调覆盖的是产品代码本身
     await openMedia(seed.mediaPath);
     if (seed.cues?.length) {
       await api.replaceCues(seed.cues);
@@ -1441,11 +1446,8 @@ export async function openMedia(
       size: info.size,
     });
 
-    // MKV / HEVC 在 Chromium 里放不出来：后台压代理，不挡用户操作。
-    // 已经有代理（包括刚挂载的）时不再重复压。
-    if (info.needs_proxy && !info.proxy_ready && (app.settings?.auto_proxy ?? true)) {
-      startProxyJob(info.id);
-    }
+    // 代理只在用户点按钮时压（黑屏画面里的提示 / 工具栏「⋯」），导入不再自动开任务：
+    // 高码率视频可能只是拖动卡，自动压会平白占一条重任务槽。
   } catch (err) {
     toast(`导入失败：${(err as Error).message}`, 'error');
   } finally {
@@ -2503,27 +2505,10 @@ export interface TranscribeOptions {
   startText: string;
   endText: string;
   absoluteTimeline: boolean;
-  /** 结果如何进入核对台。整片默认覆盖，区间默认追加。 */
+  /** 结果如何进入核对台；档位与文案见 `lib/applyMode.ts`。区间默认 `replace_range`。 */
   apply?: 'replace' | 'append' | 'replace_range';
   /** 整片且核对台非空时：true = 写进双引擎复核第二列，不覆盖核对台。 */
   altReview?: boolean;
-}
-
-function optimisticJob(stage: string): JobSnapshot {
-  return {
-    id: '',
-    kind: 'transcribe',
-    status: 'queued',
-    ratio: 0,
-    percent: 0,
-    stage,
-    error: '',
-    created_at: Date.now() / 1000,
-    started_at: 0,
-    finished_at: 0,
-    elapsed: 0,
-    result: null,
-  };
 }
 
 function engineEnabled(key: string): boolean {
@@ -2550,13 +2535,14 @@ export async function startTranscribe(
     toast('结束时间必须大于起始时间', 'warn');
     return;
   }
-  // 「全片」按钮会把 0 与完整时长填进两个输入框；那仍然算整片覆盖，
+  // 手填 0 与完整时长也算整片覆盖（「全片」按钮已改成清空区间），
   // 不能因为「填了时间」就误判成区间追加。
   const duration = app.media.duration || 0;
   const coversFull =
     (start === null || start <= 0.001) && (end === null || end >= duration - 0.5);
   const isRange = !coversFull;
-  const apply = opts.apply ?? (isRange ? 'append' : 'replace');
+  // 区间默认「替换选区」（删旧、写新、其余不动）；以前默认 append，区间重听会叠字幕。
+  const apply = opts.apply ?? (isRange ? 'replace_range' : 'replace');
 
   // 乐观态：请求本身可能因为服务端首次预热而慢一拍，
   // 但用户必须在 300ms 内看到反馈（规划 §5 指标 6）
@@ -2564,11 +2550,12 @@ export async function startTranscribe(
   app.jobMeta = {
     scope: isRange ? 'range' : 'full',
     apply,
+    origin: 'transcribe',
     start: start ?? 0,
     end: end ?? app.media.duration,
     label: isRange ? `${start ?? 0}s – ${end ?? '片尾'}` : '整片',
   };
-  app.job = optimisticJob('正在启动内核…');
+  app.job = optimisticTranscribeJob('正在启动内核…');
   logEvent('info', 'transcribe-start', `${opts.engine} | ${isRange ? 'range' : 'full'} | ${apply}`, {
     start,
     end,
@@ -2639,11 +2626,12 @@ export async function transcribeRange(args: {
   app.jobMeta = {
     scope: 'range',
     apply,
+    origin: 'review',
     start,
     end,
     label: args.label ?? `${start.toFixed(2)}s – ${end.toFixed(2)}s`,
   };
-  app.job = optimisticJob('正在识别选区…');
+  app.job = optimisticTranscribeJob('正在识别选区…');
   logEvent('info', 'transcribe-range', `${args.engine} | ${start.toFixed(2)}-${end.toFixed(2)} | ${apply}`, {
     label: args.label,
     params: { ...(tuning.values[args.engine] ?? {}) },
@@ -2813,16 +2801,17 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
       app.qaFillId = '';
       await qaAction({ id: fillId, action: 'mark', status: 'done', resolution: 'filled' });
     }
-    const saved = app.lastSavedPath ? '，已自动保存到导出文件夹' : '';
-    if (added && removed) {
-      toast(`局部转写完成：替换 ${removed} 条、新增 ${added} 条，时间轴共 ${total} 条${saved}`);
-    } else if (removed) {
-      toast(`局部转写完成：更新该区间 ${removed} 条，时间轴共 ${total} 条${saved}`);
-    } else if (added) {
-      toast(`局部转写完成：新增 ${added} 条，时间轴共 ${total} 条${saved}`);
-    } else {
-      toast(`局部转写完成：该区间已有相同字幕，时间轴共 ${total} 条${saved}`);
-    }
+    toast(
+      rangeDoneText({
+        origin: meta.origin,
+        added,
+        removed,
+        total,
+        saved: Boolean(app.lastSavedPath),
+      }),
+    );
+    // 转写页的区间任务要把用户带到核对台（结果只在那里）；核对台的原地修正不跳页。
+    if (meta.origin === 'transcribe') setView('review');
     return;
   }
 
@@ -2879,7 +2868,7 @@ export async function loadTuning() {
 export function setParam(engine: string, key: string, value: number | boolean) {
   if (!tuning.values[engine]) tuning.values[engine] = {};
   tuning.values[engine][key] = value;
-  tuning.activePreset = ''; // 手改之后就不再算「某个预设」了
+  tuning.activePreset = tuning.activePresetEngine = ''; // 手改之后就不再算「某个预设」了
   persistTuning();
 }
 
@@ -2887,7 +2876,7 @@ export function resetParams(engine: string) {
   const entry = tuning.schema?.find((e) => e.key === engine);
   if (!entry) return;
   tuning.values[engine] = { ...entry.defaults };
-  tuning.activePreset = '';
+  tuning.activePreset = tuning.activePresetEngine = '';
   persistTuning();
 }
 
@@ -2902,9 +2891,9 @@ function persistTuning() {
   }
 }
 
-export async function refreshPresets() {
+export async function refreshPresets(engine?: string) {
   try {
-    const data = await api.listPresets();
+    const data = await api.listPresets(engine);
     tuning.presets = data.items;
     if (data.load_error) toast(`预设文件读取异常：${data.load_error}`, 'warn');
   } catch {
@@ -2912,20 +2901,19 @@ export async function refreshPresets() {
   }
 }
 
-export async function applyPreset(name: string) {
-  if (!name) return;
+export async function applyPreset(name: string, engine: string): Promise<boolean> {
+  if (!name || !engine) return false;
   try {
-    const preset = await api.getPreset(name);
-    const engine = preset.engine || 'whisper';
-    tuning.values[engine] = {
-      ...(tuning.values[engine] || {}),
-      ...preset.values,
-    };
-    tuning.activePreset = name;
+    const preset = await api.getPreset(name, engine);
+    if (preset.engine !== engine) throw new Error(`预设「${name}」不属于当前引擎`); // 双保险
+    tuning.values[engine] = { ...preset.values }; // 完整快照：替换而不是合并
+    tuning.activePreset = tuning.activePresetEngine = name;
     persistTuning();
     toast(`已载入预设「${name}」`);
+    return true;
   } catch (err) {
     toast((err as Error).message, 'error');
+    return false;
   }
 }
 
@@ -2938,7 +2926,7 @@ export async function savePresetAs(name: string, engine: string) {
   try {
     const values = tuning.values[engine] || {};
     await api.savePreset(trimmed, engine, values);
-    tuning.activePreset = trimmed;
+    tuning.activePreset = trimmed; tuning.activePresetEngine = engine; // 同名不同引擎由服务端拒绝
     await refreshPresets();
     toast(`已保存预设「${trimmed}」`);
   } catch (err) {
@@ -2950,7 +2938,7 @@ export async function deletePreset(name: string) {
   if (!name) return;
   try {
     await api.deletePreset(name);
-    if (tuning.activePreset === name) tuning.activePreset = '';
+    if (tuning.activePreset === name) tuning.activePreset = tuning.activePresetEngine = '';
     await refreshPresets();
     toast(`已删除预设「${name}」`);
   } catch (err) {
@@ -3235,7 +3223,6 @@ export async function loadSettings(force = false) {
 
 export async function updateSettings(patch: {
   enabled_engines?: string[];
-  auto_proxy?: boolean;
   export_dir?: string;
   video_export_dir?: string;
 }) {

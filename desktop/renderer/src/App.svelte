@@ -14,6 +14,7 @@
   import ReviewView from './views/ReviewView.svelte';
   import DualView from './views/DualView.svelte';
   import PolishView from './views/PolishView.svelte';
+  import ReshapeView from './views/ReshapeView.svelte';
   import TranslateView from './views/TranslateView.svelte';
   import ReportView from './views/ReportView.svelte';
   import PromptView from './views/PromptView.svelte';
@@ -43,6 +44,7 @@
     type View,
   } from './lib/store.svelte';
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
+  import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
 
   let engine = $state('whisper');
@@ -282,6 +284,9 @@
         case 'find':
           openFind();
           break;
+        case 'punct':
+          openPunctPanel();
+          break;
         case 'shortcuts':
           shortcuts.open = true;
           break;
@@ -351,6 +356,9 @@
       case 'review.find':
         openFind();
         return;
+      case 'review.cleanPunct':
+        openPunctPanel();
+        return;
       case 'review.findPrev':
         if (app.view === 'review') review?.api_findStep(-1);
         return;
@@ -374,6 +382,9 @@
         return;
       case 'view.polish':
         setView('polish');
+        return;
+      case 'view.reshape':
+        setView('reshape');
         return;
       case 'view.translate':
         setView('translate');
@@ -521,6 +532,8 @@
           <DualView />
         {:else if app.view === 'polish'}
           <PolishView />
+        {:else if app.view === 'reshape'}
+          <ReshapeView />
         {:else if app.view === 'translate'}
           <TranslateView />
         {:else if app.view === 'prompts'}

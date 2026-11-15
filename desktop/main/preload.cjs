@@ -36,7 +36,8 @@ contextBridge.exposeInMainWorld('kikusub', {
   // 原生对话框
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),
   // 默认打开导出文件夹，只让用户挑字幕；设置页用 pickDirectory 选导出目录
-  pickSubtitle: (defaultDir) => ipcRenderer.invoke('dialog:pick-subtitle', defaultDir),
+  pickSubtitle: (defaultDir, title) =>
+    ipcRenderer.invoke('dialog:pick-subtitle', defaultDir, title),
   // 克隆音色的参考音频：只读路径，转换与落盘都在 Python 侧
   pickAudio: (defaultDir) => ipcRenderer.invoke('dialog:pick-audio', defaultDir),
   pickProposal: (defaultDir) => ipcRenderer.invoke('dialog:pick-proposal', defaultDir),

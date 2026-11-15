@@ -106,8 +106,17 @@ def engine_family(engine_key: str) -> str:
 
 
 def output_suffix(engine_key: str) -> str:
-    """Whisper 产物不加后缀，其余引擎加 `.key`，避免互相覆盖。"""
-    return "" if engine_key == "whisper" else f".{engine_key}"
+    """原始转写产物统一带引擎文件名标签，避免不同引擎互相覆盖。
+
+    标签来自 `core/engines.py` 的 `file_tag`（红线 #12：不许在这里再维护映射）：
+    `.AnimeWhisper` / `.Qwen3-ASR` / `.SenseVoice-Small` / `.FireRedASR2-AED`。
+    未知 key 退回 key 本身，保证测试替身与未来引擎也能落一个可区分的名字。
+    """
+    tag = engine_registry.file_tag_of(engine_key)
+    if tag:
+        return f".{tag}"
+    key = str(engine_key or "").strip()
+    return f".{key}" if key else ""
 
 
 @dataclass(slots=True)
@@ -123,6 +132,9 @@ class TranscribeRequest:
     export_dir: Path | None = None
     start_s: float | None = None
     end_s: float | None = None
+    # 媒体总时长（服务层 ffprobe 得到）。整片人声分离要按 0..duration 截取；
+    # 独立调用 pipeline（测试 / 旧界面）不传时，分离前再探一次。
+    media_duration_s: float = 0.0
     keep_absolute_timeline: bool = True
     whisper_config: WhisperVadConfig | None = None
     qwen_config: QwenCtcConfig | None = None
@@ -133,6 +145,10 @@ class TranscribeRequest:
     # 局部转写不该覆盖整片的质检队列：否则「重转这一句」会把用户刚核对完的
     # 待核进度全部冲掉。服务层在区间任务里置 False。
     write_audit: bool = True
+    # 强 BGM / 歌曲：先对「本次转写范围」做 Demucs 人声分离，再送 ASR。
+    # 整片任务（start_s/end_s 都为 None）= 0..media_duration_s；只填一端时另一端
+    # 取片头/片尾。分离结果由 audio_cache 复用，换引擎重转不重复跑。
+    separate_vocals: bool = False
     # 双引擎：本次整片结果写入第二版（不覆盖核对台）。服务层只在「核对台非空 +
     # 整片覆盖」时置 True；具体写内存/落盘由 server.jobs 负责。
     alt_review: bool = False
@@ -195,6 +211,33 @@ class TranscribeResult:
             "slice_tag": self.slice_tag,
             "time_slice_desc": self.time_slice_desc,
         }
+
+
+def separation_range(req: TranscribeRequest) -> tuple[float, float]:
+    """人声分离实际截取的 `[start, end)`。
+
+    整片（起止都为 None）= 0..影片总时长；只填一端时另一端取片头/片尾。
+    总时长优先用服务层已探到的 `media_duration_s`，独立调用时再 ffprobe 一次；
+    探不到时长又没有完整区间时无法截取，报错让用户填区间。
+    """
+    duration = max(0.0, float(req.media_duration_s or 0.0))
+    if duration <= 0 and req.end_s is None:
+        from .proxy import probe_duration
+
+        duration = probe_duration(Path(req.media_path))
+
+    start = max(0.0, float(req.start_s or 0.0))
+    if req.end_s is None:
+        if duration <= 0:
+            raise ValueError("无法确定影片总时长，人声分离请填写起止时间")
+        end = duration
+    else:
+        end = float(req.end_s)
+    if duration > 0:
+        end = min(end, duration)
+    if end <= start:
+        raise ValueError("人声分离区间的结束必须大于开始")
+    return start, end
 
 
 def plan_slice(
@@ -260,39 +303,69 @@ def run_transcription(
         req.output_format,
         req.keep_absolute_timeline,
     )
+    audio_path = media_path
+    audio_start, audio_end = req.start_s, req.end_s
+    if req.separate_vocals:
+        from . import separate as separate_mod
+        from .audio_cache import ensure_vocals_wav
+
+        # 先验参数、再验依赖：探不到总时长是**用户能改**的问题（填起止时间），
+        # 缺 demucs 是环境问题。反过来的顺序会让"没填区间"报成"缺 demucs"，
+        # 测试里也直接卡在这一句（用户报障时同样拿到错误提示）。
+        sep_start, sep_end = separation_range(req)
+        if not separate_mod.available():
+            raise RuntimeError("人声分离依赖未安装（缺少 demucs）。")
+        # 分离器与 ASR 不同时常驻：先让出当前引擎，分离器用完会自行 release。
+        release_engine(req.engine_key)
+        cb(0.01, "正在准备人声分离（Demucs htdemucs）…")
+
+        def _sep_progress(ratio: float, message: str) -> None:
+            cb(0.01 + 0.06 * max(0.0, min(1.0, float(ratio))), message)
+
+        audio_path = ensure_vocals_wav(
+            media_path,
+            start=sep_start,
+            end=sep_end,
+            separator=separate_mod.separate_to_wav,
+            cancel_event=cancel_event,
+            progress_cb=_sep_progress,
+        )
+        audio_start, audio_end = None, None
+        log.info("人声分离就绪 | %s | %.1fs-%.1fs", audio_path.name, sep_start, sep_end)
+
     if is_sherpa:
         cues = engine.transcribe_file(
-            media_path,
+            audio_path,
             progress_cb=cb,
             config=req.sherpa_config,
             cancel_event=cancel_event,
-            start_time_s=req.start_s,
-            end_time_s=req.end_s,
+            start_time_s=audio_start,
+            end_time_s=audio_end,
             time_offset=req.time_offset,
         )
         stats_note = ""
     elif is_qwen:
         cues = engine.transcribe_file(
-            media_path,
+            audio_path,
             progress_cb=cb,
             use_alignment=req.use_alignment,
             config=req.qwen_config,
             cancel_event=cancel_event,
-            start_time_s=req.start_s,
-            end_time_s=req.end_s,
+            start_time_s=audio_start,
+            end_time_s=audio_end,
             time_offset=req.time_offset,
         )
         stats_note = ""
     else:
         cues = engine.transcribe_file(
-            media_path,
+            audio_path,
             config=req.whisper_config,
             no_repeat_ngram_size=req.no_repeat_ngram_size,
             repetition_penalty=req.repetition_penalty,
             progress_cb=cb,
             cancel_event=cancel_event,
-            start_time_s=req.start_s,
-            end_time_s=req.end_s,
+            start_time_s=audio_start,
+            end_time_s=audio_end,
             time_offset=req.time_offset,
         )
         stats_note = f"\n\n`{engine.last_stats.describe()}`"

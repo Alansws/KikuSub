@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -36,3 +37,19 @@ def write_text_atomic(path: str | Path, text: str, encoding: str = "utf-8") -> P
             pass
         raise
     return target
+
+
+def next_available_path(path: str | Path) -> Path:
+    """同名文件已存在时给出不冲突的路径：`name (2).srt`、`name (3).srt`……
+
+    与成片导出共用同一套编号约定：交付文件**绝不静默覆盖**另一份内容。
+    调用方先判断内容是否相同；相同可以原地重写，不同才用这个函数换名。
+    """
+    target = Path(path)
+    if not target.exists():
+        return target
+    for index in range(2, 1000):
+        candidate = target.with_name(f"{target.stem} ({index}){target.suffix}")
+        if not candidate.exists():
+            return candidate
+    return target.with_name(f"{target.stem}-{int(time.time())}{target.suffix}")

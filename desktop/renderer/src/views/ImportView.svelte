@@ -148,8 +148,8 @@
     </span>
   </button>
 
-  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入后可在核对台手动压制代理。">
-    MKV / HEVC 自动压一份 480p 监看代理，拖动才能秒开；也可以在核对台手动压制。
+  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
+    MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
   </p>
 
   {#if exportDir}

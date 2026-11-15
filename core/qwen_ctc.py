@@ -50,6 +50,7 @@ log = logging.getLogger(__name__)
 from silero_vad import load_silero_vad
 
 from .coverage import find_coverage_spans
+from .report import align_progress_note
 from .procutil import CommandCancelled
 
 from .transcribe import (
@@ -1318,7 +1319,9 @@ class QwenCtcEngine:
         }
 
         if progress_cb and not self.last_interrupted:
-            note = f"（{aligned}/{total} 段完成逐字对齐）" if use_alignment else ""
+            # 文案由 `core.report.align_progress_note()` 统一生成：说清分母是
+            # 「语音段」而不是字幕条数，并把未对齐的三类分开列，免得用户以为漏字。
+            note = align_progress_note(self.last_align_stats) if use_alignment else ""
             progress_cb(0.95, f"正在整理字幕…{note}")
         cues.sort(key=lambda c: (c.start, c.end))
         final_cues = _dedupe(cues)

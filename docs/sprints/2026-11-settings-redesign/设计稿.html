@@ -1,0 +1,1558 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>设置页重构 · 静态高保真稿</title>
+<style>
+/* ============================================================
+   设置页重构静态稿 —— 只用于评审，不参与应用构建。
+   令牌与 app.css 同名同值；新增令牌标了 ★，最终要落到三套主题里。
+   ============================================================ */
+:root {
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur: 200ms;
+  --dur-fast: 120ms;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+    'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-cue: var(--font-sans);
+
+  --fs-display: 22px; --lh-display: 30px;
+  --fs-heading: 15px; --lh-heading: 22px;
+  --fs-body: 14px;   --lh-body: 22px;
+  --fs-ui: 13px;     --lh-ui: 18px;
+  --fs-label: 12px;  --lh-label: 16px;
+  --fs-mono: 12.5px; --lh-mono: 18px;
+  /* ★ 新增字阶：总览看板里的大数字（只在本页用，主题不覆盖） */
+  --fs-hero: 27px; --lh-hero: 33px;
+
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+  --sp-12: 48px; --sp-16: 64px;
+
+  --rad-control: 4px;
+  --rad-card: 8px;
+  --rad-panel: 12px;
+  /* ★ 新增圆角：分段导航 / Inset 分组 / 总览看板 / 缩略图 */
+  --rad-tab: 9px;
+  --rad-inset: 10px;
+  --rad-hero: 14px;
+  --rad-shot: 6px;
+
+  --ctl-h: 28px; --ctl-h-lg: 32px; --ctl-h-xl: 36px;
+
+  /* —— 青空浅 —— */
+  --canvas: #edf3fb;
+  --paper: #f9fbfe;
+  --raise: #ffffff;
+  --ink: #1b2740;
+  --ink-2: #5a6780;
+  --ink-3: #68758a;
+  --line: rgba(27, 39, 64, 0.12);
+  --line-2: rgba(27, 39, 64, 0.06);
+
+  --accent: #4f6bff;
+  --accent-hover: #3d57e6;
+  --accent-soft: rgba(79, 107, 255, 0.08);
+  --accent-ring: rgba(79, 107, 255, 0.35);
+  --accent-line: rgba(79, 107, 255, 0.35);
+  --btn-primary-bg: var(--accent);
+  --btn-primary-hover: var(--accent-hover);
+  --control-on: var(--accent);
+  --on-accent: #fff;
+  --danger: #b3261e; --danger-soft: rgba(179, 38, 30, 0.1);
+  --warn: #9a6400;   --warn-soft: rgba(154, 100, 0, 0.1);
+  --success: #2e7d5b; --success-soft: rgba(46, 125, 91, 0.1);
+
+  --bg-content: var(--raise);
+  --bg-sidebar: rgba(237, 243, 251, 0.72);
+  --bg-toolbar: rgba(249, 251, 254, 0.86);
+
+  --text: var(--ink); --text-2: var(--ink-2); --text-3: var(--ink-3);
+  --separator: var(--line); --separator-soft: var(--line-2);
+
+  --fill: rgba(27, 39, 64, 0.045);
+  --fill-strong: rgba(27, 39, 64, 0.08);
+  --row-hover: rgba(27, 39, 64, 0.03);
+
+  --shadow-pop: 0 10px 30px rgba(27, 39, 64, 0.14), 0 1px 3px rgba(27, 39, 64, 0.1);
+  --shadow-btn: 0 1px 2px rgba(27, 39, 64, 0.18);
+  --shadow-seg: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
+  --scroll-thumb: rgba(27, 39, 64, 0.18);
+
+  /* ★ 分段导航 */
+  --seg-track: rgba(27, 39, 64, 0.055);
+  --seg-thumb: #ffffff;
+  --seg-thumb-ring: rgba(27, 39, 64, 0.1);
+  --seg-thumb-shadow: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
+  --seg-ink: var(--text-2);
+  --seg-ink-on: var(--text);
+
+  /* ★ Bento 卡片（默认 / 在用） */
+  --bento-bg: #ffffff;
+  --bento-border: rgba(27, 39, 64, 0.075);
+  --bento-border-on: rgba(79, 107, 255, 0.34);
+  --bento-glow: rgba(79, 107, 255, 0.1);
+  --bento-bg-on: rgba(79, 107, 255, 0.035);
+  --bento-shadow: 0 1px 2px rgba(27, 39, 64, 0.045);
+  --bento-shadow-on: 0 2px 12px rgba(79, 107, 255, 0.1), 0 1px 2px rgba(27, 39, 64, 0.05);
+
+  /* ★ 本机总览看板 */
+  --hero-bg: linear-gradient(180deg, rgba(79, 107, 255, 0.075), rgba(79, 107, 255, 0) 68%), var(--raise);
+  --hero-border: rgba(79, 107, 255, 0.16);
+
+  /* ★ 仪表 / 多段占用条 */
+  --meter-track: rgba(27, 39, 64, 0.065);
+  --meter-a: #4f6bff;
+  --meter-b: #2f9e8f;
+  --meter-c: #b06bd0;
+  --meter-muted: rgba(27, 39, 64, 0.28);
+  --meter-gap: var(--raise);
+
+  /* ★ Inset 分组列表 */
+  --inset-bg: #ffffff;
+  --inset-line: var(--separator-soft);
+
+  /* ★ 主题缩略图（同时展示三套主题，颜色只能来自注册表，见 themes.ts） */
+  --shot-canvas: #edf3fb;
+  --shot-paper: #f9fbfe;
+  --shot-ink: #1b2740;
+  --shot-accent: #4f6bff;
+}
+
+html[data-theme='light'] { color-scheme: light; }
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --canvas: #0a0c10;
+  --paper: #111419;
+  --raise: #181c23;
+  --ink: #ecf1fa;
+  --ink-2: #a9b4c6;
+  --ink-3: #8591a5;
+  --line: rgba(236, 241, 250, 0.13);
+  --line-2: rgba(236, 241, 250, 0.07);
+
+  --accent: #7d93ff;
+  --accent-hover: #94a6ff;
+  --accent-soft: rgba(125, 147, 255, 0.16);
+  --accent-ring: rgba(125, 147, 255, 0.42);
+  --accent-line: rgba(125, 147, 255, 0.42);
+  /* ★ 深色强调色上白字只有 2.8:1：主按钮实心底单独加深，白字回到 5.0:1 */
+  --btn-primary-bg: #4c62c9;
+  --btn-primary-hover: #5b71d8;
+  --danger: #e6675a; --danger-soft: rgba(230, 103, 90, 0.14);
+  --warn: #d9a441;   --warn-soft: rgba(217, 164, 65, 0.14);
+  --success: #6fbf8b; --success-soft: rgba(111, 191, 139, 0.14);
+
+  --bg-content: var(--raise);
+  --bg-sidebar: rgba(10, 12, 16, 0.92);
+  --bg-toolbar: rgba(17, 20, 25, 0.86);
+
+  --text: var(--ink); --text-2: var(--ink-2); --text-3: var(--ink-3);
+  --separator: var(--line); --separator-soft: var(--line-2);
+
+  --fill: rgba(236, 241, 250, 0.06);
+  --fill-strong: rgba(236, 241, 250, 0.11);
+  --row-hover: rgba(236, 241, 250, 0.04);
+
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --scroll-thumb: rgba(236, 241, 250, 0.2);
+
+  --seg-track: rgba(236, 241, 250, 0.075);
+  --seg-thumb: #262c36;
+  --seg-thumb-ring: rgba(236, 241, 250, 0.11);
+  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --seg-ink: var(--text-2);
+  --seg-ink-on: var(--text);
+
+  --bento-bg: #171b22;
+  --bento-border: rgba(236, 241, 250, 0.085);
+  --bento-border-on: rgba(125, 147, 255, 0.46);
+  --bento-glow: rgba(125, 147, 255, 0.13);
+  --bento-bg-on: rgba(125, 147, 255, 0.055);
+  --bento-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --bento-shadow-on: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(125, 147, 255, 0.08);
+
+  --hero-bg: linear-gradient(180deg, rgba(125, 147, 255, 0.1), rgba(125, 147, 255, 0) 70%), var(--raise);
+  --hero-border: rgba(125, 147, 255, 0.22);
+
+  --meter-track: rgba(236, 241, 250, 0.085);
+  --meter-a: #7d93ff;
+  --meter-b: #45c0ad;
+  --meter-c: #c07fe0;
+  --meter-muted: rgba(236, 241, 250, 0.3);
+  --meter-gap: #111419;
+
+  --inset-bg: #1a1f27;
+  --inset-line: rgba(236, 241, 250, 0.07);
+}
+
+html[data-theme='mincho'] {
+  color-scheme: light;
+  --canvas: #f1f3f0;
+  --paper: #fafaf8;
+  --raise: #ffffff;
+  --ink: #15181b;
+  --ink-2: #5e6468;
+  --ink-3: #666c70;
+  --line: rgba(21, 24, 27, 0.12);
+  --line-2: rgba(21, 24, 27, 0.06);
+
+  --accent: #c8412d;
+  --accent-hover: #b03524;
+  --accent-soft: rgba(200, 65, 45, 0.07);
+  --accent-ring: rgba(200, 65, 45, 0.32);
+  --accent-line: rgba(200, 65, 45, 0.35);
+  --on-accent: #fff;
+  --danger: #9e2318;  --danger-soft: rgba(158, 35, 24, 0.09);
+  --warn: #8a5a00;    --warn-soft: rgba(138, 90, 0, 0.1);
+  --success: #2e6b45; --success-soft: rgba(46, 107, 69, 0.09);
+
+  --bg-content: var(--raise);
+  --bg-sidebar: rgba(241, 243, 240, 0.72);
+  --bg-toolbar: rgba(250, 250, 248, 0.86);
+
+  --text: var(--ink); --text-2: var(--ink-2); --text-3: var(--ink-3);
+  --separator: var(--line); --separator-soft: var(--line-2);
+
+  --fill: rgba(21, 24, 27, 0.045);
+  --fill-strong: rgba(21, 24, 27, 0.08);
+  --row-hover: rgba(21, 24, 27, 0.03);
+
+  --shadow-pop: 0 10px 30px rgba(21, 24, 27, 0.14), 0 1px 3px rgba(21, 24, 27, 0.1);
+  --shadow-btn: 0 1px 2px rgba(21, 24, 27, 0.18);
+  --shadow-seg: 0 1px 2px rgba(21, 24, 27, 0.1), 0 0 0 0.5px rgba(21, 24, 27, 0.04);
+  --scroll-thumb: rgba(21, 24, 27, 0.18);
+
+  --seg-track: rgba(21, 24, 27, 0.055);
+  --seg-thumb: #ffffff;
+  --seg-thumb-ring: rgba(21, 24, 27, 0.13);
+  --seg-thumb-shadow: 0 1px 2px rgba(21, 24, 27, 0.1), 0 0 0 0.5px rgba(21, 24, 27, 0.04);
+  --seg-ink: var(--text-2);
+  --seg-ink-on: var(--text);
+
+  --bento-bg: #ffffff;
+  --bento-border: rgba(21, 24, 27, 0.09);
+  --bento-border-on: rgba(200, 65, 45, 0.3);
+  --bento-glow: rgba(200, 65, 45, 0.07);
+  --bento-bg-on: rgba(200, 65, 45, 0.028);
+  --bento-shadow: 0 1px 2px rgba(21, 24, 27, 0.05);
+  --bento-shadow-on: 0 2px 10px rgba(200, 65, 45, 0.08), 0 1px 2px rgba(21, 24, 27, 0.05);
+
+  --hero-bg: linear-gradient(180deg, rgba(200, 65, 45, 0.055), rgba(200, 65, 45, 0) 66%), var(--raise);
+  --hero-border: rgba(200, 65, 45, 0.16);
+
+  --meter-track: rgba(21, 24, 27, 0.06);
+  --meter-a: #c8412d;
+  --meter-b: #4a6b64;
+  --meter-c: #a08a6a;
+  --meter-muted: rgba(21, 24, 27, 0.26);
+  --meter-gap: #fafaf8;
+
+  --inset-bg: #ffffff;
+  --inset-line: var(--separator-soft);
+
+  --font-cue: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  line-height: 1.38;
+  color: var(--text);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+  padding: var(--sp-6);
+}
+html[data-theme='dark'] body { background: #06070a; }
+
+/* ---------- 评审用的控制条（截图时用 ?chrome=0 隐藏） ---------- */
+.mockbar {
+  max-width: 1360px;
+  margin: 0 auto var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-label);
+  color: var(--text-3);
+  flex-wrap: wrap;
+}
+.mockbar h1 { font-size: var(--fs-label); font-weight: 600; margin: 0; color: var(--text-2); letter-spacing: .02em; }
+.mockbar .sep { opacity: .45; }
+.mockbar button {
+  font: inherit; font-size: var(--fs-label);
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--separator);
+  border-radius: var(--rad-control);
+  height: 24px; padding: 0 var(--sp-2);
+}
+.mockbar button.on { color: var(--on-accent); background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); }
+
+/* ---------- 窗口骨架 ---------- */
+.frame {
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  background: var(--paper);
+  border: 1px solid var(--separator);
+  border-radius: var(--rad-panel);
+  overflow: hidden;
+  box-shadow: var(--shadow-pop);
+}
+.sidebar {
+  width: 236px;
+  flex: 0 0 236px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--separator);
+  padding: 46px var(--sp-3) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sb-brand { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2) var(--sp-3); }
+.brand-mark {
+  width: 24px; height: 24px; border-radius: var(--rad-control);
+  background: var(--btn-primary-bg); color: var(--on-accent);
+  display: grid; place-items: center; font-size: 12px; font-weight: 700;
+}
+.brand-name { font-size: var(--fs-ui); font-weight: 600; }
+.brand-sub { font-size: 11px; color: var(--text-3); }
+.sb-label { font-size: 11px; font-weight: 600; color: var(--text-3); padding: var(--sp-2) var(--sp-2) var(--sp-1); letter-spacing: .04em; }
+.sb-item {
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: 28px; padding: 0 var(--sp-2);
+  border-radius: var(--rad-control);
+  font-size: var(--fs-ui); color: var(--text-2);
+}
+.sb-item .ico { width: 16px; display: grid; place-items: center; color: var(--text-3); }
+.sb-item.on { background: var(--accent-soft); color: var(--text); font-weight: 500; }
+.sb-item.on .ico { color: var(--accent); }
+.sb-item .kbd { margin-left: auto; font-size: 11px; color: var(--text-3); }
+.sb-foot { margin-top: auto; padding: var(--sp-2); font-size: 11px; color: var(--text-3); }
+
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--paper); }
+.toolbar {
+  height: 44px; flex: 0 0 44px;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--sp-5);
+  border-bottom: 1px solid var(--separator);
+  background: var(--bg-toolbar);
+  font-size: var(--fs-ui); color: var(--text-2);
+}
+.toolbar b { font-weight: 600; color: var(--text); }
+.tb-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 var(--sp-2);
+  border-radius: var(--rad-control);
+  background: var(--fill); color: var(--text-2); font-size: var(--fs-label);
+}
+.scroll { flex: 1; min-height: 0; overflow: auto; }
+.page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: var(--sp-8) var(--sp-10) var(--sp-16);
+}
+
+/* ---------- 页头 ---------- */
+.page-head { margin: 0 0 var(--sp-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-5); }
+.page-title { margin: 0; font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 600; letter-spacing: -0.015em; }
+.page-sub { margin: 6px 0 0; font-size: var(--fs-body); line-height: var(--lh-body); color: var(--text-2); }
+.head-meta { display: flex; align-items: center; gap: 6px; font-size: var(--fs-label); color: var(--text-3); padding-top: 3px; white-space: nowrap; }
+.head-key { padding: 1px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg-content); font-size: 11.5px; line-height: 16px; }
+
+/* ---------- 页签（★ 分段导航） ---------- */
+.tabs {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: var(--sp-3);
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-2) 0 var(--sp-3);
+  background: var(--paper);
+  border-bottom: 1px solid var(--separator-soft);
+}
+.tablist {
+  display: inline-flex; gap: 2px;
+  padding: 3px;
+  border-radius: var(--rad-tab);
+  background: var(--seg-track);
+  box-shadow: inset 0 0 0 1px var(--separator-soft);
+}
+.tab {
+  appearance: none; border: 0; background: transparent;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 var(--sp-3);
+  border-radius: var(--rad-control);
+  font: inherit; font-size: var(--fs-ui);
+  color: var(--seg-ink);
+  white-space: nowrap;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.tab .ico { color: currentColor; opacity: .75; display: grid; place-items: center; }
+.tab:hover { color: var(--seg-ink-on); }
+.tab[aria-selected='true'] {
+  background: var(--seg-thumb);
+  color: var(--seg-ink-on);
+  font-weight: 500;
+  box-shadow: var(--seg-thumb-shadow), inset 0 0 0 1px var(--seg-thumb-ring);
+}
+.tab[aria-selected='true'] .ico { opacity: 1; color: var(--accent); }
+.tab-badge {
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: var(--rad-control);
+  background: var(--fill-strong); color: var(--text-2);
+  font-size: 11px; line-height: 16px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.tab[aria-selected='true'] .tab-badge { background: var(--accent-soft); color: var(--accent); }
+.tabs .hint { margin-left: auto; font-size: var(--fs-label); color: var(--text-3); }
+
+/* ---------- 通用小组件 ---------- */
+.pane { display: none; }
+.pane.on { display: block; }
+.section + .section { margin-top: var(--sp-8); }
+.sec-head { display: flex; align-items: flex-end; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+.sec-title { font-size: var(--fs-heading); font-weight: 600; line-height: var(--lh-heading); }
+.sec-desc { font-size: var(--fs-label); color: var(--text-2); line-height: 1.55; margin-top: 2px; max-width: 620px; }
+.sec-meta { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); color: var(--text-3); white-space: nowrap; }
+
+.btn {
+  appearance: none; border: 1px solid var(--line); height: var(--ctl-h);
+  padding: 0 11px; border-radius: var(--rad-control);
+  font: inherit; font-size: var(--fs-ui); display: inline-flex; align-items: center; gap: 5px;
+  background: var(--raise); color: var(--text); white-space: nowrap;
+}
+.btn.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--on-accent); font-weight: 500; box-shadow: var(--shadow-btn); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--fill); color: var(--text); }
+.btn.danger { color: var(--danger); }
+.btn.sm { height: 24px; font-size: var(--fs-label); padding: 0 var(--sp-2); }
+.btn .ico { display: grid; place-items: center; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 var(--sp-2);
+  border-radius: var(--rad-control);
+  background: var(--fill); color: var(--text-2);
+  font-size: var(--fs-label); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chip b { color: var(--text); font-weight: 600; }
+.chip.ok { background: var(--success-soft); color: var(--success); }
+.chip.ok b { color: var(--success); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.accent { background: var(--accent-soft); color: var(--accent); }
+.chip.mono { font-family: var(--font-mono); font-size: 12px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block; }
+.dot.off { background: var(--warn); }
+.dot.idle { background: var(--text-3); }
+
+/* 开关 */
+.switch { appearance: none; width: 30px; height: 18px; border-radius: 4px; border: 0; background: var(--fill-strong); position: relative; padding: 0; flex: 0 0 30px; }
+.switch .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+.switch.on { background: var(--control-on); }
+.switch.on .knob { transform: translateX(12px); }
+
+/* 分段小控件 */
+.seg { display: inline-flex; background: var(--fill); border-radius: var(--rad-control); padding: 2px; gap: 2px; }
+.seg button { appearance: none; border: 0; background: transparent; font: inherit; font-size: var(--fs-label); height: 22px; padding: 0 var(--sp-2); border-radius: var(--rad-control); color: var(--text-2); }
+.seg button.on { background: var(--raise); color: var(--text); box-shadow: var(--shadow-seg), inset 0 0 0 1px var(--separator-soft); font-weight: 500; }
+
+/* ============================================================
+   本机总览看板（★）
+   ============================================================ */
+.hero {
+  border: 1px solid var(--hero-border);
+  border-radius: var(--rad-hero);
+  background: var(--hero-bg);
+  box-shadow: var(--bento-shadow);
+  overflow: hidden;
+}
+.hero-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: var(--sp-8); padding: var(--sp-5) var(--sp-6) var(--sp-5); }
+.hero-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--text-3); display: flex; align-items: center; gap: 6px; }
+.hero-device { display: flex; align-items: baseline; gap: var(--sp-2); margin-top: var(--sp-2); }
+.hero-device b { font-size: var(--fs-hero); line-height: var(--lh-hero); font-weight: 600; letter-spacing: -0.02em; }
+.hero-device span { font-size: var(--fs-ui); color: var(--text-2); }
+.hero-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--sp-3); }
+.hero-cpu { display: flex; gap: var(--sp-5); margin-top: var(--sp-4); }
+.stat { min-width: 92px; }
+.stat .k { font-size: 11px; color: var(--text-3); }
+.stat .v { font-size: var(--fs-ui); font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.stat .v.mono { font-family: var(--font-mono); font-size: var(--fs-label); }
+
+.usage { min-width: 0; display: flex; flex-direction: column; }
+
+.usage-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
+.usage-top .k { font-size: var(--fs-label); color: var(--text-2); }
+.usage-top .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.usage-top .v small { font-size: 11px; font-weight: 500; color: var(--text-3); margin-left: 3px; }
+.meter { display: flex; gap: 2px; height: 9px; margin-top: var(--sp-3); }
+.meter span { display: block; height: 100%; border-radius: 2px; }
+.meter .a { background: var(--meter-a); }
+.meter .b { background: var(--meter-b); }
+.meter .c { background: var(--meter-c); }
+.meter .empty { background: var(--meter-track); border-radius: 2px; }
+.meter .empty.dashed {
+  background: repeating-linear-gradient(135deg, var(--meter-track) 0 4px, transparent 4px 8px);
+  box-shadow: inset 0 0 0 1px var(--separator-soft);
+}
+.legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-3); }
+.legend .item { display: flex; align-items: center; gap: 6px; font-size: var(--fs-label); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.legend .sw { width: 7px; height: 7px; border-radius: 2px; }
+.legend .sw.a { background: var(--meter-a); }
+.legend .sw.b { background: var(--meter-b); }
+.legend .sw.c { background: var(--meter-c); }
+.legend .sw.none { box-shadow: inset 0 0 0 1px var(--separator); }
+.legend .item.muted { color: var(--text-3); }
+
+.hero-foot { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-6); border-top: 1px solid var(--hero-border); background: var(--raise); }
+.hero-foot .note { font-size: var(--fs-label); color: var(--text-3); margin-left: auto; }
+
+/* ============================================================
+   Bento 引擎卡片（★）
+   ============================================================ */
+.bento { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.engine {
+  position: relative;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--bento-border);
+  border-radius: var(--rad-card);
+  background: var(--bento-bg);
+  box-shadow: var(--bento-shadow);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.engine.on { border-color: var(--bento-border-on); background: var(--bento-bg-on); box-shadow: var(--bento-shadow-on); }
+.engine.dim { opacity: .88; }
+.engine-body { padding: var(--sp-4) var(--sp-4) var(--sp-3); display: flex; flex-direction: column; flex: 1; }
+.eng-top { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.eng-id { min-width: 0; flex: 1; }
+.eng-name { display: flex; align-items: center; gap: 7px; font-size: var(--fs-heading); font-weight: 600; line-height: var(--lh-heading); }
+.eng-purpose { font-size: var(--fs-label); color: var(--text-3); margin-top: 3px; }
+.eng-badges { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.tag-live {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 20px; padding: 0 7px;
+  border-radius: var(--rad-control);
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+}
+.tag-live .pulse { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.caps { margin-top: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
+.cap { display: grid; grid-template-columns: 52px minmax(0, 1fr) 96px; align-items: center; gap: var(--sp-2); }
+.cap .k { font-size: 11px; color: var(--text-3); }
+.cap .bar { height: 4px; border-radius: 2px; background: var(--meter-track); overflow: hidden; }
+.cap .bar i { display: block; height: 100%; border-radius: 2px; background: var(--meter-a); }
+.cap .bar i.muted { background: var(--meter-muted); }
+.cap .v { font-size: 11px; color: var(--text-2); text-align: right; font-variant-numeric: tabular-nums; }
+.cap .v b { font-weight: 600; color: var(--text); }
+.eng-note { margin-top: var(--sp-3); font-size: var(--fs-label); color: var(--text-3); line-height: 1.5; }
+
+.eng-foot {
+  margin-top: auto;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--separator-soft);
+  min-height: 44px;
+}
+.eng-foot .size { font-size: var(--fs-label); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.eng-foot .size b { color: var(--text-2); font-weight: 500; }
+.eng-foot .spacer { margin-left: auto; }
+.detail-btn {
+  appearance: none; border: 0; background: transparent;
+  font: inherit; font-size: var(--fs-label); color: var(--text-2);
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 6px; border-radius: var(--rad-control);
+}
+.detail-btn:hover { background: var(--fill); color: var(--text); }
+.detail-btn .chev { transition: transform var(--dur) var(--ease); display: grid; place-items: center; }
+.detail-btn.open .chev { transform: rotate(180deg); }
+
+.eng-detail {
+  display: none;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  border-top: 1px dashed var(--separator);
+  background: var(--fill);
+}
+.eng-detail.open { display: block; }
+.detail-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: var(--sp-2); padding: 3px 0; font-size: var(--fs-label); align-items: baseline; }
+.detail-row .k { color: var(--text-3); }
+.detail-row .v { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-row .v.mono { font-family: var(--font-mono); font-size: 12px; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--sp-2); }
+
+/* 卡内进度：贴底一整条，融合进卡片 */
+.eng-progress { padding: var(--sp-2) var(--sp-4) var(--sp-3); border-top: 1px solid var(--separator-soft); }
+.eng-progress .line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-label); color: var(--text-2); }
+.eng-progress .line b { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+.eng-progress .track { height: 3px; border-radius: 2px; background: var(--meter-track); margin-top: 6px; overflow: hidden; }
+.eng-progress .track i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.engine .edge-progress { position: absolute; inset: auto 0 0 0; height: 2px; background: var(--accent); opacity: .9; }
+
+/* 音色克隆横向特色卡（★） */
+.feature {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+  align-items: center; gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+  border: 1px solid var(--bento-border);
+  border-radius: var(--rad-card);
+  background: var(--bento-bg);
+  box-shadow: var(--bento-shadow);
+}
+.feature .what { display: flex; gap: var(--sp-3); min-width: 0; }
+.feature .glyph {
+  width: 34px; height: 34px; flex: 0 0 34px;
+  border-radius: var(--rad-control);
+  background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center;
+}
+.feature .flow { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.step {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 26px; padding: 0 7px;
+  border-radius: var(--rad-control);
+  background: var(--fill); color: var(--text-2); font-size: var(--fs-label);
+  white-space: nowrap;
+}
+.step b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.step .n { width: 15px; height: 15px; border-radius: 50%; background: var(--raise); box-shadow: inset 0 0 0 1px var(--separator); display: grid; place-items: center; font-size: 10px; color: var(--text-2); }
+.flow .arrow { color: var(--text-3); display: grid; place-items: center; }
+.feature .act { display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-2); }
+.feature .act .row { display: flex; gap: 6px; }
+
+/* ============================================================
+   外观：主题缩略图（★）
+   ============================================================ */
+.theme-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
+.theme-card {
+  appearance: none; text-align: left; font: inherit;
+  padding: var(--sp-2); border-radius: var(--rad-card);
+  border: 1px solid var(--bento-border);
+  background: var(--bento-bg);
+  box-shadow: var(--bento-shadow);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.theme-card.on { border-color: var(--bento-border-on); box-shadow: var(--bento-shadow-on); }
+.shot {
+  height: 116px; border-radius: var(--rad-shot); overflow: hidden;
+  border: 1px solid var(--separator-soft);
+  background: var(--shot-canvas);
+  display: flex;
+}
+.shot .rail { width: 44px; background: var(--shot-paper); border-right: 1px solid var(--shot-line, rgba(0,0,0,.08)); padding: 7px 5px; display: flex; flex-direction: column; gap: 4px; }
+.shot .rail i { display: block; height: 4px; border-radius: 2px; background: var(--shot-ink); opacity: .16; }
+.shot .rail i.on { background: var(--shot-accent); opacity: .85; }
+.shot { --shot-cue: var(--font-sans); }
+.shot .body { flex: 1; background: var(--shot-paper); padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+.shot .h { height: 6px; width: 46%; border-radius: 3px; background: var(--shot-ink); opacity: .55; }
+.shot .p { height: 4px; width: 78%; border-radius: 2px; background: var(--shot-ink); opacity: .16; }
+.shot .card { margin-top: 2px; flex: 1; border-radius: 4px; background: var(--shot-card, #fff); border: 1px solid var(--shot-line, rgba(0,0,0,.06)); padding: 5px; display: flex; flex-direction: column; gap: 4px; }
+.shot .b { height: 3px; width: 64%; border-radius: 2px; background: var(--shot-accent); opacity: .8; }
+.shot .b2 { height: 3px; width: 40%; border-radius: 2px; background: var(--shot-ink); opacity: .14; }
+.shot .cue { font-family: var(--shot-cue); font-size: 8.5px; color: var(--shot-ink); opacity: .7; line-height: 1.35; }
+.shot .btn { height: 9px; width: 26px; border-radius: 3px; background: var(--shot-accent); margin-top: auto; }
+.theme-meta { display: flex; align-items: flex-start; gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-1); }
+.theme-meta .tt { min-width: 0; }
+.theme-meta .nm { font-size: var(--fs-ui); font-weight: 600; }
+.theme-meta .ds { font-size: 11px; color: var(--text-3); line-height: 1.45; margin-top: 1px; }
+.theme-meta .pick { margin-left: auto; color: var(--accent); display: none; flex: 0 0 auto; }
+#curTheme { color: var(--text-2); font-weight: 600; }
+.theme-card.on .theme-meta .pick { display: block; }
+
+/* ============================================================
+   Inset 分组列表（★）
+   ============================================================ */
+.inset { border: 1px solid var(--inset-line); border-radius: var(--rad-inset); background: var(--inset-bg); overflow: hidden; }
+.inset-row { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--inset-line); min-height: 46px; }
+.inset-row:last-child { border-bottom: 0; }
+.inset-row .lab { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
+.inset-row .lab .t { font-size: var(--fs-ui); font-weight: 500; }
+.inset-row .lab .d { font-size: var(--fs-label); color: var(--text-3); line-height: 1.45; }
+.inset-row .ctl { flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-2); justify-content: flex-end; }
+.inset-row .ctl.grow { flex: 1 1 46%; min-width: 0; }
+.inset-row .ctl .path { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inset-note { padding: 0 var(--sp-4) var(--sp-3); font-size: var(--fs-label); color: var(--text-3); line-height: 1.55; }
+.field { height: var(--ctl-h-lg); border-radius: var(--rad-control); border: 1px solid var(--separator); background: var(--raise); display: flex; align-items: center; padding: 0 9px; font-size: var(--fs-ui); width: 100%; }
+.field.mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); }
+.field.faint { color: var(--text-3); background: var(--fill); border-color: transparent; }
+select.field { appearance: none; padding-right: 24px; background-image: none; }
+.select-wrap { position: relative; display: inline-flex; align-items: center; }
+.select-wrap .chev { position: absolute; right: 8px; color: var(--text-3); pointer-events: none; display: grid; place-items: center; }
+.disclosure { margin-top: var(--sp-2); }
+.disclosure > summary {
+  list-style: none; cursor: default; line-height: 1.5;
+  display: flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 var(--sp-2);
+  border-radius: var(--rad-control);
+  font-size: var(--fs-label); color: var(--text-2);
+}
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary:hover { background: var(--fill); color: var(--text); }
+.disclosure[open] > summary .chev { transform: rotate(180deg); }
+.disclosure > summary .sum-meta { margin-left: auto; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.disclosure > summary .chev { transition: transform var(--dur) var(--ease); display: grid; place-items: center; }
+.disclosure .inset { margin-top: 6px; }
+
+.advanced { margin-top: var(--sp-2); }
+.advanced .fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); }
+.advanced .fields label { display: flex; flex-direction: column; gap: var(--sp-1); }
+.advanced .fields .t { font-size: var(--fs-label); color: var(--text-2); }
+.advanced .fields .h { font-size: 11px; color: var(--text-3); }
+.advanced .foot { display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-4) var(--sp-3); }
+.advanced .foot .note { font-size: 11px; color: var(--text-3); margin-left: auto; }
+
+/* 说明 / 警示条 */
+.note-box { display: flex; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--rad-card); font-size: var(--fs-label); line-height: 1.55; background: var(--fill); color: var(--text-2); margin-top: var(--sp-2); }
+.note-box.warn { background: var(--warn-soft); color: var(--warn); }
+.note-box .ico { flex: 0 0 auto; margin-top: 1px; }
+.note-box b { font-weight: 600; }
+
+/* ============================================================
+   环境：指标卡 / 路径 / 日志
+   ============================================================ */
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+.metric {
+  border: 1px solid var(--bento-border); border-radius: var(--rad-card);
+  background: var(--bento-bg); box-shadow: var(--bento-shadow);
+  padding: var(--sp-3) var(--sp-4);
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0;
+}
+.metric .top { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); }
+.metric .top .ico { color: var(--text-3); }
+.metric .v { font-size: var(--fs-heading); font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.metric .v.mono { font-family: var(--font-mono); font-size: 13px; }
+.metric .sub { font-size: var(--fs-label); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric.warn { border-color: var(--warn); background: var(--warn-soft); }
+.metric.warn .v, .metric.warn .top { color: var(--warn); }
+
+.log-summary { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; font-size: var(--fs-label); color: var(--text-2); }
+.log-summary .path { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 300px; min-width: 0; }
+.log-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--inset-line); background: var(--fill); }
+.problems { margin: 0; padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--inset-line); font-family: var(--font-mono); font-size: 12px; line-height: 1.55; color: var(--text-2); max-height: 128px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.rawlog { margin: 0; padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--inset-line); font-family: var(--font-mono); font-size: 12px; line-height: 1.55; color: var(--text-2); max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; background: var(--fill); }
+
+.about { margin-top: var(--sp-10); padding-top: var(--sp-3); border-top: 1px solid var(--separator-soft); font-size: var(--fs-label); color: var(--text-3); text-align: center; }
+
+@media (max-width: 1120px) {
+  .tabs .hint { display: none; }
+  .hero-foot .note { display: none; }
+  .hero-foot { flex-wrap: wrap; }
+  .bento { grid-template-columns: minmax(0, 1fr); }
+  .hero-main { grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }
+  .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .feature { grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+  .feature .act { align-items: flex-start; }
+  .metrics { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  body { padding: var(--sp-2); }
+  .sidebar { display: none; }
+  .page { padding: var(--sp-5) var(--sp-4) var(--sp-10); }
+  .theme-grid { grid-template-columns: minmax(0, 1fr); }
+  .tabs { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-chip" viewBox="0 0 16 16"><rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.4"/><path d="M6.4 1.6v2.6M9.6 1.6v2.6M6.4 11.8v2.6M9.6 11.8v2.6M1.6 6.4h2.6M1.6 9.6h2.6M11.8 6.4h2.6M11.8 9.6h2.6"/></symbol>
+  <symbol id="i-swatch" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 2v12"/><path d="M8 8h6"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 16 16"><path d="M6.2 2.6 7.2 5.6 10.2 6.6 7.2 7.6 6.2 10.6 5.2 7.6 2.2 6.6 5.2 5.6z"/><path d="M11.6 9.4l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 16 16"><path d="M2.2 11.4a6 6 0 1 1 11.6 0"/><path d="M8 11.4 10.9 6.9"/><circle cx="8" cy="11.4" r="1.1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.8 4.6a1.4 1.4 0 0 1 1.4-1.4h2.6l1.4 1.6h5.6a1.4 1.4 0 0 1 1.4 1.4v5.4a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.1 6.3a5.5 5.5 0 1 0 .1 3.4"/><path d="M13.4 2.8v3.7H9.7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 16 16"><path d="M3.5 6 8 10.5 12.5 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.4 6.3 11.7 13 5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 16 16"><path d="M8 2.6v8.4"/><path d="M5.2 8.4 8 11.2l2.8-2.8"/><path d="M2.6 13.4h10.8"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 16 16"><path d="M1.5 8h1.2"/><path d="M4.2 5.4v5.2"/><path d="M6.6 3.2v9.6"/><path d="M9 6v4"/><path d="M11.4 4.2v7.6"/><path d="M13.8 6.6v2.8"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 16 16"><rect x="6" y="1.8" width="4" height="7.2" rx="2"/><path d="M3.6 7.4a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8v2.4"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 16 16"><path d="M9.2 1.8H4.5A1.5 1.5 0 0 0 3 3.3v9.4a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5V5.3z"/><path d="M9.2 1.8v3.5H13"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 4.4v4.2"/><circle cx="8" cy="11.4" r=".85" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.4" y="5.4" width="8" height="8" rx="1.4"/><path d="M10.6 5.4V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.6a1.4 1.4 0 0 0 1.4 1.4h1.8"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10"/><path d="M9.4 4.4 13 8l-3.6 3.6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="4.2"/><circle cx="8" cy="8" r="1.7"/><path d="M8 1.2v2.6M8 12.2v2.6M14.8 8h-2.6M3.8 8H1.2M12.8 3.2l-1.9 1.9M5.1 10.9l-1.9 1.9M12.8 12.8l-1.9-1.9M5.1 5.1 3.2 3.2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 16 16"><path d="M2 4h1.6"/><path d="M2 8h1.6"/><path d="M2 12h1.6"/><path d="M6 4h8"/><path d="M6 8h8"/><path d="M6 12h4"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 16 16"><path d="M8 10.4V2"/><path d="M5.2 4.8 8 2l2.8 2.8"/><path d="M2.6 11.4v1.2a1.4 1.4 0 0 0 1.4 1.4h8a1.4 1.4 0 0 0 1.4-1.4v-1.2"/></symbol>
+  <symbol id="i-target" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.2"/><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></symbol>
+</defs></svg>
+
+<div class="mockbar" id="mockbar">
+  <h1>设置页重构 · 静态高保真稿</h1>
+  <span class="sep">/</span>
+  <span>主题</span>
+  <button data-mock-theme="light">青空浅</button>
+  <button data-mock-theme="dark">青空深</button>
+  <button data-mock-theme="mincho">明朝墨</button>
+  <span class="sep">/</span>
+  <span>状态</span>
+  <button data-state="details">展开详情</button>
+  <button data-state="download">下载中</button>
+  <span class="sep">/</span>
+  <span id="mockhint"></span>
+</div>
+
+<div class="frame">
+  <aside class="sidebar">
+    <div class="sb-brand">
+      <span class="brand-mark">K</span>
+      <div><div class="brand-name">KikuSub</div><div class="brand-sub">字幕工作台</div></div>
+    </div>
+    <div class="sb-label">工作区</div>
+    <div class="sb-item"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download"/></svg></span>导入<span class="kbd">⌘1</span></div>
+    <div class="sb-item"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-wave"/></svg></span>转写<span class="kbd">⌘2</span></div>
+    <div class="sb-item"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-list"/></svg></span>核对台<span class="kbd">⌘3</span></div>
+    <div class="sb-item"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-target"/></svg></span>AI 优化<span class="kbd">⌘4</span></div>
+    <div class="sb-item"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-upload"/></svg></span>导出<span class="kbd">⌘5</span></div>
+    <div class="sb-item"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg></span>提示词<span class="kbd">⌘6</span></div>
+    <div class="sb-item on"><span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><use href="#i-gear"/></svg></span>设置<span class="kbd">⌘,</span></div>
+    <div class="sb-foot">所有音频与模型都在本机处理</div>
+  </aside>
+
+  <main class="content">
+    <div class="toolbar">
+      <b>KikuSub</b><span>拖入即用</span>
+      <span class="tb-pill"><span class="dot"></span>Whisper · 对话通稿</span>
+    </div>
+
+    <div class="scroll">
+      <div class="page">
+        <header class="page-head">
+          <div>
+            <h1 class="page-title">设置</h1>
+            <p class="page-sub">引擎与模型、外观与朗读、AI 与技能、环境与诊断。</p>
+          </div>
+          <div class="head-meta">
+            <span>4 / 4 个引擎已就绪</span><span>·</span><span>2 个已启用</span>
+            <kbd class="head-key">⌘,</kbd>
+          </div>
+        </header>
+
+        <!-- ============ 分段导航 ============ -->
+        <nav class="tabs" role="tablist" aria-label="设置分区">
+          <div class="tablist">
+            <button class="tab" role="tab" aria-selected="true" data-tab="engines">
+              <span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg></span>
+              引擎与模型
+              <span class="tab-badge">4</span>
+            </button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="appearance">
+              <span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-swatch"/></svg></span>
+              外观与朗读
+            </button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="ai">
+              <span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sparkle"/></svg></span>
+              AI 与技能
+            </button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="env">
+              <span class="ico"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-gauge"/></svg></span>
+              环境与诊断
+            </button>
+          </div>
+          <span class="hint">← → 可切换页签</span>
+        </nav>
+
+        <!-- ============================================================
+             页签 1：引擎与模型
+             ============================================================ -->
+        <section class="pane on" id="pane-engines" role="tabpanel">
+
+          <!-- 本机总览看板 -->
+          <div class="hero">
+            <div class="hero-main">
+              <div>
+                <div class="hero-eyebrow">
+                  <span class="dot"></span>本机推理就绪
+                </div>
+                <div class="hero-device">
+                  <b>Apple Silicon</b><span>arm64 · MPS 加速</span>
+                </div>
+                <div class="hero-chips">
+                  <span class="chip ok"><b>MPS</b> 可用</span>
+                  <span class="chip">Python <b>3.12.8</b></span>
+                  <span class="chip">ffmpeg <b>9.0.2</b></span>
+                  <span class="chip">v0.3.0</span>
+                </div>
+                <div class="hero-cpu">
+                  <div class="stat"><div class="k">已就绪引擎</div><div class="v">4 / 4</div></div>
+                  <div class="stat"><div class="k">已启用</div><div class="v">2 个</div></div>
+                  <div class="stat"><div class="k">模型目录</div><div class="v mono">…/KikuSub/models</div></div>
+                </div>
+              </div>
+
+              <div class="usage">
+                <div class="usage-top">
+                  <span class="k">模型占用</span>
+                  <span class="v">8.1 <small>GB</small></span>
+                </div>
+                <div class="meter" role="img" aria-label="日语 6.6 GB，中文 1.5 GB，音色克隆未安装">
+                  <span class="a" style="flex: 6600"></span>
+                  <span class="b" style="flex: 1529"></span>
+                  <span class="empty dashed" style="flex: 1200"></span>
+                </div>
+                <div class="legend">
+                  <span class="item"><i class="sw a"></i>日语 6.6 GB</span>
+                  <span class="item"><i class="sw b"></i>中文 1.5 GB</span>
+                  <span class="item muted"><i class="sw none"></i>音色克隆 未安装</span>
+                </div>
+
+              </div>
+            </div>
+            <div class="hero-foot">
+              <button class="btn primary"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download"/></svg></span>运行首次配置…</button>
+              <button class="btn"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg></span>重新检测</button>
+              <button class="btn ghost"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg></span>打开模型根目录</button>
+              <span class="note">按目录实测 · 上次检测：刚刚</span>
+            </div>
+          </div>
+
+          <!-- 日语主力引擎 -->
+          <div class="section" style="margin-top:var(--sp-8)">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">日语主力引擎</div>
+                <div class="sec-desc">两个都已就绪，按内容性质二选一；启用的引擎会出现在顶部切换栏。指标为本机实测，内存条越短越省。</div>
+              </div>
+              <div class="sec-meta">2 个已安装 · Qwen3 在用</div>
+            </div>
+
+            <div class="bento">
+              <!-- Anime Whisper -->
+              <article class="engine" data-card="whisper">
+                <div class="engine-body">
+                  <div class="eng-top">
+                    <div class="eng-id">
+                      <div class="eng-name"><span class="dot"></span>Anime Whisper</div>
+                      <div class="eng-purpose">对话通稿 · 自然断句</div>
+                    </div>
+                    <div class="eng-badges">
+                      <label class="switch on" role="switch" aria-checked="true" aria-label="启用 Anime Whisper"><span class="knob"></span></label>
+                    </div>
+                  </div>
+                  <div class="caps">
+                    <div class="cap"><span class="k">速度</span><span class="bar"><i style="width:46%"></i></span><span class="v"><b>0.14×</b></span></div>
+                    <div class="cap"><span class="k">时间轴</span><span class="bar"><i style="width:27%"></i></span><span class="v">±1.35s</span></div>
+                    <div class="cap"><span class="k">内存</span><span class="bar"><i class="muted" style="width:100%"></i></span><span class="v">6.7 GB</span></div>
+                  </div>
+                  <div class="eng-note">日常对话、长片通稿首选；带幻觉门控与短句复核。</div>
+                </div>
+                <div class="eng-foot">
+                  <span class="size">已安装 <b>2.8 GB</b></span>
+                  <span class="spacer"></span>
+                  <button class="detail-btn" data-detail="whisper">
+                    详情
+                    <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                  </button>
+                </div>
+                <div class="eng-detail" data-detail-panel="whisper">
+                  <div class="detail-row"><span class="k">模型目录</span><span class="v mono">~/Library/Application Support/KikuSub/models/anime-whisper</span></div>
+                  <div class="detail-row"><span class="k">HF 仓库</span><span class="v mono">litagin/anime-whisper</span></div>
+                  <div class="detail-row"><span class="k">必需文件</span><span class="v mono">model.safetensors</span></div>
+                  <div class="detail-row"><span class="k">备注</span><span class="v">实测转写峰值内存约 6.7 GB（fp32 权重 + MPS fp16 副本）。</span></div>
+                  <div class="detail-actions">
+                    <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg></span>打开目录</button>
+                    <button class="btn sm ghost">在访达中显示</button>
+                    <button class="btn sm ghost">校验 / 补齐</button>
+                  </div>
+                </div>
+              </article>
+
+              <!-- Qwen3-ASR -->
+              <article class="engine on" data-card="qwen">
+                <div class="engine-body">
+                  <div class="eng-top">
+                    <div class="eng-id">
+                      <div class="eng-name"><span class="dot"></span>Qwen3-ASR + CTC</div>
+                      <div class="eng-purpose">逐字对齐 · 精准时间轴</div>
+                    </div>
+                    <div class="eng-badges">
+                      <span class="tag-live"><span class="pulse"></span>在用</span>
+                      <label class="switch on" role="switch" aria-checked="true" aria-label="启用 Qwen3-ASR"><span class="knob"></span></label>
+                    </div>
+                  </div>
+                  <div class="caps">
+                    <div class="cap"><span class="k">速度</span><span class="bar"><i style="width:100%"></i></span><span class="v"><b>0.07×</b></span></div>
+                    <div class="cap"><span class="k">时间轴</span><span class="bar"><i style="width:90%"></i></span><span class="v">±0.36s</span></div>
+                    <div class="cap"><span class="k">内存</span><span class="bar"><i class="muted" style="width:76%"></i></span><span class="v">5.1 GB</span></div>
+                  </div>
+                  <div class="eng-note">CTC 对齐头给出逐字发声时间；830 秒素材约 54 秒转完。</div>
+                </div>
+                <div class="eng-foot">
+                  <span class="size">已安装 <b>3.8 GB</b></span>
+                  <span class="spacer"></span>
+                  <button class="detail-btn" data-detail="qwen">
+                    详情
+                    <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                  </button>
+                </div>
+                <div class="eng-detail" data-detail-panel="qwen">
+                  <div class="detail-row"><span class="k">模型目录</span><span class="v mono">~/Library/Application Support/KikuSub/models/qwen3-asr-ja-anime</span></div>
+                  <div class="detail-row"><span class="k">HF 仓库</span><span class="v mono">jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf</span></div>
+                  <div class="detail-row"><span class="k">必需文件</span><span class="v mono">config.json · ctc_aligner_jav_vocalisation_v3.pt</span></div>
+                  <div class="detail-row"><span class="k">备注</span><span class="v">起点误差 p90 0.36s；实测峰值内存 5.1 GB，比 Anime Whisper 更低。</span></div>
+                  <div class="detail-actions">
+                    <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg></span>打开目录</button>
+                    <button class="btn sm ghost">在访达中显示</button>
+                    <button class="btn sm ghost">校验 / 补齐</button>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <!-- 中文可选引擎 -->
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">中文可选引擎</div>
+                <div class="sec-desc">按需下载、默认停用；两个都跑 ONNX · CPU，不占显存。中文侧内存按权重口径，越短越省。</div>
+              </div>
+              <div class="sec-meta">2 个已安装 · 均停用</div>
+            </div>
+
+            <div class="bento">
+              <!-- SenseVoice -->
+              <article class="engine dim" data-card="sensevoice">
+                <div class="engine-body">
+                  <div class="eng-top">
+                    <div class="eng-id">
+                      <div class="eng-name"><span class="dot idle"></span>SenseVoice-Small</div>
+                      <div class="eng-purpose">中文通稿 · 轻量快速</div>
+                    </div>
+                    <div class="eng-badges">
+                      <label class="switch" role="switch" aria-checked="false" aria-label="启用 SenseVoice-Small"><span class="knob"></span></label>
+                    </div>
+                  </div>
+                  <div class="caps">
+                    <div class="cap"><span class="k">速度</span><span class="bar"><i style="width:100%"></i></span><span class="v"><b>0.02×</b></span></div>
+                    <div class="cap"><span class="k">时间轴</span><span class="bar"><i style="width:97%"></i></span><span class="v">F1 0.68</span></div>
+                    <div class="cap"><span class="k">内存</span><span class="bar"><i class="muted" style="width:16%"></i></span><span class="v">0.23 GB 权重</span></div>
+                  </div>
+                  <div class="eng-note">int8 权重 229 MB；中英混排首选，也覆盖日语与粤语。</div>
+                </div>
+                <div class="eng-foot">
+                  <span class="size">已安装 <b>229 MB</b></span>
+                  <span class="spacer"></span>
+                  <button class="detail-btn" data-detail="sensevoice">
+                    详情
+                    <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                  </button>
+                </div>
+                <div class="eng-detail" data-detail-panel="sensevoice">
+                  <div class="detail-row"><span class="k">模型目录</span><span class="v mono">~/Library/Application Support/KikuSub/models/sensevoice-small</span></div>
+                  <div class="detail-row"><span class="k">HF 仓库</span><span class="v mono">csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17</span></div>
+                  <div class="detail-row"><span class="k">必需文件</span><span class="v mono">model.int8.onnx · tokens.txt</span></div>
+                  <div class="detail-row"><span class="k">备注</span><span class="v">345 秒素材 7–8 秒转完；边界 F1 ±0.4s 0.678，词内切点 0.0%。</span></div>
+                  <div class="detail-actions">
+                    <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg></span>打开目录</button>
+                    <button class="btn sm ghost">在访达中显示</button>
+                    <button class="btn sm ghost">校验 / 补齐</button>
+                  </div>
+                </div>
+              </article>
+
+              <!-- FireRed -->
+              <article class="engine dim" data-card="firered">
+                <div class="engine-body">
+                  <div class="eng-top">
+                    <div class="eng-id">
+                      <div class="eng-name"><span class="dot idle"></span>FireRedASR2-AED</div>
+                      <div class="eng-purpose">中文高精度 · 方言兼容</div>
+                    </div>
+                    <div class="eng-badges">
+                      <label class="switch" role="switch" aria-checked="false" aria-label="启用 FireRedASR2-AED"><span class="knob"></span></label>
+                    </div>
+                  </div>
+                  <div class="caps">
+                    <div class="cap"><span class="k">速度</span><span class="bar"><i style="width:30%"></i></span><span class="v"><b>0.30×</b></span></div>
+                    <div class="cap"><span class="k">时间轴</span><span class="bar"><i style="width:78%"></i></span><span class="v">F1 0.55</span></div>
+                    <div class="cap"><span class="k">内存</span><span class="bar"><i class="muted" style="width:100%"></i></span><span class="v">1.4 GB 权重</span></div>
+                  </div>
+                  <div class="eng-note">中文准确率更高，兼容 20 多种方言；不输出逐字时间戳。</div>
+                </div>
+                <div class="eng-foot">
+                  <span class="size">已安装 <b>1.3 GB</b></span>
+                  <span class="spacer"></span>
+                  <button class="detail-btn" data-detail="firered">
+                    详情
+                    <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                  </button>
+                </div>
+                <div class="eng-detail" data-detail-panel="firered">
+                  <div class="detail-row"><span class="k">模型目录</span><span class="v mono">~/Library/Application Support/KikuSub/models/fireredasr2-aed</span></div>
+                  <div class="detail-row"><span class="k">HF 仓库</span><span class="v mono">csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26</span></div>
+                  <div class="detail-row"><span class="k">必需文件</span><span class="v mono">encoder.int8.onnx · decoder.int8.onnx · tokens.txt</span></div>
+                  <div class="detail-row"><span class="k">备注</span><span class="v">int8 权重 1.2 GB + 标点模型 160 MB；345 秒素材约 103 秒转完。</span></div>
+                  <div class="detail-actions">
+                    <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg></span>打开目录</button>
+                    <button class="btn sm ghost">在访达中显示</button>
+                    <button class="btn sm ghost">校验 / 补齐</button>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <!-- 音色克隆 -->
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">音色克隆</div>
+                <div class="sec-desc">与转写引擎分开的可选层：从视频任意一句切 3–10 秒参考音频，用本机克隆声线朗读日文。</div>
+              </div>
+            </div>
+
+            <div class="feature">
+              <div class="what">
+                <span class="glyph"><svg width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-mic"/></svg></span>
+                <div class="eng-id">
+                  <div class="eng-name"><span class="dot off"></span>OmniVoice</div>
+                  <div class="eng-purpose">零样本克隆 · 可选</div>
+                </div>
+              </div>
+              <div class="flow">
+                <span class="step"><span class="n">1</span>切 <b>3–10s</b> 音频</span>
+                <span class="arrow"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow"/></svg></span>
+                <span class="step"><span class="n">2</span>克隆声线</span>
+                <span class="arrow"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-arrow"/></svg></span>
+                <span class="step"><span class="n">3</span>朗读日文</span>
+              </div>
+              <div class="act">
+                <span class="chip warn">未下载 · 约 3.3 GB</span>
+                <div class="row">
+                  <button class="btn"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-download"/></svg></span>下载模型</button>
+                  <button class="btn ghost">详情</button>
+                </div>
+                <span class="size" style="font-size:11px;color:var(--text-3)">首次合成才加载，空闲 5 分钟卸载</span>
+              </div>
+            </div>
+          </div>
+
+          <p class="sec-desc" style="margin-top:var(--sp-4)">
+            模型目录：<span style="font-family:var(--font-mono)">~/Library/Application Support/KikuSub/models</span>
+            （可在「环境与诊断」里更改）。
+          </p>
+        </section>
+
+        <!-- ============================================================
+             页签 2：外观与朗读
+             ============================================================ -->
+        <section class="pane" id="pane-appearance" role="tabpanel">
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">外观主题</div>
+                <div class="sec-desc">直接点缩略图切换，立即生效；明朝墨是单色主题，固定浅色。</div>
+              </div>
+              <div class="sec-meta">当前：<b id="curTheme">青空浅</b></div>
+            </div>
+            <div class="theme-grid" id="themeGrid"></div>
+          </div>
+
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">朗读</div>
+                <div class="sec-desc">决定核对台「朗读」默认用哪一层声音；切换后立即生效。</div>
+              </div>
+            </div>
+            <div class="inset">
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">默认朗读音色</span>
+                  <span class="d">系统语音零显存、秒出；克隆音色按角色声线朗读，首次合成要加载模型。</span>
+                </div>
+                <div class="ctl">
+                  <div class="seg"><button class="on">系统语音</button><button>克隆音色</button></div>
+                </div>
+              </div>
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">默认克隆音色</span>
+                  <span class="d">当前默认：绫濑（最近保存）· 保存过的克隆音色不会丢。</span>
+                </div>
+                <div class="ctl">
+                  <span class="select-wrap"><select class="field" style="width:220px"><option>绫濑</option><option>最近保存的音色</option></select><span class="chev"><svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span></span>
+                </div>
+              </div>
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">音色目录</span>
+                  <span class="d">参考音频与克隆资产都放在这里。</span>
+                </div>
+                <div class="ctl grow">
+                  <span class="path">~/Library/Application Support/KikuSub/outputs/voices</span>
+                  <button class="btn sm">在访达中显示</button>
+                </div>
+              </div>
+            </div>
+            <p class="sec-desc" style="margin-top:var(--sp-2)">参考音频建议 3–10 秒、单人干声、无背景音乐；会自动去首尾静音，超长只保留前 10 秒。</p>
+          </div>
+        </section>
+
+        <!-- ============================================================
+             页签 3：AI 与技能
+             ============================================================ -->
+        <section class="pane" id="pane-ai" role="tabpanel">
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">AI 优化</div>
+                <div class="sec-desc">用你自己的模型按全片语境修正识别错误；结果只生成<b>建议</b>，确认后才写进核对台。</div>
+              </div>
+              <div class="sec-meta"><span class="chip ok">已配置 Key</span></div>
+            </div>
+
+            <div class="inset">
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">启用 AI 优化</span>
+                  <span class="d">关闭后「润色 / 翻译」页仍可查看、导入已有建议，只是不能再生成。</span>
+                </div>
+                <div class="ctl">
+                  <label class="switch on" role="switch" aria-checked="true" aria-label="启用 AI 优化"><span class="knob"></span></label>
+                </div>
+              </div>
+              <div class="inset-row">
+                <div class="lab"><span class="t">服务地址</span></div>
+                <div class="ctl grow"><input class="field mono" value="https://api.deepseek.com" /></div>
+              </div>
+              <div class="inset-row">
+                <div class="lab"><span class="t">模型</span></div>
+                <div class="ctl grow"><input class="field mono" value="deepseek-flash" /></div>
+              </div>
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">API Key</span>
+                  <span class="d">本机 AES-256-GCM 加密，不写进 settings.json、不写日志。</span>
+                </div>
+                <div class="ctl">
+                  <input class="field faint" type="password" value="sk-xxxxxxxxxxxxxxxxxxxx" style="width:190px" />
+                  <button class="btn sm">更换…</button>
+                  <button class="btn sm ghost">清除</button>
+                </div>
+              </div>
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">连接测试</span>
+                  <span class="d" style="color:var(--success)">连接正常 · 412ms · api.deepseek.com</span>
+                </div>
+                <div class="ctl"><button class="btn sm">测试连接</button></div>
+              </div>
+            </div>
+
+            <div class="note-box warn">
+              <span class="ico"><svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><use href="#i-warn"/></svg></span>
+              <span><b>调用会把字幕文本发送到该地址。</b> Key 只保存在本机、加密存储，升级或重装应用都不会丢；每次请求时才解密。</span>
+            </div>
+
+            <details class="advanced disclosure">
+              <summary>
+                <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                高级参数
+                <span class="sum-meta">每块 200 · 翻译 120 · 上下文 5</span>
+              </summary>
+              <div class="inset">
+                <div class="fields">
+                  <label><span class="t">每块条数</span><input class="field mono" value="200" /><span class="h">润色分块大小</span></label>
+                  <label><span class="t">翻译每块条数</span><input class="field mono" value="120" /><span class="h">译文分块大小</span></label>
+                  <label><span class="t">上下文条数</span><input class="field mono" value="5" /><span class="h">0 表示不带上下文</span></label>
+                </div>
+                <div class="foot">
+                  <button class="btn sm">保存</button>
+                  <span class="note">块越大调用越少，但失败重试的成本也越高。</span>
+                </div>
+              </div>
+            </details>
+          </div>
+
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">Agent 技能</div>
+                <div class="sec-desc">让外部 agent（DeepSeek Harness 等）按技能说明读字幕、产出建议文件。</div>
+              </div>
+              <div class="sec-meta"><span class="chip ok">已配置</span></div>
+            </div>
+            <div class="inset">
+              <div class="inset-row">
+                <div class="lab">
+                  <span class="t">安装位置</span>
+                  <span class="d">装到用户级技能根目录，DSH 启动时自动扫描。</span>
+                </div>
+                <div class="ctl grow">
+                  <span class="path">~/.agents/skills/kikusub-subtitle</span>
+                  <button class="btn sm">一键配置</button>
+                  <button class="btn sm ghost">刷新</button>
+                </div>
+              </div>
+            </div>
+            <div class="note-box">
+              <span>配置后，在 agent 里说「帮我把 KikuSub 这份字幕润色一遍 / 翻译成中文」，它会读字幕、写出建议；回到「润色 → 重新加载」逐条对照。<b>技能不直接改字幕</b>，也不写入任何密钥。</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================================================
+             页签 4：环境与诊断
+             ============================================================ -->
+        <section class="pane" id="pane-env" role="tabpanel">
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">运行环境</div>
+                <div class="sec-desc">硬件加速与外部依赖的状态；任一项不可用会直接影响导入或转写。</div>
+              </div>
+              <div class="sec-meta">上次检测：刚刚</div>
+            </div>
+            <div class="metrics">
+              <div class="metric">
+                <div class="top"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chip"/></svg></span>硬件加速</div>
+                <div class="v">MPS</div>
+                <div class="sub">Apple Silicon · arm64 · 就绪</div>
+              </div>
+              <div class="metric">
+                <div class="top"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg></span>Python</div>
+                <div class="v">3.12.8</div>
+                <div class="sub">源码模式 · 打包运行：否</div>
+              </div>
+              <div class="metric">
+                <div class="top"><span class="ico"><svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><use href="#i-wave"/></svg></span>ffmpeg</div>
+                <div class="v">9.0.2</div>
+                <div class="sub mono" style="font-family:var(--font-mono);font-size:11px">/opt/homebrew/bin/ffmpeg</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">路径管理</div>
+                <div class="sec-desc">只有交付物相关的三个目录可以改；其余内部路径只读，需要时展开查看。</div>
+              </div>
+            </div>
+            <div class="inset">
+              <div class="inset-row">
+                <div class="lab"><span class="t">导出文件夹</span><span class="d">字幕 SRT / VTT / TXT 的默认落点</span></div>
+                <div class="ctl grow">
+                  <span class="path">~/Movies/KikuSub/exports</span>
+                  <span class="chip">自定义</span>
+                  <button class="btn sm">更改…</button>
+                  <button class="btn sm ghost">打开</button>
+                </div>
+              </div>
+              <div class="inset-row">
+                <div class="lab"><span class="t">成片目录</span><span class="d">硬字幕 / 软字幕成片的落点，可独立于字幕</span></div>
+                <div class="ctl grow">
+                  <span class="path">跟随导出文件夹</span>
+                  <span class="chip">默认</span>
+                  <button class="btn sm">更改…</button>
+                  <button class="btn sm ghost">打开</button>
+                </div>
+              </div>
+              <div class="inset-row">
+                <div class="lab"><span class="t">模型目录</span><span class="d">权重、CTC 对齐头与标点模型；切换会重启内核</span></div>
+                <div class="ctl grow">
+                  <span class="path">~/Library/Application Support/KikuSub/models</span>
+                  <button class="btn sm">更改…</button>
+                  <button class="btn sm ghost">打开</button>
+                </div>
+              </div>
+            </div>
+
+            <details class="disclosure" id="pathsMore">
+              <summary>
+                <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                其余 8 个内部路径
+              </summary>
+              <div class="inset">
+                <div class="inset-row"><div class="lab"><span class="t">运行数据目录</span></div><div class="ctl grow"><span class="path">…/KikuSub</span><button class="btn sm ghost">打开</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">代理缓存</span></div><div class="ctl grow"><span class="path">…/KikuSub/proxy</span><button class="btn sm ghost">打开</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">TTS 缓存</span></div><div class="ctl grow"><span class="path">…/KikuSub/tts</span><button class="btn sm ghost">打开</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">克隆音色</span></div><div class="ctl grow"><span class="path">…/KikuSub/outputs/voices</span><button class="btn sm ghost">打开</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">TTS 模型</span></div><div class="ctl grow"><span class="path">…/KikuSub/models/omnivoice</span><button class="btn sm ghost">打开</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">日志目录</span></div><div class="ctl grow"><span class="path">…/KikuSub/logs</span><button class="btn sm ghost">打开</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">预设文件</span></div><div class="ctl grow"><span class="path">…/KikuSub/presets.json</span><button class="btn sm ghost">显示</button></div></div>
+                <div class="inset-row"><div class="lab"><span class="t">设置文件</span></div><div class="ctl grow"><span class="path">…/KikuSub/settings.json</span><button class="btn sm ghost">显示</button></div></div>
+              </div>
+            </details>
+          </div>
+
+          <div class="section">
+            <div class="sec-head">
+              <div>
+                <div class="sec-title">日志与诊断</div>
+                <div class="sec-desc">遇到问题先点「复制精简诊断」，它包含版本、目录、引擎状态与最近问题。</div>
+              </div>
+              <div class="sec-meta">日志 <b>1.2 MB</b> · 最近问题 2 条</div>
+            </div>
+            <div class="inset">
+              <div class="log-summary" style="padding:var(--sp-3) var(--sp-4)">
+                <span class="dot off"></span>
+                <span>已写入 · 1.2 MB · 保留 14 天 / 64 MB</span>
+                <span class="path">~/Library/Application Support/KikuSub/logs/kikusub.log</span>
+              </div>
+              <div class="log-actions">
+                <button class="btn sm primary"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-copy"/></svg></span>复制精简诊断</button>
+                <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-copy"/></svg></span>复制最近日志</button>
+                <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-folder"/></svg></span>打开日志目录</button>
+                <button class="btn sm"><span class="ico"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg></span>清理旧日志</button>
+                <button class="btn sm danger">清空全部日志</button>
+                <span style="margin-left:auto;font-size:11px;color:var(--text-3)">刷新于 刚刚</span>
+              </div>
+              <pre class="problems">[2026-11-15 10:13:22] WARNING kikusub.tts ｜ OmniVoice 权重缺失 voice_encoder.pt，已回退系统语音
+[2026-11-15 09:41:08] WARNING kikusub.server ｜ ffprobe 时长读取超时（已重试 1 次）</pre>
+              <details class="disclosure" id="logRaw" style="margin:0">
+                <summary style="padding:var(--sp-2) var(--sp-4);border-top:1px solid var(--inset-line);border-radius:0">
+                  <span class="chev"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg></span>
+                  查看最近日志原文（120 行）
+                </summary>
+                <pre class="rawlog">10:13:22 INFO  kikusub.server ｜ POST /api/settings 200 4ms
+10:13:22 INFO  kikusub.engines ｜ detect whisper=installed qwen=installed
+10:13:21 INFO  kikusub.tts ｜ model_dir=…/models/omnivoice missing=voice_encoder.pt
+…（共 120 行）</pre>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <div class="about">KikuSub · 本地优先的日语字幕工作台。所有音视频与模型都在本机处理，不上传。</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  /* ---- 主题缩略图：颜色来自「注册表」，与 themes.ts 的 skin.swatch 对应 ---- */
+  const SKINS = [
+    {
+      id: 'light', name: '青空浅', note: '浅天蓝 + 靛蓝，默认主题',
+      preview: { canvas: '#edf3fb', paper: '#f9fbfe', card: '#ffffff', ink: '#1b2740', accent: '#4f6bff', line: 'rgba(27,39,64,.08)' },
+      cue: 'ここで待っていたんだよ、ずっと。', cueFont: 'var(--font-sans)',
+    },
+    {
+      id: 'dark', name: '青空深', note: '深空底 + 亮靛蓝，夜间校对',
+      preview: { canvas: '#0a0c10', paper: '#111419', card: '#181c23', ink: '#ecf1fa', accent: '#7d93ff', line: 'rgba(236,241,250,.09)' },
+      cue: 'ここで待っていたんだよ、ずっと。', cueFont: 'var(--font-sans)',
+    },
+    {
+      id: 'mincho', name: '明朝墨', note: '纸白 + 墨黑 + 朱红，字幕用明朝',
+      preview: { canvas: '#f1f3f0', paper: '#fafaf8', card: '#ffffff', ink: '#15181b', accent: '#c8412d', line: 'rgba(21,24,27,.1)' },
+      cue: 'ここで待っていたんだよ、ずっと。', cueFont: "'Hiragino Mincho ProN', 'Yu Mincho', serif",
+    },
+  ];
+
+  const html = document.documentElement;
+  const params = new URLSearchParams(location.search);
+  const theme = params.get('theme');
+  if (theme && ['light', 'dark', 'mincho'].includes(theme)) html.dataset.theme = theme;
+  if (params.get('chrome') === '0') document.getElementById('mockbar').style.display = 'none';
+
+  const grid = document.getElementById('themeGrid');
+  grid.innerHTML = SKINS.map((s) => {
+    const p = s.preview;
+    return `
+    <button class="theme-card${html.dataset.theme === s.id ? ' on' : ''}" data-skin="${s.id}">
+      <div class="shot" aria-hidden="true" style="--shot-canvas:${p.canvas};--shot-paper:${p.paper};--shot-card:${p.card};--shot-ink:${p.ink};--shot-accent:${p.accent};--shot-line:${p.line};--shot-cue:${s.cueFont}">
+        <div class="rail"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+        <div class="body">
+          <div class="h"></div><div class="p"></div>
+          <div class="card">
+            <div class="b"></div><div class="b2"></div>
+            <div class="cue">${s.cue}</div>
+            <div class="btn"></div>
+          </div>
+        </div>
+      </div>
+      <div class="theme-meta">
+        <div class="tt"><div class="nm">${s.name}</div><div class="ds">${s.note}</div></div>
+        <span class="pick"><svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg></span>
+      </div>
+    </button>`;
+  }).join('');
+
+  grid.addEventListener('click', (e) => {
+    const card = e.target.closest('[data-skin]');
+    if (!card) return;
+    const id = card.dataset.skin;
+    html.dataset.theme = id;
+    grid.querySelectorAll('.theme-card').forEach((c) => c.classList.toggle('on', c.dataset.skin === id));
+    document.querySelector('#mockhint').textContent = '已切到 · ' + SKINS.find((s) => s.id === id).name;
+  });
+
+  /* ---- 页签 ---- */
+  function selectTab(id) {
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === id)));
+    document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.id === 'pane-' + id));
+  }
+  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => selectTab(t.dataset.tab)));
+  const initialTab = params.get('tab');
+  if (initialTab) selectTab(initialTab);
+
+  /* ---- 详情折叠 ---- */
+  document.querySelectorAll('[data-detail]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.detail;
+      btn.classList.toggle('open');
+      document.querySelector(`[data-detail-panel="${key}"]`).classList.toggle('open');
+    });
+  });
+  if (params.get('adv') === '1') document.querySelector('.advanced')?.setAttribute('open', '');
+  if (params.get('paths') === '1') document.getElementById('pathsMore')?.setAttribute('open', '');
+  if (params.get('log') === '1') document.getElementById('logRaw')?.setAttribute('open', '');
+  if (params.get('details') === '1') {
+    document.querySelector('[data-detail="qwen"]')?.click();
+    document.querySelector('[data-detail="whisper"]')?.click();
+  }
+
+  /* ---- 控制条状态按钮 ---- */
+  document.querySelectorAll('[data-mock-theme]').forEach((b) => {
+    b.addEventListener('click', () => {
+      html.dataset.theme = b.dataset.mockTheme;
+      grid.querySelectorAll('.theme-card').forEach((c) => c.classList.toggle('on', c.dataset.skin === b.dataset.mockTheme));
+      syncMock();
+    });
+  });
+  function syncMock() {
+    document.querySelectorAll('[data-mock-theme]').forEach((b) => b.classList.toggle('on', b.dataset.mockTheme === html.dataset.theme));
+  }
+  syncMock();
+
+  document.querySelector('[data-state="details"]').addEventListener('click', () => {
+    document.querySelectorAll('[data-detail]').forEach((b) => {
+      const open = !b.classList.contains('open');
+      b.classList.toggle('open', open);
+      document.querySelector(`[data-detail-panel="${b.dataset.detail}"]`).classList.toggle('open', open);
+    });
+  });
+  document.querySelector('[data-state="download"]').addEventListener('click', () => {
+    const card = document.querySelector('[data-card="sensevoice"]');
+    card.querySelector('[data-detail-panel]')?.remove();
+    card.querySelector('.eng-foot').outerHTML = `
+      <div class="eng-progress">
+        <div class="line"><span>正在下载 model.int8.onnx</span><b>42%</b></div>
+        <div class="track"><i style="width:42%"></i></div>
+      </div>`;
+  });
+
+  function syncThemeLabel() {
+    const skin = SKINS.find((x) => x.id === html.dataset.theme) || SKINS[0];
+    const el = document.getElementById('curTheme');
+    if (el) el.textContent = skin.name;
+  }
+  syncThemeLabel();
+  new MutationObserver(syncThemeLabel).observe(html, { attributes: true, attributeFilter: ['data-theme'] });
+
+  document.querySelector('#mockhint').textContent = '1360 × 838 视口，内容可滚动';
+</script>
+</body>
+</html>

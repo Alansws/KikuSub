@@ -42,6 +42,8 @@ from .text_cues_zh import (
     build_timed_chars,
     split_cues,
     spread_text,
+    spread_text_voiced,
+    voiced_spans,
 )
 from .transcribe import (
     SAMPLE_RATE,
@@ -76,7 +78,12 @@ def _load_vad():
 
 @dataclass(slots=True)
 class SherpaAsrConfig:
-    """两个中文引擎共用的参数（字段名与 `core/params.py` 的 config_field 对齐）。"""
+    """两个中文引擎共用的参数（字段名与 `core/params.py` 的 config_field 对齐）。
+
+    注意：**产品默认值不在这里**，在 `core/params.py` 的 ParamSpec 里（两个引擎的
+    窗口长度不同，共用一份 dataclass 默认值表达不了）。引擎构造时会用 params 的
+    默认值实例化，所以从这里拿到的 config 与界面上的默认值一致。
+    """
 
     enable_loudnorm: bool = True
     vad_threshold: float = 0.30
@@ -98,6 +105,8 @@ class SherpaAsrConfig:
     use_itn: bool = True
     # FireRedASR2 没有标点；开启后用 FireRedPunc 补（ONNX，约 160 MB，随引擎一起下载）。
     use_punc: bool = True
+    # 没有 token 时间戳时，用能量把字铺在「有声区间」上，而不是整段均分。
+    energy_align: bool = True
 
 
 class _SherpaEngine:
@@ -118,7 +127,7 @@ class _SherpaEngine:
     def __init__(self, model_dir: str | Path | None = None, config: SherpaAsrConfig | None = None) -> None:
         env = str(model_dir or os.environ.get(self.env_var) or "").strip()
         self.model_dir = Path(env).expanduser() if env else MODELS_DIR / self.dir_name
-        self.config = config or SherpaAsrConfig()
+        self.config = config or self.default_config()
         self.last_interrupted = False
         self.last_missed_spans: list[dict] = []
         self.last_coverage_spans: list[dict] = []
@@ -128,6 +137,13 @@ class _SherpaEngine:
         self._recognizer_key: tuple | None = None
         self._vad = None
         self._punc: PunctuationModel | None = None
+
+    @classmethod
+    def default_config(cls) -> SherpaAsrConfig:
+        """界面上的默认参数（来自 `core/params.py`，不在 dataclass 里重复一份）。"""
+        from . import params as param_specs
+
+        return SherpaAsrConfig(**param_specs.config_kwargs(cls.key, {}))
 
     @property
     def ready(self) -> bool:
@@ -207,12 +223,20 @@ class _SherpaEngine:
         offset: float,
         seg_end: float,
         cfg: SherpaAsrConfig,
+        chunk: np.ndarray | None = None,
     ) -> tuple[list[SubtitleCue], int, bool]:
         """把一段的识别结果切成字幕；返回 (cues, 字符数, 是否逐字时间轴可用)。"""
         timed = bool(tokens) and len(timestamps) == len(tokens)
         if timed:
             chars: list[TimedChar] = build_timed_chars(
                 tokens, timestamps, offset, offset + seg_end
+            )
+        elif cfg.energy_align and chunk is not None and len(chunk):
+            chars = spread_text_voiced(
+                text,
+                offset,
+                offset + seg_end,
+                voiced_spans(chunk),
             )
         else:
             chars = spread_text(text, offset, offset + seg_end)
@@ -362,7 +386,7 @@ class _SherpaEngine:
                 continue
 
             seg_cues, chars, timed = self._cues_for_segment(
-                tokens, timestamps, text, offset, seg_dur_s, cfg
+                tokens, timestamps, text, offset, seg_dur_s, cfg, chunk=chunk
             )
             char_count += chars
             if timed:

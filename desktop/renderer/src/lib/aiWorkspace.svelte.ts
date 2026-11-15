@@ -28,11 +28,7 @@ import {
   setTrackMode,
   toast,
 } from './store.svelte';
-import {
-  promptSelectedId,
-  selectedPromptTemplate,
-  type PromptCategory,
-} from './promptStore.svelte';
+import { promptSelectedId, type PromptCategory } from './promptStore.svelte';
 
 export type AiMode = 'single' | 'dual';
 
@@ -127,9 +123,15 @@ export function planAiSegments() {
     ai.segmentIndex = 0;
     return;
   }
-  ai.longMode = needsSegments(app.cues, dual.cues);
-  ai.segments = ai.longMode ? planSegments(app.cues, dual.cues) : [];
-  ai.segmentIndex = Math.min(ai.segmentIndex, Math.max(0, ai.segments.length - 1));
+  // 注意：这里刻意用局部变量算完后一次性写回。如果写成「先写 ai.segments、
+  // 再从 ai.segments.length 取上限」，调用方是 $effect 时就会自读自写同一份
+  // state，Svelte 5 会一直重跑这个 effect 到 effect_update_depth_exceeded，
+  // 表现是页面巨卡、点了分段按钮高亮不动。
+  const longMode = needsSegments(app.cues, dual.cues);
+  const segments = longMode ? planSegments(app.cues, dual.cues) : [];
+  ai.longMode = longMode;
+  ai.segments = segments;
+  ai.segmentIndex = Math.min(ai.segmentIndex, Math.max(0, segments.length - 1));
 }
 
 export function resetAi() {
@@ -453,13 +455,18 @@ export async function copyPromptTemplateForCategory(id: string, category: Prompt
     return false;
   }
   const kind = category === 'translate' ? 'translate' : 'polish';
-  const mode: AiMode = category === 'polish_dual' ? 'dual' : 'single';
+  const mode: AiMode =
+    category === 'polish_dual' || category === 'reshape_dual' ? 'dual' : 'single';
   if (mode === 'dual' && !dual.exists) {
     toast('双源模板需要第二版字幕：先把另一引擎的稿放进双引擎复核', 'warn');
     return false;
   }
   try {
-    const res = await api.getAiPrompt(kind, ai.lang, id, { mode });
+    // 断句重排走自己的接口：它的提示词不是 1:1 提案，混用会把润色模板发出去。
+    const res =
+      category === 'reshape_single' || category === 'reshape_dual'
+        ? await api.getReshapePrompt(mode, 1, null, id)
+        : await api.getAiPrompt(kind, ai.lang, id, { mode });
     if (window.kikusub?.writeClipboard) {
       await window.kikusub.writeClipboard(res.prompt);
     } else if (navigator.clipboard) {
@@ -550,10 +557,12 @@ export async function parseAiPastedSrt() {
     }
     if (segment) {
       ai.filled[segmentKey(segment)] = true;
-      const next = ai.segments.findIndex((item, index) => index > ai.segmentIndex && !ai.filled[segmentKey(item)]);
-      ai.segmentIndex = next >= 0 ? next : ai.segmentIndex;
+      // 停在这段看刚回填的 diff：分段模式下表格只画当前段，自动跳到下一段
+      // 会让结果立刻从眼前消失（看起来像没粘上）。下一段由用户点分段轨继续。
+      ai.pasteOpen = false;
       ai.pasteText = '';
-      toast(`第 ${segment.from}–${segment.to} 段已回填（${segment.count} 条）`);
+      const position = ai.segments.findIndex((item) => segmentKey(item) === segmentKey(segment)) + 1;
+      toast(`第 ${position} 段（第 ${segment.from}–${segment.to} 条）已回填`);
     } else {
       ai.pasteOpen = false;
       ai.pasteText = '';
@@ -764,9 +773,3 @@ export async function importAiProposal() {
 // 把 AI 草稿的读写挂到零依赖桥上，供 store 的快照/历史路径复用。
 aiBridge.applyDraft = applyAiDraft;
 aiBridge.currentDraft = currentAiDraft;
-
-/** 当前模式绑定的模板名（页头显示用）。 */
-export function currentPolishTemplateName(): string {
-  const category: PromptCategory = ai.mode === 'dual' ? 'polish_dual' : 'polish_single';
-  return selectedPromptTemplate(category)?.name ?? '—';
-}

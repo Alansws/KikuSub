@@ -4,16 +4,17 @@
   import { dual } from '../lib/dualReview.svelte';
   import appIcon from '../assets/app-icon.png';
 
-  // 按工作流顺序：导入 → 转写 → 核对 → 双引擎复核 → 润色 → 翻译 → 导出。
-  // ⌘1..⌘7 与这张表一一对应（见 lib/shortcuts.svelte.ts）。
+  // 按工作流顺序：导入 → 转写 → 核对 → 双引擎复核 → 润色 → 断句重排 → 翻译 → 导出。
+  // ⌘1..⌘8 与这张表一一对应（见 lib/shortcuts.svelte.ts）。
   const items: { view: View; icon: string; label: string; key: string }[] = [
     { view: 'import', icon: 'tray', label: '导入', key: '⌘1' },
     { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
     { view: 'review', icon: 'listcheck', label: '核对台', key: '⌘3' },
     { view: 'dual', icon: 'rows', label: '双引擎复核', key: '⌘4' },
     { view: 'polish', icon: 'sparkle', label: '润色', key: '⌘5' },
-    { view: 'translate', icon: 'quote', label: '翻译', key: '⌘6' },
-    { view: 'export', icon: 'export', label: '导出', key: '⌘7' },
+    { view: 'reshape', icon: 'split', label: '断句重排', key: '⌘6' },
+    { view: 'translate', icon: 'quote', label: '翻译', key: '⌘7' },
+    { view: 'export', icon: 'export', label: '导出', key: '⌘8' },
   ];
 </script>
 

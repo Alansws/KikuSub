@@ -11,15 +11,21 @@
   import {
     altEngineLabel,
     altParamsLabel,
+    altIsImported,
     deleteAltReview,
     dual,
+    importAltReview,
     loadAltDiff,
     refreshAltReview,
     replacePrimaryWithAlt,
   } from '../lib/dualReview.svelte';
   import { tcShort } from '../lib/time';
+  import { recallScroll, rememberScroll } from '../lib/scrollMemory';
+  import type { DualRow } from '../lib/api';
 
   let moreOpen = $state(false);
+  /** 对照表的滚动容器：去核对台看完一句再回来要停在同一句，而不是回到第 0 行。 */
+  let listEl = $state<HTMLDivElement | null>(null);
 
   const rows = $derived(
     dual.onlyDiff ? dual.rows.filter((row) => row.kind !== 'same') : dual.rows,
@@ -33,8 +39,14 @@
     const at = dual.createdAt
       ? new Date(dual.createdAt * 1000).toLocaleString()
       : '';
-    return [name, at ? `生成于 ${at}` : ''].filter(Boolean).join(' · ');
+    const when = at ? `${altIsImported() ? '导入于' : '生成于'} ${at}` : '';
+    return [name, when].filter(Boolean).join(' · ');
   });
+
+  async function importB() {
+    moreOpen = false;
+    await importAltReview();
+  }
 
   $effect(() => {
     void app.connected;
@@ -43,12 +55,46 @@
     if (app.connected) void loadAltDiff();
   });
 
-  function goto(row: { a_indices: number[]; start: number; end: number }) {
+  /** 一行的稳定 key：A/B 的全局序号组合，两列对齐后不会变。 */
+  function rowKey(row: DualRow): string {
+    return `${row.a_indices.join('-')}:${row.b_indices.join('-')}`;
+  }
+
+  /**
+   * 滚动位置按「哪份 B + 哪个过滤条件」分别记：换了第二版或切「只看差异」，
+   * 行集合就变了，沿用旧偏移只会停在无关的位置。
+   */
+  const listKey = $derived(
+    `dual:${dual.mediaId}:${dual.createdAt}:${dual.onlyDiff ? 'diff' : 'all'}`,
+  );
+  let restoredKey = '';
+
+  $effect(() => {
+    const key = listKey;
+    if (!listEl || !dual.rows.length || restoredKey === key) return;
+    restoredKey = key;
+    const target = recallScroll(key);
+    const apply = () => {
+      if (!listEl) return;
+      listEl.scrollTop = target;
+      rememberScroll(key, listEl.scrollTop);
+    };
+    apply();
+    // 行高首帧后才量稳（content-visibility），第二帧再对齐一次。
+    requestAnimationFrame(apply);
+  });
+
+  function onListScroll() {
+    if (listEl) rememberScroll(listKey, listEl.scrollTop);
+  }
+
+  function goto(row: DualRow) {
     const index = row.a_indices[0];
     if (index === undefined) {
       toast('这一行只有第二版有，先在核对台补上对应句子再定位', 'warn');
       return;
     }
+    dual.anchor = rowKey(row);
     setView('review');
     jumpToCue(index, { seek: false });
     focusRange(row.start, row.end);
@@ -134,6 +180,7 @@
               <button class="menu-backdrop" aria-label="关闭菜单" onclick={() => (moreOpen = false)}></button>
               <div class="menu" role="menu">
                 <button class="menu-item" role="menuitem" onclick={refresh}>刷新对照</button>
+                <button class="menu-item" role="menuitem" onclick={importB}>导入字幕替换 B 版…</button>
                 <button class="menu-item danger" role="menuitem" onclick={discard}>丢弃第二版</button>
               </div>
             {/if}
@@ -163,19 +210,20 @@
           <i class="sw del"></i>本行 A 独有
           <i class="sw ins"></i>本行 B 独有
         </span>
-        <div class="spacer"></div>
-        <label class="chk">
-          <input type="checkbox" bind:checked={dual.onlyDiff} />
-          只看差异
-        </label>
-        <button
-          class="btn ghost danger overwrite"
-          onclick={replaceAll}
-          disabled={dual.loading || dual.replacing}
-          title="整列用第二版覆盖核对台；只压一步历史，⌘Z 可整批退回"
-        >
-          {dual.replacing ? '覆盖中…' : '用 B 覆盖核对台…'}
-        </button>
+        <div class="head-end">
+          <label class="chk">
+            <input type="checkbox" bind:checked={dual.onlyDiff} />
+            只看差异
+          </label>
+          <button
+            class="btn ghost danger overwrite"
+            onclick={replaceAll}
+            disabled={dual.loading || dual.replacing}
+            title="整列用第二版覆盖核对台；只压一步历史，⌘Z 可整批退回"
+          >
+            {dual.replacing ? '覆盖中…' : '用 B 覆盖核对台…'}
+          </button>
+        </div>
       </div>
     {/if}
   </header>
@@ -187,11 +235,13 @@
       <span class="blank-icon"><Icon name="rows" size={24} /></span>
       <div class="et">还没有第二版字幕</div>
       <div class="es">
-        在转写页换一个引擎（或同一引擎换一组参数）再整片转一次，结果选「放进双引擎复核」即可。
-        第二版会按当前媒体自动保存在工作草稿目录，切走再切回来仍然在。
+        在转写页换一个引擎（或同一引擎换一组参数）再整片转一次，结果选「放进双引擎复核」；
+        也可以把工作流里已经做好的另一版字幕直接导入这里。第二版只做只读对照，
+        按当前媒体自动保存，切走再切回来仍然在。
       </div>
       <div class="ea">
         <button class="btn primary" onclick={() => setView('transcribe')}>去转写页</button>
+        <button class="btn ghost" onclick={importB}>导入已有字幕作为 B 版…</button>
       </div>
     </div>
   {:else}
@@ -213,9 +263,12 @@
         <div class="es">两份字幕逐条一致；取消「只看差异」可以看全量对照。</div>
       </div>
     {:else}
-      <div class="list">
-        {#each rows as row (`${row.a_indices.join('-')}:${row.b_indices.join('-')}`)}
-          <div class="row kind-{row.kind}">
+      <div class="list" bind:this={listEl} onscroll={onListScroll}>
+        {#each rows as row (rowKey(row))}
+          <div
+            class="row kind-{row.kind}"
+            class:anchor={dual.anchor === rowKey(row)}
+          >
             <button class="c-time" onclick={() => goto(row)} title={row.a_indices.length ? '回到核对台定位这一句' : 'B 独有的句子'}>
               <span class="tc">{tcShort(row.start)}</span>
               <span class="idx">
@@ -451,7 +504,9 @@
   .chip {
     display: inline-flex;
     align-items: baseline;
+    justify-content: space-between;
     gap: var(--sp-1);
+    min-width: 94px;
     font-size: 12px;
     line-height: 22px;
     padding: 0 var(--sp-2);
@@ -459,6 +514,7 @@
     background: var(--fill);
     color: var(--text-2);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
   .chip b {
     font-size: 12px;
@@ -478,13 +534,22 @@
   .chip.only-b b {
     color: var(--accent);
   }
-  .spacer {
-    flex: 1;
+  .head-end {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-left: auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .legend {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    margin-left: 2px;
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--separator-soft);
     font-size: 11px;
     line-height: 22px;
     color: var(--text-3);
@@ -515,8 +580,22 @@
     user-select: none;
     white-space: nowrap;
   }
-  .overwrite {
+  /* 覆盖是危险动作，但也是这一页唯一的整列写回入口：给它实心边界，
+     不再和旁边那些 ghost 链接挤成同一层。 */
+  .btn.ghost.overwrite {
     white-space: nowrap;
+    height: 26px;
+    padding: 0 10px;
+    background: var(--raise);
+    border-color: color-mix(in srgb, var(--danger) 34%, var(--separator));
+    color: var(--danger);
+    font-weight: 500;
+    box-shadow: var(--shadow-btn);
+  }
+  .btn.ghost.overwrite:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
   }
   .cols,
   .row {
@@ -561,6 +640,11 @@
   .row.kind-only_b {
     background: color-mix(in srgb, var(--accent) 5%, transparent);
   }
+  /* 从核对台回来时标出「刚才看的就是这一句」：位置恢复之外再给一个视觉锚点。 */
+  .row.anchor {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
   .c-time {
     display: flex;
     flex-direction: column;
@@ -574,13 +658,18 @@
   }
   .tc {
     color: var(--accent);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 12px;
+    line-height: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums;
   }
   .idx {
-    font-size: 12px;
-    color: var(--text-3);
+    font-size: 10.5px;
+    line-height: 14px;
+    font-weight: 400;
+    color: color-mix(in srgb, var(--text-3) 66%, transparent);
     font-variant-numeric: tabular-nums;
   }
   .c-side {
@@ -604,7 +693,7 @@
     border-radius: 5px;
     display: grid;
     place-items: center;
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 700;
     line-height: 1;
@@ -637,7 +726,7 @@
     background: color-mix(in srgb, var(--success) 26%, transparent);
   }
   .placeholder {
-    color: var(--text-3);
+    color: color-mix(in srgb, var(--text-3) 55%, transparent);
   }
   .note {
     display: flex;

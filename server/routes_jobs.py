@@ -61,6 +61,9 @@ class TranscribeJobRequest(BaseModel):
     # 整片转写且核对台非空时：true = 写进「双引擎复核」第二列，不覆盖核对台。
     # 是否真的走第二列由服务端按「核对台非空 + apply=replace」再判一次。
     alt_review: bool = False
+    # 强 BGM / 歌曲：先对本次转写范围做 Demucs 人声分离（整片 = 0..总时长）。
+    # 分离结果缓存在 audio_cache，换引擎重转直接复用。
+    separate_vocals: bool = False
 
     @field_validator("engine")
     @classmethod
@@ -138,7 +141,6 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         raise HTTPException(status_code=422, detail="起始时间不能为负")
     if payload.start is not None and payload.end is not None and payload.end <= payload.start:
         raise HTTPException(status_code=422, detail="结束时间必须大于起始时间")
-
     # 参数键用 core.params 的规格键（whisper.vad_threshold 这种），
     # 与预设文件里的键天然一致；缺失补默认、越界夹紧都由 normalize 负责。
     values = dict(payload.params or {})
@@ -176,6 +178,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         export_dir=export_dir,
         start_s=payload.start,
         end_s=payload.end,
+        media_duration_s=float(info.duration or 0.0),
         keep_absolute_timeline=payload.keep_absolute_timeline,
         whisper_config=whisper_config,
         qwen_config=qwen_config,
@@ -183,6 +186,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         no_repeat_ngram_size=int(extra.get("no_repeat_ngram_size", 5)),
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
+        separate_vocals=payload.separate_vocals,
         # 只有核对台里的「单句/选区修正」保留原队列；转写页的整片或区间任务
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。
@@ -199,6 +203,15 @@ async def create_job(
 ) -> dict:
     manager = _manager(request)
     loop = asyncio.get_running_loop()
+
+    # 「替换选区」是区间语义：没有起点时 `_apply_cues` 会落进最后的 else 分支，
+    # 把整张表换成这一次的结果（用户看到的就是"全片字幕只剩这一段"）。
+    # 请求层直接拦掉，不允许这种静默降级成整片覆盖。
+    if payload.kind == "transcribe" and payload.apply == "replace_range" and payload.start is None:
+        raise HTTPException(
+            status_code=422,
+            detail="「替换选区」需要填写起始时间；整片转写请选「覆盖」",
+        )
 
     # 会话与媒体显式绑定：`/api/qa` 按媒体落盘，抢在转写前绑好，
     # 任务完成时才能把结果写回同一个会话。

@@ -41,6 +41,13 @@ class EngineSpec:
     family: str = "whisper"
     # 判断“装好了没”的必需文件；全部存在才算 installed。
     required_files: tuple[str, ...] = ()
+    # 产物文件名标签（原始转写与交付文件共用）：带空格/加号的展示名不适合进文件名，
+    # 所以在这里单独登记一份。例：.AnimeWhisper.srt / .Qwen3-ASR.srt。
+    # 新增引擎必须填；`core.export_naming` 与 `core.pipeline.output_suffix` 只读这里，
+    # 不许在别处再维护第二份文件名白名单（红线 #12）。
+    file_tag: str = ""
+    # 历史标签：旧版本产物用过 .whisper / .qwen 等，导入与版本推断仍要认。
+    legacy_tags: tuple[str, ...] = ()
 
     @property
     def approx_label(self) -> str:
@@ -66,6 +73,8 @@ ENGINES: tuple[EngineSpec, ...] = (
         notes="日常对话、长片通稿首选；会做幻觉门控与短句复核。实测转写峰值内存约 6.7 GB。",
         family="whisper",
         required_files=("model.safetensors",),
+        file_tag="AnimeWhisper",
+        legacy_tags=("whisper", "anime-whisper"),
     ),
     EngineSpec(
         key="qwen",
@@ -85,6 +94,8 @@ ENGINES: tuple[EngineSpec, ...] = (
         notes="逐字对齐时间最准；实测转写峰值内存约 5.1 GB（低于 Anime Whisper），830 秒素材约 50 秒转完。",
         family="qwen",
         required_files=("config.json", "ctc_aligner_jav_vocalisation_v3.pt"),
+        file_tag="Qwen3-ASR",
+        legacy_tags=("qwen", "qwen3", "qwen3-asr"),
     ),
     # ---- 中文（可选装）----
     # 两个引擎都走 sherpa-onnx（ONNX Runtime / CPU），不引入 torch 之外的新运行时；
@@ -104,6 +115,8 @@ ENGINES: tuple[EngineSpec, ...] = (
         notes="int8 权重约 230 MB；中文/中英混排首选，也覆盖日语与粤语。",
         family="sherpa",
         required_files=("model.int8.onnx", "tokens.txt"),
+        file_tag="SenseVoice-Small",
+        legacy_tags=("sensevoice",),
     ),
     EngineSpec(
         key="firered",
@@ -120,6 +133,8 @@ ENGINES: tuple[EngineSpec, ...] = (
         notes="int8 权重约 1.2 GB + FireRedPunc 标点模型约 160 MB。该模型不输出逐字时间戳，句内时间按字数比例分配（与 Anime Whisper 同口径）。",
         family="sherpa",
         required_files=("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"),
+        file_tag="FireRedASR2-AED",
+        legacy_tags=("firered", "fireredasr2"),
     ),
 )
 
@@ -145,6 +160,22 @@ def spec_or_none(key: str) -> EngineSpec | None:
 def family_of(key: str) -> str:
     """引擎运行时的族名；未知 key 直接抛错（不要静默退回 whisper）。"""
     return get(key).family
+
+
+def file_tag_of(key: str) -> str:
+    """产物文件名标签；未知 key 返回空串（调用方自己决定退化文案）。
+
+    这是文件名标签的**唯一登记处**：`pipeline.output_suffix()` 与
+    `core.export_naming` 都读它，禁止在别处再维护一份引擎→后缀的映射。
+    """
+    spec = spec_or_none(str(key or "").strip().lower())
+    return spec.file_tag if spec else ""
+
+
+def filename_tags(spec: EngineSpec) -> tuple[str, ...]:
+    """该引擎在文件名里可被识别的全部标签（新标签 + 历史标签）。"""
+    tags = [spec.file_tag, *spec.legacy_tags]
+    return tuple(tag for tag in tags if tag)
 
 
 def model_dir(spec: EngineSpec) -> Path:

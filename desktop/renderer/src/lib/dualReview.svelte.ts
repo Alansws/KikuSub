@@ -24,24 +24,50 @@ export const dual = $state({
   error: '',
   /** 只看差异（= / ~ / + / − 里只留 ~ + −）。 */
   onlyDiff: true,
+  /**
+   * 刚从对照表点走的那一行（`a-b` 索引）。回来后高亮它，让用户一眼看到
+   * 「刚才看的就是这一句」；B 版换了就没有意义了，重新拉取时清掉。
+   */
+  anchor: '',
   /** 进入页面时接管的媒体 id：换片后自动重拉。 */
   mediaId: '',
 });
 
-/** 引擎 key → 用户看到的名称（注册表里找不到时退回 key）。 */
+/** 第二版是不是导入稿（没有转写参数、没有 job_id）。 */
+export function altIsImported(): boolean {
+  return dual.source?.kind === 'import';
+}
+
+/** 引擎 key → 用户看到的名称（注册表里找不到时退回 key；导入稿额外标注）。 */
 export function altEngineLabel(): string {
   const key = dual.engine;
-  if (!key) return '第二引擎';
-  return app.config?.engines.find((engine) => engine.key === key)?.label ?? key;
+  const base = key
+    ? app.config?.engines.find((engine) => engine.key === key)?.label ?? key
+    : '';
+  if (altIsImported()) return base ? `${base}（导入）` : '导入稿';
+  return base || '第二引擎';
 }
 
 export function altParamsLabel(): string {
+  if (altIsImported()) return '导入稿 · 无转写参数';
   const entries = Object.entries(dual.params ?? {});
   if (!entries.length) return '默认参数';
   return entries
     .slice(0, 4)
     .map(([key, value]) => `${key}=${String(value)}`)
     .join(' · ');
+}
+
+/**
+ * 认领「这是哪一份 B」：媒体 id + 生成时间。
+ * 换了人，之前点过的那一行就作废（横幅高亮不能挂到新表的同号行上）。
+ */
+function adoptAltIdentity(createdAt: number) {
+  const nextMedia = app.media?.id ?? '';
+  const nextCreatedAt = createdAt ?? 0;
+  if (dual.mediaId !== nextMedia || dual.createdAt !== nextCreatedAt) dual.anchor = '';
+  dual.createdAt = nextCreatedAt;
+  dual.mediaId = nextMedia;
 }
 
 export function resetAltReview() {
@@ -55,6 +81,7 @@ export function resetAltReview() {
   dual.rows = [];
   dual.stats = null;
   dual.error = '';
+  dual.anchor = '';
   dual.mediaId = app.media?.id ?? '';
 }
 
@@ -71,9 +98,8 @@ export async function refreshAltReview() {
     dual.cues = data.cues ?? [];
     dual.source = data.source ?? {};
     dual.params = data.params ?? {};
-    dual.createdAt = data.created_at ?? 0;
     dual.stats = data.stats ?? null;
-    dual.mediaId = app.media?.id ?? '';
+    adoptAltIdentity(data.created_at ?? 0);
     if (!data.exists) dual.rows = [];
   } catch (err) {
     dual.error = (err as Error).message;
@@ -100,12 +126,50 @@ export async function loadAltDiff() {
     dual.cues = data.cues ?? [];
     dual.source = data.source ?? {};
     dual.params = data.params ?? {};
-    dual.createdAt = data.created_at ?? 0;
     dual.rows = data.rows ?? [];
     dual.stats = data.stats ?? null;
-    dual.mediaId = app.media?.id ?? '';
+    adoptAltIdentity(data.created_at ?? 0);
   } catch (err) {
     dual.error = (err as Error).message;
+  } finally {
+    dual.loading = false;
+  }
+}
+
+/**
+ * 导入一份已经做好的字幕作为第二版。
+ *
+ * 与「换引擎再整片转一次」写的是同一个 `AltReview`：边车按媒体身份落盘、切媒体
+ * 自动恢复、实时 diff、双源润色 / 断句重排参考、整列覆盖全部复用；核对台不动。
+ */
+export async function importAltReview(): Promise<boolean> {
+  const dir = app.config?.export_dir || app.config?.output_dir || '';
+  const file = await window.kikusub.pickSubtitle(dir, '选择第二版字幕');
+  if (!file) return false;
+  if (
+    dual.exists &&
+    !window.confirm(
+      `导入会替换当前第二版（${altEngineLabel()} · ${dual.count} 条）。\n\n核对台不会改动，这一步也不进撤销历史。继续？`,
+    )
+  ) {
+    return false;
+  }
+  dual.loading = true;
+  dual.error = '';
+  try {
+    const res = await api.importAltReview(file);
+    await refreshAltReview();
+    await loadAltDiff();
+    const name = file.split('/').pop() || file;
+    if (res.warning) {
+      toast(`已导入第二版 ${res.count} 条；${res.warning}`, 'warn');
+    } else {
+      toast(`已导入第二版 ${res.count} 条（${name}）`);
+    }
+    return true;
+  } catch (err) {
+    toast(`导入第二版失败：${(err as Error).message}`, 'error');
+    return false;
   } finally {
     dual.loading = false;
   }

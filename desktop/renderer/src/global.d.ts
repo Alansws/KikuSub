@@ -35,6 +35,9 @@ export interface MenuEvent {
     | 'play'
     | 'prev-cue'
     | 'next-cue'
+    | 'find'
+    | 'punct'
+    | 'shortcuts'
     | 'view';
   view?: string;
 }
@@ -48,12 +51,20 @@ declare global {
         arch: string;
         dev: boolean;
         repoRoot: string;
+        dataDir: string;
+        modelsDir: string;
+        preferencesPath: string;
+        /** 芯片型号（例：Apple M4 Pro）；取不到时是空字符串。 */
+        chip: string;
+        cores: number;
+        /** 物理内存字节数。 */
+        totalMemBytes: number;
       }>;
       getSidecar(): Promise<SidecarHandshake | null>;
       onSidecarReady(cb: (payload: SidecarHandshake) => void): () => void;
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
       pickMedia(): Promise<string | null>;
-      pickSubtitle(defaultDir?: string): Promise<string | null>;
+      pickSubtitle(defaultDir?: string, title?: string): Promise<string | null>;
       /** TTS 克隆音色的参考音频（wav/mp3/…），返回绝对路径。 */
       pickAudio(defaultDir?: string): Promise<string[]>;
       pickProposal(defaultDir?: string): Promise<string | null>;

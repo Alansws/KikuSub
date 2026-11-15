@@ -21,7 +21,7 @@
 
 ![Review desk: video monitor, waveform timeline, subtitle lane and inspector](docs/images/workbench.jpg)
 
-> The source and subtitles in the screenshots are demo data; the UI is from the current build.
+> The source and subtitles in the screenshots are demo data (footage: *The Garden of Words*); the UI is from the current build.
 
 ---
 
@@ -32,7 +32,7 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **Transcribe** — Silero VAD segments the speech, then a switchable Japanese engine produces timed subtitles.
 - **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
 - **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
-- **AI polish / translate / structure suggestions** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A separate structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically. Translations live in a parallel track and export as source, target or bilingual.
+- **AI polish / structure suggestions / re-segmentation / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically; a re-segmentation lane replaces whole index ranges from a complete SRT. Translations live in a parallel track and export as source, target or bilingual.
 - **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
 - **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
 - **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality share one history with subtitles, translations, QA state and AI suggestion edits; ⌘Z always undoes the most recent step, and the history panel is a single list.
@@ -44,10 +44,12 @@ Everything except the optional AI features is local inference.
 
 **Import & transcribe**
 
-- Drag in video, audio or subtitles. MKV and HEVC — which Chromium cannot decode — get a 480p preview proxy built in the background.
+- Drag in video, audio or subtitles. For MKV and HEVC — which Chromium cannot decode — the black frame offers a **Build proxy** button instead of building a 480p preview proxy automatically on import.
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
-- All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. Six built-in presets, plus save / overwrite / delete.
+- Result handling depends on scope: a whole-file run offers *replace all / append*, a range run adds **replace selection** (default — rewrites that span only, every other cue stays). Picking *replace all* on a range asks for confirmation first.
+- **Vocal separation**: run it on the whole file or just a time range (most useful for songs and loud-BGM passages); with only one bound filled the other follows the start / end of the file, and long files are split automatically — no manual cutting required.
+- All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. **Each engine ships one calibrated, engine-bound preset** (Japanese ASMR ×2, Chinese short-form ×2); the picker only lists presets for the selected engine, and cross-engine loads are rejected. Presets can be saved and deleted.
 - FFmpeg `dynaudnorm` is on by default (on quiet masters it is the difference between
   transcribing a line and dropping it); turn it off in the parameter panel if you prefer.
 - Silero VAD runs in 30 s windows: one long pass drifts and silently misses clear lines.
@@ -60,9 +62,9 @@ Everything except the optional AI features is local inference.
 - **Import source and target tracks separately**: the Transcribe page's “existing subtitles” cards can load a source SRT/VTT or a target SRT/VTT aligned to the current source; the Review desk “⋯” menu can delete either track independently, so a restart no longer forces a full re-transcription just to restore translations.
 - Hallucination gate: segments transcribed but re-checked as empty are dropped, suspicious short cues are marked, and the per-segment details go into the task report.
 
-**Review desk**
-
 ![Parameters: engine, time range, output format and result handling](docs/images/transcribe.jpg)
+
+**Review desk**
 
 - Video, waveform, cue table and inspector stay in sync: when the playhead enters a cue, the table scrolls to it and selects it.
 - The waveform is fetched per visible window; scroll / pinch to zoom, two-finger pan or ⌥-drag to move. Zoom goes far enough to see a fraction of a second.
@@ -78,7 +80,8 @@ Everything except the optional AI features is local inference.
 - **The QA panel no longer covers the picture**: it docks into a "QA" tab in the right inspector by default; click "pop out" when you want it beside the source, then drag/resize it, reset it, or dock it back.
 - **Right-click an empty spot on the cue lane → Add subtitle**: inserts a 0.8 s empty cue centred on the cursor and focuses the inspector textarea, for breath sounds or lines the model returned empty.
 - **Right-click a cue → Split cue** cuts it into two at the cursor; both halves keep the full text so you only trim each side. Drag-select two or more cues then right-click → **Merge N cues** (translations are merged too).
-- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 translate / ⌘7 export**.
+- **Batch punctuation cleanup**: ASR models love to append `、` `。` at cue ends (sometimes mid-line); the review toolbar, `⌘⇧L`, or the Edit menu open the same popover. Leading / trailing marks are removed, mid-line marks become a single space, and ellipses plus `.` `,` inside numbers and Latin text are left alone. Source track only — the translation track is never touched — and the whole-track edit is one history step (⌘Z reverts it in one go).
+- The bottom cue lane supports **⌘-click multi-select** and one-shot delete. **Enter** deletes the selected cue by default; **⌘K** lists every rebindable action. View keys are **⌘1 import / ⌘2 transcribe / ⌘3 review / ⌘4 dual review / ⌘5 polish / ⌘6 re-segment / ⌘7 translate / ⌘8 export**.
 - Every **Focus** button is fixed at **69×** (no more 145× → 415× stacking); a range transcription selects the new cue and leaves the current zoom untouched.
 
 **QA queue**
@@ -88,12 +91,13 @@ Everything except the optional AI features is local inference.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
 
-**Dual-engine review, polish, structure suggestions & translation**
+**Dual-engine review, polish, structure suggestions, re-segmentation & translation**
 
 ![Dual review: two read-only columns marked = / ~ / + / −](docs/images/dual-view.jpg)
 
 - A second engine's full transcript goes into a read-only column and **never overwrites the review desk**. Rows are aligned live 1:1 and marked `=` / `~` / `+` / `−`, with a soft character-level tint on `~` (no strikethrough; low-similarity rows keep only the row marker). **The two versions may have different line counts**; extra lines show up as their own `+` / `−` rows instead of being hidden.
 - The second version is cached per media file and restored when you switch back. Drop it, or confirm once to replace the whole review desk with B (one ⌘Z reverts everything).
+- **Jump to the review desk from a timestamp, then come back with ⌘4 / the sidebar, and the table is still where you left it** (the row you left from stays highlighted), so long films do not need re-scrolling.
 - The sidebar badge counts text-diff rows only; `+` / `−` missing lines are shown inside the page.
 
 ![Dual-source polish: A | B (collapsible) | AI final](docs/images/polish-view.jpg)
@@ -101,26 +105,28 @@ Everything except the optional AI features is local inference.
 - Every AI result lands as a **suggestion file**; the app only renders the diff and applies it. In-app generation and external agents produce the same UI.
 - **Proposals carry no timestamps.** The timeline is joined back by index, so "the timeline never changes" is a structural guarantee, not a prompt request.
 - With a second version you can switch between **single-source / dual-source**: A | B | AI final, with B collapsible. **B does not need the same line count as A** (different engines segment differently); the AI final still follows A's indices and timeline exactly. Accept per item, apply all changed rows, or apply the whole column — all through the same `apply_polish()`, one history entry.
-- Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap, with per-segment copy / paste and completion tracking.
+- Long films switch to **smart segments** for the external copy/paste path: boundaries at the largest A/B silence gap. **Clicking a segment shows only that segment's cues** (the table, prompt copy and paste-back all share the same range), with per-segment copy / paste and completion tracking.
 - Applying is one history entry — ⌘Z reverts the whole batch. A digest / digest_b mismatch is rejected without touching a single byte.
 
 ![Structure suggestions: paste ops JSON, preview merge / retime / replace text / insert / delete](docs/images/structure-view.jpg)
 
 - **Structure suggestions (Phase 1)** — the external model only returns `{"ops":[...]}` (merge / retime / replace text / insert / delete); the app binds the source digest on paste, previews every op, and applies the selection as one history step (⌘Z). No digest or version is requested from the model, and the polish timeline contract is untouched. Conflicting ops are red and cannot be selected; count-changing merge / insert / delete are rejected when a non-empty translation track exists.
+- **Re-segmentation (full re-script)** — the external model returns a complete SRT; pasting it replaces each original index range wholesale, so cue count, splitting, timecodes and text may all change. It is a third lane separate from polish (text only) and structure suggestions (named ops only). Health checks annotate but never block (overlap / out of order / too long / out of bounds); only a halved or doubled cue count (<50% or >200%) needs a second confirmation, and a digest mismatch refuses the paste.
 - Translations go into a parallel track aligned cue by cue; count / index / digest mismatches reject the whole batch.
-- Export source, target or bilingual as separate files (`*.lang.srt`, `*.bilingual.srt`). Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
+- Export source, target or bilingual as separate files named `{stem}.{engine}.reviewed{track}.srt` (e.g. `film.AnimeWhisper.reviewed.srt`, `film.Qwen3-ASR.reviewed.zh-Hans.srt`, `….bilingual.srt`). If a file with the same name already holds different content, the new export gets a numbered name (`… (2).srt`) instead of overwriting it, so versions from different engines never clobber each other. Bilingual files put each language on its own cue over the same time range (the layout used by official bilingual SRTs), so re-importing them into the review desk no longer collapses both lines into one.
 - **Video export**: hard subs use a Pillow sprite + ffmpeg overlay (no libass needed); soft subs are toggleable in MP4; "copy only" skips re-encoding entirely.
 - No API? **Copy prompt** gives you a prompt containing the SRT; paste the model's reply back and it is parsed by order alone — indices and timestamps are discarded, your timeline is kept.
 - Ships an agent skill (`~/.agents/skills/kikusub-subtitle`) so a DeepSeek Harness session can do the same job.
 
 **Settings & runtime**
 
-![Settings: engines, AI options, agent skill, appearance](docs/images/settings-ai.jpg)
+![Settings: engines & models, appearance & voice, AI & skills, environment & diagnostics](docs/images/settings.jpg)
 
+- Settings is split into four tabs: **Engines & models / Appearance & voice / AI & skills / Environment & diagnostics**.
 - Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download. Anime Whisper / Qwen3 / OmniVoice share one progress track for **Verify / Fill gaps**: verification uses an indeterminate sweep, downloads use real percentages, and completion briefly turns green before collapsing.
-- Runtime lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
+- **Environment & diagnostics** lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
-- Two themes: Clear Sky (light / dark) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch in Settings. Waveform height is draggable from the review stage.
+- Three themes: Clear Sky light / Clear Sky dark (one skin, two schemes) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch by thumbnail under Settings → Appearance & voice. Waveform height is draggable from the review stage.
 
 ## Switchable engines
 
@@ -148,9 +154,9 @@ download them (about 230 MB / 1.2 GB) from Settings → Engines or the first-run
 | Weights | [`csukuangfj/sherpa-onnx-sense-voice-…`](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17) | [`csukuangfj2/sherpa-onnx-fire-red-asr2-…`](https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26) |
 | Size | ~230 MB (int8) | ~1.35 GB (1.2 GB ASR + 160 MB FireRedPunc) |
 | Languages | zh / en / ja / ko / yue | zh / en + 20+ dialects |
-| Timing inside a cue | token timestamps from the model | **no timestamps**; proportional to character count |
+| Timing inside a cue | token timestamps from the model | **no timestamps**; characters are spread over the voiced regions found by an energy pass (falls back to proportional) |
 | Punctuation | ITN output (can be disabled) | **restored by FireRedPunc** (on by default) |
-| Segmentation | sentence punctuation → pauses → length / duration | punctuation → pauses → length / duration |
+| Segmentation | sentence punctuation → pauses → commas → word boundaries → length / duration | same (word boundaries come from the bundled jieba dictionary) |
 | Speed | ~0.1 s for 5–6 s audio | ~1.5 s for 5–6 s audio (more accurate) |
 | Good for | Chinese first drafts, mixed zh/ja material | Chinese fine-tuning, dialect material |
 
@@ -163,7 +169,9 @@ A 30-character unpunctuated transcript can only be cut by character count — th
 subtitles look wrong. FireRedASR2S' full stack is VAD + AED + FireRedPunc, and the last piece is wired in here:
 FireRedPunc is downloaded with the engine (`<models>/punc/`, ~160 MB) and restores commas/periods before cue
 splitting. When a mark sits only a few characters past the cue limit, the cue is allowed to run a little longer
-instead of cutting through a word. Whisper and Qwen already emit punctuation, and rely on punctuation rules and
+instead of cutting through a word. Chinese has no spaces, so cutting purely by character count would also split
+words ("办 / 理", "手 / 机"); jieba word boundaries are the last line of defence (without that package the code
+falls back to plain character cuts). Whisper and Qwen already emit punctuation, and rely on punctuation rules and
 Japanese-particle DP respectively, so they do not need this step.
 
 ## Installation
@@ -189,7 +197,7 @@ xattr -dr com.apple.quarantine /Applications/KikuSub.app
 
 **First launch** has two steps: pick a model folder (default `~/Library/Application Support/KikuSub/models`), then choose which models to download — Anime Whisper (recommended), Qwen3-ASR, and the optional **OmniVoice voice cloning**. **Set up selected** downloads them in order; **Not now** skips and leaves the same choices under Settings → Engines & Models. Models are not bundled; the default source is `hf-mirror.com` with resume support.
 
-The default TTS voice is still the macOS system voice (Kyoko etc.); you can switch the default to a cloned voice under Settings → TTS. OmniVoice only loads when a cloned voice is actually used.
+The default TTS voice is still the macOS system voice (Kyoko etc.); you can switch the default to a cloned voice under Settings → Appearance & voice. OmniVoice only loads when a cloned voice is actually used.
 
 ## Running from source
 
@@ -262,7 +270,7 @@ media file
 
 ## Configuring AI
 
-Under Settings → **AI options (experimental)** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek.
+Under Settings → **AI & skills → AI options** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek.
 
 - **The key never enters `settings.json` or the logs.** The main process encrypts it with a machine-local master key (AES-256-GCM) and stores the ciphertext in `preferences.json` under an `aik1:` prefix; the master key is `{dataDir}/.ai-key` with mode 0600. The renderer decrypts it only for the request and sends it once as `X-AI-Key`; the server layer never reads, writes or logs it.
 - Not using `safeStorage` is deliberate: the app ships as a DMG with ad-hoc signing, so the cdhash changes on every release and Keychain ACLs would invalidate every user's key on upgrade.
@@ -285,7 +293,7 @@ In development, output, logs and proxies live in the repository's `outputs/`, ma
 ## FAQ
 
 **Black screen after importing MKV?**
-Chromium cannot decode some MKV / HEVC files. A 480p proxy is built in the background and swapped in automatically; the toolbar shows live progress such as “Proxy 42%”. You can also start one from the Transcribe page. If a finished proxy already exists, use **Import proxy…** in the review notice or the “⋯” menu to attach it without re-encoding. The playhead still moves while it is being made.
+Chromium cannot decode some MKV / HEVC files. Nothing is built automatically: when the picture really cannot be shown, a **Build proxy** button appears in the middle of the black frame — click it to start. No progress bar is drawn inside the frame while it runs; the blue progress chip in the top toolbar shows live progress such as “Proxy 42%”, and the proxy is swapped in when it finishes. If a finished proxy already exists, use **Import existing proxy…** under the button, or **Import proxy…** in the review “⋯” menu, to attach it without re-encoding. High-bitrate files that play normally are never proxied automatically; start one from the “⋯” menu when you need it. The playhead still moves while it is being made.
 
 **Model download is slow or fails?**
 The default endpoint is `hf-mirror.com`. Set `HF_ENDPOINT` back to the official Hugging Face endpoint for the sidecar, or pre-download the weights with `huggingface-cli`.

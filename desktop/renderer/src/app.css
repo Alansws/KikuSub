@@ -20,6 +20,9 @@
   --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* 字幕正文的字体角色：只有主题会换它（「明朝墨」用明朝），UI 永远跟 --font-sans */
   --font-cue: var(--font-sans);
+  /* 明朝字幕的字体栈单独提一个与主题无关的别名：设置页的缩略图要在「当前不是明朝墨」时
+     也能渲染出明朝那一张，不能读当前主题的 --font-cue */
+  --font-cue-mincho: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
 
   /* 字阶：UI 角色 ≤6 种，字幕正文单独一条（见设计规划 §5.2） */
   --fs-display: 22px;
@@ -34,6 +37,9 @@
   --lh-label: 16px;
   --fs-mono: 12.5px;
   --lh-mono: 18px;
+  /* 设置页总览看板的大数字 */
+  --fs-hero: 27px;
+  --lh-hero: 33px;
 
   /* 间距：4 的倍数 */
   --sp-1: 4px;
@@ -51,11 +57,18 @@
   --rad-control: 4px;
   --rad-card: 8px;
   --rad-panel: 12px;
+  /* 设置页：分段导航 / Inset 分组 / 总览看板 / 主题缩略图 */
+  --rad-tab: 9px;
+  --rad-inset: 10px;
+  --rad-hero: 14px;
+  --rad-shot: 6px;
 
   /* 控件高度 */
   --ctl-h: 28px;
   --ctl-h-lg: 32px;
   --ctl-h-xl: 36px;
+  /* 设置页分段导航的段高（比普通控件高一档） */
+  --seg-h: 30px;
 
   /* —— D「青空」浅色（来自上传图的浅天蓝 / 薰衣草 / 樱粉 / 深靛） —— */
   --canvas: #edf3fb;
@@ -128,6 +141,38 @@
   --cue-block-hover: rgba(27, 39, 64, 0.24);
   --cue-block-active: rgba(79, 107, 255, 0.82);
   --cue-edge: rgba(79, 107, 255, 0.9);
+
+  /* —— 设置页（2026-11）：分段导航 / Bento / 占用条 / Inset 分组 —— */
+  --seg-track: rgba(27, 39, 64, 0.055);
+  --seg-thumb: #ffffff;
+  --seg-thumb-ring: rgba(27, 39, 64, 0.1);
+  --seg-thumb-shadow: var(--shadow-seg);
+  --seg-ink: var(--text-2);
+  --seg-ink-on: var(--text);
+
+  --bento-bg: #ffffff;
+  --bento-border: rgba(27, 39, 64, 0.075);
+  --bento-border-on: rgba(79, 107, 255, 0.34);
+  --bento-glow: rgba(79, 107, 255, 0.1);
+  --bento-bg-on: rgba(79, 107, 255, 0.035);
+  --bento-shadow: 0 1px 2px rgba(27, 39, 64, 0.045);
+  --bento-shadow-on: 0 2px 12px rgba(79, 107, 255, 0.1), 0 1px 2px rgba(27, 39, 64, 0.05);
+
+  --hero-bg: linear-gradient(180deg, rgba(79, 107, 255, 0.075), rgba(79, 107, 255, 0) 68%),
+    var(--raise);
+  --hero-border: rgba(79, 107, 255, 0.16);
+
+  --meter-track: rgba(27, 39, 64, 0.065);
+  --meter-a: #4f6bff;
+  --meter-b: #2f9e8f;
+  --meter-c: #b06bd0;
+  --meter-muted: rgba(27, 39, 64, 0.28);
+  --meter-gap: var(--raise);
+
+  --inset-bg: #ffffff;
+  --inset-line: var(--separator-soft);
+  /* 开关的滑块：三套主题都是白片，单独留一个令牌方便以后换 */
+  --switch-knob: #ffffff;
 }
 
 html[data-theme='dark'] {
@@ -189,6 +234,40 @@ html[data-theme='dark'] {
   --cue-block-hover: rgba(236, 241, 250, 0.2);
   --cue-block-active: rgba(125, 147, 255, 0.88);
   --cue-edge: rgba(160, 178, 255, 0.95);
+
+  /* —— 设置页令牌（深色） —— */
+  --seg-track: rgba(236, 241, 250, 0.075);
+  --seg-thumb: #262c36;
+  --seg-thumb-ring: rgba(236, 241, 250, 0.11);
+  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --seg-ink: var(--text-2);
+  --seg-ink-on: var(--text);
+
+  --bento-bg: #171b22;
+  --bento-border: rgba(236, 241, 250, 0.085);
+  --bento-border-on: rgba(125, 147, 255, 0.46);
+  --bento-glow: rgba(125, 147, 255, 0.13);
+  --bento-bg-on: rgba(125, 147, 255, 0.055);
+  --bento-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --bento-shadow-on: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(125, 147, 255, 0.08);
+
+  --hero-bg: linear-gradient(180deg, rgba(125, 147, 255, 0.1), rgba(125, 147, 255, 0) 70%),
+    var(--raise);
+  --hero-border: rgba(125, 147, 255, 0.22);
+
+  --meter-track: rgba(236, 241, 250, 0.085);
+  --meter-a: #7d93ff;
+  --meter-b: #45c0ad;
+  --meter-c: #c07fe0;
+  --meter-muted: rgba(236, 241, 250, 0.3);
+  --meter-gap: #111419;
+
+  --inset-bg: #1a1f27;
+  --inset-line: rgba(236, 241, 250, 0.07);
+
+  /* 深色强调色 #7d93ff 上的白字只有 2.8:1：实心主按钮单独加深，白字回到 5.0:1 */
+  --btn-primary-bg: #4c62c9;
+  --btn-primary-hover: #5b71d8;
 }
 
 /* ============================================================
@@ -255,8 +334,38 @@ html[data-theme='mincho'] {
   --cue-block-active: rgba(200, 65, 45, 0.82);
   --cue-edge: rgba(200, 65, 45, 0.9);
 
+  /* —— 设置页令牌（明朝墨） —— */
+  --seg-track: rgba(21, 24, 27, 0.055);
+  --seg-thumb: #ffffff;
+  --seg-thumb-ring: rgba(21, 24, 27, 0.13);
+  --seg-thumb-shadow: var(--shadow-seg);
+  --seg-ink: var(--text-2);
+  --seg-ink-on: var(--text);
+
+  --bento-bg: #ffffff;
+  --bento-border: rgba(21, 24, 27, 0.09);
+  --bento-border-on: rgba(200, 65, 45, 0.3);
+  --bento-glow: rgba(200, 65, 45, 0.07);
+  --bento-bg-on: rgba(200, 65, 45, 0.028);
+  --bento-shadow: 0 1px 2px rgba(21, 24, 27, 0.05);
+  --bento-shadow-on: 0 2px 10px rgba(200, 65, 45, 0.08), 0 1px 2px rgba(21, 24, 27, 0.05);
+
+  --hero-bg: linear-gradient(180deg, rgba(200, 65, 45, 0.055), rgba(200, 65, 45, 0) 66%),
+    var(--raise);
+  --hero-border: rgba(200, 65, 45, 0.16);
+
+  --meter-track: rgba(21, 24, 27, 0.06);
+  --meter-a: #c8412d;
+  --meter-b: #4a6b64;
+  --meter-c: #a08a6a;
+  --meter-muted: rgba(21, 24, 27, 0.26);
+  --meter-gap: var(--paper);
+
+  --inset-bg: #ffffff;
+  --inset-line: var(--separator-soft);
+
   /* 唯一的排版差异：字幕用明朝。UI 文案仍是苹方，别把整个界面变成书 */
-  --font-cue: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
+  --font-cue: var(--font-cue-mincho);
 }
 
 * {
@@ -407,6 +516,12 @@ body {
   width: var(--ctl-h);
   padding: 0;
   justify-content: center;
+}
+/* 设置页大量使用的小号按钮（Inline 行内动作） */
+.btn.sm {
+  height: 24px;
+  font-size: var(--fs-label);
+  padding: 0 var(--sp-2);
 }
 .btn.danger {
   color: var(--danger);
@@ -603,6 +718,122 @@ html[data-theme='dark'] .card {
 .dot.off {
   background: var(--warn);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
+/* ---------- 设置页：说明 / 警示条 ---------- */
+.note-box {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--rad-card);
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: var(--fs-label);
+  line-height: 1.55;
+}
+.note-box.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.note-box .note-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+}
+.note-box b {
+  font-weight: 600;
+}
+
+/* ---------- 设置页：Inset 分组列表 ---------- */
+/* 四个页签共用；组件里不要再各写一份（和 .sec/.sec-head 同一个道理）。 */
+.set-group {
+  border: 1px solid var(--inset-line);
+  border-radius: var(--rad-inset);
+  background: var(--inset-bg);
+  overflow: hidden;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--inset-line);
+  min-height: 46px;
+}
+.set-row:last-child {
+  border-bottom: 0;
+}
+.set-row-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.set-row-title {
+  font-size: var(--fs-ui);
+  font-weight: 500;
+}
+.set-row-desc {
+  font-size: var(--fs-label);
+  color: var(--text-3);
+  line-height: 1.45;
+}
+.set-row-ctl {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+}
+.set-row-ctl.grow {
+  flex: 1 1 46%;
+  min-width: 0;
+}
+.set-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ---------- 开关 ---------- */
+/* 设置页的引擎卡与 AI 分组共用。ParamPanel 里另有一份历史实现，不在本次范围。 */
+.switch {
+  appearance: none;
+  width: 30px;
+  height: 18px;
+  border-radius: 4px;
+  border: 0;
+  background: var(--fill-strong);
+  position: relative;
+  padding: 0;
+  flex: 0 0 30px;
+  transition: background var(--dur) var(--ease);
+}
+.switch .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--switch-knob);
+  box-shadow: var(--shadow-btn);
+  transition: transform var(--dur) var(--ease);
+}
+.switch.on {
+  background: var(--control-on);
+}
+.switch.on .knob {
+  transform: translateX(12px);
+}
+.switch:disabled {
+  opacity: 0.45;
 }
 
 /* ---------- 滚动条（overlay 风格） ---------- */

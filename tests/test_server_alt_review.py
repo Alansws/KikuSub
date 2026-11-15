@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -36,8 +37,10 @@ class _Runner:
     def __init__(self, cues: list[SubtitleCue], tmp_path: Path) -> None:
         self.cues = cues
         self.tmp_path = tmp_path
+        self.last_request = None
 
     def __call__(self, request, *, on_progress, cancel_event, output_dir):
+        self.last_request = request
         out = self.tmp_path / "episode.srt"
         out.write_text("", encoding="utf-8")
         on_progress(1.0, "完成")
@@ -94,7 +97,15 @@ def _run_alt_job(client: TestClient, media_id: str) -> dict:
         json={"media_id": media_id, "alt_review": True},
     )
     assert created.status_code == 201, created.text
-    return client.get(f"/api/jobs/{created.json()['id']}", headers=AUTH).json()
+    job_id = created.json()["id"]
+    # 任务在 worker 线程里跑，创建后立刻 GET 可能还在 running；轮询到终态，
+    # 否则全量套件在高负载下会偶发「status != done」的假红。
+    deadline = time.time() + 10
+    snap = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+    while snap["status"] not in {"done", "error", "cancelled"} and time.time() < deadline:
+        time.sleep(0.02)
+        snap = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+    return snap
 
 
 def test_alt_review_does_not_touch_primary(make_client, tmp_path):
@@ -349,3 +360,197 @@ def test_dual_polish_allows_a83_b89(make_client, tmp_path):
     assert len(body["proposal"]["items"]) == 83
     assert body["proposal"]["source"]["count_b"] == 89
     assert body["proposal"]["source"]["digest_b"]
+
+
+def test_separate_vocals_full_film_is_not_rejected(make_client, tmp_path):
+    """整片勾「人声分离」不再 422：2026-11-15 起由 pipeline 按 0..总时长分段分离。"""
+    client = make_client([])
+    media_id = _new_media(client, tmp_path)
+
+    created = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={"media_id": media_id, "separate_vocals": True},
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+    for _ in range(200):
+        snapshot = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snapshot["status"] in {"done", "error", "cancelled"}:
+            break
+        import time
+
+        time.sleep(0.01)
+    assert snapshot["status"] == "done", snapshot
+    request = client.app.state.jobs._runner.last_request
+    assert request.separate_vocals is True
+    assert request.start_s is None and request.end_s is None
+    # 服务层把 ffprobe 到的总时长带给 pipeline（1 字节假媒体探不到 → 0，pipeline 会报错让填区间）
+    assert request.media_duration_s == 0.0
+
+
+def test_separate_vocals_range_reaches_pipeline(make_client, tmp_path):
+    client = make_client([])
+    media_id = _new_media(client, tmp_path)
+
+    created = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={
+            "media_id": media_id,
+            "start": 1.0,
+            "end": 2.0,
+            "separate_vocals": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+    for _ in range(200):
+        snapshot = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snapshot["status"] in {"done", "error", "cancelled"}:
+            break
+        import time
+
+        time.sleep(0.01)
+    assert snapshot["status"] == "done", snapshot
+    assert client.app.state.jobs._runner.last_request.separate_vocals is True
+
+
+# ---------------------------------------------------------------------------
+# 导入第二版（与转写产出的 B 版同构）
+# ---------------------------------------------------------------------------
+
+
+def _write_srt(path: Path, cues: list[tuple[float, float, str]]) -> Path:
+    blocks = []
+    for index, (start, end, text) in enumerate(cues, start=1):
+        def stamp(sec: float) -> str:
+            hours = int(sec // 3600)
+            minutes = int((sec % 3600) // 60)
+            seconds = int(sec % 60)
+            millis = int(round((sec - int(sec)) * 1000))
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+        blocks.append(f"{index}\n{stamp(start)} --> {stamp(end)}\n{text}\n")
+    path.write_text("\n".join(blocks) + "\n", encoding="utf-8")
+    return path
+
+
+def test_import_alt_review_from_srt_behaves_like_transcribed_b(make_client, tmp_path):
+    client = make_client()
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    _seed_primary(client)
+    srt = _write_srt(
+        tmp_path / "episode.whisper.reviewed.srt",
+        [(0.0, 1.0, "おはよう"), (1.0, 2.0, "今日は飴だ"), (2.0, 3.0, "追加の一句")],
+    )
+
+    imported = client.post("/api/alt-review/import", headers=AUTH, json={"path": str(srt)})
+    assert imported.status_code == 200, imported.text
+    body = imported.json()
+    assert body["count"] == 3
+    assert body["engine"] == "whisper"  # 历史标签也要识别
+    assert body["warning"] == ""
+
+    alt = client.get("/api/alt-review?diff=1", headers=AUTH).json()
+    assert alt["exists"] is True
+    assert alt["source"]["kind"] == "import"
+    assert alt["source"]["name"] == srt.name
+    assert alt["stats"]["a_count"] == 2
+    assert alt["stats"]["b_count"] == 3
+    assert alt["stats"]["only_b"] == 1
+    # 核对台一个字都没动
+    assert [c["text"] for c in client.get("/api/cues", headers=AUTH).json()["cues"]] == [
+        "おはよう",
+        "今日は雨だ",
+    ]
+    # 边车按媒体身份落盘（切媒体恢复由现有 sync 逻辑负责）
+    assert list(tmp_path.glob("*.autosave_draft.alt.json"))
+
+    # 下游链路把导入稿当普通 B 版用：双源润色与断句重排的提示词都能拿到 B 文本
+    polish = client.get("/api/ai/prompt?kind=polish&mode=dual", headers=AUTH)
+    assert polish.status_code == 200, polish.text
+    assert "追加の一句" in polish.json()["prompt"]
+    reshape = client.get("/api/ai/reshape/prompt?mode=dual", headers=AUTH)
+    assert reshape.status_code == 200, reshape.text
+    assert "追加の一句" in reshape.json()["prompt"]
+
+    # 切媒体再切回：导入稿与转写稿一样从边车恢复（source.kind 仍是 import）
+    other = _new_media(client, tmp_path, "other.mkv")
+    _bind(client, other)
+    assert client.get("/api/alt-review", headers=AUTH).json()["exists"] is False
+    _bind(client, media_id)
+    restored = client.get("/api/alt-review", headers=AUTH).json()
+    assert restored["exists"] is True
+    assert restored["source"]["kind"] == "import"
+    assert restored["count"] == 3
+
+
+def test_import_alt_review_keeps_import_source_after_replace_and_undo(make_client, tmp_path):
+    client = make_client()
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+
+    # A 先由一份导入稿建立来源（kind=import + 文件名）
+    a_srt = _write_srt(
+        tmp_path / "episode.AnimeWhisper.srt", [(0.0, 1.0, "おはよう"), (1.0, 2.0, "今日は雨だ")]
+    )
+    assert client.post("/api/cues/import", headers=AUTH, json={"path": str(a_srt)}).status_code == 200
+    a_source = client.get("/api/cues", headers=AUTH).json()["review_source"]
+    assert a_source["kind"] == "import"
+
+    b_srt = _write_srt(
+        tmp_path / "episode.Qwen3-ASR.reviewed.srt",
+        [(0.0, 1.0, "おはよう"), (1.0, 2.0, "今日は飴だ")],
+    )
+    assert client.post("/api/alt-review/import", headers=AUTH, json={"path": str(b_srt)}).status_code == 200
+
+    replaced = client.post("/api/alt-review/replace-primary", headers=AUTH, json={})
+    assert replaced.status_code == 200, replaced.text
+    snapshot = replaced.json()
+    assert [c["text"] for c in snapshot["cues"]] == ["おはよう", "今日は飴だ"]
+    # 覆盖后来源仍是「导入稿」，检查器不会去找一份不存在的转写报告
+    assert snapshot["review_source"]["kind"] == "import"
+    assert snapshot["review_source"]["name"] == b_srt.name
+
+    undone = client.post("/api/cues/undo", headers=AUTH)
+    assert undone.status_code == 200, undone.text
+    restored = client.get("/api/cues", headers=AUTH).json()
+    assert [c["text"] for c in restored["cues"]] == ["おはよう", "今日は雨だ"]
+    # ⌘Z 必须把 source 一起退回 A 的来源（不能只回字幕）
+    assert restored["review_source"]["kind"] == "import"
+    assert restored["review_source"]["name"] == a_srt.name
+
+
+def test_import_alt_review_rejections(make_client, tmp_path):
+    client = make_client()
+    # 没有绑定媒体：第二版按影片身份落盘，必须先有片
+    no_media = tmp_path / "episode.whisper.srt"
+    _write_srt(no_media, [(0.0, 1.0, "x")])
+    assert (
+        client.post("/api/alt-review/import", headers=AUTH, json={"path": str(no_media)}).status_code
+        == 409
+    )
+
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    missing = client.post(
+        "/api/alt-review/import", headers=AUTH, json={"path": str(tmp_path / "nope.srt")}
+    )
+    assert missing.status_code == 404
+
+    bilingual = _write_srt(tmp_path / "episode.bilingual.srt", [(0.0, 1.0, "x")])
+    assert (
+        client.post(
+            "/api/alt-review/import", headers=AUTH, json={"path": str(bilingual)}
+        ).status_code
+        == 422
+    )
+
+    txt = tmp_path / "episode.txt"
+    txt.write_text("x", encoding="utf-8")
+    assert (
+        client.post("/api/alt-review/import", headers=AUTH, json={"path": str(txt)}).status_code
+        == 422
+    )

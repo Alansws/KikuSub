@@ -33,8 +33,10 @@ class _FakeEngine:
         self.last_align_stats: dict = {}
         self.last_stats = _FakeStats()
         self.received: dict = {}
+        self.media_path = None
 
     def transcribe_file(self, media_path, **kwargs):
+        self.media_path = media_path
         self.received = kwargs
         cb = kwargs["progress_cb"]
         for i in range(1, 4):
@@ -82,7 +84,7 @@ def test_qwen_output_gets_its_own_suffix(media, tmp_path, monkeypatch):
         output_dir=tmp_path,
         engine=_FakeEngine(),
     )
-    assert result.out_filename == "episode.qwen.srt"
+    assert result.out_filename == "episode.Qwen3-ASR.srt"
 
 
 def test_slice_tag_lands_in_filename_and_report(media, tmp_path, monkeypatch):
@@ -93,7 +95,7 @@ def test_slice_tag_lands_in_filename_and_report(media, tmp_path, monkeypatch):
         engine=_FakeEngine(),
     )
     assert result.slice_tag == "_00m10s-01m05s"
-    assert result.out_filename.startswith("episode_00m10s-01m05s")
+    assert result.out_filename == "episode_00m10s-01m05s.AnimeWhisper.srt"
     assert "00m10s 至 01m05s" in result.report_text
     # 引擎必须收到同一组切片参数，否则字幕时间轴会和文件名对不上
     engine_kwargs = result and None
@@ -108,7 +110,7 @@ def test_interrupted_run_keeps_partial_file(media, tmp_path, monkeypatch):
         engine=_FakeEngine(interrupted=True),
     )
     assert result.interrupted is True
-    assert ".part_cancelled" in result.out_filename
+    assert result.out_filename == "episode.AnimeWhisper.part_cancelled.srt"
     assert result.status_summary.startswith("⚠️")
     assert "打断" in result.final_progress
 
@@ -231,7 +233,7 @@ def test_sensevoice_uses_sherpa_dispatch_and_own_suffix(media, tmp_path, monkeyp
 
     assert engine.received["config"].max_cue_chars == 16
     assert "use_alignment" not in engine.received
-    assert result.out_filename == "episode.sensevoice.srt"
+    assert result.out_filename == "episode.SenseVoice-Small.srt"
     assert result.report_data["quality"]["engine_family"] == "sherpa"
     assert "SenseVoice-Small" in result.report_text
 
@@ -243,7 +245,7 @@ def test_firered_output_gets_its_own_suffix(media, tmp_path, monkeypatch):
         output_dir=tmp_path,
         engine=_FakeEngine(),
     )
-    assert result.out_filename == "episode.firered.srt"
+    assert result.out_filename == "episode.FireRedASR2-AED.srt"
     assert "FireRedASR2-AED" in result.report_text
 
 
@@ -254,4 +256,108 @@ def test_engine_family_comes_from_registry(media, tmp_path, monkeypatch):
         pipeline.run_transcription(
             pipeline.TranscribeRequest(media_path=media, engine_key="sensevoice-pro"),
             output_dir=tmp_path,
+        )
+
+
+def test_separate_vocals_routes_engine_to_cached_vocals(media, tmp_path, monkeypatch):
+    """勾选人声分离：引擎拿到的是区间 vocals，时间轴仍按原片绝对时间。"""
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import audio_cache, separate
+
+    vocals = tmp_path / "vocals.wav"
+    vocals.write_bytes(b"RIFF" + b"x" * 100)
+    seen: dict = {}
+
+    def fake_ensure(media_path, *, start, end, separator, cancel_event=None, progress_cb=None):
+        seen.update(start=start, end=end)
+        if progress_cb:
+            progress_cb(0.5, "fake sep")
+        return vocals
+
+    monkeypatch.setattr(audio_cache, "ensure_vocals_wav", fake_ensure)
+    monkeypatch.setattr(separate, "available", lambda: True)
+
+    engine = _FakeEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media,
+            start_s=10.0,
+            end_s=20.0,
+            separate_vocals=True,
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+
+    assert seen == {"start": 10.0, "end": 20.0}
+    assert engine.media_path == vocals
+    assert engine.received["start_time_s"] is None
+    assert engine.received["end_time_s"] is None
+    assert engine.received["time_offset"] == 10.0
+    assert result.out_filename.startswith("episode_00m10s-00m20s")
+
+
+def test_separate_vocals_full_film_uses_whole_duration(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import audio_cache, separate
+
+    vocals = tmp_path / "vocals.wav"
+    vocals.write_bytes(b"RIFF")
+    seen = {}
+
+    def fake_ensure(media_path, *, start, end, separator, cancel_event=None, progress_cb=None):
+        seen.update(start=start, end=end)
+        return vocals
+
+    monkeypatch.setattr(audio_cache, "ensure_vocals_wav", fake_ensure)
+    monkeypatch.setattr(separate, "available", lambda: True)
+
+    engine = _FakeEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media, media_duration_s=123.5, separate_vocals=True
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+
+    assert seen == {"start": 0.0, "end": 123.5}
+    assert engine.media_path == vocals
+    # 整片仍然是「整片」：引擎不传切片、文件名不带区间后缀
+    assert engine.received["start_time_s"] is None
+    assert engine.received["end_time_s"] is None
+    assert engine.received["time_offset"] == 0.0
+    assert result.slice_tag == ""
+    assert result.out_filename == "episode.AnimeWhisper.srt"
+
+
+def test_separation_range_fills_missing_edges_from_duration():
+    from core.pipeline import TranscribeRequest, separation_range
+
+    def req(**kw):
+        return TranscribeRequest(media_path=Path("episode.mkv"), **kw)
+
+    assert separation_range(req(media_duration_s=100.0)) == (0.0, 100.0)
+    assert separation_range(req(media_duration_s=100.0, start_s=10.0)) == (10.0, 100.0)
+    assert separation_range(req(media_duration_s=100.0, end_s=20.0)) == (0.0, 20.0)
+    assert separation_range(req(start_s=10.0, end_s=20.0)) == (10.0, 20.0)
+    # 用户填的尾部超过影片时长：夹到片尾
+    assert separation_range(req(media_duration_s=100.0, start_s=10.0, end_s=999.0)) == (
+        10.0,
+        100.0,
+    )
+
+
+def test_separate_vocals_full_film_without_duration_asks_for_range(
+    media, tmp_path, monkeypatch
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import proxy
+
+    monkeypatch.setattr(proxy, "probe_duration", lambda _path: 0.0)
+    with pytest.raises(ValueError, match="无法确定影片总时长"):
+        pipeline.run_transcription(
+            pipeline.TranscribeRequest(media_path=media, separate_vocals=True),
+            output_dir=tmp_path,
+            engine=_FakeEngine(),
         )

@@ -23,10 +23,37 @@
   } from '../lib/promptStore.svelte';
   import { app, setView, toast } from '../lib/store.svelte';
 
-  const CATEGORIES: { id: PromptCategory; label: string; hint: string }[] = [
-    { id: 'polish_single', label: '单源润色', hint: '使用 {{SRT}}，只修正识别错误，不改写风格。' },
-    { id: 'polish_dual', label: '双源润色', hint: '使用 {{SRT_A}} / {{SRT_B}}；以 A 为骨架，参考 B 修正错听与漏字。' },
-    { id: 'translate', label: '翻译', hint: '使用 {{SRT}} / {{LANG}}；只在原文定稿后使用。' },
+  const CATEGORIES: { id: PromptCategory; label: string; hint: string; group: string }[] = [
+    {
+      id: 'polish_single',
+      label: '单源润色',
+      group: '润色',
+      hint: '使用 {{SRT}}；只修正识别错误，不改写风格，条数与时间轴不动。',
+    },
+    {
+      id: 'polish_dual',
+      label: '双源润色',
+      group: '润色',
+      hint: '使用 {{SRT_A}} / {{SRT_B}}；以 A 为骨架，参考 B 修正错听与漏字。',
+    },
+    {
+      id: 'reshape_single',
+      label: '断句重排·单源',
+      group: '断句重排',
+      hint: '使用 {{SRT}}；允许改条数与时间码，输出一整份新 SRT。',
+    },
+    {
+      id: 'reshape_dual',
+      label: '断句重排·双源',
+      group: '断句重排',
+      hint: '使用 {{SRT_A}} / {{SRT_B}}；以 A 为底稿，用 B 补漏，允许改条数与时间码。',
+    },
+    {
+      id: 'translate',
+      label: '翻译',
+      group: '翻译',
+      hint: '使用 {{SRT}} / {{LANG}}；只在原文定稿后使用。',
+    },
   ];
 
   let category = $state<PromptCategory>('translate');
@@ -75,7 +102,11 @@
           ? '你是日语影视字幕校对员。请以 A 为主稿、参考 B 修正识别错误；\n严格沿用 A 的序号与时间轴，只输出修订后的 SRT。\n{{RANGE_HINT}}\n\n【A】\n{{SRT_A}}\n\n【B】\n{{SRT_B}}'
           : category === 'polish_single'
             ? '你是日语影视字幕校对员。只修正明显的识别错误，不改写风格。\n严格保留原序号与时间戳，只输出修正后的 SRT。\n{{RANGE_HINT}}\n{{SRT}}'
-            : '请将以下 SRT 日语字幕翻译为{{LANG}}：\n\n内容如下：\n{{SRT}}';
+            : category === 'reshape_dual'
+              ? '你是影视字幕的排版师。以 A 为底稿、参考 B 补漏，重新断句；\n条数可以变，时间轴以 A 为准，只输出新的 SRT。\n{{RANGE_HINT}}\n\n【A】\n{{SRT_A}}\n\n【B】\n{{SRT_B}}'
+              : category === 'reshape_single'
+                ? '你是影视字幕的排版师。重新断句、合并碎句、修错听；\n条数可以变，输出新的 SRT（带时间码）。\n{{RANGE_HINT}}\n{{SRT}}'
+                : '请将以下 SRT 日语字幕翻译为{{LANG}}：\n\n内容如下：\n{{SRT}}';
     } else {
       const item = prompts.items.find((entry) => entry.id === id);
       if (!item) return;
@@ -149,7 +180,7 @@
       toast('当前还没有字幕；导入并转写后再复制', 'warn');
       return;
     }
-    if (category === 'polish_dual' && !canCopyDual) {
+    if ((category === 'polish_dual' || category === 'reshape_dual') && !canCopyDual) {
       toast('双源模板需要第二版字幕', 'warn');
       return;
     }
@@ -188,6 +219,9 @@
     <button class="btn ghost" onclick={() => setView('polish')} title="回到润色页">
       <Icon name="doc" size={11} />润色页
     </button>
+    <button class="btn ghost" onclick={() => setView('reshape')} title="回到断句重排页">
+      <Icon name="split" size={11} />断句重排页
+    </button>
     <button class="btn ghost" onclick={() => setView('translate')} title="回到翻译页">
       <Icon name="quote" size={11} />翻译页
     </button>
@@ -197,7 +231,10 @@
   </PageHeader>
 
   <div class="tabs" role="tablist" aria-label="提示词分类">
-    {#each CATEGORIES as item (item.id)}
+    {#each CATEGORIES as item, index (item.id)}
+      {#if index > 0 && CATEGORIES[index - 1].group !== item.group}
+        <span class="tab-gap" aria-hidden="true"></span>
+      {/if}
       <button
         role="tab"
         aria-selected={category === item.id}
@@ -427,6 +464,14 @@
     background: var(--accent-soft);
     color: var(--accent);
     font-weight: 500;
+  }
+  .tab-gap {
+    width: 1px;
+    height: 16px;
+    flex: 0 0 1px;
+    background: var(--separator);
+    margin: 0 2px;
+    align-self: center;
   }
   .tab-count {
     font-size: 11px;

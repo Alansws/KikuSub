@@ -24,6 +24,7 @@ const {
 } = require('electron');
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const aikey = require('./aikey.cjs');
 const launchguard = require('./launchguard.cjs');
@@ -906,6 +907,9 @@ async function captureAndQuit() {
       } catch (err) {
         console.log('[eval:error]', err.message);
       }
+      // dev-eval 常常就是「切页 + 切主题」，切页会播 220ms 的 viewIn。
+      // 立刻 capturePage 会截到动画中间态（整页淡出到 30%），看起来像界面坏了。
+      await new Promise((r) => setTimeout(r, 420));
     }
     if (!app.isPackaged || process.env.KIKUSUB_PROBE) {
       const info = await win.webContents.executeJavaScript(
@@ -919,7 +923,7 @@ async function captureAndQuit() {
             const v = document.querySelector('video');
             return v ? { w: v.videoWidth, h: v.videoHeight, err: v.error && v.error.code, src: v.currentSrc.slice(-28) } : null;
           })(),
-          notice: document.querySelector('.notice')?.textContent?.trim() ?? null,
+          gate: document.querySelector('.gate')?.textContent?.trim() ?? null,
         })`,
       );
       console.log('[probe]', info);
@@ -1053,18 +1057,21 @@ function buildMenu() {
         // 快捷键由渲染层的可自定义表处理（默认 ⌘F），这里只保留菜单动作，
         // 否则用户把「查找」改成别的键后，旧 accelerator 仍然会抢先触发。
         { label: '查找与替换…', click: send('menu:find') },
+        // 与快捷键同一入口：渲染层管键，菜单只发动作
+        { label: '清理标点…', click: send('menu:punct') },
       ],
     },
     {
       label: '显示',
       submenu: [
-        // ⌘1–⌘7 由渲染层处理（导入 / 转写 / 核对台 / 双引擎复核 / 润色 / 翻译 / 导出）。
+        // ⌘1–⌘8 由渲染层处理（导入 / 转写 / 核对台 / 双引擎复核 / 润色 / 断句重排 / 翻译 / 导出）。
         // 菜单不绑 accelerator：用户改键后旧键不能仍然生效。
         { label: '导入', click: send('menu:view', 'import') },
         { label: '转写', click: send('menu:view', 'transcribe') },
         { label: '核对台', click: send('menu:view', 'review') },
         { label: '双引擎复核', click: send('menu:view', 'dual') },
         { label: '润色', click: send('menu:view', 'polish') },
+        { label: '断句重排', click: send('menu:view', 'reshape') },
         { label: '翻译', click: send('menu:view', 'translate') },
         { label: '导出', click: send('menu:view', 'export') },
         { label: '任务详报', click: send('menu:view', 'report') },
@@ -1143,7 +1150,7 @@ async function pickProposal(defaultDir) {
   return result.filePaths[0];
 }
 
-async function pickSubtitle(defaultDir) {
+async function pickSubtitle(defaultDir, title) {
   if (!win) return null;
   let defaultPath = typeof defaultDir === 'string' && defaultDir.trim() ? defaultDir.trim() : '';
   try {
@@ -1153,8 +1160,11 @@ async function pickSubtitle(defaultDir) {
   }
   if (!defaultPath) defaultPath = baseDir();
   const result = await dialog.showOpenDialog(win, {
-    title: '选择要导入核对台的字幕',
-    message: '从导出文件夹里选择上次转写的 .srt / .vtt',
+    title:
+      typeof title === 'string' && title.trim()
+        ? title.trim()
+        : '选择要导入核对台的字幕',
+    message: '从导出文件夹里选择 .srt / .vtt 字幕文件',
     defaultPath,
     properties: ['openFile'],
     filters: [
@@ -1254,10 +1264,17 @@ ipcMain.handle('app:info', () => ({
   dataDir: dataDir(),
   modelsDir: modelsDir(),
   preferencesPath: preferencesPath(),
+  // 硬件信息：设置页「本机总览」用。sidecar 侧只有 device/machine
+  // （torch 的 mps/cpu 与架构），拿不到芯片型号与物理内存，只能由主进程补。
+  chip: (os.cpus()[0]?.model || '').trim(),
+  cores: os.cpus().length,
+  totalMemBytes: os.totalmem(),
 }));
 
 ipcMain.handle('dialog:pick-media', () => pickMedia());
-ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir) => pickSubtitle(defaultDir));
+ipcMain.handle('dialog:pick-subtitle', (_e, defaultDir, title) =>
+    pickSubtitle(defaultDir, title),
+  );
 ipcMain.handle('dialog:pick-audio', (_e, defaultDir) => pickAudio(defaultDir));
 ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultDir));
 

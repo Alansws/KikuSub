@@ -15,8 +15,20 @@
     toast,
     tuning,
   } from '../lib/store.svelte';
+  import {
+    type ApplyMode,
+    applyChoices,
+    applyHint,
+    confirmDestructiveText,
+    isDestructiveChoice,
+    needsAbsoluteTimeline,
+    resolveApplyChoice,
+  } from '../lib/applyMode';
   import { altEngineLabel, deleteAltReview, dual, refreshAltReview } from '../lib/dualReview.svelte';
+  import { type AlignStats, alignDoneText } from '../lib/transcribeJob';
+  import { takeSlice } from '../lib/transcribeSlice';
   import { parseTimeInput } from '../lib/time';
+  import { vocalSeparation } from '../lib/vocalSeparation.svelte';
 
   let { engine = $bindable('whisper') }: { engine?: string } = $props();
 
@@ -24,7 +36,12 @@
   let startText = $state('');
   let endText = $state('');
   let absolute = $state(true);
-  let applyMode = $state<'auto' | 'replace' | 'append'>('auto');
+  /**
+   * 「结果处理」不再是 自动/覆盖/追加 三选一：没有「自动」这一档，档位按
+   * 「这次是不是整片」变（区间多一档「替换选区」），默认值永远是不破坏已有
+   * 字幕的那个。判断与文案都在 `lib/applyMode.ts`，这里只存用户的选择。
+   */
+  let applyMode = $state<ApplyMode>('replace_range');
   let presetName = $state('');
   let picked = $state('');
   /** 核对台非空时的整片结果去向：覆盖第一版 / 放进第二列。 */
@@ -58,18 +75,40 @@
     const endCovers = end === null || end >= duration - 0.5;
     return startCovers && endCovers;
   });
-  const canChooseDest = $derived(app.cues.length > 0 && fullCover && applyMode !== 'append');
+  /** 「结果处理」的档位表：整片两档，区间三档（见 lib/applyMode.ts 的文件头）。 */
+  const applyCtx = $derived({ fullCover, start: startText, end: endText });
+  const applyOptions = $derived(applyChoices(applyCtx));
+  /** 档位在当前范围下不成立时（如整片下的「替换选区」）退回该范围的默认档。 */
+  const effectiveApply = $derived(resolveApplyChoice(applyMode, applyCtx));
+  const applyHintText = $derived(applyHint(effectiveApply, applyCtx));
+  const destructive = $derived(isDestructiveChoice(effectiveApply, applyCtx));
+  /** 「替换选区」必须走原片绝对时间轴，否则新区间字幕会落到片头（见 applyMode.ts）。 */
+  const absoluteLocked = $derived(needsAbsoluteTimeline(effectiveApply));
+  const effectiveAbsolute = $derived(absoluteLocked ? true : absolute);
+  const canChooseDest = $derived(app.cues.length > 0 && fullCover && effectiveApply !== 'append');
+  /**
+   * 人声分离对整片 / 区间都生效：知道总时长（有媒体）或填了完整区间就能勾。
+   * 整片由服务端按 0..总时长分离；长片会自动分段，不再拦截。
+   */
+  const canSeparate = $derived.by(() => {
+    const start = parseTimeInput(startText);
+    const end = parseTimeInput(endText);
+    if (start !== null && end !== null && end > start + 0.2) return true;
+    return (app.media?.duration || 0) > 0;
+  });
 
-  // 核对台「填入转写」：把框选区间带过来。nonce 变一次填一次，
-  // 不能每次渲染都覆盖用户手输的内容。
-  let seenSlice = 0;
+  // 核对台「同步到转写页」：把框选/⇧ 连选的区间带过来。
+  // **必须消费式读取**：`App.svelte` 用 `{#key app.view}` 重建视图，组件内的
+  // nonce 守卫会跟着归零；只靠它的话，整片转完自动跳核对台、再回转写页时，
+  // 旧区间会从 `app.slice` 里复活，输入框显示区间而实际提交的是整片（用户报障）。
+  // 带过来时把「结果处理」定到「替换选区」：用户同步一个区间过来，意图就是重做
+  // 这一段（40:20–44:25 的歌词段换引擎重听），不是把整张表冲掉。
   $effect(() => {
-    const req = app.slice;
-    if (!req || req.nonce === seenSlice) return;
-    seenSlice = req.nonce;
+    const req = takeSlice(app);
+    if (!req) return;
     startText = req.start;
     endText = req.end;
-    applyMode = 'auto';
+    applyMode = 'replace_range';
   });
 
   // 默认去向：引擎不同 → 第二列；引擎相同（含主稿来源未知）→ 覆盖。
@@ -92,40 +131,87 @@
     if (app.connected) void refreshAltReview();
   });
 
-  // 只列出当前引擎可用的预设
+  // 只列出与当前引擎绑定的预设；未绑定/别的引擎的一律不显示，免得选错。
   const presetsForEngine = $derived(
-    tuning.presets.filter((p) => !p.engine || p.engine === engine),
+    tuning.presets.filter((p) => p.engine === engine),
+  );
+  /** 当前引擎自己的「已载入预设」；切引擎后不能把上一个引擎的预设当成可删对象。 */
+  const deletablePreset = $derived(
+    picked || (tuning.activePresetEngine === engine ? tuning.activePreset : ''),
   );
 
+  // 换引擎时清掉上一套引擎的选中项；参数面板本身按引擎分开存，不互相污染。
+  let lastPresetEngine = engine;
+  $effect(() => {
+    if (lastPresetEngine === engine) return;
+    lastPresetEngine = engine;
+    picked = '';
+    if (tuning.activePresetEngine && tuning.activePresetEngine !== engine) {
+      tuning.activePreset = '';
+      tuning.activePresetEngine = '';
+    }
+  });
+
   function go() {
+    // 区间任务里选「覆盖整片」会清掉区间外的全部字幕。这是用户报障过的那个坑
+    // （选覆盖 → 整张表只剩选区结果），破坏性动作必须显式确认一次。
+    if (destructive && app.cues.length > 0) {
+      if (!window.confirm(confirmDestructiveText(applyCtx))) return;
+    }
     startTranscribe(
       {
         engine,
         outputFormat,
         startText,
         endText,
-        absoluteTimeline: absolute,
-        apply: applyMode === 'auto' ? undefined : applyMode,
+        // 「替换选区」由 applyMode.ts 强制原片绝对时间轴：相对时间轴会让新区间
+        // 的字幕从 0 秒起编号，结果是选区旧句被删、新句子插到片头。
+        absoluteTimeline: effectiveAbsolute,
+        apply: effectiveApply,
         altReview: destination === 'alt' && fullCover,
       },
       parseTimeInput,
     );
   }
 
-  /** 把当前媒体的完整时长填进结束框，省得用户手算。 */
-  function fillFull() {
-    startText = '0';
-    if (app.media) {
-      const d = app.media.duration;
-      const m = Math.floor(d / 60);
-      const s = (d % 60).toFixed(2);
-      endText = `${m}:${s.padStart(5, '0')}`;
-    }
+  /**
+   * 「全片」= 不限制区间：清空起止输入与待填选区。
+   * 不再把 0–片尾填进两个框——那会让整片任务带上 `_00m00s-...s` 的区间后缀，
+   * 也会让「输入框里有时间」和「实际按整片转写」看起来互相矛盾。
+   */
+  function clearRange() {
+    startText = '';
+    endText = '';
+    app.slice = null;
   }
+
+  /** 本次任务提交时锁定的范围（来自 jobMeta，不跟随输入框，避免显示与执行不一致）。 */
+  const jobScopeText = $derived.by(() => {
+    const meta = app.jobMeta;
+    if (!meta) return '';
+    return meta.scope === 'full' ? '整片' : meta.label;
+  });
+
+  /**
+   * Qwen 的 CTC 对齐说明。非 CTC 引擎（关闭 CTC 的 Whisper、中文引擎）不显示，
+   * 更不会出现 `0/0` 的汇总行。
+   */
+  const alignNote = $derived(
+    alignDoneText(
+      (app.job?.result?.align_stats ?? null) as AlignStats | null,
+      String(
+        app.job?.result?.report?.quality?.engine_family ??
+          app.report?.quality?.engine_family ??
+          '',
+      ),
+    ),
+  );
 
   async function onPick(name: string) {
     picked = name;
-    if (name) await applyPreset(name);
+    if (!name) return;
+    const ok = await applyPreset(name, engine);
+    if (!ok) picked = '';
   }
 
   async function onSave() {
@@ -134,7 +220,9 @@
   }
 
   async function onDelete() {
-    await deletePreset(picked || tuning.activePreset);
+    const target = deletablePreset;
+    if (!target) return;
+    await deletePreset(target);
     picked = '';
   }
 
@@ -196,11 +284,48 @@
           <div class="field mono" style="width:104px">
             <input class="mono" bind:value={endText} placeholder="片尾" />
           </div>
-          <button class="btn ghost" onclick={fillFull} title="填入完整时长">全片</button>
-          <label class="check">
-            <input type="checkbox" bind:checked={absolute} />
+          <button class="btn ghost" onclick={clearRange} title="清空起止时间 = 转写整片（不写区间后缀）">
+            全片
+          </button>
+          <label
+            class="check"
+            title={absoluteLocked
+              ? '「替换选区」必须用原片绝对时间轴：相对时间轴会让新区间的字幕从 0 秒开始编号，插入位置就错了'
+              : '用原片时间轴编号，而不是从区间起点重新计时'}
+          >
+            <input
+              type="checkbox"
+              checked={effectiveAbsolute}
+              disabled={absoluteLocked}
+              onchange={(e) => (absolute = e.currentTarget.checked)}
+            />
             绝对时间轴
           </label>
+        </div>
+
+        <label>人声分离</label>
+        <div class="sep-row">
+          <label
+            class="check"
+            title="对整片或已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用。长片自动分段分离，单次长度不再设上限，代价是耗时随长度增长"
+          >
+            <input
+              id="sep"
+              type="checkbox"
+              bind:checked={vocalSeparation.enabled}
+              disabled={!canSeparate}
+            />
+            强 BGM / 歌曲
+          </label>
+          <span class="hint">
+            {#if !canSeparate}
+              先导入媒体或填写起止时间
+            {:else if fullCover}
+              整片先分离人声再识别（长片自动分段）
+            {:else}
+              先分离区间人声再识别；换引擎重转复用缓存
+            {/if}
+          </span>
         </div>
 
         <label for="fmt">输出格式</label>
@@ -213,17 +338,18 @@
         <label for="apply">结果处理</label>
         <div class="apply-row">
           <div class="seg">
-            <button class:on={applyMode === 'auto'} onclick={() => (applyMode = 'auto')}>自动</button>
-            <button class:on={applyMode === 'replace'} onclick={() => (applyMode = 'replace')}>
-              覆盖
-            </button>
-            <button class:on={applyMode === 'append'} onclick={() => (applyMode = 'append')}>
-              追加
-            </button>
+            {#each applyOptions as opt (opt.key)}
+              <button
+                class:on={effectiveApply === opt.key}
+                class:danger-opt={opt.key === 'replace' && !fullCover}
+                onclick={() => (applyMode = opt.key)}
+                title={applyHint(opt.key, applyCtx)}
+              >
+                {opt.label}
+              </button>
+            {/each}
           </div>
-          <span class="hint">
-            {applyMode === 'auto' ? '整片覆盖核对台，区间去重后追加' : applyMode === 'replace' ? '用本次结果替换整张表' : '与现有时间轴合并去重'}
-          </span>
+          <span class="hint" class:warn-hint={destructive}>{applyHintText}</span>
         </div>
 
         {#if canChooseDest}
@@ -321,6 +447,9 @@
           </div>
           <div class="pc-bar"><i style="width:{pct}%"></i></div>
           <div class="pc-meta">
+            {#if jobScopeText}
+              <span title="本次任务提交时锁定的范围，不随输入框变化">本次任务：{jobScopeText}</span>
+            {/if}
             {#if app.job.status === 'queued'}
               <span>正在唤醒推理内核，通常需要几秒</span>
             {:else if app.job.status === 'running'}
@@ -333,6 +462,14 @@
               <span>{app.job.status}</span>
             {/if}
           </div>
+          {#if app.job.status === 'done' && alignNote}
+            <div class="pc-note">
+              <span>{alignNote}</span>
+              {#if app.report?.job_id === app.job.id}
+                <button class="btn tiny ghost" onclick={() => setView('report')}>对齐明细</button>
+              {/if}
+            </div>
+          {/if}
           {#if app.job.status === 'done' && app.job.result?.alt_review}
             <div class="alt-done">
               <span class="saved-ok"><Icon name="check" size={10} />已放进双引擎复核</span>
@@ -360,7 +497,11 @@
     <section class="right">
       <div class="preset-bar">
         <span class="pb-label">预设</span>
-        <select value={picked} onchange={(e) => onPick(e.currentTarget.value)}>
+        <select
+          value={picked}
+          title="只显示与当前识别引擎绑定的预设"
+          onchange={(e) => onPick(e.currentTarget.value)}
+        >
           <option value="">（未选择）</option>
           {#each presetsForEngine as p (p.name)}
             <option value={p.name}>{p.name}</option>
@@ -378,7 +519,7 @@
         <button class="btn" onclick={onSave} disabled={!presetName.trim() && !picked}>
           <Icon name="check" size={11} />保存
         </button>
-        <button class="btn ghost" onclick={onDelete} disabled={!picked && !tuning.activePreset}>
+        <button class="btn ghost" onclick={onDelete} disabled={!deletablePreset}>
           <Icon name="trash" size={11} />
         </button>
       </div>
@@ -400,10 +541,12 @@
 
   .cols {
     display: grid;
-    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    /* 左栏原来 360px：区间行 + 结果处理提示会横向被切。这里把宽屏下原本空着的
+       左侧留白收进内容区（max-width 1120 → 1280），并给左栏 440px；右栏仍可伸缩。 */
+    grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
     gap: var(--sp-8);
     width: 100%;
-    max-width: 1120px;
+    max-width: 1280px;
     margin: 0 auto;
     min-height: 0;
     flex: 1;
@@ -411,6 +554,7 @@
 
   .left {
     overflow-y: auto;
+    min-width: 0;
     padding-right: var(--sp-1);
   }
 
@@ -418,6 +562,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
+    min-width: 0;
     min-height: 0;
     border-left: 1px solid var(--separator-soft);
     padding-left: 22px;
@@ -497,6 +642,12 @@
   }
   .check input {
     margin: 0;
+  }
+  .sep-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
   }
 
   .actions {
@@ -597,6 +748,22 @@
     gap: var(--sp-2);
     flex-wrap: wrap;
   }
+  /* 提示文字是 flex 子项：不给 min-width:0 时它会按整句宽度把左栏顶出可视区。 */
+  .apply-row .hint,
+  .dest .hint {
+    flex: 1 1 140px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  /* 「覆盖整片」在区间任务里是唯一会丢数据的档位：靠令牌给一点警示色，
+     让它在被点之前就与另外两档区分开（点下去还有一次确认）。 */
+  .seg button.danger-opt,
+  .seg button.danger-opt.on {
+    color: var(--warn);
+  }
+  .apply-row .hint.warn-hint {
+    color: var(--warn);
+  }
   .alt-state {
     display: flex;
     align-items: center;
@@ -681,6 +848,21 @@
     font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* 对齐说明：一句话解释 230/257 的口径，右侧给一个进报告页的入口。 */
+  .pc-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-3);
+  }
+
+  .pc-note .btn {
+    flex: 0 0 auto;
   }
 
   .saved-row {

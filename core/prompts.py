@@ -4,14 +4,19 @@
 需要在网页版模型和不同翻译风格之间切换，所以模板必须变成可保存、可编辑、可选中
 的数据，而不是改一次代码换一次提示词。
 
-2026-11 双引擎重构后模板分成三个**互不混杂**的分类（Q12）：
+2026-11 双引擎重构后模板分成五个**互不混杂**的分类（Q12）：
 
 - ``polish_single``：单源润色，变量 ``{{SRT}}``；
 - ``polish_dual``：双源润色，变量 ``{{SRT_A}}`` / ``{{SRT_B}}``（可选 ``{{RANGE}}``）；
+- ``reshape_single``：断句重排（整份重写，单源），变量 ``{{SRT}}``；
+- ``reshape_dual``：断句重排（整份重写，双源），变量 ``{{SRT_A}}`` / ``{{SRT_B}}``；
 - ``translate``：翻译，变量 ``{{SRT}}`` / ``{{LANG}}``。
 
+前两组是 **1:1 提案**（条数与时间轴不变）；``reshape_*`` 是**整份换稿**（条数与
+时间轴都可变），两者的模板绝不能互相顶替，否则会拿润色模板去重排字幕。
+
 分类各自记住「当前选中」：``selected`` 仍然是翻译的选中项（向后兼容旧
-``prompts.json``），另加 ``selected_polish_single`` / ``selected_polish_dual``。
+``prompts.json``），其余分类各有一个 ``selected_*`` 字段。
 没有分类字段的历史自定义模板一律归入翻译（旧版只有翻译）。
 
 设计约束：
@@ -43,11 +48,23 @@ LEGACY_ID = "legacy"
 LOCALIZATION_ID = "localization"
 POLISH_SINGLE_ID = "polish-single"
 POLISH_DUAL_ID = "polish-dual"
+SONG_POLISH_DUAL_ID = "song-polish-dual"
+RESHAPE_SINGLE_ID = "reshape-single"
+RESHAPE_DUAL_ID = "reshape-dual"
 
 CATEGORY_TRANSLATE = "translate"
 CATEGORY_POLISH_SINGLE = "polish_single"
 CATEGORY_POLISH_DUAL = "polish_dual"
-CATEGORIES = (CATEGORY_POLISH_SINGLE, CATEGORY_POLISH_DUAL, CATEGORY_TRANSLATE)
+#: 「断句重排」：允许改条数与时间轴，输出一整份新 SRT（不是 1:1 提案）。
+CATEGORY_RESHAPE_SINGLE = "reshape_single"
+CATEGORY_RESHAPE_DUAL = "reshape_dual"
+CATEGORIES = (
+    CATEGORY_POLISH_SINGLE,
+    CATEGORY_POLISH_DUAL,
+    CATEGORY_RESHAPE_SINGLE,
+    CATEGORY_RESHAPE_DUAL,
+    CATEGORY_TRANSLATE,
+)
 DEFAULT_CATEGORY = CATEGORY_TRANSLATE
 
 #: 每个分类的「当前选中」存在哪个字段。``selected`` 保持翻译，兼容旧文件。
@@ -55,6 +72,8 @@ SELECTED_KEYS = {
     CATEGORY_TRANSLATE: "selected",
     CATEGORY_POLISH_SINGLE: "selected_polish_single",
     CATEGORY_POLISH_DUAL: "selected_polish_dual",
+    CATEGORY_RESHAPE_SINGLE: "selected_reshape_single",
+    CATEGORY_RESHAPE_DUAL: "selected_reshape_dual",
 }
 
 LEGACY_CONTENT = """请将以下 SRT 日语字幕翻译为{{LANG}}：
@@ -112,6 +131,73 @@ POLISH_DUAL_CONTENT = """你是日语影视字幕校对员。下面提供同一�
 【B（参考稿）】
 {{SRT_B}}"""
 
+SONG_POLISH_DUAL_CONTENT = """你是日语歌词字幕校对员。A 是主稿（核对台当前版本），B 是另一引擎对同一段音频的参考稿。
+只修正 A 的识别错误，保持 A 的条数、序号与时间轴不变；不要新增、删除、拆分或合并条目。
+
+歌词特有规则：
+1. 副歌重复段互校：同一段歌词在 A 中多次出现时，把所有出现放在一起比较，取「多数一致 + 语义通顺」的写法，并把结论应用到每一次出现（仍逐条对应 A 的序号）。
+2. 用字统一：同一词在全篇只保留一种写法（汉字/假名/拉丁字母），例如 Lady/レイディ、君/キミ、僕/ボク、小降り/小ぶり；优先采用与作品风格一致、且 B 也支持的写法。
+3. 同音/近音错字按歌词语义修正（例：小ぶり→小降り、銃やと→常夜灯）；没有把握就保留 A 原文。
+4. B 只用于同一时间段的对照；禁止把 B 的整句拼接/追加到 A，禁止新增 B 独有的句子（漏句留给「结构建议」处理）。
+5. 只输出与 A 逐条对应的修订后 SRT，序号沿用 A；不要解释、不要 markdown 代码块。
+{{RANGE_HINT}}
+
+【A（主稿）】
+{{SRT_A}}
+
+【B（参考稿）】
+{{SRT_B}}"""
+
+RESHAPE_SINGLE_CONTENT = """你是影视字幕的排版师。下面是一份机器转写稿（SRT，带序号与时间码）。
+
+任务：把它重新整理成可以直接交付的成片字幕：
+- 合并被切碎的短句，重新切开读起来太长的句子；
+- 修掉明显的错听（同音/近音）、错字与标点；
+- 统一数字、英文缩写与专有名词的写法（例如 eSIM / E-SIM 全篇只留一种）；
+- 删掉纯语气重复的碎片，但保留角色的语气词。
+
+不要逐条对齐原来的序号：条数可以变，允许合并、拆分、删除。
+
+硬性要求：
+1. 输出标准 SRT：序号 + 时间码 + 文本，条与条之间空一行。
+2. 时间码必须覆盖这句台词真实的发声区间。可以从原稿沿用；重切时允许微调边界，但不许整体平移，也不许相邻两条重叠或倒序。
+3. 每行正文建议不超过 18 个字（日文字幕可放到 20 字），单条时长不超过 7 秒。
+4. 不新增原稿里没有的信息，不翻译，不加解释性括号。
+5. 只输出 SRT，不要解释、不要 markdown 代码块。
+
+{{RANGE_HINT}}
+内容如下：
+<subtitles>
+{{SRT}}
+</subtitles>"""
+
+RESHAPE_DUAL_CONTENT = """你是影视字幕的排版师。下面提供同一段音频的两份机器转写稿：
+- A 是主稿（核对台当前版本），带序号与时间码；
+- B 是另一个引擎的稿子，行数与 A 可能不同，只作参考。
+
+任务：以 A 为底稿，把它重新整理成可以直接交付的成片字幕：
+- 合并被切碎的短句，重新切开读起来太长的句子；
+- 用 B 补 A 的漏字、纠正错听；两者冲突又判断不出来时保留 A；
+- 统一数字、英文缩写与专有名词的写法（例如 eSIM / E-SIM 全篇只留一种）；
+- 保留角色的语气词。
+
+不要逐条对齐 A 的序号：条数可以变，允许合并、拆分、删除；B 的行号和条数不要写进输出。
+
+硬性要求：
+1. 输出标准 SRT：序号 + 时间码 + 文本，条与条之间空一行。
+2. 时间轴以 A 为准：沿用 A 的时间码；重切时允许微调边界，但不许整体平移，也不许相邻两条重叠或倒序。
+3. 每行正文建议不超过 18 个字（日文字幕可放到 20 字），单条时长不超过 7 秒。
+4. 不新增 A/B 里都没有的信息，不翻译，不加解释性括号。
+5. 只输出 SRT，不要解释、不要 markdown 代码块。
+
+{{RANGE_HINT}}
+
+【A（主稿）】
+{{SRT_A}}
+
+【B（参考稿）】
+{{SRT_B}}"""
+
 DEFAULT_TEMPLATES: list[dict] = [
     {
         "id": LEGACY_ID,
@@ -143,6 +229,30 @@ DEFAULT_TEMPLATES: list[dict] = [
         "name": "双源润色（默认）",
         "description": "以 A 为骨架、参考 B 修复错听与漏字；禁止拼接重复。",
         "content": POLISH_DUAL_CONTENT,
+        "builtin": True,
+    },
+    {
+        "id": SONG_POLISH_DUAL_ID,
+        "category": CATEGORY_POLISH_DUAL,
+        "name": "歌曲歌词润色",
+        "description": "副歌重复段互校、统一汉字/假名/英文用字；仍保持 A 的条数与时间轴。",
+        "content": SONG_POLISH_DUAL_CONTENT,
+        "builtin": True,
+    },
+    {
+        "id": RESHAPE_SINGLE_ID,
+        "category": CATEGORY_RESHAPE_SINGLE,
+        "name": "断句重排 · 单源（默认）",
+        "description": "整份重写：允许改条数与时间码，重新断句并输出一份新 SRT。",
+        "content": RESHAPE_SINGLE_CONTENT,
+        "builtin": True,
+    },
+    {
+        "id": RESHAPE_DUAL_ID,
+        "category": CATEGORY_RESHAPE_DUAL,
+        "name": "断句重排 · 双源（默认）",
+        "description": "整份重写：以 A 为底稿、用 B 补漏，允许改条数与时间码。",
+        "content": RESHAPE_DUAL_CONTENT,
         "builtin": True,
     },
 ]
@@ -314,6 +424,12 @@ def _library_payload(
         ),
         "selected_polish_dual": (selected or {}).get(
             "selected_polish_dual", library.get("selected_polish_dual") or ""
+        ),
+        "selected_reshape_single": (selected or {}).get(
+            "selected_reshape_single", library.get("selected_reshape_single") or ""
+        ),
+        "selected_reshape_dual": (selected or {}).get(
+            "selected_reshape_dual", library.get("selected_reshape_dual") or ""
         ),
     }
     return payload

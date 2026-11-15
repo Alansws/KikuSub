@@ -20,12 +20,18 @@ function tmpdir() {
 test('fragment subtitle classifier', () => {
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.srt'), true);
   assert.equal(isFragmentSubtitle('剧集_25m10s-25m43s.qwen.srt'), true);
+  assert.equal(isFragmentSubtitle('剧集_25m10s-25m43s.AnimeWhisper.srt'), true);
+  assert.equal(isFragmentSubtitle('剧集_25m10s-25m43s.Qwen3-ASR.srt'), true);
   assert.equal(isFragmentSubtitle('剧集_01h02m03s-01h02m10s.part_cancelled.srt'), true);
   assert.equal(isFragmentSubtitle('剧集_from_00m10s.vtt'), true);
   assert.equal(isFragmentSubtitle('剧集.srt'), false);
+  assert.equal(isFragmentSubtitle('剧集.AnimeWhisper.srt'), false);
+  assert.equal(isFragmentSubtitle('剧集.Qwen3-ASR.srt'), false);
   // 核对工作草稿与已导出的成片不是临时碎片，退出清理不得默认删除
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.autosave_draft.srt'), false);
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.reviewed.srt'), false);
+  assert.equal(isFragmentSubtitle('剧集.Qwen3-ASR.reviewed.srt'), false);
+  assert.equal(isFragmentSubtitle('剧集.Qwen3-ASR.reviewed.zh-Hans.srt'), false);
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.clean.srt'), false);
   // 译文交付物也不是碎片：只导译文 / 双语，两种后缀
   assert.equal(isFragmentSubtitle('剧集_05m00s-05m15s.zh-Hans.srt'), false);

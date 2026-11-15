@@ -39,6 +39,7 @@ from .procutil import (
     unregister_process,
 )
 from .subtitles import SubtitleCue, cues_to_srt
+from .textio import next_available_path
 
 # --------------------------------------------------------------------------- 预设
 
@@ -1259,13 +1260,8 @@ def _encoder_args(bitrate: int) -> list[list[str]]:
 
 
 def _unique_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    for index in range(2, 1000):
-        candidate = path.with_name(f"{path.stem} ({index}){path.suffix}")
-        if not candidate.exists():
-            return candidate
-    return path.with_name(f"{path.stem}-{int(time.time())}{path.suffix}")
+    """同一套编号规则在 `core.textio`；成片与字幕交付不许各自实现一份。"""
+    return next_available_path(path)
 
 
 def _suffix_for(track: str, lang: str) -> str:

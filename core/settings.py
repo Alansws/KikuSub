@@ -6,7 +6,6 @@
 当前字段：
 
 - `enabled_engines`：工具栏与转写页允许使用的引擎；引擎配置页的开关写这里。
-- `auto_proxy`：导入 MKV/HEVC 时是否自动压制 480p 监看代理。
 - `export_dir`：字幕默认导出目录。空字符串表示沿用 `OUTPUT_DIR`
   （打包后是 `~/Library/Application Support/KikuSub/outputs`），保证老用户升级后
   还能在原来的地方找到已经转写的字幕。
@@ -33,7 +32,6 @@ CONTEXT_RANGE = (0, 30)
 
 DEFAULTS: dict = {
     "enabled_engines": list(engines.DEFAULT_ENABLED),
-    "auto_proxy": True,
     "export_dir": "",
     "video_export_dir": "",
     # ---- AI（实验功能）----
@@ -59,8 +57,6 @@ def _normalize(raw: dict | None) -> dict:
         picked = {str(item) for item in enabled}
         # 保持注册表顺序，前端/DOM 不会因为勾选顺序跳来跳去
         data["enabled_engines"] = [key for key in engines.KEYS if key in picked]
-    if isinstance(raw.get("auto_proxy"), bool):
-        data["auto_proxy"] = raw["auto_proxy"]
     export = raw.get("export_dir")
     if isinstance(export, str):
         data["export_dir"] = export.strip()
@@ -139,8 +135,6 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
     merged = dict(current)
     if "enabled_engines" in patch:
         merged["enabled_engines"] = patch.get("enabled_engines")
-    if "auto_proxy" in patch:
-        merged["auto_proxy"] = bool(patch.get("auto_proxy"))
     if "export_dir" in patch:
         merged["export_dir"] = patch.get("export_dir") or ""
     if "video_export_dir" in patch:
@@ -156,9 +150,8 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         log.exception("设置文件写入失败 | %s", target)
         raise
     log.info(
-        "设置已更新 | enabled_engines=%s | auto_proxy=%s | export_dir=%s | video_export_dir=%s | path=%s",
+        "设置已更新 | enabled_engines=%s | export_dir=%s | video_export_dir=%s | path=%s",
         ",".join(normalized["enabled_engines"]) or "(无)",
-        normalized["auto_proxy"],
         normalized["export_dir"] or "(默认输出目录)",
         normalized["video_export_dir"] or "(跟随字幕导出目录)",
         target,

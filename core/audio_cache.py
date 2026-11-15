@@ -10,6 +10,7 @@ ffmpeg 反复全片解码。缓存键由「绝对路径 + 体积 + mtime_ns + �
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import time
@@ -24,11 +25,19 @@ from .paths import OUTPUT_DIR
 CACHE_DIR = OUTPUT_DIR / ".cache" / "audio"
 
 SAMPLE_RATE = 16000
+# 人声分离（Demucs htdemucs）的独立缓存命名空间：和 16k 送模 wav 共用目录，
+# 但键里带「vocals|模型|算法版本」，避免换引擎重转时误命中旧文件。
+VOCALS_MODEL = "htdemucs"
+VOCALS_VERSION = 1
 ENV_FLAG = "KIKUSUB_AUDIO_CACHE"
 DEFAULT_MAX_BYTES = 4 << 30  # 4GB ≈ 35 小时 16k mono s16
 PRUNE_GRACE_S = 600.0
 
 Extractor = Callable[..., None]
+# 分离器签名：separator(media, out_wav, *, start, end, cancel_event, progress_cb)
+VocalsSeparator = Callable[..., None]
+
+log = logging.getLogger(__name__)
 
 
 def enabled() -> bool:
@@ -115,6 +124,115 @@ def ensure_wav(
             os.replace(partial, target)
         except OSError:
             # 少数受限文件系统禁止 rename，退回「复制 + 清理」保证缓存可用
+            shutil.copyfile(partial, target)
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+    finally:
+        if partial.exists():
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+
+    try:
+        prune()
+    except Exception:
+        pass
+    return target
+
+
+def vocals_cache_key(
+    media: str | Path,
+    *,
+    start: float,
+    end: float,
+    model: str = VOCALS_MODEL,
+    version: int = VOCALS_VERSION,
+) -> str:
+    """人声分离缓存键：源文件指纹 + 区间 + 模型/算法版本。
+
+    同一段音频换第二个引擎重转时，只要源文件与区间没变就命中同一份 vocals，
+    不会再跑一次 Demucs。
+    """
+    path = Path(media).expanduser().resolve()
+    try:
+        stat = path.stat()
+        size, mtime_ns = stat.st_size, stat.st_mtime_ns
+    except OSError:
+        size, mtime_ns = 0, 0
+    raw = (
+        f"{path.as_posix()}|{size}|{mtime_ns}|{_fmt_bound(start)}|{_fmt_bound(end)}"
+        f"|vocals|{model}|v{int(version)}"
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def vocals_wav_path(
+    media: str | Path,
+    *,
+    start: float,
+    end: float,
+    model: str = VOCALS_MODEL,
+    version: int = VOCALS_VERSION,
+) -> Path:
+    key = vocals_cache_key(media, start=start, end=end, model=model, version=version)
+    return CACHE_DIR / f"{key}.vocals.wav"
+
+
+def ensure_vocals_wav(
+    media: str | Path,
+    *,
+    start: float,
+    end: float,
+    separator: VocalsSeparator,
+    model: str = VOCALS_MODEL,
+    version: int = VOCALS_VERSION,
+    cancel_event=None,
+    progress_cb=None,
+) -> Path:
+    """返回区间内的人声 wav；未命中时调用 ``separator`` 分离并原子落盘。
+
+    与 :func:`ensure_wav` 同一套缓存/原子写语义，只是产物是 44.1k 立体声
+    （Demucs htdemucs 的原生采样率），供送模前再降采样。人声分离是重计算，
+    这份缓存**不随** ``KIKUSUB_AUDIO_CACHE=0`` 关闭（否则换引擎重转会重跑 Demucs）。
+    """
+    if float(end) <= float(start):
+        raise ValueError("人声分离区间的结束必须大于开始")
+
+    target = vocals_wav_path(
+        media, start=start, end=end, model=model, version=version
+    )
+    if target.exists() and target.stat().st_size > 44:
+        log.info("人声分离命中缓存 | %s", target.name)
+        if progress_cb:
+            progress_cb(1.0, "已复用缓存的人声分离结果")
+        return target
+
+    media_path = Path(media).expanduser()
+    if not media_path.exists():
+        raise FileNotFoundError(f"媒体文件不存在: {media_path}")
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # 保留 .wav 扩展名：ffmpeg/soundfile 都靠它推断容器格式。
+    partial = target.with_name(
+        f"{target.stem}.{os.getpid()}.{uuid.uuid4().hex[:8]}.part.wav"
+    )
+    try:
+        separator(
+            media_path,
+            partial,
+            start=float(start),
+            end=float(end),
+            cancel_event=cancel_event,
+            progress_cb=progress_cb,
+        )
+        if not partial.exists() or partial.stat().st_size <= 44:
+            raise RuntimeError(f"人声分离产出为空: {partial.name}")
+        try:
+            os.replace(partial, target)
+        except OSError:
             shutil.copyfile(partial, target)
             try:
                 partial.unlink()

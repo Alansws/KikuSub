@@ -50,6 +50,15 @@
       '<path d="M8 1.6v12.8" stroke-dasharray="2 1.7"/><path d="M5.4 4.2 2.6 6.9l2.8 2.7"/><path d="M10.6 4.2l2.8 2.7-2.8 2.7"/>',
     merge:
       '<path d="M2.6 4.2 5.4 6.9 2.6 9.6"/><path d="M13.4 4.2 10.6 6.9l2.8 2.7"/><path d="M5.4 6.9h5.2"/><path d="M8 8.4v5.6"/>',
+    // 「清理标点」：一道斜杠压在一个句点上（去掉句读的意象）
+    punct:
+      '<path d="M13.4 2.8 2.6 13.2"/><circle cx="4.9" cy="10.2" r="1.5" fill="currentColor" stroke="none"/>',
+    // 设置页四个页签（2026-11）
+    chip: '<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.4"/><path d="M6.4 1.6v2.6M9.6 1.6v2.6M6.4 11.8v2.6M9.6 11.8v2.6M1.6 6.4h2.6M1.6 9.6h2.6M11.8 6.4h2.6M11.8 9.6h2.6"/>',
+    swatch: '<circle cx="8" cy="8" r="6"/><path d="M8 2v12"/><path d="M8 8h6"/>',
+    gauge: '<path d="M2.2 11.4a6 6 0 1 1 11.6 0"/><path d="M8 11.4 10.9 6.9"/><circle cx="8" cy="11.4" r="1.1" fill="currentColor" stroke="none"/>',
+    mic: '<rect x="6" y="1.8" width="4" height="7.2" rx="2"/><path d="M3.6 7.4a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8v2.4"/>',
+    copy: '<rect x="5.4" y="5.4" width="8" height="8" rx="1.4"/><path d="M10.6 5.4V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.6a1.4 1.4 0 0 0 1.4 1.4h1.8"/>',
   };
 
   const FILL: Record<string, string> = {

@@ -289,13 +289,29 @@ def test_preset_roundtrip(client: TestClient, tmp_path: Path, monkeypatch: pytes
     client.app.state.presets.reload()
 
     assert client.post("/api/presets", headers=auth(),
-                       json={"name": "冒烟", "engine": "whisper", "values": {"whisper.beam_size": 5}}
+                       json={"name": "冒烟", "engine": "whisper", "values": {"whisper.vad_threshold": 0.3}}
                        ).status_code == 201
     items = client.get("/api/presets", headers=auth()).json()["items"]
     assert items == [{"name": "冒烟", "engine": "whisper"}]
+    assert client.get("/api/presets?engine=whisper", headers=auth()).json()["items"] == items
+    assert client.get("/api/presets?engine=qwen", headers=auth()).json()["items"] == []
 
-    got = client.get("/api/presets/冒烟", headers=auth()).json()
-    assert got["values"]["whisper.beam_size"] == 5
+    got = client.get("/api/presets/冒烟?engine=whisper", headers=auth()).json()
+    assert got["engine"] == "whisper"
+    assert got["values"]["whisper.vad_threshold"] == 0.3
+
+    # 预设与引擎强绑定：选着 Qwen 时不能加载 Whisper 的预设
+    wrong = client.get("/api/presets/冒烟?engine=qwen", headers=auth())
+    assert wrong.status_code == 409
+    # 同名也不能改成别的引擎，避免把原方案覆盖掉
+    clash = client.post(
+        "/api/presets",
+        headers=auth(),
+        json={"name": "冒烟", "engine": "qwen", "values": {"qwen.max_cue_chars": 12}},
+    )
+    assert clash.status_code == 409
+    # 加载必须声明当前引擎，避免“先拿一份参数再套到别的面板上”
+    assert client.get("/api/presets/冒烟", headers=auth()).status_code == 422
 
     assert client.put("/api/presets/冒烟", headers=auth(), json={"new_name": "改名"}).json()["renamed"] is True
     assert client.delete("/api/presets/改名", headers=auth()).json()["deleted"] == "改名"
@@ -305,7 +321,9 @@ def test_preset_roundtrip(client: TestClient, tmp_path: Path, monkeypatch: pytes
 def test_preset_invalid_name_is_422(client: TestClient, tmp_path: Path) -> None:
     client.app.state.presets.path = tmp_path / "presets.json"
     client.app.state.presets.reload()
-    resp = client.post("/api/presets", headers=auth(), json={"name": "  ", "values": {}})
+    resp = client.post(
+        "/api/presets", headers=auth(), json={"name": "  ", "engine": "whisper", "values": {}}
+    )
     assert resp.status_code == 422
 
 
@@ -415,3 +433,65 @@ def test_import_rejects_unknown_suffix(client: TestClient, tmp_path: Path) -> No
     bad.write_text("whatever", encoding="utf-8")
     resp = client.post("/api/cues/import", headers=auth(), json={"path": str(bad)})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 交付字幕命名（不同引擎不许互相覆盖）
+# ---------------------------------------------------------------------------
+
+
+def _bind_media(client: TestClient, tmp_path: Path, name: str = "episode.mkv") -> str:
+    media = tmp_path / name
+    media.write_bytes(b"x")
+    media_id = client.post("/api/media", headers=auth(), json={"path": str(media)}).json()["id"]
+    resp = client.post("/api/session/bind", headers=auth(), json={"media_id": media_id})
+    assert resp.status_code == 200, resp.text
+    return media_id
+
+
+def _srt(*texts: str) -> str:
+    blocks = []
+    for index, text in enumerate(texts):
+        blocks.append(
+            f"{index + 1}\n00:00:0{index},000 --> 00:00:0{index + 1},000\n{text}\n"
+        )
+    return "\n".join(blocks) + "\n"
+
+
+def test_export_uses_engine_tag_and_never_overwrites(client: TestClient, tmp_path: Path):
+    _bind_media(client, tmp_path)
+    source = tmp_path / "episode.whisper.reviewed.srt"  # 历史标签也要能识别
+    source.write_text(_srt("テスト"), encoding="utf-8")
+    imported = client.post("/api/cues/import", headers=auth(), json={"path": str(source)})
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["review_source"]["engine"] == "whisper"
+
+    first = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+    assert first["name"] == "episode.AnimeWhisper.reviewed.srt"
+    assert first["renamed"] is False
+    assert "テスト" in Path(first["path"]).read_text(encoding="utf-8")
+
+    # 改一句再导出：同名不同内容必须另存 (2)，旧版本一个字都不许动
+    client.patch("/api/cues/0", headers=auth(), json={"text": "変更"})
+    second = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+    assert second["renamed"] is True
+    assert second["name"] == "episode.AnimeWhisper.reviewed (2).srt"
+    assert "テスト" in Path(first["path"]).read_text(encoding="utf-8")
+    assert "変更" in Path(second["path"]).read_text(encoding="utf-8")
+
+
+def test_export_names_differ_between_engines(client: TestClient, tmp_path: Path):
+    _bind_media(client, tmp_path)
+    whisper_srt = tmp_path / "episode.AnimeWhisper.srt"
+    whisper_srt.write_text(_srt("ウィスパー"), encoding="utf-8")
+    client.post("/api/cues/import", headers=auth(), json={"path": str(whisper_srt)})
+    whisper = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+
+    qwen_srt = tmp_path / "episode.Qwen3-ASR.srt"
+    qwen_srt.write_text(_srt("クウェン"), encoding="utf-8")
+    client.post("/api/cues/import", headers=auth(), json={"path": str(qwen_srt)})
+    qwen = client.post("/api/cues/export", headers=auth(), json={"format": "SRT"}).json()
+
+    assert whisper["name"] == "episode.AnimeWhisper.reviewed.srt"
+    assert qwen["name"] == "episode.Qwen3-ASR.reviewed.srt"
+    assert whisper["path"] != qwen["path"]
