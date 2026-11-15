@@ -907,6 +907,9 @@ async function captureAndQuit() {
       } catch (err) {
         console.log('[eval:error]', err.message);
       }
+      // dev-eval 常常就是「切页 + 切主题」，切页会播 220ms 的 viewIn。
+      // 立刻 capturePage 会截到动画中间态（整页淡出到 30%），看起来像界面坏了。
+      await new Promise((r) => setTimeout(r, 420));
     }
     if (!app.isPackaged || process.env.KIKUSUB_PROBE) {
       const info = await win.webContents.executeJavaScript(

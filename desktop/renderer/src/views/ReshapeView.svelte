@@ -2,33 +2,39 @@
   /**
    * 断句重排页：把「切得不像人话」的字幕整份交给外部模型重排，再整段换回核对台。
    *
-   * 与润色页的分工只有一句话：**润色改字、时间轴不动；这里改切分、时间轴可以动。**
-   * 两种做法共用一个粘贴入口：
-   * - 整份重写：提示词不要求 1:1，粘回来的一整份 SRT 覆盖当前段（条数会话可变）；
-   * - 只改几处：沿用 ops JSON，只动模型点名的那几处，逐项可拒。
+   * 版式：上半是紧凑顶栏 + 自适应分段轨道；下半是「左操作工作台（约 40%） +
+   * 右本段预览（约 60%）」。右栏默认只读原稿（双源时 A | B），粘入新稿后
+   * 原地切换为「原稿 ↔ 新稿」对照，覆盖前能先看清每一处变化。
    *
-   * 主操作只有一条、文案随状态变：复制 → 贴回 → 扫一遍并覆盖。
+   * 契约不变：
+   * - 整份重写只收标准 SRT；时间码是模型给的，服务端只体检不改数；
+   * - 应用锚点是原稿条目区间，分段计划冻结，覆盖一次只动本段；
+   * - 条数腰斩/翻倍才二次确认，digest 对不上整批拒绝；
+   * - 「只改几处」走 ops JSON，勾选后一次原子应用。
    */
   import Icon from '../components/Icon.svelte';
+  import SourceSwitch from '../components/ai/SourceSwitch.svelte';
+  import TemplatePicker from '../components/ai/TemplatePicker.svelte';
+  import SegmentRail from '../components/ai/SegmentRail.svelte';
+  import '../components/ai/ai-workbench.css';
   import type { StructureOpView } from '../lib/api';
+  import type { AiSegment } from '../lib/aiSegments';
+  import { alignPreviewRows, bRefsFor, type PreviewRow } from '../lib/previewDiff';
   import {
     activeDraft,
     appliedCount,
     applyReshapeDraft,
-    closePaste,
     copyReshapePrompt,
     currentRangeFor,
     currentSegment,
     discardDraft,
     ensurePromptInfo,
     ensureReshapePlan,
-    openPaste,
     parseReshapeText,
     promptCategory,
     removeDraftCue,
     reshape,
     resetReshape,
-    segmentKey,
     segmentState,
     setMode,
     setSegment,
@@ -37,7 +43,6 @@
   } from '../lib/reshape.svelte';
   import {
     applyStructureOps,
-    closeStructurePanel,
     copyStructurePrompt,
     discardStructure,
     loadStructure,
@@ -47,7 +52,12 @@
     structure,
     toggleStructureOp,
   } from '../lib/structure.svelte';
-  import { altEngineLabel, dual, refreshAltReview } from '../lib/dualReview.svelte';
+  import {
+    altEngineLabel,
+    dual,
+    importAltReview,
+    refreshAltReview,
+  } from '../lib/dualReview.svelte';
   import {
     loadPrompts,
     promptItemsFor,
@@ -65,20 +75,58 @@
   let armed = $state('');
   /** 「只改几处」的粘贴卡是否展开（不能靠 text 是否为空判断，否则清空输入框就整块消失）。 */
   let opsPasting = $state(false);
+  let dragging = $state(false);
 
   const segment = $derived(currentSegment());
   const draft = $derived(activeDraft());
   const templates = $derived(promptItemsFor(promptCategory()));
   const activeTemplate = $derived(promptSelectedId(promptCategory()));
+  const isOps = $derived(reshape.mode === 'ops');
 
-  /** 当前处于第几步：1 复制提示词 / 2 贴回结果 / 3 扫一遍并覆盖。 */
+  /** 当前段在当前表里的条目区间（长片按已覆盖段的条数差平移）。 */
+  const range = $derived.by(() => {
+    if (!segment) return { from: 1, to: 0 };
+    return reshape.longMode ? currentRangeFor(segment) : { from: 1, to: app.cues.length };
+  });
+  const segmentCues = $derived(
+    range.to >= range.from ? app.cues.slice(range.from - 1, range.to) : [],
+  );
+  const segmentSpan = $derived.by(() => {
+    if (!segmentCues.length) return null;
+    return {
+      start: segmentCues[0].start,
+      end: segmentCues[segmentCues.length - 1].end,
+    };
+  });
+  const rangeLabel = $derived.by(() => {
+    if (!segment) return '全片';
+    if (!reshape.longMode) return `全片 ${segment.count} 条`;
+    return `第 ${range.from}–${range.to} 条`;
+  });
+  const segmentNo = $derived(String((reshape.longMode ? reshape.segmentIndex : 0) + 1).padStart(2, '0'));
+
+  /** 分段轨道：短片也显示一格「全片」，让左卡与右表始终有明确的当前对象。 */
+  const railSegments: AiSegment[] = $derived.by(() => {
+    if (isOps || !app.cues.length) return [];
+    if (reshape.longMode && reshape.segments.length) {
+      // 覆盖过一段之后，段轨显示的是这一段的**新条数**；后续段的计划条数不变。
+      return reshape.segments.map((item) => {
+        const delta = reshape.applied[`${item.from}-${item.to}`]?.delta ?? 0;
+        return delta ? { ...item, count: item.count + delta } : item;
+      });
+    }
+    const first = app.cues[0];
+    const last = app.cues[app.cues.length - 1];
+    return [{ from: 1, to: app.cues.length, start: first.start, end: last.end, count: app.cues.length }];
+  });
+
   const step = $derived.by(() => {
-    if (reshape.mode === 'ops') {
+    if (isOps) {
       if (structure.ops.length) return 3;
-      return opsPasting ? 2 : 1;
+      return structure.text.trim() || opsPasting ? 2 : 1;
     }
     if (draft) return 3;
-    return reshape.pasteOpen ? 2 : 1;
+    return reshape.text.trim() ? 2 : 1;
   });
 
   const opsGroups = $derived.by(() => {
@@ -94,10 +142,105 @@
     return defs.filter((item) => item.ops.length > 0);
   });
 
+  /** 结构建议命中哪些原稿行（1 基）：右侧表格据此高亮。 */
+  const hitMap = $derived.by(() => {
+    const map = new Map<number, string[]>();
+    const add = (index: number | null, label: string) => {
+      if (!index || index < 1) return;
+      const list = map.get(index) ?? [];
+      if (!list.includes(label)) list.push(label);
+      map.set(index, list);
+    };
+    const rangeAdd = (from: number | null, to: number | null, label: string) => {
+      if (!from) return;
+      const start = from;
+      const end = Math.max(from, to ?? from);
+      for (let index = start; index <= end; index += 1) add(index, label);
+    };
+    const indexesFromLabel = (label: string): number[] => {
+      if (!label) return [];
+      if (label.startsWith('最前')) return [1];
+      const match = /#(\d+)(?:\s*[–-]\s*#(\d+))?/.exec(label);
+      if (!match) return [];
+      const start = Number(match[1]);
+      const end = match[2] ? Number(match[2]) : start;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+      return Array.from({ length: Math.min(end - start + 1, 500) }, (_, step) => start + step);
+    };
+    for (const op of structure.ops) {
+      const label = opLabel(op.op);
+      if (op.op === 'merge' && op.from_index) {
+        rangeAdd(op.from_index, op.to_index, label);
+      } else if (op.op === 'insert') {
+        add(op.after_index === 0 ? 1 : op.after_index, label);
+      } else {
+        const indexes = op.from_index ? [op.from_index] : indexesFromLabel(op.index_label);
+        for (const index of indexes) add(index, label);
+      }
+    }
+    return map;
+  });
+
+  const previewRows = $derived(alignPreviewRows(segmentCues, draft?.cues ?? null));
+  const bRefs = $derived(dual.exists ? bRefsFor(segmentCues, dual.cues) : []);
+  const warnNotes = $derived(draft ? draft.notes.filter((note) => note.level === 'warn') : []);
+  const countBefore = $derived(draft?.diagnostics.count_before ?? 0);
+  const countAfter = $derived(draft?.cues.length ?? 0);
+  const countDelta = $derived(countAfter - countBefore);
+  const previewDual = $derived(reshape.source === 'dual' && dual.exists);
+
+  /**
+   * 条数掉一半以上（或翻倍）时要求二次确认。
+   *
+   * 正常重排 208→127 不触发；但只贴了半份、或把 Prompt 的示例内容粘进来时，
+   * 一键覆盖会把整份稿换掉——这类错误一次就够痛，值得多一次点击。
+   */
+  const needsArm = $derived.by(() => {
+    if (!draft) return false;
+    const before = draft.diagnostics.count_before;
+    if (!before) return false;
+    return draft.cues.length < before * 0.5 || draft.cues.length > before * 2;
+  });
+  const isArmed = $derived(Boolean(draft && armed === draft.digest));
+
+  const copyLabel = $derived.by(() => {
+    if (isOps) return '复制提示词';
+    if (!app.cues.length) return '复制提示词';
+    if (reshape.longMode && segment) {
+      const current = currentRangeFor(segment);
+      return `复制第 ${current.from}–${current.to} 条提示词`;
+    }
+    return '复制整份提示词';
+  });
+
+  const metaText = $derived.by(() => {
+    if (isOps) {
+      if (structure.promptLoading) return '正在准备提示词…';
+      return app.cues.length
+        ? `共 ${app.cues.length} 条 · 模型只回 ops JSON`
+        : '还没有字幕';
+    }
+    const info = reshape.prompt;
+    if (!info) return reshape.loadingPrompt ? '正在准备提示词…' : '';
+    const parts = [info.alt_count ? `参考 ${info.alt_count} 条` : `${info.count} 条`];
+    parts.push(`≈${(info.chars / 1000).toFixed(1)}k 字`);
+    return parts.join(' · ');
+  });
+
+  const applyLabel = $derived.by(() => {
+    if (!draft) return '';
+    if (reshape.applying) return '覆盖中…';
+    if (needsArm && isArmed) return `再点一次：覆盖 ${draft.cues.length} 条`;
+    if (needsArm) return `确认覆盖 · ${draft.cues.length} 条`;
+    if (draft.range.full) return `覆盖核对台 · ${draft.cues.length} 条`;
+    return `覆盖第 ${segmentNo} 段 · ${draft.cues.length} 条`;
+  });
+
   // 换片 / 换源：清掉上一部片留下的草稿，否则段号和指纹都会对不上。
   $effect(() => {
     void app.media?.id;
     resetReshape();
+    opsPasting = false;
   });
 
   // 分段计划：换片 / 换做法 / 换源 / 第二版变化时才重切，之后冻结。
@@ -141,8 +284,9 @@
 
   function switchMode(mode: 'rewrite' | 'ops') {
     if (reshape.mode === mode) return;
-    if (reshape.mode === 'ops') closeStructurePanel();
     setMode(mode);
+    opsPasting = false;
+    dragging = false;
     if (mode === 'ops') void loadStructure();
   }
 
@@ -154,22 +298,30 @@
     setSource(source);
   }
 
+  async function importB() {
+    await importAltReview();
+  }
+
   async function copyPrompt() {
-    if (reshape.mode === 'ops') {
-      // 复制完直接把粘贴框打开：仓库里没有别的入口告诉用户「贴哪里」。
-      if (await copyStructurePrompt(reshape.source)) opsPasting = true;
+    if (isOps) {
+      const ok = await copyStructurePrompt(reshape.source);
+      if (ok) opsPasting = true;
       return;
     }
     await copyReshapePrompt();
   }
 
   async function parsePaste() {
-    if (reshape.mode === 'ops') await parseStructurePaste();
-    else await parseReshapeText();
+    if (isOps) {
+      await parseStructurePaste();
+      if (structure.ops.length) opsPasting = false;
+      return;
+    }
+    await parseReshapeText();
   }
 
   async function applyDraft() {
-    if (reshape.mode === 'ops') {
+    if (isOps) {
       const applied = await applyStructureOps();
       if (applied) {
         opsPasting = false;
@@ -188,38 +340,66 @@
     void loadAiProposal(true);
   }
 
-  function openPastePanel() {
-    if (reshape.mode === 'ops') opsPasting = true;
-    else openPaste();
+  function repaste() {
+    if (isOps) {
+      opsPasting = true;
+      structure.text = '';
+      return;
+    }
+    discardDraft();
   }
 
-  function cancelPastePanel() {
-    if (reshape.mode === 'ops') {
-      opsPasting = false;
-      structure.text = '';
-    } else {
-      closePaste();
-    }
+  function onDropFile(event: DragEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragging = false;
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    void file.text().then((text) => {
+      if (!text.trim()) return;
+      if (isOps) {
+        structure.text = text;
+        opsPasting = true;
+      } else {
+        reshape.text = text;
+      }
+      void parsePaste();
+    });
+  }
+
+  function onDragOver(event: DragEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragging = true;
+  }
+
+  function onDragLeave(event: DragEvent) {
+    event.stopPropagation();
+    dragging = false;
   }
 
   function pasteBoxEmpty(): boolean {
-    return reshape.mode === 'ops' ? !structure.text.trim() : !reshape.text.trim();
+    return isOps ? !structure.text.trim() : !reshape.text.trim();
   }
 
   function onPaste(event: ClipboardEvent) {
     const text = event.clipboardData?.getData('text') ?? '';
     if (text.trim().length < 40) return;
-    const target = reshape.mode === 'ops' ? structure.text : reshape.text;
     // 只在空框里自动解析：往已有内容里补粘一段时，不该直接覆盖整份稿。
-    if (target.trim()) return;
+    if ((isOps ? structure.text : reshape.text).trim()) return;
     setTimeout(() => {
       if (!pasteBoxEmpty()) return;
       void parsePaste();
     }, 180);
   }
 
-  function jumpToFirstIssue() {
-    document.querySelector('.row.flagged')?.scrollIntoView({ block: 'center' });
+  function onApplyClick() {
+    if (!draft) return;
+    if (needsArm && !isArmed) {
+      armed = draft.digest;
+      return;
+    }
+    void applyDraft();
   }
 
   function beginEdit(index: number, text: string) {
@@ -247,18 +427,7 @@
     node.focus();
   }
 
-  /** 紧凑时间码：`mm:ss.cc`，超过一小时才带小时位（列宽才不会把正文挤掉）。 */
-  function shortTime(value: number): string {
-    const total = Math.max(0, Number(value) || 0);
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const seconds = total % 60;
-    const body = `${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`;
-    return hours ? `${hours}:${body}` : body;
-  }
-
-  /** 段轨用的短时钟：`mm:ss`，超过一小时带小时位。 */
-  function shortClock(value: number): string {
+  function clock(value: number): string {
     const total = Math.max(0, Number(value) || 0);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
@@ -269,10 +438,13 @@
 
   function opLabel(op: string): string {
     return (
-      ({ merge: '合并', retime: '改时间', replace_text: '改文字', insert: '新增', delete: '删除' }) as Record<
-        string,
-        string
-      >
+      ({
+        merge: '合并',
+        retime: '改时间',
+        replace_text: '改文字',
+        insert: '新增',
+        delete: '删除',
+      }) as Record<string, string>
     )[op] ?? op;
   }
 
@@ -284,677 +456,613 @@
     return fmt(op.old_start);
   }
 
-  /** 覆盖前后的条数差；0 表示没变，界面不显示。 */
-  /**
-   * 条数掉一半以上（或翻倍）时要求二次确认。
-   *
-   * 正常重排 208→127 不触发；但只贴了半份、或把 Prompt 的示例内容粘进来时，
-   * 一键覆盖会把整份稿换掉——这类错误一次就够痛，值得多一次点击。
-   */
-  const needsArm = $derived.by(() => {
-    if (!draft) return false;
-    const before = draft.diagnostics.count_before;
-    if (!before) return false;
-    return draft.cues.length < before * 0.5 || draft.cues.length > before * 2;
-  });
-  const isArmed = $derived(Boolean(draft && armed === draft.digest));
-
-  function onApplyClick() {
-    if (!draft) return;
-    if (needsArm && !isArmed) {
-      armed = draft.digest;
-      return;
-    }
-    void applyDraft();
+  function oldIndexLabel(row: PreviewRow): string {
+    if (!row.oldIndexes.length) return '';
+    const first = row.oldIndexes[0] + range.from;
+    const last = row.oldIndexes[row.oldIndexes.length - 1] + range.from;
+    return first === last ? `#${first}` : `#${first}–${last}`;
   }
 
-  function countDelta(): number {
-    if (!draft) return 0;
-    return draft.cues.length - draft.diagnostics.count_before;
+  function newIndexLabel(row: PreviewRow): string {
+    if (!row.newIndexes.length) return '';
+    const first = row.newIndexes[0] + 1;
+    const last = row.newIndexes[row.newIndexes.length - 1] + 1;
+    return first === last ? `#${first}` : `#${first}–${last}`;
   }
 
-  const metaText = $derived.by(() => {
-    const info = reshape.prompt;
-    if (!info) return '';
-    const parts = [rangeLabel];
-    if (info.alt_count) parts.push(`参考 ${info.alt_count} 条`);
-    parts.push(`约 ${(info.chars / 1000).toFixed(1)}k 字`);
-    return parts.join(' · ');
-  });
+  function rowMark(row: PreviewRow): string {
+    return row.kind === 'same' ? '=' : row.kind === 'diff' ? '~' : row.kind === 'old' ? '−' : '+';
+  }
 
-  const rangeLabel = $derived.by(() => {
-    const value = segment;
-    if (!value) return '';
-    if (!reshape.longMode) return `全片 ${value.count} 条`;
-    const range = currentRangeFor(value);
-    return `第 ${range.from}–${range.to} 条`;
-  });
+  function issuesForRow(row: PreviewRow): string[] {
+    if (!draft) return [];
+    return row.newIndexes
+      .map((index) => draft?.issues[index + 1] ?? '')
+      .filter((label) => Boolean(label));
+  }
+
+  function jumpToFirstIssue() {
+    document
+      .querySelector('.preview-row.compare.flagged')
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  function railStatus(item: AiSegment): 'done' | 'ready' | 'todo' {
+    return reshape.longMode ? segmentState(item) : 'todo';
+  }
 </script>
 
-<div class="reshape">
-  <header class="head">
-    <div class="head-copy">
-      <h1>断句重排</h1>
-      <p>合并碎句、重切长句、调整时间与结构</p>
-    </div>
-    <div class="spacer"></div>
-    <button class="btn ghost" onclick={() => setView('prompts')} title="打开提示词库">
-      提示词库
-    </button>
-  </header>
+<div class="reshape aiw-page">
+  <header class="aiw-head">
+    <div class="aiw-title-row">
+      <h1 class="aiw-title">断句重排</h1>
 
-  <div class="config">
-    <span class="dim">做法</span>
-    <div class="segs" role="tablist" aria-label="做法">
-      <button
-        role="tab"
-        aria-selected={reshape.mode === 'rewrite'}
-        class="seg"
-        class:on={reshape.mode === 'rewrite'}
-        onclick={() => switchMode('rewrite')}
-        title="让模型自由重切，整份换掉这一段（条数与时间码都可变）"
-      >整份重写</button>
-      <button
-        role="tab"
-        aria-selected={reshape.mode === 'ops'}
-        class="seg"
-        class:on={reshape.mode === 'ops'}
-        onclick={() => switchMode('ops')}
-        title="只改模型点名的那几处（合并 / 改时间 / 增删），逐项可拒"
-      >只改几处</button>
-    </div>
+      <div class="aiw-config">
+        <span class="aiw-label">做法</span>
+        <div class="seg" role="tablist" aria-label="做法">
+          <button
+            role="tab"
+            aria-selected={reshape.mode === 'rewrite'}
+            class:on={reshape.mode === 'rewrite'}
+            onclick={() => switchMode('rewrite')}
+            title="让模型自由重切，整份换掉这一段（条数与时间码都可变）"
+          >整份重写</button>
+          <button
+            role="tab"
+            aria-selected={reshape.mode === 'ops'}
+            class:on={reshape.mode === 'ops'}
+            onclick={() => switchMode('ops')}
+            title="只改模型点名的那几处（合并 / 改时间 / 增删），逐项可拒"
+          >只改几处</button>
+        </div>
 
-    <span class="config-sep" aria-hidden="true"></span>
-    <span class="dim">底稿</span>
-    <div class="segs" role="group" aria-label="参考来源">
-      <button
-        class="seg"
-        class:on={reshape.source === 'single'}
-        onclick={() => switchSource('single')}
-        title="只吃核对台当前版本"
-      >当前稿</button>
-      <button
-        class="seg"
-        class:on={reshape.source === 'dual'}
-        onclick={() => switchSource('dual')}
-        disabled={!dual.exists}
-        title={dual.exists ? `同时参考第二引擎（${altEngineLabel()}，${dual.count} 条）` : '还没有第二版字幕（可转写或导入）'}
-      >+ 第二引擎</button>
-    </div>
+        <span class="aiw-divider" aria-hidden="true"></span>
 
-    {#if reshape.mode === 'rewrite' && templates.length}
-      <select
-        class="select"
-        value={activeTemplate}
-        onchange={(event) =>
-          void selectPromptTemplate(event.currentTarget.value, promptCategory())}
-        title="断句重排提示词模板"
-      >
-        {#each templates as item (item.id)}
-          <option value={item.id}>{item.name}</option>
-        {/each}
-      </select>
-    {/if}
+        <span class="aiw-label">底稿</span>
+        <SourceSwitch
+          source={reshape.source}
+          hasB={dual.exists}
+          aCount={app.cues.length}
+          bCount={dual.count}
+          bLabel={altEngineLabel()}
+          dualLabel="双源 A+B"
+          onchange={switchSource}
+          onimport={() => void importB()}
+        />
 
-    <div class="spacer"></div>
+        {#if !isOps}
+          <TemplatePicker
+            items={templates}
+            value={activeTemplate}
+            title="断句重排提示词模板"
+            onchange={(id) => void selectPromptTemplate(id, promptCategory())}
+          />
+        {/if}
+      </div>
 
-    {#if reshape.mode === 'rewrite' && reshape.longMode}
-      <span class="progress-title">已覆盖 {appliedCount()}/{reshape.segments.length} 段</span>
-    {:else if app.cues.length && !draft}
-      <span class="progress-title">{app.cues.length} 条</span>
-    {/if}
-  </div>
+      <div class="aiw-spacer"></div>
 
-  {#if reshape.mode === 'rewrite' && reshape.longMode}
-    <div class="rail" role="tablist" aria-label="长片分段">
-      {#each reshape.segments as item, index (segmentKey(item))}
-        {@const state = segmentState(item)}
-        <button
-          class="rail-item"
-          class:on={index === reshape.segmentIndex}
-          class:done={state === 'done'}
-          onclick={() => setSegment(index)}
-          title={`第 ${item.count} 条 · 复制与粘贴都只作用于这一段`}
-        >
-          <span class="rail-no">{String(index + 1).padStart(2, '0')}</span>
-          <span class="rail-body">
-            <!-- 已覆盖段显示覆盖后的条数（计划条数 + 这一段的增减），否则段轨会说谎 -->
-            <span class="rail-count"
-              >{item.count + (reshape.applied[segmentKey(item)]?.delta ?? 0)} 条</span
-            >
-            <span class="rail-time">{shortClock(item.start)}–{shortClock(item.end)}</span>
-          </span>
-          {#if state === 'done'}
-            <span class="rail-flag done" title="已覆盖"><Icon name="check" size={11} /></span>
-          {:else if state === 'ready'}
-            <span class="rail-flag ready" title="已贴回，待覆盖">●</span>
-          {/if}
+      <div class="aiw-head-end">
+        {#if !isOps && reshape.longMode}
+          <span class="aiw-chip">已覆盖 <b>{appliedCount()}</b>/<b>{reshape.segments.length}</b> 段</span>
+        {:else if app.cues.length}
+          <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
+        {/if}
+        <button class="btn ghost sm" onclick={() => setView('prompts')} title="打开提示词库">
+          提示词库
         </button>
-      {/each}
+      </div>
     </div>
-  {/if}
 
-  <div class="steps" aria-label="这一步做什么">
-    <span class="step" class:on={step === 1} class:done={step > 1}>
-      <b>{step > 1 ? '✓' : '1'}</b>复制提示词
-    </span>
-    <span class="step-line" class:done={step > 2}></span>
-    <span class="step" class:on={step === 2} class:done={step > 2}>
-      <b>{step > 2 ? '✓' : '2'}</b>贴回结果
-    </span>
-    <span class="step-line"></span>
-    <span class="step" class:on={step === 3}>
-      <b>3</b>{reshape.mode === 'ops' ? '勾选并应用' : '扫一遍并覆盖'}
-    </span>
-    <div class="spacer"></div>
-    {#if reshape.mode === 'rewrite' && reshape.prompt}
-      <span class="step-meta">{metaText}</span>
-    {:else if reshape.mode === 'ops' && structure.exists}
-      <span class="step-meta">已用 {structure.sourceCount} 条稿生成</span>
-    {:else if reshape.mode === 'rewrite' && !app.cues.length}
-      <span class="step-meta warn">还没有字幕：先导入或转写</span>
+    {#if railSegments.length}
+      <SegmentRail
+        label={reshape.longMode ? '智能分段' : '当前分段'}
+        segments={railSegments}
+        active={reshape.longMode ? reshape.segmentIndex : 0}
+        status={railStatus}
+        onselect={(index) => {
+          if (reshape.longMode) setSegment(index);
+        }}
+        disabled={!reshape.longMode}
+      />
     {/if}
-  </div>
+  </header>
 
   {#if reshape.errors.length}
     <div class="note err"><Icon name="warn" size={11} /><span>{reshape.errors[0]}</span></div>
   {/if}
-  {#if structure.errors.length && reshape.mode === 'ops'}
+  {#if isOps && structure.errors.length}
     <div class="note err"><Icon name="warn" size={11} /><span>{structure.errors[0]}</span></div>
   {/if}
 
   <div class="body">
-    {#if reshape.mode === 'ops'}
-      <!-- ---------------- 只改几处（ops） ---------------- -->
-      {#if structure.ops.length}
-        <div class="ops-bar">
-          <span>共 <b>{structure.ops.length}</b> 项</span>
-          {#if structure.summary}
-            <span class="dim">结果 <b>{structure.summary.input_count}</b> → <b>{structure.summary.output_count}</b> 条</span>
-            {#if structure.summary.conflicts}
-              <span class="conflict">冲突 <b>{structure.summary.conflicts}</b>（红色项不能应用）</span>
-            {/if}
+    <aside class="side">
+      <section class="aiw-card">
+        <div class="aiw-card-head">
+          {#if isOps}
+            <span class="aiw-card-title">结构建议</span>
+            <span class="aiw-card-sub">{app.cues.length} 条 · 勾选后应用</span>
+          {:else}
+            <span class="aiw-card-title">第 <b>{segmentNo}</b> 段</span>
+            <span class="aiw-card-sub">{rangeLabel}</span>
           {/if}
-          <div class="spacer"></div>
-          <button class="link" onclick={() => setAllStructureOps(true)}>全选</button>
-          <button class="link" onclick={() => setAllStructureOps(false)}>全不选</button>
-          <button class="link danger" onclick={() => discardStructure()}>丢弃</button>
         </div>
 
-        <div class="ops-list">
-          {#each opsGroups as group (group.key)}
-            <div class="ops-group">
-              <div class="ops-group-title">{group.label} <b>{group.ops.length}</b></div>
-              {#each group.ops as op (op.id)}
-                <label class="op-row" class:conflict={op.conflict.length > 0}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(structure.selected[op.id])}
-                    disabled={op.conflict.length > 0}
-                    onchange={() => toggleStructureOp(op.id)}
-                  />
-                  <span class="op-badge">{opLabel(op.op)}</span>
-                  <span class="op-idx">{op.index_label}</span>
-                  <span class="op-body">
-                    <span class="op-line">
-                      {#if op.op === 'retime' || op.op === 'insert' || op.before === op.after}
-                        {op.after}
-                      {:else}
-                        {op.before}
-                        <span class="arrow">→</span>
-                        {#if op.op === 'delete'}<span class="muted">（删除）</span>{:else}{op.after}{/if}
-                      {/if}
-                    </span>
-                    {#if op.reason}<span class="op-reason">{op.reason}</span>{/if}
-                    {#if op.conflict.length}<span class="op-conflict">{op.conflict.join('；')}</span>{/if}
-                  </span>
-                  <span class="op-time">{opTime(op)}</span>
-                </label>
-              {/each}
+        <ol class="aiw-steps">
+          <!-- Step 1 -->
+          <li class="aiw-step" class:on={step === 1} class:done={step > 1}>
+            <span class="aiw-step-no">{step > 1 ? '✓' : '1'}</span>
+            <div class="aiw-step-body">
+              <button
+                class="btn aiw-wide"
+                class:primary={step === 1}
+                onclick={() => void copyPrompt()}
+                disabled={!app.cues.length || (isOps ? structure.promptLoading : reshape.loadingPrompt)}
+              >
+                {isOps
+                  ? structure.promptLoading
+                    ? '正在准备…'
+                    : '复制提示词'
+                  : reshape.loadingPrompt
+                    ? '正在准备…'
+                    : copyLabel}
+              </button>
+              <p class="aiw-step-meta">{metaText || ' '}</p>
             </div>
-          {/each}
-        </div>
+          </li>
 
-        <div class="apply-bar">
-          <button
-            class="btn primary apply"
-            onclick={() => void applyDraft()}
-            disabled={structure.applying || selectedStructureCount() === 0}
+          <!-- Step 2 -->
+          <li
+            class="aiw-step"
+            class:on={step === 2}
+            class:done={isOps ? structure.ops.length > 0 : Boolean(draft)}
           >
-            {structure.applying ? '应用中…' : `应用所选${selectedStructureCount() ? `（${selectedStructureCount()}）` : ''}`}
-          </button>
-          <button class="btn ghost" onclick={openPastePanel}>再贴一份</button>
-          <span class="hint">⌘Z 一次整批撤回；应用后这份建议即被丢弃</span>
+            <span class="aiw-step-no">{isOps ? (structure.ops.length ? '✓' : '2') : draft ? '✓' : '2'}</span>
+            <div class="aiw-step-body">
+              {#if isOps && structure.ops.length && !opsPasting}
+                <div class="parsed-line">
+                  <span class="parsed-icon"><Icon name="check" size={12} /></span>
+                  <span>已解析 <b>{structure.ops.length}</b> 项</span>
+                  <div class="aiw-spacer"></div>
+                  <button class="aiw-link" onclick={repaste}>重新粘贴</button>
+                </div>
+                {#if structure.summary}
+                  <p class="aiw-step-meta">
+                    结果 {structure.summary.input_count} → {structure.summary.output_count} 条{#if structure.summary.conflicts}
+                      · <span class="warn-ink">冲突 {structure.summary.conflicts}</span>{/if}
+                  </p>
+                {/if}
+              {:else if !isOps && draft}
+                <div class="parsed-line">
+                  <span class="parsed-icon"><Icon name="check" size={12} /></span>
+                  <span>已预检 <b>{draft.cues.length}</b> 条</span>
+                  <div class="aiw-spacer"></div>
+                  <button class="aiw-link" onclick={repaste}>重新粘贴</button>
+                </div>
+                <p class="aiw-step-meta">右栏对照 · 双击新稿可改</p>
+              {:else}
+                <div
+                  class="aiw-drop"
+                  class:hot={dragging}
+                  role="group"
+                  aria-label="粘贴或拖入模型返回的文件"
+                  ondragover={onDragOver}
+                  ondragleave={onDragLeave}
+                  ondrop={onDropFile}
+                >
+                  {#if !(isOps ? structure.text.trim() : reshape.text.trim())}
+                    <div class="aiw-drop-hint">
+                      <b>{isOps ? '粘贴模型返回的 ops JSON' : '粘贴模型返回的 SRT'}</b>
+                      <span class="aiw-kbd">⌘V 自动预检</span>
+                      <span>{isOps ? '或拖入 .json 文件' : '或拖入 .srt 文件'}</span>
+                    </div>
+                  {/if}
+                  {#if isOps}
+                    <textarea
+                      bind:value={structure.text}
+                      onpaste={onPaste}
+                      spellcheck="false"
+                      aria-label="粘贴 ops JSON"
+                    ></textarea>
+                  {:else}
+                    <textarea
+                      bind:value={reshape.text}
+                      onpaste={onPaste}
+                      spellcheck="false"
+                      aria-label="粘贴重排后的 SRT"
+                    ></textarea>
+                  {/if}
+                </div>
+                <div class="aiw-step-actions">
+                  <button
+                    class="btn"
+                    class:primary={step === 2}
+                    onclick={() => void parsePaste()}
+                    disabled={(isOps ? structure.parsing : reshape.parsing) ||
+                      !(isOps ? structure.text.trim() : reshape.text.trim())}
+                  >
+                    {isOps
+                      ? structure.parsing
+                        ? '解析中…'
+                        : '解析改动'
+                      : reshape.parsing
+                        ? '解析中…'
+                        : '解析并预检'}
+                  </button>
+                  {#if isOps ? structure.text.trim() : reshape.text.trim()}
+                    <button
+                      class="aiw-link"
+                      onclick={() => {
+                        if (isOps) {
+                          structure.text = '';
+                          opsPasting = false;
+                        } else {
+                          reshape.text = '';
+                        }
+                      }}
+                    >清空</button>
+                  {/if}
+                  <span class="aiw-hint">{isOps ? '只收 ops JSON' : '必须带时间码'}</span>
+                </div>
+              {/if}
+            </div>
+          </li>
+
+          <!-- Step 3 -->
+          <li
+            class="aiw-step"
+            class:on={step === 3}
+          >
+            <span class="aiw-step-no">3</span>
+            <div class="aiw-step-body">
+              {#if isOps}
+                {#if structure.ops.length}
+                  <div class="aiw-step-actions ops-tools">
+                    <span class="aiw-chip">已选 <b>{selectedStructureCount()}</b></span>
+                    <button class="aiw-link" onclick={() => setAllStructureOps(true)}>全选</button>
+                    <button class="aiw-link" onclick={() => setAllStructureOps(false)}>全不选</button>
+                    <div class="aiw-spacer"></div>
+                    <button class="aiw-link danger" onclick={() => void discardStructure()}>丢弃</button>
+                  </div>
+                  <div class="ops-list">
+                    {#each opsGroups as group (group.key)}
+                      <div class="ops-group">
+                        <div class="ops-group-title">{group.label} <b>{group.ops.length}</b></div>
+                        {#each group.ops as op (op.id)}
+                          <label class="op-row" class:conflict={op.conflict.length > 0}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(structure.selected[op.id])}
+                              disabled={op.conflict.length > 0}
+                              onchange={() => toggleStructureOp(op.id)}
+                            />
+                            <span class="op-badge">{opLabel(op.op)}</span>
+                            <span class="op-idx">{op.index_label}</span>
+                            <span class="op-body">
+                              <span class="op-line">
+                                {#if op.op === 'retime' || op.op === 'insert' || op.before === op.after}
+                                  {op.after}
+                                {:else}
+                                  {op.before}
+                                  <span class="op-arrow">→</span>
+                                  {#if op.op === 'delete'}<span class="op-dim">（删除）</span>{:else}{op.after}{/if}
+                                {/if}
+                              </span>
+                              {#if op.reason}<span class="op-reason">{op.reason}</span>{/if}
+                              {#if op.conflict.length}<span class="op-conflict">{op.conflict.join('；')}</span>{/if}
+                            </span>
+                            <span class="op-time">{opTime(op)}</span>
+                          </label>
+                        {/each}
+                      </div>
+                    {/each}
+                  </div>
+                  <button
+                    class="btn primary aiw-wide"
+                    onclick={() => void applyDraft()}
+                    disabled={structure.applying || selectedStructureCount() === 0}
+                  >
+                    {structure.applying
+                      ? '应用中…'
+                      : `应用所选${selectedStructureCount() ? ` · ${selectedStructureCount()}` : ''}`}
+                  </button>
+                  <p class="aiw-step-meta">⌘Z 一次整批撤回；应用后这份建议即被丢弃</p>
+                {:else}
+                  <div class="aiw-idle">粘贴后在这里勾选要应用的改动</div>
+                {/if}
+              {:else}
+                {#if draft}
+                  <div class="aiw-delta">
+                    <span class="aiw-fig muted">{countBefore}</span>
+                    <span class="aiw-fig-arrow">→</span>
+                    <span class="aiw-fig">{countAfter}</span>
+                    <span class="aiw-hint">条</span>
+                    {#if warnNotes.length}
+                      <button class="aiw-chip warn" onclick={jumpToFirstIssue} title="跳到第一处体检提示">
+                        体检 {warnNotes.length}
+                      </button>
+                    {:else}
+                      <span class="aiw-chip ok">体检通过</span>
+                    {/if}
+                    {#if countDelta !== 0}
+                      <span class="aiw-chip">{countDelta > 0 ? '+' : ''}{countDelta}</span>
+                    {/if}
+                  </div>
+                  {#if warnNotes.length}
+                    <p class="aiw-step-meta warn-ink">
+                      {warnNotes.slice(0, 2).map((note) => note.text).join(' · ')}{warnNotes.length > 2
+                        ? ` …另有 ${warnNotes.length - 2} 条`
+                        : ''}
+                    </p>
+                  {/if}
+                  <button
+                    class="btn primary aiw-wide"
+                    class:armed={needsArm && isArmed}
+                    onclick={onApplyClick}
+                    disabled={reshape.applying || !draft.cues.length}
+                  >
+                    {applyLabel}
+                  </button>
+                  <div class="aiw-step-actions">
+                    <span class="aiw-hint">⌘Z 一次整批撤回{draft.range.full ? '' : '；只替换这一段'}</span>
+                    <div class="aiw-spacer"></div>
+                    <button class="aiw-link" onclick={() => discardDraft()} disabled={reshape.applying}>丢弃</button>
+                  </div>
+                {:else}
+                  <div class="aiw-idle">粘贴后在这里确认覆盖</div>
+                {/if}
+              {/if}
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="aiw-card brief-card">
+        <div class="aiw-card-head">
+          <span class="aiw-card-title">{isOps ? '结构速览' : '本段速览'}</span>
+          <span class="aiw-card-sub">{isOps ? '勾选后应用' : '只读'}</span>
         </div>
-      {:else if opsPasting || structure.parsing}
-        <div class="paste-card">
-          <div class="paste-head">把模型返回的 ops JSON 粘在这里</div>
-          <textarea
-            class="paste-box"
-            bind:value={structure.text}
-            onpaste={onPaste}
-            spellcheck="false"
-            placeholder={'把模型回复的 ops JSON 粘在这里'}
-          ></textarea>
-          <div class="paste-actions">
-            <button class="btn primary" onclick={() => void parsePaste()} disabled={structure.parsing || !structure.text.trim()}>
-              {structure.parsing ? '解析中…' : '解析改动'}
-            </button>
-            <button class="btn ghost" onclick={cancelPastePanel}>取消</button>
-            <span class="hint">只收 &#123;"ops": [...]&#125;；序号按当前字幕 1-based</span>
+        <div class="brief-grid">
+          <div class="brief-item">
+            <span class="brief-k">{isOps ? '原稿' : '本段'}</span>
+            <span class="brief-v">{isOps ? app.cues.length : segmentCues.length} 条</span>
+          </div>
+          <div class="brief-item">
+            <span class="brief-k">{isOps ? '命中' : '覆盖后'}</span>
+            <span class="brief-v">
+              {isOps
+                ? `${hitMap.size} 条`
+                : draft
+                  ? `${draft.cues.length} 条`
+                  : '—'}
+            </span>
+          </div>
+          <div class="brief-item">
+            <span class="brief-k">{isOps ? '结果' : '时长'}</span>
+            <span class="brief-v mono">
+              {isOps
+                ? structure.summary
+                  ? `${structure.summary.input_count}→${structure.summary.output_count}`
+                  : '—'
+                : segmentSpan
+                  ? `${clock(segmentSpan.start)}–${clock(segmentSpan.end)}`
+                  : '—'}
+            </span>
+          </div>
+          <div class="brief-item">
+            <span class="brief-k">{isOps ? '冲突' : '体检'}</span>
+            <span class="brief-v" class:warn-ink={isOps ? (structure.summary?.conflicts ?? 0) > 0 : warnNotes.length > 0}>
+              {isOps
+                ? structure.summary?.conflicts ?? 0
+                : draft
+                  ? warnNotes.length
+                    ? `${warnNotes.length} 项`
+                    : '通过'
+                  : '—'}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <div class="side-foot">
+        <span>{isOps ? '⌘V 粘贴 ops JSON' : '⌘V 粘贴 / 拖入 SRT'}</span>
+        <span>{isOps ? '应用后建议即丢弃' : '覆盖只动本段'}</span>
+      </div>
+    </aside>
+
+    <section class="preview">
+      <div class="preview-head">
+        <span class="preview-title">{isOps ? '原稿预览' : '本段预览'}</span>
+        {#if !isOps}
+          <span class="aiw-chip">{rangeLabel}</span>
+        {/if}
+        {#if draft}
+          <span class="aiw-chip accent">新稿 <b>{draft.cues.length}</b> 条</span>
+          <span class="aiw-hint">原稿 ↔ 新稿 · 双击新稿可改</span>
+        {:else if isOps}
+          <span class="aiw-chip">命中 <b>{hitMap.size}</b> 条</span>
+          <span class="aiw-hint">受影响的句子已在表中标出</span>
+        {:else if previewDual}
+          <span class="aiw-chip">B · {altEngineLabel()} <b>{dual.count}</b> 条</span>
+        {/if}
+        <div class="aiw-spacer"></div>
+        {#if draft}
+          <span class="legend">= 同 · ~ 改 · − 删 · + 增</span>
+        {/if}
+      </div>
+
+      {#if !app.cues.length}
+        <div class="aiw-empty">
+          <div class="aiw-empty-title">还没有字幕</div>
+          <div class="aiw-empty-text">先在转写页跑一次，或从导入页导入一份 SRT，再回来重排断句。</div>
+          <div class="empty-actions">
+            <button class="btn primary sm" onclick={() => setView('transcribe')}>去转写页</button>
+            <button class="btn ghost sm" onclick={() => setView('import')}>导入字幕</button>
+          </div>
+        </div>
+      {:else if isOps}
+        <div class="aiw-table">
+          <div class="aiw-cols preview-cols ops">
+            <span>时间码</span>
+            <span>原稿（全部）</span>
+            <span>结构</span>
+          </div>
+          <div class="aiw-list">
+            {#each app.cues as cue, index (index)}
+              {@const hits = hitMap.get(index + 1) ?? []}
+              <div class="aiw-row preview-row ops" class:hit={hits.length > 0}>
+                <div class="aiw-time">
+                  <span class="aiw-tc">{tcShort(cue.start)}</span>
+                  <span class="aiw-idx">#{index + 1}</span>
+                </div>
+                <div class="aiw-cell">{cue.text}</div>
+                <div class="struct-cell">
+                  {#each hits as hit (hit)}
+                    <span class="struct-chip">{hit}</span>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else if draft}
+        <div class="aiw-table">
+          <div class="aiw-cols preview-cols compare">
+            <span>时间码</span>
+            <span>原稿 · 第 {range.from}–{range.to} 条</span>
+            <span class="mark-head">对照</span>
+            <span>新稿 · {draft.cues.length} 条</span>
+          </div>
+          <div class="aiw-list">
+            {#each previewRows as row, rowIndex (`${row.start}-${row.oldIndexes.join('-')}:${row.newIndexes.join('-')}-${rowIndex}`)}
+              {@const rowIssues = issuesForRow(row)}
+              <div
+                class="aiw-row preview-row compare"
+                class:changed={row.kind === 'diff'}
+                class:only-old={row.kind === 'old'}
+                class:only-new={row.kind === 'new'}
+                class:flagged={rowIssues.length > 0}
+              >
+                <div class="aiw-time">
+                  <span class="aiw-tc">{tcShort(row.start)}</span>
+                  <span class="aiw-idx">
+                    {#if row.oldIndexes.length}{oldIndexLabel(row)}{:else}+{/if}
+                    {#if row.newIndexes.length}<span class="idx-arrow">→</span>{newIndexLabel(row)}{/if}
+                  </span>
+                </div>
+                <div class="aiw-cell old-cell">
+                  {#each row.oldIndexes as oldIndex (oldIndex)}
+                    <span class="line">{segmentCues[oldIndex]?.text ?? ''}</span>
+                  {/each}
+                  {#if !row.oldIndexes.length}<span class="aiw-placeholder">—</span>{/if}
+                </div>
+                <div class="aiw-mark">
+                  <span class={row.kind === 'same' ? 'same' : row.kind === 'diff' ? 'diff' : row.kind === 'old' ? 'old' : 'new'}>
+                    {rowMark(row)}
+                  </span>
+                </div>
+                <div class="aiw-cell new-cell">
+                  {#each row.newIndexes as newIndex (newIndex)}
+                    {@const number = newIndex + 1}
+                    {#if editing === number}
+                      <textarea
+                        use:focusOnMount
+                        bind:value={editingText}
+                        onkeydown={(event) => onEditKey(event, number)}
+                        onblur={() => commitEdit(number)}
+                        spellcheck="false"
+                      ></textarea>
+                    {:else}
+                      <div class="new-line">
+                        <span
+                          class="line editable"
+                          role="button"
+                          tabindex="0"
+                          aria-label={`编辑新稿第 ${number} 条`}
+                          ondblclick={() => beginEdit(number, draft?.cues[newIndex]?.text ?? '')}
+                          onkeydown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              beginEdit(number, draft?.cues[newIndex]?.text ?? '');
+                            }
+                          }}
+                          title="双击可改这一条"
+                        >{draft?.cues[newIndex]?.text ?? ''}</span>
+                        <button
+                          class="line-del"
+                          onclick={() => removeDraftCue(number)}
+                          title="删除这一条"
+                          aria-label={`删除新稿第 ${number} 条`}
+                        ><Icon name="close" size={9} /></button>
+                      </div>
+                      {#if draft?.issues[number]}
+                        <span class="cue-issue">
+                          <Icon name="warn" size={9} />{draft.issues[number]}
+                        </span>
+                      {/if}
+                    {/if}
+                  {/each}
+                  {#if !row.newIndexes.length}<span class="aiw-placeholder">—</span>{/if}
+                </div>
+              </div>
+            {/each}
           </div>
         </div>
       {:else}
-        <div class="cta">
-          <p class="cta-title">先拿提示词</p>
-          <button class="btn primary big" onclick={() => void copyPrompt()} disabled={!app.cues.length || structure.promptLoading}>
-            {structure.promptLoading ? '正在准备…' : '复制提示词'}
-          </button>
-          <p class="cta-meta">
-            模型只回 <code>&#123;"ops": [...]&#125;</code>，只动你点名的几处
-          </p>
-          <button class="link" onclick={openPastePanel} disabled={!app.cues.length}>已有结果？直接粘贴</button>
+        <div class="aiw-table">
+          {#if previewDual}
+            <div class="aiw-cols preview-cols ref-dual">
+              <span>时间码</span>
+              <span>A · 原稿</span>
+              <span>B · {altEngineLabel()}（参考）</span>
+            </div>
+          {:else}
+            <div class="aiw-cols preview-cols ref-single">
+              <span>时间码</span>
+              <span>原文 · 第 {range.from}–{range.to} 条</span>
+            </div>
+          {/if}
+          <div class="aiw-list">
+            {#each segmentCues as cue, index (index)}
+              {@const ref = previewDual ? (bRefs[index] ?? null) : null}
+              <div class="aiw-row preview-row" class:ref-dual={previewDual} class:ref-single={!previewDual}>
+                <div class="aiw-time">
+                  <span class="aiw-tc">{tcShort(cue.start)}</span>
+                  <span class="aiw-idx">#{range.from + index}</span>
+                  {#if previewDual}
+                    <span class="aiw-idx b-idx">
+                      {ref ? `B#${ref.first + 1}${ref.last > ref.first ? `–B#${ref.last + 1}` : ''}` : 'B —'}
+                    </span>
+                  {/if}
+                </div>
+                <div class="aiw-cell">{cue.text}</div>
+                {#if previewDual}
+                  <div class="aiw-cell dim ref-cell">
+                    {#if ref}
+                      {#each ref.lines as line, lineIndex (lineIndex)}
+                        <span class="line">{line}</span>
+                      {/each}
+                    {:else}
+                      <span class="aiw-placeholder">—</span>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
-    {:else if draft}
-      <!-- ---------------- 整份重写：预览 ---------------- -->
-      <div class="preview-bar">
-        {#each draft.notes as note (note.text)}
-          {#if note.level === 'warn'}
-            <button class="chip warn" onclick={jumpToFirstIssue} title="跳到第一处有问题的地方">
-              {note.text}
-            </button>
-          {:else}
-            <span class="chip">{note.text}</span>
-          {/if}
-        {/each}
-        <span class="preview-hint">双击改字</span>
-        <button
-          class="link"
-          onclick={() => {
-            discardDraft();
-            openPastePanel();
-          }}
-        >重新粘贴</button>
-      </div>
-
-      <div class="draft-list">
-        {#each draft.cues as cue, index (index)}
-          {@const number = index + 1}
-          <div class="row" class:flagged={Boolean(draft.issues[number])}>
-            <span class="row-mark">
-              {#if draft.issues[number]}<Icon name="warn" size={12} />{/if}
-            </span>
-            <div class="row-time" title={`第 ${number} 条 · ${tcShort(cue.start)} → ${tcShort(cue.end)}`}>
-              <span class="tc">{shortTime(cue.start)}</span>
-              <span class="tc end">– {shortTime(cue.end)}</span>
-            </div>
-            <div class="row-text" ondblclick={() => beginEdit(number, cue.text)}>
-              {#if editing === number}
-                <textarea
-                  use:focusOnMount
-                  bind:value={editingText}
-                  onkeydown={(event) => onEditKey(event, number)}
-                  onblur={() => commitEdit(number)}
-                  spellcheck="false"
-                ></textarea>
-              {:else}
-                <span class="txt">{cue.text}</span>
-              {/if}
-            </div>
-            <span class="row-flag">
-              {#if draft.issues[number] && editing !== number}{draft.issues[number]}{/if}
-            </span>
-            <button
-              class="row-del"
-              onclick={() => removeDraftCue(number)}
-              title="删掉这一条"
-              aria-label={`删除第 ${number} 条`}
-            ><Icon name="close" size={11} /></button>
-          </div>
-        {/each}
-      </div>
-
-      <div class="apply-bar">
-        <button
-          class="btn primary apply"
-          class:armed={needsArm && isArmed}
-          onclick={onApplyClick}
-          disabled={reshape.applying || !draft.cues.length}
-        >
-          {#if reshape.applying}
-            覆盖中…
-          {:else if needsArm && isArmed}
-            再点一次：覆盖 {draft.cues.length} 条
-          {:else if needsArm}
-            确认覆盖 · {draft.cues.length} 条
-          {:else if draft.range.full}
-            覆盖核对台 · {draft.cues.length} 条
-          {:else}
-            覆盖这一段 · {draft.cues.length} 条
-          {/if}
-        </button>
-        {#if countDelta()}
-          <span class="delta" class:less={countDelta() < 0}>
-            {countDelta() > 0 ? '多' : '少'} {Math.abs(countDelta())} 条
-          </span>
-        {/if}
-        <span class="hint">⌘Z 一次整批撤回{draft.range.full ? '' : '；只替换这一段，其余段不动'}</span>
-        <div class="spacer"></div>
-        <button class="btn ghost" onclick={() => discardDraft()} disabled={reshape.applying}>丢弃</button>
-      </div>
-    {:else if reshape.pasteOpen}
-      <!-- ---------------- 整份重写：粘贴 ---------------- -->
-      <div class="paste-card">
-        <div class="paste-head">
-          把模型返回的整份 SRT 粘在这里
-          {#if reshape.longMode}<b>（只覆盖 {rangeLabel}）</b>{/if}
-        </div>
-        <textarea
-          class="paste-box"
-          bind:value={reshape.text}
-          onpaste={onPaste}
-          spellcheck="false"
-          placeholder={'把模型回复的整段 SRT 粘在这里（必须带时间码）'}
-        ></textarea>
-        <div class="paste-actions">
-          <button class="btn primary" onclick={() => void parsePaste()} disabled={reshape.parsing || !reshape.text.trim()}>
-            {reshape.parsing ? '解析中…' : '解析这份新稿'}
-          </button>
-          <button class="btn ghost" onclick={cancelPastePanel}>取消</button>
-          <span class="hint">必须带时间码；条数与时间都可以和原稿不一样</span>
-        </div>
-      </div>
-    {:else}
-      <!-- ---------------- 整份重写：空态 ---------------- -->
-      <div class="cta">
-        <p class="cta-title">
-          {#if !app.cues.length}
-            还没有字幕
-          {:else if reshape.longMode}
-            {rangeLabel} 交给模型重排
-          {:else}
-            整份交给模型重排
-          {/if}
-        </p>
-        <button
-          class="btn primary big"
-          onclick={() => void copyPrompt()}
-          disabled={!app.cues.length || reshape.loadingPrompt}
-        >
-          {reshape.loadingPrompt ? '正在准备…' : reshape.longMode ? `复制${rangeLabel}的提示词` : '复制整份提示词'}
-        </button>
-        <p class="cta-meta">
-          {#if reshape.longMode}
-            模型回一份新的 SRT，只覆盖这一段；条数可以变
-          {:else}
-            模型回一份新的 SRT，允许合并、拆分、改时间码
-          {/if}
-        </p>
-        <button class="link" onclick={openPastePanel} disabled={!app.cues.length}>已有结果？直接粘贴</button>
-        {#if appliedCount() && !draft}
-          <button class="link" onclick={() => setView('review')}>刚才覆盖过，去核对台看看</button>
-        {/if}
-      </div>
-    {/if}
+    </section>
   </div>
 </div>
 
 <style>
-  .reshape {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    background: var(--paper);
-  }
-  .head {
-    display: flex;
-    align-items: flex-end;
-    gap: var(--sp-3);
-    padding: var(--sp-3) 16px var(--sp-2);
-  }
-  .head-copy h1 {
-    margin: 0;
-    font-size: 20px;
-    line-height: 26px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    color: var(--text);
-  }
-  .head-copy p {
-    margin: 2px 0 0;
-    font-size: var(--fs-label);
-    line-height: var(--lh-label);
-    color: var(--text-3);
-  }
-  .spacer {
-    flex: 1;
-  }
-
-  .config {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    padding: 0 16px var(--sp-3);
-    flex-wrap: wrap;
-    border-bottom: 1px solid var(--separator);
-  }
-  .segs {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: var(--rad-control);
-    background: var(--fill);
-  }
-  .seg {
-    border: 0;
-    background: transparent;
-    color: var(--text-2);
-    font: inherit;
-    font-size: var(--fs-label);
-    line-height: 16px;
-    padding: 3px var(--sp-2);
-    border-radius: 3px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-  }
-  .seg:hover {
-    color: var(--text);
-  }
-  .seg.on {
-    background: var(--bg-content);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  }
-  .seg:disabled {
-    color: var(--text-3);
-    cursor: default;
-    opacity: 0.4;
-  }
-  .dim {
-    font-size: var(--fs-label);
-    color: var(--text-3);
-  }
-  .select {
-    font: inherit;
-    font-size: var(--fs-label);
-    padding: 3px 6px;
-    border-radius: var(--rad-control);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
-    max-width: 190px;
-  }
-  .progress-title {
-    font-size: var(--fs-label);
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* ---- 段轨：块宽按时长，当前段抬起来一格 ---- */
-  .rail {
-    display: flex;
-    gap: 6px;
-    padding: 10px var(--sp-4);
-    border-bottom: 1px solid var(--separator-soft);
-    background: var(--bg-inspector);
-    overflow-x: auto;
-    min-width: 0;
-  }
-  .rail-item {
-    /* 按内容定宽、不按比例撑开：比例宽度在段数一多时必然溢出，把最后一格切掉更像 bug */
-    flex: 0 0 auto;
-    min-width: 112px;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 9px;
-    border: 1px solid var(--separator);
-    border-radius: var(--rad-card);
-    background: var(--bg-content);
-    color: var(--text-2);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
-      box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
-  }
-  .rail-item:hover {
-    border-color: var(--accent-line);
-  }
-  .rail-item.on {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--text);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-    transform: translateY(-1px);
-  }
-  .rail-item.done {
-    border-color: color-mix(in srgb, var(--success) 45%, var(--separator));
-  }
-  .rail-no {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .rail-item.on .rail-no {
-    color: var(--accent);
-  }
-  .rail-item.done .rail-no {
-    color: var(--success);
-  }
-  .rail-body {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-  }
-  .rail-count {
-    font-size: var(--fs-label);
-    line-height: 15px;
-    font-variant-numeric: tabular-nums;
-  }
-  .rail-time {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    line-height: 14px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .rail-flag {
-    margin-left: auto;
-    font-size: 11px;
-    line-height: 16px;
-    white-space: nowrap;
-    flex: 0 0 auto;
-  }
-  /* 状态用点/勾代替「未开始」三个字：段一多，文字会把每格撑得放不下 */
-  .rail-flag.done {
-    color: var(--success);
-    display: grid;
-    place-items: center;
-  }
-  .rail-flag.ready {
-    color: var(--accent);
-    font-size: 9px;
-  }
-
-  /* ---- 步骤：一眼看出现在走哪一步 ---- */
-  .steps {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: var(--sp-2) var(--sp-4);
-    border-bottom: 1px solid var(--separator-soft);
-    font-size: var(--fs-label);
-    color: var(--text-3);
-    min-width: 0;
-  }
-  .step {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-  }
-  .step b {
-    width: 16px;
-    height: 16px;
-    border-radius: 999px;
-    border: 1px solid var(--separator);
-    display: grid;
-    place-items: center;
-    font-size: 10.5px;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-3);
-    background: var(--bg-content);
-  }
-  .step.on {
-    color: var(--text);
-  }
-  .step.on b {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--on-accent);
-  }
-  .step.done {
-    color: var(--text-2);
-  }
-  .step.done b {
-    border-color: transparent;
-    background: var(--success-soft);
-    color: var(--success);
-  }
-  .step-line {
-    width: 18px;
-    height: 1px;
-    background: var(--separator);
-    flex: 0 0 18px;
-  }
-  .step-line.done {
-    background: color-mix(in srgb, var(--success) 45%, transparent);
-  }
-  .step-meta {
-    font-size: 12px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .step-meta.warn {
-    color: var(--warn);
-  }
-
   .note {
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    padding: 6px var(--sp-4);
-    font-size: var(--fs-label);
+    padding: 6px 14px;
+    font-size: 12px;
     line-height: 1.5;
     border-bottom: 1px solid var(--separator-soft);
   }
@@ -966,354 +1074,113 @@
   .body {
     flex: 1;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* ---- 空态：一个动作，不写说明书 ---- */
-  .cta {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    /* 左对齐到步骤 1 下面：和步骤条共用一条轴线，动作读起来是「下一步」而不是浮在空白里 */
-    align-items: flex-start;
-    justify-content: flex-start;
-    gap: 10px;
-    padding: 44px var(--sp-6) var(--sp-10);
-    text-align: left;
-  }
-  .cta-title {
-    margin: 0;
-    font-size: var(--fs-heading);
-    line-height: var(--lh-heading);
-    font-weight: 600;
-    color: var(--text);
-  }
-  .cta-meta {
-    margin: 0;
-    font-size: var(--fs-label);
-    line-height: 1.6;
-    color: var(--text-3);
-    max-width: 420px;
-  }
-  .cta-meta {
-    max-width: 460px;
-  }
-  .cta-meta code {
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-  }
-
-  .btn {
-    appearance: none;
-    font: inherit;
-    font-size: var(--fs-ui);
-    height: var(--ctl-h);
-    padding: 0 var(--sp-3);
-    border-radius: var(--rad-control);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-  }
-  .btn:hover {
-    background: var(--fill);
-  }
-  .btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .btn.primary {
-    background: var(--btn-primary-bg);
-    border-color: transparent;
-    color: var(--on-accent);
-    font-weight: 500;
-  }
-  .btn.primary:hover {
-    background: var(--btn-primary-hover);
-  }
-  .btn.primary.armed {
-    background: var(--danger);
-  }
-  .btn.ghost {
-    background: transparent;
-  }
-  .btn.big {
-    height: var(--ctl-h-xl);
-    padding: 0 var(--sp-6);
-    font-size: var(--fs-body);
-  }
-  .link {
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    font: inherit;
-    font-size: var(--fs-label);
-    cursor: pointer;
-    padding: 2px var(--sp-1);
-  }
-  .link:disabled {
-    color: var(--text-3);
-    cursor: default;
-  }
-  .link.danger {
-    color: var(--danger);
-  }
-
-  /* ---- 粘贴卡 ---- */
-  .paste-card {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-    padding: 14px var(--sp-4);
-    flex: 1;
-    min-height: 0;
-  }
-  .paste-head {
-    font-size: var(--fs-label);
-    color: var(--text-2);
-  }
-  .paste-box {
-    flex: 1;
-    min-height: 150px;
-    resize: none;
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono);
-    line-height: 1.6;
-    padding: 10px var(--sp-3);
-    border-radius: var(--rad-card);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
-    outline: none;
-  }
-  .paste-box:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-  .paste-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-  }
-  .hint {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--text-3);
-  }
-
-  /* ---- 预览 ---- */
-  .preview-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: var(--sp-2) var(--sp-4);
-    border-bottom: 1px solid var(--separator-soft);
-    background: var(--bg-inspector);
-    flex-wrap: wrap;
-  }
-  .chip {
-    font-size: 12px;
-    line-height: 18px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: var(--fill);
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .chip.warn {
-    background: var(--warn-soft);
-    color: var(--warn);
-  }
-
-  .draft-list {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-  }
-  .row {
     display: grid;
-    /* 正文列封顶 520（一行约 40 字），提示列从固定 x 起排：告警原因也能成一条竖轴 */
-    grid-template-columns: 14px 84px minmax(0, 520px) minmax(0, 1fr) 22px;
-    align-items: start;
-    gap: 10px;
-    padding: 5px var(--sp-4) 5px 13px;
-    border-bottom: 1px solid var(--separator-soft);
-    border-left: 3px solid transparent;
-    font-size: 13px;
-    line-height: 1.55;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 36px;
+    grid-template-columns: minmax(350px, 40%) minmax(0, 1fr);
+    background: var(--paper);
   }
-  .row:hover {
-    background: var(--row-hover);
+  .side {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+    border-right: 1px solid var(--separator);
+    background: var(--canvas);
+    overflow-y: auto;
   }
-  .row.flagged {
-    border-left-color: color-mix(in srgb, var(--warn) 75%, transparent);
-    background: color-mix(in srgb, var(--warn) 6%, var(--paper));
+  .side .aiw-card {
+    flex: 0 0 auto;
+    width: 100%;
   }
-  .row-mark {
+  .brief-grid {
     display: grid;
-    place-items: center;
-    color: var(--warn);
-    margin-top: 1px;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px var(--sp-3);
+    padding: 9px var(--sp-3) 10px;
   }
-  .row-time {
+  .brief-item {
     display: flex;
     flex-direction: column;
     gap: 1px;
+    min-width: 0;
   }
-  .tc {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 15px;
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
+  .brief-k {
+    font-size: 10.5px;
+    line-height: 14px;
+    color: var(--text-3);
     white-space: nowrap;
   }
-  .tc.end {
-    color: var(--text-3);
-  }
-  .row-text {
-    min-width: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
+  .brief-v {
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 600;
     color: var(--text);
-    cursor: text;
-    border-radius: 3px;
-    padding: 0 3px;
-    margin: 0 -3px;
-  }
-  .row-text:hover {
-    background: var(--fill);
-  }
-  .row-text textarea {
-    width: 100%;
-    min-height: 34px;
-    resize: vertical;
-    font: inherit;
-    line-height: inherit;
-    padding: 2px 5px;
-    border-radius: var(--rad-control);
-    border: 1px solid var(--accent);
-    background: var(--bg-content);
-    color: var(--text);
-    outline: none;
-  }
-  /* 提示独立成列：正文封顶后，所有告警原因从同一个 x 起排，扫一列就能看完 */
-  .row-flag {
-    display: block;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--warn);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding-top: 1px;
   }
-  .row-del {
-    width: 20px;
-    height: 20px;
-    border: 0;
-    border-radius: var(--rad-control);
-    background: transparent;
-    color: var(--text-3);
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity var(--dur-fast) var(--ease);
+  .brief-v.mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 500;
   }
-  .row:hover .row-del {
-    opacity: 1;
-  }
-  .row-del:hover {
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-
-  /* ---- 应用条 ---- */
-  .apply-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    min-width: 0;
-    padding: 10px var(--sp-4);
-    border-top: 1px solid var(--separator);
-    background: var(--bg-inspector);
-    flex: 0 0 auto;
-  }
-  .btn.apply {
-    height: var(--ctl-h-lg);
-    padding: 0 var(--sp-4);
-  }
-  .delta {
-    font-size: 12px;
-    line-height: 18px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: var(--fill);
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .delta.less {
-    background: var(--warn-soft);
+  .brief-v.warn-ink {
     color: var(--warn);
   }
-  .preview-hint {
-    margin-left: auto;
-    margin-right: var(--sp-2);
-    font-size: 12px;
+  .side-foot {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    padding: 2px;
+    font-size: 11px;
+    line-height: 15px;
     color: var(--text-3);
     white-space: nowrap;
   }
-  .config-sep {
-    width: 1px;
-    height: 14px;
-    background: var(--separator);
-    margin: 0 2px;
-    flex: 0 0 1px;
-  }
 
-  /* ---- ops 面板 ---- */
-  .ops-bar {
+  /* ---- 左卡内的行内状态 ---- */
+  .parsed-line {
     display: flex;
     align-items: center;
-    gap: var(--sp-2);
-    padding: var(--sp-2) var(--sp-4);
-    border-bottom: 1px solid var(--separator-soft);
-    font-size: var(--fs-label);
+    gap: 6px;
+    min-height: 24px;
+    font-size: 12px;
     color: var(--text-2);
-    flex-wrap: wrap;
   }
-  .ops-bar b {
+  .parsed-line b {
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
-  .ops-bar .conflict,
-  .ops-bar .conflict b {
-    color: var(--danger);
+  .parsed-icon {
+    display: grid;
+    place-items: center;
+    color: var(--success);
   }
-  .ops-bar .dim {
+  .warn-ink {
+    color: var(--warn);
+  }
+  .aiw-step-meta.warn-ink {
+    color: var(--warn);
+  }
+  .idx-arrow {
     color: var(--text-3);
+    margin: 0 2px;
   }
-  .ops-bar .spacer {
-    flex: 1;
+
+  /* ---- 结构建议 ops ---- */
+  .ops-tools {
+    flex: 0 0 auto;
   }
   .ops-list {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 10px var(--sp-4) var(--sp-4);
+    flex: 0 0 auto;
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
+    padding-right: 2px;
   }
   .ops-group {
     display: flex;
@@ -1321,9 +1188,10 @@
     gap: var(--sp-1);
   }
   .ops-group-title {
-    font-size: 11px;
-    color: var(--text-3);
+    font-size: 10.5px;
+    line-height: 15px;
     letter-spacing: 0.02em;
+    color: var(--text-3);
   }
   .ops-group-title b {
     color: var(--text-2);
@@ -1332,14 +1200,14 @@
   .op-row {
     display: flex;
     align-items: flex-start;
-    gap: 7px;
-    padding: 6px var(--sp-2);
+    gap: 6px;
+    padding: 5px 7px;
     border: 1px solid var(--separator);
     border-radius: var(--rad-card);
     background: var(--bg-content);
     cursor: pointer;
     content-visibility: auto;
-    contain-intrinsic-size: auto 44px;
+    contain-intrinsic-size: auto 40px;
   }
   .op-row:hover {
     background: var(--row-hover);
@@ -1351,12 +1219,13 @@
   }
   .op-row input {
     margin-top: 3px;
+    flex: 0 0 auto;
   }
   .op-badge {
     flex: 0 0 auto;
-    font-size: 11px;
-    line-height: 18px;
-    padding: 0 5px;
+    font-size: 10.5px;
+    line-height: 17px;
+    padding: 0 var(--sp-1);
     border-radius: 3px;
     background: var(--fill);
     color: var(--text-2);
@@ -1365,8 +1234,8 @@
   .op-idx {
     flex: 0 0 auto;
     font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 18px;
+    font-size: 10.5px;
+    line-height: 17px;
     color: var(--text-3);
     white-space: nowrap;
   }
@@ -1378,32 +1247,264 @@
     gap: 1px;
   }
   .op-line {
-    font-size: 12.5px;
-    line-height: 1.5;
+    font-size: 12px;
+    line-height: 1.45;
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .op-line .arrow {
+  .op-arrow {
     color: var(--text-3);
-    margin: 0 5px;
+    margin: 0 var(--sp-1);
   }
-  .op-line .muted {
+  .op-dim {
     color: var(--text-3);
   }
   .op-reason {
-    font-size: 11px;
+    font-size: 10.5px;
+    line-height: 15px;
     color: var(--text-3);
   }
   .op-conflict {
-    font-size: 11px;
+    font-size: 10.5px;
+    line-height: 15px;
     color: var(--danger);
   }
   .op-time {
     flex: 0 0 auto;
     font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 18px;
+    font-size: 10.5px;
+    line-height: 17px;
     color: var(--text-3);
     white-space: nowrap;
+  }
+
+  /* ---- 右栏预览 ---- */
+  .preview {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+  }
+  .preview-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 9px 14px 7px;
+    border-bottom: 1px solid var(--separator-soft);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .preview-title {
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .legend {
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .preview-cols.ref-single,
+  .preview-row.ref-single {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+  .preview-cols.ref-dual,
+  .preview-row.ref-dual {
+    grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .preview-cols.compare,
+  .preview-row.compare {
+    grid-template-columns: 96px minmax(0, 1fr) 44px minmax(0, 1fr);
+  }
+  .preview-row.compare {
+    border-left: 3px solid transparent;
+    padding-left: 11px;
+  }
+  .preview-row.compare.flagged {
+    border-left-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 4%, transparent);
+  }
+  .preview-cols.ops,
+  .preview-row.ops {
+    grid-template-columns: 96px minmax(0, 1fr) minmax(0, 0.55fr);
+  }
+  .preview-row.ref-single {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+  .preview-row.ref-dual {
+    grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .mark-head {
+    text-align: center;
+  }
+  .ref-cell {
+    border-left: 1px solid var(--separator-soft);
+    padding-left: var(--sp-2);
+  }
+  .b-idx {
+    color: color-mix(in srgb, var(--text-3) 60%, transparent);
+  }
+  .line {
+    display: block;
+    min-width: 0;
+  }
+  .old-cell .line + .line,
+  .ref-cell .line + .line {
+    margin-top: 2px;
+  }
+  .new-line + .new-line {
+    margin-top: 2px;
+  }
+  .new-cell .line {
+    border-radius: 3px;
+  }
+  .new-line {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-1);
+    min-width: 0;
+  }
+  .new-line .editable {
+    flex: 1;
+    min-width: 0;
+    cursor: text;
+    margin: 0 -3px;
+    padding: 0 3px;
+  }
+  .new-line .editable:hover {
+    background: var(--fill);
+  }
+  .line-del {
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-3);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease);
+  }
+  .new-line:hover .line-del,
+  .line-del:focus-visible {
+    opacity: 1;
+  }
+  .line-del:hover {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  .cue-issue {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-top: 1px;
+    font-size: 10.5px;
+    line-height: 14px;
+    color: var(--warn);
+  }
+  .new-cell textarea {
+    width: 100%;
+    min-height: 38px;
+    resize: vertical;
+    font: inherit;
+    line-height: inherit;
+    padding: 3px 5px;
+    margin-bottom: 2px;
+    border-radius: var(--rad-control);
+    border: 1px solid var(--accent);
+    background: var(--bg-content);
+    color: var(--text);
+    outline: none;
+  }
+  .struct-cell {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-1);
+    align-content: flex-start;
+    min-height: 20px;
+  }
+  .struct-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 19px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    line-height: 19px;
+    white-space: nowrap;
+  }
+  .empty-actions {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: 2px;
+  }
+  .aiw-config {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  /* 二次确认时主按钮换成警示色（仍然是主题令牌） */
+  .btn.armed {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .btn.armed:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  @media (max-width: 1100px) {
+    .body {
+      grid-template-columns: minmax(320px, 42%) minmax(0, 1fr);
+    }
+  }
+  @media (max-width: 900px) {
+    .body {
+      grid-template-columns: 1fr;
+      overflow: auto;
+    }
+    .side {
+      border-right: 0;
+      border-bottom: 1px solid var(--separator);
+      min-height: 420px;
+    }
+    .preview {
+      min-height: 460px;
+    }
+    .aiw-title-row {
+      padding: var(--sp-2) var(--sp-3) var(--sp-2);
+    }
+    .preview-cols.ref-single,
+    .preview-row.ref-single {
+      grid-template-columns: 80px minmax(0, 1fr);
+    }
+    .preview-cols.ref-dual,
+    .preview-row.ref-dual {
+      grid-template-columns: 80px minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .preview-cols.compare,
+    .preview-row.compare {
+      grid-template-columns: 80px minmax(0, 1fr) 34px minmax(0, 1fr);
+    }
+    .preview-cols.ops,
+    .preview-row.ops {
+      grid-template-columns: 80px minmax(0, 1fr) minmax(0, 0.55fr);
+    }
   }
 </style>

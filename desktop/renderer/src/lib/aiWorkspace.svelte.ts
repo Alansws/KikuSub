@@ -28,11 +28,7 @@ import {
   setTrackMode,
   toast,
 } from './store.svelte';
-import {
-  promptSelectedId,
-  selectedPromptTemplate,
-  type PromptCategory,
-} from './promptStore.svelte';
+import { promptSelectedId, type PromptCategory } from './promptStore.svelte';
 
 export type AiMode = 'single' | 'dual';
 
@@ -775,9 +771,3 @@ export async function importAiProposal() {
 // 把 AI 草稿的读写挂到零依赖桥上，供 store 的快照/历史路径复用。
 aiBridge.applyDraft = applyAiDraft;
 aiBridge.currentDraft = currentAiDraft;
-
-/** 当前模式绑定的模板名（页头显示用）。 */
-export function currentPolishTemplateName(): string {
-  const category: PromptCategory = ai.mode === 'dual' ? 'polish_dual' : 'polish_single';
-  return selectedPromptTemplate(category)?.name ?? '—';
-}

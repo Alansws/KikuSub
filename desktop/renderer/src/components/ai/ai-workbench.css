@@ -1,0 +1,959 @@
+/* ============================================================
+   AI 工作台共享语法（润色 / 断句重排 / 双引擎复核）
+
+   三页共用一套「顶栏 → 操作条 → 数据表」的密度与边框层级。这里只放
+   结构性样式与令牌引用；任何颜色都必须是 app.css 的令牌或 color-mix(令牌)，
+   组件里不再各写一套胶囊、表头和空态。
+
+   命名前缀 aiw- 是本文件唯一的命名空间；组件局部样式可以继续覆盖
+   grid-template-columns 这类与内容强相关的尺寸。
+   ============================================================ */
+
+.aiw-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
+
+.aiw-head {
+  flex: 0 0 auto;
+  background: var(--paper);
+  border-bottom: 1px solid var(--separator);
+}
+
+.aiw-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 14px var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.aiw-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.aiw-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.aiw-divider {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--separator);
+}
+
+.aiw-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 提案来源 / 模型名的整体：窄窗口里整组换行，不把模型名单独留在一行 */
+.aiw-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+/* 顶栏右侧的低频入口与计数：窄窗口里整组换行，避免按钮单独掉到下一行左侧 */
+.aiw-head-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-left: auto;
+}
+
+.aiw-mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 胶囊 / 计数 ---------- */
+
+.aiw-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  height: 22px;
+  padding: 0 var(--sp-2);
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.aiw-chip b {
+  color: var(--text);
+  font-weight: 600;
+}
+.aiw-chip.ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.aiw-chip.ok b {
+  color: var(--success);
+}
+.aiw-chip.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.aiw-chip.warn b {
+  color: var(--warn);
+}
+.aiw-chip.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.aiw-chip.danger b {
+  color: var(--danger);
+}
+.aiw-chip.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.aiw-chip.accent b {
+  color: var(--accent);
+}
+button.aiw-chip {
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+button.aiw-chip:hover {
+  opacity: 0.86;
+}
+
+.aiw-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.aiw-count b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.aiw-count-sep {
+  color: var(--text-3);
+  margin: 0 1px;
+}
+button.aiw-count {
+  cursor: pointer;
+}
+button.aiw-count:hover {
+  background: var(--fill);
+  color: var(--text-2);
+}
+
+.aiw-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 2px var(--sp-1);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.aiw-link:hover {
+  background: var(--accent-soft);
+}
+.aiw-link:disabled {
+  color: var(--text-3);
+  cursor: default;
+  background: transparent;
+}
+.aiw-link.danger {
+  color: var(--danger);
+}
+.aiw-link.danger:hover {
+  background: var(--danger-soft);
+}
+
+/* ---------- 来源 / 模板 ---------- */
+
+.aiw-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.aiw-template {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.aiw-select {
+  font: inherit;
+  font-size: 12px;
+  height: 26px;
+  max-width: 210px;
+  padding: 0 7px;
+  border-radius: var(--rad-control);
+  border: 1px solid var(--separator);
+  background: var(--raise);
+  color: var(--text);
+}
+.aiw-select:hover {
+  border-color: var(--accent-line);
+}
+.aiw-select:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+/* ---------- 操作条：两条工作流并排，不是两张卡 ---------- */
+
+.aiw-launch {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: 7px 14px;
+  background: var(--bg-inspector);
+  border-top: 1px solid var(--separator-soft);
+  min-width: 0;
+}
+.aiw-channel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.aiw-channel + .aiw-channel {
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--separator-soft);
+}
+.aiw-channel-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.aiw-channel-tag b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.aiw-arrow {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1;
+}
+.aiw-sep {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1;
+}
+.aiw-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 16%, transparent);
+  flex: 0 0 6px;
+}
+.aiw-state.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.aiw-state.accent {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.aiw-progress {
+  flex: 0 0 auto;
+  height: 2px;
+  width: 100%;
+  background: var(--fill);
+  overflow: hidden;
+}
+.aiw-progress > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+/* ---------- 分段轨道：自适应均分铺满 ---------- */
+
+.aiw-rail-wrap {
+  padding: 0 14px 10px;
+}
+.aiw-rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+  min-width: 0;
+}
+.aiw-rail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+.aiw-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--separator);
+  border-radius: var(--rad-card);
+  background: var(--raise);
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.aiw-rail-item:hover {
+  border-color: var(--accent-line);
+}
+.aiw-rail-item.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: var(--shadow-seg);
+}
+.aiw-rail-item:disabled {
+  cursor: default;
+}
+.aiw-rail-no {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.aiw-rail-item.on .aiw-rail-no {
+  color: var(--accent);
+}
+.aiw-rail-item.done .aiw-rail-no {
+  color: var(--success);
+}
+.aiw-rail-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.aiw-rail-count {
+  font-size: 12px;
+  line-height: 15px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aiw-rail-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 14px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aiw-rail-flag {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+.aiw-rail-flag.done {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.aiw-rail-flag.ready {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.aiw-rail-flag.todo {
+  background: var(--fill);
+}
+.aiw-rail-flag i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.aiw-rail-flag.done i {
+  background: var(--success);
+}
+.aiw-rail-flag.ready i {
+  background: var(--accent);
+}
+
+/* ---------- 工作卡 / 步骤 ---------- */
+
+.aiw-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--raise);
+  border: 1px solid var(--separator);
+  border-radius: var(--rad-card);
+  overflow: hidden;
+}
+.aiw-card-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--separator-soft);
+  background: var(--bg-inspector);
+  min-width: 0;
+}
+.aiw-card-title {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.aiw-card-title b {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-weight: 600;
+}
+.aiw-card-sub {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aiw-steps {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.aiw-step {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 12px 10px;
+  min-width: 0;
+}
+.aiw-step + .aiw-step {
+  border-top: 1px solid var(--separator-soft);
+}
+.aiw-step-no {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--separator);
+  background: var(--raise);
+  color: var(--text-3);
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.aiw-step.on .aiw-step-no {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.aiw-step.done .aiw-step-no {
+  background: var(--success-soft);
+  border-color: transparent;
+  color: var(--success);
+}
+.aiw-step-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aiw-step-meta {
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.aiw-step-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.aiw-wide {
+  width: 100%;
+  justify-content: center;
+}
+
+/* 粘贴 / 拖入区：内容空时显示提示，内容有值时提示让位 */
+.aiw-drop {
+  position: relative;
+  flex: 1;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  border: 1px dashed var(--separator);
+  border-radius: var(--rad-card);
+  background: var(--bg-inspector);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  overflow: hidden;
+}
+.aiw-drop.hot {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.aiw-drop textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 132px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 9px 10px;
+}
+.aiw-drop textarea:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: -2px;
+}
+.aiw-drop-hint {
+  position: absolute;
+  inset: 9px 10px auto 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 17px;
+}
+.aiw-drop-hint b {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.aiw-kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 15px;
+  padding: 0 4px;
+  border: 1px solid var(--separator);
+  border-radius: 3px;
+  color: var(--text-3);
+  align-self: flex-start;
+}
+
+/* 覆盖前的条数变化 + 体检徽标 */
+.aiw-delta {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.aiw-fig {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+.aiw-fig.muted {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.aiw-fig-arrow {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.aiw-idle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--text-3);
+}
+
+/* ---------- 底部应用条 ---------- */
+
+.aiw-applybar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 12px;
+  border-top: 1px solid var(--separator);
+  background: var(--bg-inspector);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.aiw-applybar .aiw-spacer {
+  flex: 1;
+}
+
+/* ---------- 表格 ---------- */
+
+.aiw-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.aiw-cols {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-3);
+  background: var(--bg-content);
+  border-bottom: 1px solid var(--separator);
+}
+.aiw-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.aiw-row {
+  display: grid;
+  align-items: start;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--separator-soft);
+  font-size: 12.5px;
+  line-height: 1.55;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
+}
+.aiw-row:hover {
+  background: var(--row-hover);
+}
+.aiw-time {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+}
+button.aiw-time {
+  cursor: pointer;
+}
+button.aiw-tc {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+button.aiw-tc:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.aiw-tc {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.aiw-idx {
+  font-size: 10.5px;
+  line-height: 14px;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--text-3) 68%, transparent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aiw-cell {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.aiw-cell.muted {
+  color: var(--text-2);
+}
+.aiw-cell.dim {
+  color: var(--text-3);
+}
+.aiw-placeholder {
+  color: color-mix(in srgb, var(--text-3) 56%, transparent);
+}
+.aiw-mark {
+  display: grid;
+  place-items: center;
+}
+.aiw-mark > span {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+}
+.aiw-mark .same {
+  color: var(--text-3);
+  background: var(--fill);
+}
+.aiw-mark .diff {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.aiw-mark .old {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.aiw-mark .new {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.aiw-row.changed {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.aiw-row.only-old {
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+.aiw-row.only-new {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.aiw-row.hit {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* 列表内的小块空态：不撑成整屏白板 */
+.aiw-inline-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 14px;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--separator-soft);
+  flex-wrap: wrap;
+}
+.aiw-inline-empty .dim {
+  color: var(--text-3);
+}
+.aiw-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 14px;
+  padding: 16px;
+  border: 1px dashed var(--separator);
+  border-radius: var(--rad-card);
+  background: var(--bg-inspector);
+}
+.aiw-empty-title {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.aiw-empty-text {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-3);
+}
+
+/* ---------- 顶栏里的次级动作菜单 ---------- */
+
+.aiw-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+.aiw-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.aiw-menu {
+  position: absolute;
+  z-index: 21;
+  top: 28px;
+  right: 0;
+  min-width: 140px;
+  padding: var(--sp-1);
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  background: var(--bg-content);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.aiw-menu button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  padding: 6px var(--sp-2);
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.aiw-menu button:hover {
+  background: var(--fill);
+}
+.aiw-menu button.danger {
+  color: var(--danger);
+}
+/* 底部应用条里的菜单向上开，不能掉出窗口 */
+.aiw-menu.up {
+  top: auto;
+  bottom: 30px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aiw-progress > i {
+    transition: none;
+  }
+}
+
+/* ---------- 表头下的一条控制/统计带 ---------- */
+
+.aiw-subbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--separator-soft);
+  background: var(--bg-inspector);
+  font-size: 12px;
+  color: var(--text-2);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.aiw-hint {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.aiw-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.aiw-icon-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.aiw-icon-btn:hover {
+  background: var(--fill);
+  color: var(--text);
+}

@@ -1,14 +1,20 @@
 <script lang="ts">
   /**
-   * 润色页（原「AI 优化」的润色半边）。
+   * 润色页：以核对台当前稿（A）为骨架的 1:1 文本建议。
    *
-   * 有第二版 B 时可选「单源 / 双源」。双源时展示三栏：
-   *   A（只读原文） | B（只读参考，可折叠） | AI 终稿（可双击编辑，与 A 逐字 diff）
+   * 版式分三层，和双引擎复核页共用一套紧凑语法：
+   *   1. 顶栏：标题 + 单源/双源 + 模板 + 低频入口；
+   *   2. 操作条：通道 A（API 自动）与通道 B（外部模型）并排，不再上下各放一套按钮；
+   *   3. 数据表：**没有提案时也先画表**（A + 虚线待生成的终稿列），拿到提案后原地激活。
    *
-   * 时间轴铁律（D-1）：第 3 栏与第 1 栏严格 1:1，所有采用粒度（逐条 / 全部差异 /
-   * 整列）都走 `apply_polish()`，一次 ⌘Z 全退。
+   * 时间轴铁律（D-1）不变：第 3 栏与第 1 栏严格 1:1，所有采用粒度都走
+   * `apply_polish()`，一次 ⌘Z 全退。
    */
   import Icon from '../components/Icon.svelte';
+  import SourceSwitch from '../components/ai/SourceSwitch.svelte';
+  import TemplatePicker from '../components/ai/TemplatePicker.svelte';
+  import SegmentRail from '../components/ai/SegmentRail.svelte';
+  import '../components/ai/ai-workbench.css';
   import {
     ai,
     applyAiAcceptedDiffs,
@@ -16,22 +22,23 @@
     applyAiWholeColumn,
     cancelAiPolish,
     copyAiPrompt,
-    currentPolishTemplateName,
     discardAiProposal,
     importAiProposal,
     loadAiProposal,
     parseAiPastedSrt,
     planAiSegments,
     saveAiProposalAs,
-    segmentKey,
     setAiEdit,
     setAiKind,
     setAiMode,
     setAllAiAccept,
     startAiPolish,
     toggleAiAccept,
+    segmentKey,
   } from '../lib/aiWorkspace.svelte';
   import { altEngineLabel, dual, loadAltDiff, refreshAltReview } from '../lib/dualReview.svelte';
+  import { api, type AiConfig } from '../lib/api';
+  import { bRefsFor } from '../lib/previewDiff';
   import { loadPrompts, promptItemsFor, prompts, selectPromptTemplate } from '../lib/promptStore.svelte';
   import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
@@ -39,8 +46,17 @@
   let editing = $state(0);
   let draft = $state('');
   let bCollapsed = $state(false);
+  let menuOpen = $state(false);
+  let applyMenuOpen = $state(false);
+  /** 逐条理由默认收起：12 行重复同一句会稀释终稿本身。 */
+  let showNotes = $state(false);
+  let aiConfig = $state<AiConfig | null>(null);
+  /** `null` = 还没问到；false = 主进程明确说没有 Key。 */
+  let keyReady = $state<boolean | null>(null);
 
-  const polishTemplates = $derived(promptItemsFor(ai.mode === 'dual' ? 'polish_dual' : 'polish_single'));
+  const polishTemplates = $derived(
+    promptItemsFor(ai.mode === 'dual' ? 'polish_dual' : 'polish_single'),
+  );
   const activeTemplateId = $derived(
     ai.mode === 'dual' ? prompts.selectedPolishDual : prompts.selectedPolishSingle,
   );
@@ -64,34 +80,33 @@
     });
   });
 
-  /** A 的每一条对应哪段 B（按时间重叠，双源页只读参考用）。 */
-  const bTexts = $derived.by(() => {
-    const out = new Map<number, string>();
-    if (!dual.exists) return out;
-    const b = dual.cues;
-    let j = 0;
-    for (let i = 0; i < app.cues.length; i += 1) {
-      const cue = app.cues[i];
-      // 只取真正与这条 A 时间重叠的 B：放宽到相邻句会让参考栏混进上一句/下一句。
-      while (j < b.length && b[j].end <= cue.start) j += 1;
-      let k = j;
-      const texts: string[] = [];
-      while (k < b.length && b[k].start < cue.end) {
-        texts.push(b[k].text);
-        k += 1;
-      }
-      out.set(i + 1, texts.join(''));
-    }
-    return out;
-  });
+  /** A 的每一条对应哪段 B（只在时间真正重叠时取，不混入邻句）。 */
+  const bRefs = $derived(dual.exists ? bRefsFor(app.cues, dual.cues) : []);
 
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
   const changedCount = $derived(rows.filter((r) => r.changed).length);
   const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
-  const visible = $derived(ai.changedOnly ? rows.filter((r) => r.changed) : rows);
-  /** 外部粘贴的 SRT 没有逐条理由：此时整列「理由」不出现，避免满屏「手动粘贴」。 */
-  const hasNotes = $derived(rows.some((r) => r.note.trim().length > 0));
+  const visible = $derived(
+    ai.proposal && ai.changedOnly ? rows.filter((r) => r.changed) : rows,
+  );
   const filledCount = $derived(ai.segments.filter((seg) => ai.filled[segmentKey(seg)]).length);
+  const hasAnyNotes = $derived(Boolean(ai.proposal) && rows.some((row) => row.note.trim().length > 0));
+  const dualVisible = $derived(ai.mode === 'dual' && !bCollapsed);
+  const activeSegment = $derived(
+    ai.longMode && ai.segments.length
+      ? ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]
+      : null,
+  );
+  const aiNeedsSetup = $derived(
+    aiConfig !== null && (!aiConfig.enabled || keyReady === false),
+  );
+  const entryLabel = $derived(
+    ai.proposal?.entry === 'manual'
+      ? '外部粘贴'
+      : ai.proposal?.entry === 'skill'
+        ? '外部 Agent'
+        : '本机生成',
+  );
 
   $effect(() => {
     void app.connected;
@@ -102,8 +117,23 @@
       void loadAiProposal();
       void loadPrompts();
       void refreshAltReview();
+      void loadAiStatus();
     }
   });
+
+  async function loadAiStatus() {
+    try {
+      aiConfig = await api.getAiConfig();
+    } catch {
+      aiConfig = null;
+    }
+    try {
+      const state = await window.kikusub?.aiKey?.status?.();
+      keyReady = state ? Boolean(state.has) : false;
+    } catch {
+      keyReady = false;
+    }
+  }
 
   $effect(() => {
     // 第二版/条数变化后重新切段；长片分段不会因为回填而失效。
@@ -124,6 +154,16 @@
     setView('review');
     jumpToCue(row.i - 1, { seek: false });
     focusRange(row.start, row.end);
+  }
+
+  function togglePaste() {
+    ai.pasteOpen = !ai.pasteOpen;
+  }
+
+  async function parsePaste() {
+    await parseAiPastedSrt();
+    // 成功时解析函数会清空 pasteText；失败时保留内容，面板不关。
+    if (!ai.pasteText.trim()) ai.pasteOpen = false;
   }
 
   function startEdit(i: number, text: string) {
@@ -152,196 +192,130 @@
     node.select();
   }
 
-  function plan() {
-    setAiMode('single');
+  function railStatus(segment: (typeof ai.segments)[number]): 'done' | 'todo' {
+    return ai.filled[segmentKey(segment)] ? 'done' : 'todo';
   }
-
-  function planDual() {
-    if (!dual.exists) return;
-    setAiMode('dual');
-    void loadAltDiff();
-  }
-
-  function timeRange(start: number, end: number): string {
-    return `${tcShort(start)}–${tcShort(end)}`;
-  }
-
 </script>
 
-<div class="ai">
-  <div class="head">
-    <span class="title">润色</span>
-    <div class="segs" role="tablist" aria-label="润色模式">
-      <button
-        role="tab"
-        aria-selected={ai.mode === 'single'}
-        class="seg"
-        class:on={ai.mode === 'single'}
-        onclick={plan}
-        title="只吃核对台当前版本"
-      >单源</button>
-      <button
-        role="tab"
-        aria-selected={ai.mode === 'dual'}
-        class="seg"
-        class:on={ai.mode === 'dual'}
-        onclick={planDual}
-        disabled={!dual.exists}
-        title={dual.exists ? '同时参考第二版稿（严格以 A 为骨架）' : '还没有第二版字幕（可转写或导入）'}
-      >双源</button>
-    </div>
-
-    <span class="dim" title="当前模式绑定的提示词模板；可在「提示词库」对应页签里编辑">
-      模板：{currentPolishTemplateName()}
-    </span>
-    {#if polishTemplates.length}
-      <select
-        class="lang"
+<div class="polish aiw-page">
+  <header class="aiw-head">
+    <div class="aiw-title-row">
+      <h1 class="aiw-title">润色</h1>
+      <SourceSwitch
+        source={ai.mode}
+        hasB={dual.exists}
+        aCount={app.cues.length}
+        bCount={dual.count}
+        bLabel={altEngineLabel()}
+        onchange={(next) => setAiMode(next)}
+      />
+      <TemplatePicker
+        items={polishTemplates}
         value={activeTemplateId}
-        onchange={(e) =>
-          void selectPromptTemplate(
-            e.currentTarget.value,
-            ai.mode === 'dual' ? 'polish_dual' : 'polish_single',
-          )}
         title="润色提示词模板"
-      >
-        {#each polishTemplates as item (item.id)}
-          <option value={item.id}>{item.name}</option>
-        {/each}
-      </select>
-    {/if}
-    {#if ai.mode === 'dual' && dual.exists}
-      <span class="badge">B：{altEngineLabel()} · {dual.count} 条</span>
-      {#if dual.count !== app.cues.length}
-        <span
-          class="ref-note"
-          title="两个引擎的断句本来就可能不同；B 只作参考，AI 终稿仍严格按 A 的序号与时间轴输出"
-        >
-          B 参考稿，行数不同；AI 仍按 A 输出
+        onchange={(id) =>
+          void selectPromptTemplate(id, ai.mode === 'dual' ? 'polish_dual' : 'polish_single')}
+      />
+      <div class="aiw-spacer"></div>
+      <button class="btn ghost sm" onclick={() => setView('prompts')} title="打开提示词库">
+        提示词库
+      </button>
+    </div>
+
+    <div class="aiw-launch">
+      <div class="aiw-channel">
+        <span class="aiw-channel-tag" class:needs-setup={aiNeedsSetup}>
+          <i class="aiw-state" class:warn={aiNeedsSetup}></i><b>A</b> API 自动
         </span>
-      {/if}
-      <button class="link" onclick={() => setView('dual')} title="打开双引擎复核页">对照</button>
-    {/if}
-
-    {#if ai.proposal}
-      <span class="badge" title={ai.proposal.entry === 'manual'
-        ? '从外部模型（网页版 / 聊天窗）复制提示词、再把回复粘回来的结果'
-        : ai.proposal.entry === 'skill'
-          ? '由随包 Agent 技能写出的提案文件'
-          : '在本机「生成建议」里调用模型得到的结果'}>
-        {ai.proposal.entry === 'skill' ? '外部 Agent' : ai.proposal.entry === 'manual' ? '外部粘贴' : '本机生成'}
-      </span>
-      {#if ai.proposal.source.digest_b}<span class="badge quiet">双源</span>{/if}
-      {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
-        <span class="dim">{ai.proposal.model}</span>
-      {/if}
-    {/if}
-
-    <div class="spacer"></div>
-
-    <button
-      class="btn ghost"
-      onclick={() => void copyAiPrompt()}
-      disabled={!app.cues.length}
-      title={ai.longMode ? '复制当前分段的提示词' : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
-    >
-      {ai.longMode ? '复制本段提示词' : '复制提示词'}
-    </button>
-    <button class="btn ghost" onclick={() => setView('prompts')} title="打开提示词库">提示词库</button>
-    <button
-      class="btn ghost"
-      onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
-      disabled={!app.cues.length}
-      title={ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
-    >
-      {ai.longMode ? '粘贴本段结果…' : '粘贴结果…'}
-    </button>
-    {#if ai.proposal}<div class="tb-div"></div>{/if}
-    {#if ai.proposal}
-      <button class="btn ghost" onclick={startAiPolish} disabled={ai.generating || !app.cues.length} title="生成一份润色建议（不修改字幕）">
-        生成建议
-      </button>
-      <button class="btn ghost" onclick={importAiProposal}>导入建议…</button>
-      <div class="tb-div"></div>
-      <button class="btn ghost" onclick={() => void loadAiProposal(true)} disabled={ai.loading || ai.generating}>重新加载</button>
-      <button class="btn ghost" onclick={saveAiProposalAs} disabled={ai.saving}>另存</button>
-      <button class="btn ghost danger" onclick={discardAiProposal}>丢弃</button>
-      <div class="tb-div"></div>
-      <button class="btn ghost" onclick={applyAiAllDiffs} disabled={ai.applying} title="把所有与 A 不同的条目一次写回">
-        全部差异
-      </button>
-      <button class="btn ghost" onclick={applyAiWholeColumn} disabled={ai.applying} title="第 3 栏全量写回核对台">
-        整列应用
-      </button>
-      <button
-        class="btn primary"
-        onclick={applyAiAcceptedDiffs}
-        disabled={ai.applying || acceptedCount === 0}
-        title="只应用「已采纳且确有差异」的条目；⌘Z 一次全退"
-      >
-        {ai.applying ? '应用中…' : '应用采纳'}
-      </button>
-    {/if}
-  </div>
-
-  {#if ai.proposal}
-    <div class="bar">
-      <span>共 <b>{app.cues.length}</b> 条</span>
-      <span class="sep"></span>
-      <span>AI 改动 <b class="warn">{changedCount}</b> 处</span>
-      <span class="sep"></span>
-      <span>已采纳 <b>{acceptedCount}</b></span>
-      {#if ai.mode === 'dual'}
-        <span class="sep"></span>
-        <span>漏句 <b>{dual.stats?.only_a ?? 0}</b> / <b>{dual.stats?.only_b ?? 0}</b></span>
-      {/if}
-      <div class="spacer"></div>
-      <label class="chk">
-        <input type="checkbox" bind:checked={ai.changedOnly} />
-        只看改动
-      </label>
-      {#if ai.mode === 'dual'}
-        <button class="link" onclick={() => (bCollapsed = !bCollapsed)} title="折叠 B 栏，给终稿更多宽度">
-          {bCollapsed ? '展开 B 栏' : '折叠 B 栏'}
+        <button
+          class="btn primary"
+          onclick={startAiPolish}
+          disabled={ai.generating || !app.cues.length || aiNeedsSetup}
+          title={aiNeedsSetup
+            ? '先在设置 → AI 优化里启用并配置 API Key'
+            : '生成一份润色建议（不修改字幕）'}
+        >
+          {ai.generating ? `生成中 ${ai.progress}%` : '生成润色建议'}
         </button>
-      {/if}
-      <button class="link" onclick={() => setAllAiAccept(true)} disabled={!ai.proposal}>全选</button>
-      <button class="link" onclick={() => setAllAiAccept(false)} disabled={!ai.proposal}>全不选</button>
-    </div>
-  {/if}
-
-  {#if ai.mode === 'dual' && ai.longMode && ai.segments.length}
-    <div class="segments">
-      <span class="seg-label">长片分段 · 已填 {filledCount}/{ai.segments.length}</span>
-      <div class="seg-list">
-        {#each ai.segments as seg, index (seg.from)}
-          <button
-            class="seg-chip"
-            class:on={index === ai.segmentIndex}
-            class:filled={ai.filled[segmentKey(seg)]}
-            onclick={() => (ai.segmentIndex = index)}
-            title="切换到这一段；复制/粘贴都只作用于当前段"
-          >
-            <span>第 {index + 1}/{ai.segments.length} 段</span>
-            <em>{seg.from}–{seg.to} · {timeRange(seg.start, seg.end)}</em>
-            <b>{ai.filled[segmentKey(seg)] ? '✅' : '未填'}</b>
+        {#if ai.generating}
+          <button class="aiw-link" onclick={cancelAiPolish}>取消</button>
+          <span class="aiw-hint">{ai.stage || '准备中'}</span>
+        {:else if aiConfig === null}
+          <span class="aiw-hint">读取配置…</span>
+        {:else if !aiConfig.enabled}
+          <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里打开">
+            未启用 · 去设置
           </button>
-        {/each}
+        {:else if keyReady === false}
+          <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里填写 API Key">
+            未配置 Key · 去设置
+          </button>
+        {:else}
+          <span class="aiw-mono" title={aiConfig.base_url}>{aiConfig.model || '未指定模型'}</span>
+        {/if}
       </div>
-      <button
-        class="btn tiny"
-        onclick={() => {
-          const next = ai.segments.findIndex((seg) => !ai.filled[segmentKey(seg)]);
-          if (next >= 0) ai.segmentIndex = next;
-        }}
-        title="跳到下一个还没回填的段"
-      >
-        下一未填
-      </button>
-    </div>
-  {/if}
 
-  {#if ai.proposal && visibleErrors.length}
+      <div class="aiw-channel">
+        <span class="aiw-channel-tag"><b>B</b> 外部模型</span>
+        <button
+          class="btn ghost"
+          onclick={() => void copyAiPrompt()}
+          disabled={!app.cues.length}
+          title={ai.longMode ? '复制当前分段的提示词' : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
+        >{ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
+        <span class="aiw-arrow" aria-hidden="true">→</span>
+        <button
+          class="btn ghost"
+          onclick={togglePaste}
+          disabled={!app.cues.length}
+          title={ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
+        >{ai.pasteOpen ? '收起粘贴' : '粘贴回复'}</button>
+        <span class="aiw-sep" aria-hidden="true">/</span>
+        <button
+          class="btn ghost"
+          onclick={importAiProposal}
+          title="导入外部工具 / Agent 写好的建议文件"
+        >导入建议文件…</button>
+      </div>
+
+      <div class="aiw-spacer"></div>
+      {#if ai.proposal}
+        <div class="aiw-status">
+          <span
+            class="aiw-chip accent"
+            title={ai.proposal.entry === 'manual'
+              ? '从外部模型复制提示词、再把回复粘回来的结果'
+              : ai.proposal.entry === 'skill'
+                ? '由随包 Agent 技能写出的提案文件'
+                : '在本机「生成润色建议」里调用模型得到的结果'}
+          >{entryLabel}</span>
+          {#if ai.proposal.source.digest_b}<span class="aiw-chip">双源</span>{/if}
+          {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
+            <span class="aiw-mono">{ai.proposal.model}</span>
+          {/if}
+        </div>
+      {:else if ai.loading}
+        <span class="aiw-hint">正在读取建议…</span>
+      {/if}
+    </div>
+
+    {#if ai.generating}
+      <div class="aiw-progress" aria-hidden="true"><i style={`width:${ai.progress}%`}></i></div>
+    {/if}
+
+    {#if ai.mode === 'dual' && ai.longMode && ai.segments.length}
+      <SegmentRail
+        label={`长片分段 · 已回填 ${filledCount}/${ai.segments.length}`}
+        segments={ai.segments}
+        active={ai.segmentIndex}
+        status={railStatus}
+        onselect={(index) => (ai.segmentIndex = index)}
+        hint="复制 / 粘贴只作用于当前段"
+      />
+    {/if}
+  </header>
+
+  {#if visibleErrors.length}
     <div class="note err"><Icon name="warn" size={11} /><span>{visibleErrors[0]}</span></div>
   {:else if ai.proposal && !ai.digestMatch}
     <div class="note err">
@@ -354,7 +328,9 @@
     <div class="note warn">
       <Icon name="warn" size={11} />
       <span>
-        {ai.warnings.slice(0, 3).join('；')}{ai.warnings.length > 3 ? ` …另有 ${ai.warnings.length - 3} 条提示` : ''}
+        {ai.warnings.slice(0, 3).join('；')}{ai.warnings.length > 3
+          ? ` …另有 ${ai.warnings.length - 3} 条提示`
+          : ''}
       </span>
     </div>
   {/if}
@@ -362,236 +338,290 @@
   {#if ai.pasteOpen}
     <div class="paste">
       <div class="paste-head">
-        {#if ai.mode === 'dual' && ai.longMode && ai.segments.length}
-          正在回填<b>第 {ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]?.from}–{ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]?.to} 条</b>。
-          序号可以是全局的，也可以是本段从 1 开始的；只按顺序取文本，条数必须正好是本段条数。
+        {#if ai.longMode && activeSegment}
+          回填<b>第 {activeSegment.from}–{activeSegment.to} 条</b>
+          <span class="aiw-hint">序号可用全局或本段 1 起</span>
         {:else}
-          把模型返回的 SRT 整段粘在下面。<b>序号和时间戳会被忽略</b>，只按顺序取文本，时间轴仍用你自己的。
+          粘贴模型返回的 SRT
+          <span class="aiw-hint">只取文本 · 条数必须一致</span>
+        {/if}
+        {#if ai.proposal}
+          <span
+            class="aiw-chip warn"
+            title="解析成功后，当前建议的手改与采纳状态会被新结果替换"
+          >将替换当前建议</span>
         {/if}
       </div>
       <textarea
         class="paste-box"
         bind:value={ai.pasteText}
         spellcheck="false"
+        aria-label="粘贴模型返回的 SRT"
         placeholder={'1\n00:00:00,500 --> 00:00:01,500\nおはよう\n\n2\n…'}
       ></textarea>
       <div class="paste-actions">
-        <button class="btn primary" onclick={parseAiPastedSrt} disabled={ai.parsing || !ai.pasteText.trim()}>
-          {ai.parsing ? '解析中…' : ai.mode === 'dual' && ai.longMode ? '解析并回填本段' : '解析成建议'}
-        </button>
+        <button
+          class="btn primary"
+          onclick={() => void parsePaste()}
+          disabled={ai.parsing || !ai.pasteText.trim()}
+        >{ai.parsing ? '解析中…' : ai.longMode ? '解析并回填本段' : '解析成建议'}</button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
-        {#if ai.mode === 'dual' && ai.longMode && ai.segments.length}
-          <button
-            class="btn ghost"
-            onclick={() => {
-              if (ai.segmentIndex < ai.segments.length - 1) ai.segmentIndex += 1;
-            }}
-          >
-            下一段
-          </button>
-        {/if}
-        <span class="paste-hint">条数不符会整段拒绝，并提示期望条数与实际条数</span>
+        <div class="aiw-spacer"></div>
+        <span class="aiw-hint">条数不符整段拒绝</span>
       </div>
     </div>
   {/if}
 
-  {#if ai.generating}
-    <div class="note busy">
-      <Icon name="wave" size={11} />
-      <span>正在生成建议：{ai.stage || '准备中'}</span>
-      <b class="pct">{ai.progress}%</b>
-      <button class="link" onclick={cancelAiPolish}>取消</button>
-    </div>
-  {/if}
-
-  {#if ai.loading}
-    <div class="blank"><div class="et">正在读取建议…</div></div>
-  {:else if !ai.proposal}
-    <div class="blank">
-      <span class="blank-icon"><Icon name="sparkle" size={24} /></span>
-      <div class="et">还没有可对照的修改建议</div>
-      <div class="es">
-        {ai.mode === 'dual'
-          ? 'AI 会同时拿到 A 与 B，但严格以 A 的序号与时间轴为骨架输出终稿。'
-          : '点「生成建议」，或导入外部工具写好的建议；时间码保持不变。'}
-      </div>
-      {#if visibleErrors.length}
-        <div class="blank-err"><Icon name="warn" size={11} />{visibleErrors[0]}</div>
+  <div class="aiw-subbar">
+    <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
+    {#if ai.proposal}
+      <span class="aiw-chip">改动 <b class:hot={changedCount > 0}>{changedCount}</b></span>
+      <span class="aiw-chip accent">采纳 <b>{acceptedCount}</b></span>
+      {#if ai.mode === 'dual'}
+        <span class="aiw-chip" title="两份字幕的漏句统计；B 只作参考，不参与覆盖">
+          漏句 <b>{dual.stats?.only_a ?? 0}</b> / <b>{dual.stats?.only_b ?? 0}</b>
+        </span>
       {/if}
-      <div class="ea">
-        <button class="btn primary" onclick={startAiPolish} disabled={ai.generating || !app.cues.length}>生成建议</button>
-        <button class="btn ghost" onclick={importAiProposal}>导入建议…</button>
+    {:else}
+      <span class="aiw-hint">
+        {ai.mode === 'dual'
+          ? 'A 与 B 已就绪 · 生成后在同一张表里激活 AI 终稿'
+          : 'A 列已就绪 · 生成后在同一张表里激活 AI 终稿'}
+      </span>
+    {/if}
+    <div class="aiw-spacer"></div>
+    {#if ai.proposal}
+      <label class="aiw-check">
+        <input type="checkbox" bind:checked={ai.changedOnly} />
+        只看改动
+      </label>
+      {#if hasAnyNotes}
+        <label class="aiw-check" title="在终稿下方显示逐条理由">
+          <input type="checkbox" bind:checked={showNotes} />
+          理由
+        </label>
+      {/if}
+      {#if ai.mode === 'dual'}
+        <button class="aiw-link" onclick={() => (bCollapsed = !bCollapsed)} title="折叠 B 栏，给终稿更多宽度">
+          {bCollapsed ? '展开 B 栏' : '折叠 B 栏'}
+        </button>
+      {/if}
+      <button class="aiw-link" onclick={() => setAllAiAccept(true)}>全选</button>
+      <button class="aiw-link" onclick={() => setAllAiAccept(false)}>全不选</button>
+      <div class="aiw-menu-wrap">
+        <button
+          class="aiw-icon-btn"
+          onclick={() => (menuOpen = !menuOpen)}
+          title="更多操作"
+          aria-label="更多操作"
+          aria-expanded={menuOpen}
+        >⋯</button>
+        {#if menuOpen}
+          <button class="aiw-menu-backdrop" aria-label="关闭菜单" onclick={() => (menuOpen = false)}></button>
+          <div class="aiw-menu" role="menu">
+            <button
+              role="menuitem"
+              onclick={() => {
+                menuOpen = false;
+                void loadAiProposal(true);
+              }}
+              disabled={ai.loading || ai.generating}
+            >重新加载</button>
+            <button role="menuitem" onclick={() => { menuOpen = false; void saveAiProposalAs(); }} disabled={ai.saving}>
+              另存…
+            </button>
+            <button
+              class="danger"
+              role="menuitem"
+              onclick={() => { menuOpen = false; void discardAiProposal(); }}
+            >丢弃</button>
+          </div>
+        {/if}
       </div>
-    </div>
-  {:else if !visible.length}
-    <div class="blank">
-      <Icon name="check" size={22} />
-      <div class="et">这一栏没有内容</div>
-      <div class="es">{ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}</div>
+    {/if}
+  </div>
+
+  {#if !app.cues.length}
+    <div class="aiw-empty">
+      <div class="aiw-empty-title">还没有字幕</div>
+      <div class="aiw-empty-text">先在转写页跑一次，或从导入页导入一份 SRT。</div>
+      <div class="empty-actions">
+        <button class="btn primary sm" onclick={() => setView('transcribe')}>去转写页</button>
+        <button class="btn ghost sm" onclick={() => setView('import')}>导入字幕</button>
+      </div>
     </div>
   {:else}
-    <div class="cols" class:dual={ai.mode === 'dual' && !bCollapsed} class:no-notes={!hasNotes}>
-      <span class="c-time">时间码</span>
-      <span class="c-side">A · 原文（只读）</span>
-      {#if ai.mode === 'dual' && !bCollapsed}
-        <span class="c-side">B · 第二引擎（只读）</span>
-      {/if}
-      <span class="c-side">AI 终稿（双击可改）</span>
-      {#if hasNotes}<span class="c-note">理由</span>{/if}
-      <span></span>
-    </div>
-    <div class="list">
-      {#each visible as row (row.i)}
-        <div
-          class="row"
-          class:dual={ai.mode === 'dual' && !bCollapsed}
-          class:no-notes={!hasNotes}
-          class:changed={row.changed}
-          class:off={!row.accepted}
-        >
-          <div class="c-time">
-            <button class="tc" onclick={() => goto(row)} title="回到核对台定位这一句">{tcShort(row.start)}</button>
-            <span class="idx">#{row.i}</span>
-          </div>
-          <div class="c-side left">{row.before}</div>
-          {#if ai.mode === 'dual' && !bCollapsed}
-            <div class="c-side ref">{bTexts.get(row.i) ?? ''}</div>
+    <div class="aiw-table">
+      <div class="aiw-cols" class:dual={dualVisible}>
+        <span>时间码</span>
+        <span>A · 核对台（只读）</span>
+        {#if dualVisible}
+          <span class="ref-head">B · {altEngineLabel()}（参考）</span>
+        {/if}
+        <span class="final-head">
+          AI 终稿
+          {#if ai.proposal}
+            <span class="aiw-hint">双击可改</span>
+          {:else}
+            <span class="aiw-chip pending-chip">待生成</span>
           {/if}
-          <div class="c-side right" ondblclick={() => startEdit(row.i, row.after)}>
-            {#if editing === row.i}
-              <textarea
-                use:focusOnMount
-                bind:value={draft}
-                onkeydown={(e) => onEditKey(e, row.i)}
-                onblur={() => commitEdit(row.i)}
-                spellcheck="false"
-              ></textarea>
-            {:else}
-              <span class="txt">{row.after}</span>
-              {#if ai.edits[row.i] !== undefined}<span class="tag">已手改</span>{/if}
+        </span>
+        <span></span>
+      </div>
+
+      <div class="aiw-list">
+        {#if !visible.length}
+          <div class="aiw-inline-empty">
+            <Icon name="check" size={16} />
+            <span>{ai.changedOnly ? '这一栏没有改动' : '当前没有字幕'}</span>
+            {#if ai.changedOnly}
+              <button class="aiw-link" onclick={() => (ai.changedOnly = false)}>看全量</button>
             {/if}
           </div>
-          {#if hasNotes}<div class="c-note">{row.note}</div>{/if}
-          <button
-            class="pin"
-            class:on={row.accepted}
-            onclick={() => toggleAiAccept(row.i)}
-            title={row.accepted ? '采纳这一条（点击排除）' : '已排除（点击采纳）'}
-          >
-            <Icon name="check" size={11} />
-          </button>
-        </div>
-      {/each}
+        {:else}
+          {#each visible as row (row.i)}
+            {@const ref = bRefs[row.i - 1]}
+            <div
+              class="aiw-row"
+              class:dual={dualVisible}
+              class:changed={Boolean(ai.proposal) && row.changed}
+              class:off={Boolean(ai.proposal) && !row.accepted}
+            >
+              <div class="aiw-time">
+                <button class="aiw-tc" onclick={() => goto(row)} title="回到核对台定位这一句">
+                  {tcShort(row.start)}
+                </button>
+                <span class="aiw-idx">#{row.i}</span>
+              </div>
+
+              <div class="aiw-cell">{row.before}</div>
+
+              {#if dualVisible}
+                <div
+                  class="aiw-cell dim ref-cell"
+                  title={ref
+                    ? `B#${ref.first + 1}${ref.last > ref.first ? `–B#${ref.last + 1}` : ''}`
+                    : '这一段没有时间重叠的 B 条目'}
+                >
+                  {ref?.text ?? ''}
+                </div>
+              {/if}
+
+              {#if ai.proposal}
+                <div
+                  class="aiw-cell final-cell"
+                  class:changed={row.changed}
+                  role="button"
+                  tabindex="0"
+                  aria-label={`编辑第 ${row.i} 条终稿`}
+                  ondblclick={() => startEdit(row.i, row.after)}
+                  onkeydown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      startEdit(row.i, row.after);
+                    }
+                  }}
+                  title="双击可改这一条的终稿"
+                >
+                  {#if editing === row.i}
+                    <textarea
+                      use:focusOnMount
+                      bind:value={draft}
+                      onkeydown={(e) => onEditKey(e, row.i)}
+                      onblur={() => commitEdit(row.i)}
+                      spellcheck="false"
+                    ></textarea>
+                  {:else}
+                    <span class="txt">{row.after}</span>
+                    {#if ai.edits[row.i] !== undefined}<span class="tag">已手改</span>{/if}
+                    {#if showNotes && row.note}
+                      <span class="note-inline" title={row.note}>{row.note}</span>
+                    {/if}
+                  {/if}
+                </div>
+              {:else}
+                <div class="aiw-cell pending-cell" aria-label="等待生成">
+                  <span class="aiw-placeholder">—</span>
+                </div>
+              {/if}
+
+              <div class="pin-cell">
+                {#if ai.proposal}
+                  <button
+                    class="pin"
+                    class:on={row.accepted}
+                    onclick={() => toggleAiAccept(row.i)}
+                    title={row.accepted ? '已采纳（点击排除）' : '已排除（点击采纳）'}
+                    aria-label={row.accepted ? `排除第 ${row.i} 条` : `采纳第 ${row.i} 条`}
+                  >
+                    <Icon name="check" size={11} />
+                  </button>
+                {:else}
+                  <span class="pin-slot" aria-hidden="true"></span>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
     </div>
+
+    {#if ai.proposal}
+      <div class="aiw-applybar">
+        <span class="aiw-hint">⌘Z 一次整批退回</span>
+        <div class="aiw-spacer"></div>
+        <div class="aiw-menu-wrap">
+          <button
+            class="btn ghost"
+            onclick={() => (applyMenuOpen = !applyMenuOpen)}
+            aria-expanded={applyMenuOpen}
+            title="更多应用方式（会忽略右侧的采纳/排除）"
+          >
+            更多应用
+            <Icon name="chevron-down" size={11} />
+          </button>
+          {#if applyMenuOpen}
+            <button class="aiw-menu-backdrop" aria-label="关闭菜单" onclick={() => (applyMenuOpen = false)}></button>
+            <div class="aiw-menu up" role="menu">
+              <button
+                role="menuitem"
+                onclick={() => {
+                  applyMenuOpen = false;
+                  if (window.confirm('应用全部差异？\n\n会忽略右侧逐条的采纳/排除，把所有与 A 不同的条目写回核对台。\n⌘Z 可整批退回。')) {
+                    void applyAiAllDiffs();
+                  }
+                }}
+              >全部差异 · 忽略采纳</button>
+              <button
+                role="menuitem"
+                onclick={() => {
+                  applyMenuOpen = false;
+                  if (window.confirm('整列应用 AI 终稿？\n\n会无视右侧的采纳/排除，把整栏写回核对台。\n⌘Z 可整批退回。')) {
+                    void applyAiWholeColumn();
+                  }
+                }}
+              >整列应用 · 无视采纳</button>
+            </div>
+          {/if}
+        </div>
+        <button
+          class="btn primary"
+          onclick={applyAiAcceptedDiffs}
+          disabled={ai.applying || acceptedCount === 0}
+          title="只应用「已采纳且确有差异」的条目；⌘Z 一次全退"
+        >
+          {ai.applying ? '应用中…' : `应用采纳${acceptedCount ? ` · ${acceptedCount}` : ''}`}
+        </button>
+      </div>
+    {/if}
   {/if}
 </div>
 
 <style>
-  .ai {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    background: var(--paper);
-  }
-  .head,
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: var(--sp-2) 14px;
-    border-bottom: 1px solid var(--separator);
-  }
-  .head {
-    flex-wrap: wrap;
-  }
-  .bar {
-    gap: var(--sp-2);
-    font-size: 12px;
-    color: var(--text-2);
-    background: var(--bg-inspector);
-  }
-  .bar b {
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-  }
-  .bar b.warn {
+  .polish .aiw-channel-tag.needs-setup {
     color: var(--warn);
   }
-  .title {
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .spacer {
-    flex: 1;
-  }
-  .tb-div,
-  .sep {
-    width: 1px;
-    height: 11px;
-    background: var(--separator);
-  }
-  .tb-div {
-    height: 16px;
-    flex: 0 0 1px;
-  }
-  .segs {
-    display: inline-flex;
-    padding: 2px;
-    border-radius: 8px;
-    background: var(--fill);
-  }
-  .seg {
-    border: 0;
-    background: transparent;
-    color: var(--text-2);
-    font: inherit;
-    font-size: 12px;
-    padding: var(--sp-1) var(--sp-3);
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .seg.on {
-    background: var(--bg-content);
-    color: var(--text);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  }
-  .seg:disabled {
-    color: var(--text-3);
-    cursor: default;
-  }
-  .lang {
-    font: inherit;
-    font-size: 12px;
-    padding: 3px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
-    max-width: 180px;
-  }
-  .badge {
-    font-size: 12px;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    white-space: nowrap;
-  }
-  .badge.quiet {
-    background: var(--fill);
-    color: var(--text-2);
-  }
-  .ref-note {
-    font-size: 12px;
-    color: var(--text-3);
-    white-space: nowrap;
-  }
-  .dim {
-    font-size: 12px;
-    color: var(--text-3);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  }
+
   .note {
     display: flex;
     align-items: flex-start;
@@ -609,79 +639,7 @@
     background: var(--warn-soft);
     color: var(--warn);
   }
-  .note.busy {
-    background: var(--accent-soft);
-    color: var(--text);
-  }
-  .note.busy .pct {
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
-  }
-  .segments {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    padding: 7px 14px;
-    border-bottom: 1px solid var(--separator-soft);
-    background: var(--bg-inspector);
-    min-width: 0;
-  }
-  .seg-label {
-    flex: 0 0 auto;
-    font-size: 12px;
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-  }
-  .seg-list {
-    flex: 1;
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    min-width: 0;
-    padding-bottom: 2px;
-  }
-  .seg-chip {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text-2);
-    border-radius: 6px;
-    padding: 3px 7px;
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .seg-chip em {
-    font-style: normal;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .seg-chip b {
-    color: var(--text-3);
-    font-weight: 500;
-  }
-  .seg-chip.on {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .seg-chip.filled b {
-    color: var(--success);
-  }
-  .count {
-    margin-left: 5px;
-    font-size: 11px;
-    line-height: 16px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-  }
+
   .paste {
     display: flex;
     flex-direction: column;
@@ -689,22 +647,29 @@
     padding: 10px 14px;
     border-bottom: 1px solid var(--separator);
     background: var(--bg-inspector);
+    flex: 0 0 auto;
   }
   .paste-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
     font-size: 12px;
     color: var(--text-2);
-    line-height: 1.6;
+  }
+  .paste-head b {
+    color: var(--text);
   }
   .paste-box {
     width: 100%;
-    min-height: 130px;
-    max-height: 40vh;
+    min-height: 118px;
+    max-height: 34vh;
     resize: vertical;
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.55;
     padding: var(--sp-2) 10px;
-    border-radius: 8px;
+    border-radius: var(--rad-card);
     border: 1px solid var(--separator);
     background: var(--bg-content);
     color: var(--text);
@@ -718,132 +683,61 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
+    flex-wrap: wrap;
   }
-  .paste-hint {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--text-3);
+
+  .aiw-subbar .aiw-chip b.hot {
+    color: var(--warn);
   }
-  .chk {
+
+  .aiw-cols,
+  .aiw-row {
+    grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1.15fr) 26px;
+  }
+  .aiw-cols.dual,
+  .aiw-row.dual {
+    grid-template-columns: 92px minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(0, 1.15fr) 26px;
+  }
+  .aiw-cols {
+    align-items: center;
+  }
+  .final-head {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    cursor: pointer;
-    user-select: none;
-  }
-  .link {
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    padding: 2px var(--sp-1);
-  }
-  .link:disabled {
-    color: var(--text-3);
-    cursor: default;
-  }
-  .cols,
-  .row {
-    display: grid;
-    grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr) 78px 26px;
-    gap: 10px;
-    align-items: start;
-    padding: 6px 14px;
-  }
-  .cols.dual,
-  .row.dual {
-    grid-template-columns: 92px minmax(0, 0.95fr) minmax(0, 0.95fr) minmax(0, 1.1fr) 78px 26px;
-  }
-  .cols.no-notes,
-  .row.no-notes {
-    grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr) 26px;
-  }
-  .cols.dual.no-notes,
-  .row.dual.no-notes {
-    grid-template-columns: 92px minmax(0, 0.95fr) minmax(0, 0.95fr) minmax(0, 1.1fr) 26px;
-  }
-  .cols {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    font-size: 12px;
-    color: var(--text-3);
-    background: var(--bg-content);
-    border-bottom: 1px solid var(--separator);
-    padding-top: 5px;
-    padding-bottom: 5px;
-  }
-  .list {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-  }
-  .row {
-    border-bottom: 1px solid var(--separator-soft);
-    font-size: 12.5px;
-    line-height: 1.55;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 42px;
-  }
-  .row:hover {
-    background: var(--row-hover);
-  }
-  .row.off {
-    opacity: 0.42;
-  }
-  .c-time {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .tc {
-    border: 0;
-    background: transparent;
-    padding: 0;
-    color: var(--accent);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-    text-align: left;
-  }
-  .idx {
-    font-size: 12px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .c-side,
-  .c-note {
-    white-space: pre-wrap;
-    word-break: break-word;
+    gap: 6px;
     min-width: 0;
   }
-  .left {
-    color: var(--text-2);
-  }
-  .ref {
+  .pending-chip {
+    height: 18px;
+    line-height: 18px;
+    padding: 0 6px;
+    font-size: 10.5px;
     color: var(--text-3);
+    background: var(--fill);
+  }
+  .ref-head {
+    color: var(--text-3);
+  }
+  .ref-cell {
     border-left: 1px solid var(--separator-soft);
     padding-left: var(--sp-2);
   }
-  .right {
+  .aiw-row.off {
+    opacity: 0.42;
+  }
+  .final-cell {
     border-radius: 4px;
     padding: 1px var(--sp-1);
     margin: -1px -4px;
     cursor: text;
     min-height: 18px;
   }
-  .row.changed .right {
+  .aiw-row.changed .final-cell {
     background: var(--accent-soft);
   }
-  .row.changed .left {
-    color: var(--text);
-  }
-  .right textarea {
+  .final-cell textarea {
     width: 100%;
-    min-height: 46px;
+    min-height: 44px;
     resize: vertical;
     font: inherit;
     line-height: inherit;
@@ -856,16 +750,36 @@
   }
   .tag {
     margin-left: 6px;
-    font-size: 12px;
-    padding: 1px 5px;
+    font-size: 11px;
+    line-height: 16px;
+    padding: 0 5px;
     border-radius: 4px;
     background: var(--fill-strong);
     color: var(--text-2);
     white-space: nowrap;
   }
-  .c-note {
-    font-size: 12px;
+  .pending-cell {
+    border: 1px dashed var(--separator);
+    border-radius: 4px;
+    min-height: 20px;
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    margin: -1px 0;
+  }
+  .note-inline {
+    display: block;
+    margin-top: 1px;
+    font-size: 11px;
+    line-height: 15px;
     color: var(--text-3);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .pin-cell {
+    display: grid;
+    place-items: center;
+    min-height: 20px;
   }
   .pin {
     width: 22px;
@@ -883,48 +797,32 @@
     background: var(--accent);
     color: var(--on-accent);
   }
-  .blank {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    padding: var(--sp-10) var(--sp-6);
-    text-align: center;
-    color: var(--text-2);
+  .pin-slot {
+    width: 22px;
+    height: 22px;
   }
-  .blank-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-    background: var(--accent-soft);
-    color: var(--accent);
-    margin-bottom: var(--sp-1);
-  }
-  .et {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .es {
-    font-size: 13px;
-    line-height: 1.7;
-    max-width: 460px;
-  }
-  .blank-err {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--warn);
-    max-width: 460px;
-  }
-  .ea {
+  .empty-actions {
     display: flex;
     gap: var(--sp-2);
-    margin-top: 6px;
+    margin-top: 2px;
+  }
+
+  @media (max-width: 900px) {
+    .aiw-title-row {
+      padding: var(--sp-2) var(--sp-3) var(--sp-2);
+    }
+    .aiw-launch {
+      padding: 6px 10px;
+    }
+    .aiw-cols,
+    .aiw-row {
+      grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1.15fr) 22px;
+      gap: 6px;
+      padding: 6px 10px;
+    }
+    .aiw-cols.dual,
+    .aiw-row.dual {
+      grid-template-columns: 76px minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(0, 1.15fr) 22px;
+    }
   }
 </style>

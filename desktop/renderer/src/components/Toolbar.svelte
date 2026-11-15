@@ -115,7 +115,9 @@
       case 'dual':
         return '双引擎对照 · 只读比较，编辑回核对台';
       case 'polish':
-        return '润色 · 单源 / 双源三栏对照';
+        return '润色 · 单源 / 双源对照';
+      case 'reshape':
+        return '断句重排 · 可改条数与时间码';
       case 'translate':
         return '翻译 · 原文定稿后生成译文轨';
       case 'prompts':

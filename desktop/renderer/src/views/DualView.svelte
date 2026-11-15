@@ -172,19 +172,20 @@
           <i class="sw del"></i>本行 A 独有
           <i class="sw ins"></i>本行 B 独有
         </span>
-        <div class="spacer"></div>
-        <label class="chk">
-          <input type="checkbox" bind:checked={dual.onlyDiff} />
-          只看差异
-        </label>
-        <button
-          class="btn ghost danger overwrite"
-          onclick={replaceAll}
-          disabled={dual.loading || dual.replacing}
-          title="整列用第二版覆盖核对台；只压一步历史，⌘Z 可整批退回"
-        >
-          {dual.replacing ? '覆盖中…' : '用 B 覆盖核对台…'}
-        </button>
+        <div class="head-end">
+          <label class="chk">
+            <input type="checkbox" bind:checked={dual.onlyDiff} />
+            只看差异
+          </label>
+          <button
+            class="btn ghost danger overwrite"
+            onclick={replaceAll}
+            disabled={dual.loading || dual.replacing}
+            title="整列用第二版覆盖核对台；只压一步历史，⌘Z 可整批退回"
+          >
+            {dual.replacing ? '覆盖中…' : '用 B 覆盖核对台…'}
+          </button>
+        </div>
       </div>
     {/if}
   </header>
@@ -462,7 +463,9 @@
   .chip {
     display: inline-flex;
     align-items: baseline;
+    justify-content: space-between;
     gap: var(--sp-1);
+    min-width: 94px;
     font-size: 12px;
     line-height: 22px;
     padding: 0 var(--sp-2);
@@ -470,6 +473,7 @@
     background: var(--fill);
     color: var(--text-2);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
   .chip b {
     font-size: 12px;
@@ -489,13 +493,22 @@
   .chip.only-b b {
     color: var(--accent);
   }
-  .spacer {
-    flex: 1;
+  .head-end {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-left: auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .legend {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    margin-left: 2px;
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--separator-soft);
     font-size: 11px;
     line-height: 22px;
     color: var(--text-3);
@@ -526,8 +539,22 @@
     user-select: none;
     white-space: nowrap;
   }
-  .overwrite {
+  /* 覆盖是危险动作，但也是这一页唯一的整列写回入口：给它实心边界，
+     不再和旁边那些 ghost 链接挤成同一层。 */
+  .btn.ghost.overwrite {
     white-space: nowrap;
+    height: 26px;
+    padding: 0 10px;
+    background: var(--raise);
+    border-color: color-mix(in srgb, var(--danger) 34%, var(--separator));
+    color: var(--danger);
+    font-weight: 500;
+    box-shadow: var(--shadow-btn);
+  }
+  .btn.ghost.overwrite:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
   }
   .cols,
   .row {
@@ -585,13 +612,18 @@
   }
   .tc {
     color: var(--accent);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 12px;
+    line-height: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums;
   }
   .idx {
-    font-size: 12px;
-    color: var(--text-3);
+    font-size: 10.5px;
+    line-height: 14px;
+    font-weight: 400;
+    color: color-mix(in srgb, var(--text-3) 66%, transparent);
     font-variant-numeric: tabular-nums;
   }
   .c-side {
@@ -615,7 +647,7 @@
     border-radius: 5px;
     display: grid;
     place-items: center;
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 700;
     line-height: 1;
@@ -648,7 +680,7 @@
     background: color-mix(in srgb, var(--success) 26%, transparent);
   }
   .placeholder {
-    color: var(--text-3);
+    color: color-mix(in srgb, var(--text-3) 55%, transparent);
   }
   .note {
     display: flex;
