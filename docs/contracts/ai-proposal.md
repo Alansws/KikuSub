@@ -131,6 +131,9 @@
   这三个入口，不要再各写一套导入逻辑。
 #### 3.7.3 双源润色（2026-11 新增）
 
+- **B 版来源不影响提案契约**：第二版可以由另一引擎整片转写产生，也可以由
+  `POST /api/alt-review/import` 直接导入一份工作流里已做好的 SRT/VTT；两者是同一个
+  `AltReview`（`source.kind` 区分 transcription / import），`digest_b` 只依赖 B 的文本。
 - **提案契约扩展但保持向后兼容**：双源润色时 `source` 额外带 `count_b` 与
   `digest_b`；单源提案**没有**这两个字段，照旧只校验 A。`build_proposal(texts_b=…)`
   是唯一构造入口，`validate_proposal(data, texts, texts_b=None)` 是唯一校验入口。

@@ -87,6 +87,19 @@
 - 转写页的整片与区间任务都经 `server/jobs.py` 调 `core.pipeline.run_transcription`，
   完成即落盘；`TranscribeRequest.export_dir` 是服务层把设置传下去的唯一通道。
   漏句清单 / 质检 JSON / 代理缓存仍属于运行数据，留在 `output_dir`。
+- **原始转写产物统一带引擎文件名标签（2026-11-15）**：
+  `{stem}{slice}.{file_tag}{ext}`，标签只在 `core/engines.py` 的 `file_tag` 登记
+  （`AnimeWhisper` / `Qwen3-ASR` / `SenseVoice-Small` / `FireRedASR2-AED`），
+  `core.pipeline.output_suffix()` 只读注册表。Whisper 不再特殊到「无后缀」——那正是
+  它和交付稿撞名的根源。
+- **核对后的交付文件命名（2026-11-15）**：
+  `{stem}.{version}.reviewed{track_suffix}{ext}`，由 `core/export_naming.py` 唯一实现。
+  `version` 优先取 `Session.review_source.engine`，导入稿从文件名推断引擎（新旧标签都认：
+  `.AnimeWhisper` / `.whisper`、`.Qwen3-ASR` / `.qwen`），识别不出才用 `import` / `draft`。
+  推断前必须先剥掉媒体 `{stem}`，并且只认点分标签，避免影片名自带 `whisper` 等关键字时误判。
+  同名且内容相同 → 原地重写；同名但内容不同 → `next_available_path()` 另存 ` (2)`、` (3)`，
+  **禁止静默覆盖另一份内容**，写入一律走 `write_text_atomic()`。禁止再回到
+  `{stem}{suffix}{ext}` 这种没有版本身份的裸名。
 - 桌面端的导入页、转写页与核对台都有「导入字幕…」，原生对话框的 `defaultPath` 就是导出目录；
   新增入口时继续走 `window.kikusub.pickSubtitle()`，不要让用户自己逐层找路径。
 - **最近打开封面**走 `core/thumbnails.py` + `GET /api/media/thumb?path=…`：先取真正的首帧，
@@ -168,6 +181,15 @@
   - 「填入转写」已更名为**「同步到转写页」**：它做的是把当前起止时间（含波形上微调后的
     结果）写进转写页的两个输入框并切页，不是提交任务；「转写选区」才是在核对台原地局部
     转写。两个名字不许再混用。
+  - **`app.slice` 是一次性消息，必须消费**（2026-11-15 修复）：转写页用
+    `lib/transcribeSlice.takeSlice()` 读走并置空。`App.svelte` 的 `{#key app.view}` 会
+    重建整个视图，写在组件里的 nonce 守卫会跟着归零；只靠它，整片转完自动跳核对台、
+    再回转写页时旧区间会复活，输入框显示区间而实际提交的是整片。**禁止**把守卫改回
+    组件内变量。
+  - **「全片」= 清空时间区间与 `app.slice`**，不再把 `0–片尾` 填进两个输入框：整片任务
+    不该带 `_00m00s-…s` 的区间后缀，输入框也不该出现「有时间但按整片跑」的歧义。
+  - 进度卡展示的范围只读 `app.jobMeta`（提交时锁定的 scope/label），不跟随输入框；
+    Qwen 的逐字对齐说明也只在这里出现，非 CTC 引擎不得显示 `0/0` 汇总。
   - **转写页「结果处理」的三档语义（2026-11-15 重做）**：档位由 `lib/applyMode.ts` 唯一
     决定，**没有「自动」这一档**（旧版前端按"有没有填区间"自己猜成追加或覆盖，用户既看
     不到也猜不到）。整片只有 `覆盖整片 / 追加`；区间多一档 `替换选区`（默认），对应

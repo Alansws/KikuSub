@@ -43,8 +43,10 @@ done
 | `export_dir` | 交付字幕所在（`settings.json` 的导出目录；空则同 `output_dir`） |
 | `output_dir` | 运行数据目录，**提案要写这里** |
 
-字幕文件名是 `{stem}.srt`，`stem` 由媒体文件名派生。找不到就问用户要路径，
-**不要猜**、也不要在整个磁盘上瞎搜。
+交付字幕按「引擎 + reviewed」命名：`{stem}.{engine}.reviewed{track}.srt`
+（例如 `言叶之庭.AnimeWhisper.reviewed.srt`、`言叶之庭.Qwen3-ASR.reviewed.zh-Hans.srt`、
+`….bilingual.srt`），`stem` 由媒体文件名派生。旧版本的文件可能是 `{stem}.srt` 或
+`{stem}.{lang}.srt`。不确定就问用户要路径，**不要猜**、也不要在整个磁盘上瞎搜。
 
 如果 `paths.json` 不存在（用户手动拷过来的技能），按平台默认值：
 
@@ -180,7 +182,7 @@ assert all(it["note"] for it in items if it["after"] != it["before"])
 
 ## 禁止清单
 
-- ❌ 修改 `{stem}.srt` 或任何交付文件
+- ❌ 修改任何交付字幕文件（`*.reviewed.srt`、旧 `{stem}.srt`、`*.bilingual.srt` 等）
 - ❌ 在提案里写 `start` / `end` / 时间码
 - ❌ 增删条目、合并或拆分句子
 - ❌ 把解释写进 `after`
