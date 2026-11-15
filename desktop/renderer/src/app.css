@@ -20,6 +20,9 @@
   --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   /* 字幕正文的字体角色：只有主题会换它（「明朝墨」用明朝），UI 永远跟 --font-sans */
   --font-cue: var(--font-sans);
+  /* 明朝字幕的字体栈单独提一个与主题无关的别名：设置页的缩略图要在「当前不是明朝墨」时
+     也能渲染出明朝那一张，不能读当前主题的 --font-cue */
+  --font-cue-mincho: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
 
   /* 字阶：UI 角色 ≤6 种，字幕正文单独一条（见设计规划 §5.2） */
   --fs-display: 22px;
@@ -362,7 +365,7 @@ html[data-theme='mincho'] {
   --inset-line: var(--separator-soft);
 
   /* 唯一的排版差异：字幕用明朝。UI 文案仍是苹方，别把整个界面变成书 */
-  --font-cue: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
+  --font-cue: var(--font-cue-mincho);
 }
 
 * {
@@ -513,6 +516,12 @@ body {
   width: var(--ctl-h);
   padding: 0;
   justify-content: center;
+}
+/* 设置页大量使用的小号按钮（Inline 行内动作） */
+.btn.sm {
+  height: 24px;
+  font-size: var(--fs-label);
+  padding: 0 var(--sp-2);
 }
 .btn.danger {
   color: var(--danger);
@@ -709,6 +718,31 @@ html[data-theme='dark'] .card {
 .dot.off {
   background: var(--warn);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
+/* ---------- 设置页：说明 / 警示条 ---------- */
+.note-box {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--rad-card);
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: var(--fs-label);
+  line-height: 1.55;
+}
+.note-box.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.note-box .note-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+}
+.note-box b {
+  font-weight: 600;
 }
 
 /* ---------- 设置页：Inset 分组列表 ---------- */
