@@ -73,7 +73,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补；按字符偏移插回原文（不改英文大小写）。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
 | `core/model_fetch.py` | 可选权重的 HF 下载入口（直连失败才走镜像）；SenseVoice / FireRed / FireRedPunc 共用，别再写第二份重试逻辑。 |
 | `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 把界面键映射成引擎 dataclass 字段。新增引擎参数只改这里，前端不用动。 |
-| `core/settings.py` | 应用级设置（启用的引擎、自动压制代理、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
+| `core/settings.py` | 应用级设置（启用的引擎、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
 | `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |
 | `core/prompts.py` | 提示词模板库：五分类、`{{SRT_A}}` / `{{SRT_B}}` 等占位符、原子读写。 |
 | `server/routes_prompts.py` | 提示词模板接口：`/api/prompts`（读取/新建/改/选中/删除/恢复内置）。 |

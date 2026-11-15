@@ -44,7 +44,7 @@ Everything except the optional AI features is local inference.
 
 **Import & transcribe**
 
-- Drag in video, audio or subtitles. MKV and HEVC — which Chromium cannot decode — get a 480p preview proxy built in the background.
+- Drag in video, audio or subtitles. For MKV and HEVC — which Chromium cannot decode — the black frame offers a **Build proxy** button instead of building a 480p preview proxy automatically on import.
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
 - Result handling depends on scope: a whole-file run offers *replace all / append*, a range run adds **replace selection** (default — rewrites that span only, every other cue stays). Picking *replace all* on a range asks for confirmation first.
@@ -288,7 +288,7 @@ In development, output, logs and proxies live in the repository's `outputs/`, ma
 ## FAQ
 
 **Black screen after importing MKV?**
-Chromium cannot decode some MKV / HEVC files. A 480p proxy is built in the background and swapped in automatically; the toolbar shows live progress such as “Proxy 42%”. You can also start one from the Transcribe page. If a finished proxy already exists, use **Import proxy…** in the review notice or the “⋯” menu to attach it without re-encoding. The playhead still moves while it is being made.
+Chromium cannot decode some MKV / HEVC files. Nothing is built automatically: when the picture really cannot be shown, a **Build proxy** button appears in the middle of the black frame — click it to start. No progress bar is drawn inside the frame while it runs; the blue progress chip in the top toolbar shows live progress such as “Proxy 42%”, and the proxy is swapped in when it finishes. If a finished proxy already exists, use **Import existing proxy…** under the button, or **Import proxy…** in the review “⋯” menu, to attach it without re-encoding. High-bitrate files that play normally are never proxied automatically; start one from the “⋯” menu when you need it. The playhead still moves while it is being made.
 
 **Model download is slow or fails?**
 The default endpoint is `hf-mirror.com`. Set `HF_ENDPOINT` back to the official Hugging Face endpoint for the sidecar, or pre-download the weights with `huggingface-cli`.

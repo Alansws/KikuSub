@@ -69,15 +69,28 @@
 #### 3.8.3 手动代理
 
 - `MediaInfo` 现在带 `video_width/height/bitrate` 与 `proxy_reason`
-  （`container` / `codec` / `bitrate`）。`needs_proxy` 在码率 ≥25 Mbps 时也为真。
-- 自动压制仍由 `auto_proxy` 控制；核对台工具栏与画面提示都提供手动
-  「压制代理」，不依赖自动判定。代理任务仍走 `/api/jobs` 的 `kind=proxy`。
+  （`container` / `codec` / `bitrate`）。`needs_proxy` 在码率 ≥25 Mbps 时也为真，
+  但它只是「建议代理」的元数据，**不再触发任何自动任务**。
+- **导入不再自动压制（2026-11-15）**：`auto_proxy` 设置已彻底删除（旧
+  `settings.json` 里的残留键会被忽略）。能正常出画面的视频——包括高码率 H.264
+  （能播但拖动卡）——一律不自动压；用户可在核对台「⋯」里手动「压制代理」。
+- **黑屏才提示**：核对台画面中央的提示由 `lib/videoFallback.ts` 判定——
+  `<video>` 触发 `error`，或 `container` / `codec` 原因下 2.5s 内仍没解出首帧。
+  计时从拿到媒体 / 切换 src 就开始，**不挂在 `loadedmetadata` 上**（容器卡死时
+  它可能永远不触发）；首帧（`loadeddata`）一到提示立即收起；`bitrate` 原因
+  永不弹提示。提示里主按钮「压制代理」，次按钮「导入已有代理…」。
+- **画面内不显示进度**：代理任务进行中，黑框中央只保留禁用态的「正在压制…」，
+  **不放百分比、不放进度条**；唯一进度显示是顶部工具栏的蓝色 `.proxy-chip`。
+  任务失败或取消后按钮随 `job.status` 自动回到可点击的「压制代理」；
+  `proxy_ready` 但画面仍失败时只显示「代理已就绪，但画面仍无法播放」。
+- 代理任务仍走 `/api/jobs` 的 `kind=proxy`。
 - **已有代理可直接挂载（2026-11 新增）**：`POST /api/media/{id}/proxy`（`path`）交给
   `MediaStore.attach_proxy()` → `core.proxy.install_existing_proxy()`：优先硬链接，跨盘用
   符号链接，最后才复制；写进标准 `web_proxies/` 路径并原子 rename，重启后仍会被识别为
-  已就绪。`openMedia()` 看到 `proxy_ready` 时不再自动起压制任务。物理文件不存在/太小、
+  已就绪。`openMedia()` 完全不再自动起压制任务。物理文件不存在/太小、
   音频文件或原片本身都会被拒绝。
-- 高码率 H.264 的提示文案要说明「能播但拖动卡」，不要写成「无法解码」。
+- 画面提示文案不要写成「无法解码」这种绝对结论：`bitrate` 只是「能播但拖动卡」，
+  而 `container` / `codec` 用「无法直接播放」即可。
 
 #### 3.8.3.1 媒体 Range（2026-11 修复）
 
