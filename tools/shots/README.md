@@ -16,7 +16,13 @@ bash tools/shots/capture_matrix.sh --out /tmp/shots --size 1440x960 --states "re
 
 # 3) 和基线比（PSNR；inf 或 >80dB 视为一致，<35dB 基本可判定改坏了）
 bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline
+
+# 4) 一次跑三套主题：文件名带 -light / -dark / -mincho 后缀
+bash tools/shots/capture_matrix.sh --theme dark --states "polish reshape dual"
 ```
+
+沙箱或 CI 里 Electron 起不来时，用 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 追加启动参数；
+脚本会为每张图使用独立的临时 `--user-data-dir`，不会落到用户的 Application Support。
 
 状态名：`transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。`review` 用
 `tools/shots/seed.json` 造 12 条字幕（不需要真跑转写）；其余状态靠 `KIKUSUB_DEV_EVAL`
