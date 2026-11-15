@@ -24,6 +24,7 @@ const {
 } = require('electron');
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const aikey = require('./aikey.cjs');
 const launchguard = require('./launchguard.cjs');
@@ -1257,6 +1258,11 @@ ipcMain.handle('app:info', () => ({
   dataDir: dataDir(),
   modelsDir: modelsDir(),
   preferencesPath: preferencesPath(),
+  // 硬件信息：设置页「本机总览」用。sidecar 侧只有 device/machine
+  // （torch 的 mps/cpu 与架构），拿不到芯片型号与物理内存，只能由主进程补。
+  chip: (os.cpus()[0]?.model || '').trim(),
+  cores: os.cpus().length,
+  totalMemBytes: os.totalmem(),
 }));
 
 ipcMain.handle('dialog:pick-media', () => pickMedia());

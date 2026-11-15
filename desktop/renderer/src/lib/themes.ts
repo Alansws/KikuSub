@@ -67,3 +67,70 @@ export const SCHEMES: { id: Scheme; name: string }[] = [
   { id: 'light', name: '浅色' },
   { id: 'dark', name: '深色' },
 ];
+
+/**
+ * 设置页「外观与朗读」的三张缩略图。
+ *
+ * 为什么颜色放在注册表而不是 app.css：三张缩略图要**同时**显示三套主题，
+ * 组件读当前主题的令牌只能拿到一套颜色。这里是“主题元信息”的唯一位置，
+ * 组件只消费 `--shot-*` 变量，不写死色值。
+ *
+ * `desktop/test/theme-preview.test.mjs` 会把这些值与 app.css 对应主题块的
+ * `--canvas / --paper / --raise / --ink / --accent / --line` 逐项对账，漂移就红。
+ */
+export interface ThemePreview {
+  id: ThemeId;
+  name: string;
+  note: string;
+  canvas: string;
+  paper: string;
+  /** 内容卡（= app.css 的 --raise）。 */
+  card: string;
+  ink: string;
+  accent: string;
+  line: string;
+  /** 字幕字体角色：明朝墨用明朝，其余跟 UI 一致（缩略图里要看得出来）。 */
+  cueFont: 'sans' | 'mincho';
+}
+
+export const THEME_PREVIEWS: ThemePreview[] = [
+  {
+    id: 'light',
+    name: '青空浅',
+    note: '浅天蓝 + 靛蓝，默认主题',
+    canvas: '#edf3fb',
+    paper: '#f9fbfe',
+    card: '#ffffff',
+    ink: '#1b2740',
+    accent: '#4f6bff',
+    line: 'rgba(27, 39, 64, 0.12)',
+    cueFont: 'sans',
+  },
+  {
+    id: 'dark',
+    name: '青空深',
+    note: '深空底 + 亮靛蓝，夜间校对',
+    canvas: '#0a0c10',
+    paper: '#111419',
+    card: '#181c23',
+    ink: '#ecf1fa',
+    accent: '#7d93ff',
+    line: 'rgba(236, 241, 250, 0.13)',
+    cueFont: 'sans',
+  },
+  {
+    id: 'mincho',
+    name: '明朝墨',
+    note: '纸白 + 墨黑 + 朱红，字幕用明朝',
+    canvas: '#f1f3f0',
+    paper: '#fafaf8',
+    card: '#ffffff',
+    ink: '#15181b',
+    accent: '#c8412d',
+    line: 'rgba(21, 24, 27, 0.12)',
+    cueFont: 'mincho',
+  },
+];
+
+/** 缩略图里那句日文字幕：三张卡用同一句，方便横向比较字体与色。 */
+export const THEME_PREVIEW_CUE = 'ここで待っていたんだよ、ずっと。';

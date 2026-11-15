@@ -51,6 +51,14 @@ declare global {
         arch: string;
         dev: boolean;
         repoRoot: string;
+        dataDir: string;
+        modelsDir: string;
+        preferencesPath: string;
+        /** 芯片型号（例：Apple M4 Pro）；取不到时是空字符串。 */
+        chip: string;
+        cores: number;
+        /** 物理内存字节数。 */
+        totalMemBytes: number;
       }>;
       getSidecar(): Promise<SidecarHandshake | null>;
       onSidecarReady(cb: (payload: SidecarHandshake) => void): () => void;
