@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# 一条命令完成「改完代码 → 新的 KikuSub.app → 打开」。
+# 一条命令完成「改完代码 → 新的 KikuSub.app」，**默认不打开**（无窗口铁律，AGENTS.md §0.5）。
 #
-#   bash tools/pack/rebuild.sh          # 按需重打 sidecar（仅 Python 变了才跑），构建、装配、打开
-#   bash tools/pack/rebuild.sh --no-open # 只构建，不打开
+#   bash tools/pack/rebuild.sh           # 按需重打 sidecar（仅 Python 变了才跑），构建、装配
+#   bash tools/pack/rebuild.sh --open    # 装配完顺便打开——人的动作，智能体不要用
 #   FORCE_SIDECAR=1 bash tools/pack/rebuild.sh  # 强制重打 sidecar（约 3–5 分钟）
+#
+# 为什么默认不打开：智能体改完代码会跑这个脚本验收，如果默认 open，用户桌面上就会
+# 反复弹应用。要看界面的人显式传 --open（--no-open 仍接受，等价于默认）。
 #
 # 为什么需要它：改 `core/` / `server/` 后 build_app.sh 会拒绝装配旧 sidecar；而改了
 # 渲染层却忘了 `npm run build` 时，装出来的 .app 仍是旧界面。这里把两步串起来，并在
@@ -14,12 +17,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-OPEN_APP=1
+OPEN_APP=0
 for arg in "$@"; do
   case "$arg" in
+    --open) OPEN_APP=1 ;;
     --no-open) OPEN_APP=0 ;;
     -h|--help)
-      sed -n '2,10p' "$0"
+      sed -n '2,13p' "$0"
       exit 0
       ;;
     *)

@@ -2,8 +2,8 @@
 
 改样式/布局时的验收工具：一次截下关键界面，再和基线做像素比对。**编译通过 ≠ 没改坏。**
 
-底层用的是主进程自带的 `--screenshot`（`show:false` + `capturePage` + `app.exit`），
-不抢焦点、可以后台跑，也不参与启动失败计数（见 `desktop/main/launchguard.cjs`）。
+底层用的是主进程自带的 `--screenshot`（透明窗口 + `capturePage` + `app.exit`），
+**桌面上什么都不出现**、可以后台跑，也不参与启动失败计数（见 `desktop/main/launchguard.cjs`）。
 
 ## 用法
 
@@ -68,7 +68,7 @@ node tools/shots/verify_reshape_flow.mjs
 node tools/shots/verify_reshape_flow.mjs --scenario stale
 ```
 
-同样走 `--screenshot` 静默路径（`showInactive` + `capturePage` + `app.exit`，不抢焦点），
+同样走 `--screenshot` 静默路径（透明窗口 + `capturePage` + `app.exit`，桌面上不出现），
 断言失败退出码非 0。契约口径见 `docs/contracts/ai-proposal.md` §3.7.6。
 
 ## 设置页专用矩阵
