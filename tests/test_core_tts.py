@@ -23,6 +23,7 @@ from core.tts import (
 )
 from core.tts.base import EngineUnavailable, TTSError
 from core.tts.clone_engine import REQUIRED_FILES
+from core.tts.loudness import measure_integrated, normalize_file
 from core.tts.model_store import ModelDownloader
 
 
@@ -290,3 +291,58 @@ def test_model_verify_detects_empty_weights(tmp_path: Path) -> None:
     result = downloader.verify()
     assert result["installed"] is False
     assert REQUIRED_FILES[0] in result["missing"]
+
+
+def write_quiet_wav(path: Path, *, amplitude: float = 0.01, seconds: float = 2.0) -> Path:
+    """模拟「从轻素材克隆出来」的朗读：幅度只有正常音量的几十分之一。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    t = np.linspace(0, seconds, int(24000 * seconds), endpoint=False)
+    tone = (amplitude * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    sf.write(str(path), tone, 24000, subtype="PCM_16")
+    return path
+
+
+def test_loudness_normalizes_quiet_clip_to_playback_target(tmp_path: Path) -> None:
+    """核心报障：克隆朗读比系统语音/视频轻 10–20 dB，缓存前必须拉回同一档。"""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("需要 ffmpeg")
+    clip = write_quiet_wav(tmp_path / "quiet.wav")
+    before = measure_integrated(clip)
+    assert before is not None and before < -35
+
+    normalize_file(clip)
+
+    after = measure_integrated(clip)
+    assert after is not None
+    assert -19.5 <= after <= -17.0
+    info = sf.info(str(clip))
+    assert info.samplerate == 24000
+
+
+def test_voice_reference_is_normalized_on_create(store: VoiceStore, tmp_path: Path) -> None:
+    """参考音频的幅度会带进 OmniVoice 输出，建音色时就要统一。"""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("需要 ffmpeg")
+    quiet = write_quiet_wav(tmp_path / "quiet-ref.wav", amplitude=0.02)
+    voice = store.create_from_file(quiet, name="轻参考", ref_text="テスト")
+    lufs = measure_integrated(store.ref_path(voice.id))
+    assert lufs is not None
+    assert -21.5 <= lufs <= -18.5
+
+
+def test_synthesize_keeps_working_when_loudness_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """响度统一只是增强：ffmpeg 缺失/测量失败不能让朗读整体失败。"""
+    import core.tts.manager as manager_module
+
+    manager = TTSManager(tmp_path / "out", model_dir=tmp_path / "missing-model")
+    manager.say = FakeSay()  # type: ignore[assignment]
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("ffmpeg 不可用")
+
+    monkeypatch.setattr(manager_module, "normalize_file", boom)
+    result = manager.synthesize("こんにちは", voice_id="system:Kyoko")
+    assert result["cached"] is False
+    assert (manager.cache_dir / result["filename"]).is_file()
