@@ -223,7 +223,8 @@
     存 `kikusub.ttsDefaultKind` / `kikusub.ttsDefaultVoiceId`，没有可用克隆音色时回退系统语音）。
     只有非 macOS 拿不到 `say` 时才回退到已有克隆音色。旧接口 `POST /api/tts`
     （`voice` + `rate`）保留兼容，内部换算成 `voice_id` + `speed`。
-  - 音色落在 `{output_dir}/voices/<id>/`：`ref.wav`（24k/单声道/PCM16，已去首尾静音、≤10s）、
+  - 音色落在 `{output_dir}/voices/<id>/`：`ref.wav`（24k/单声道/PCM16，已去首尾静音、
+    参考响度归一到 −20 LUFS / −2 dBTP、≤10s）、
     `meta.json`（名称/参考文本/时长/来源）、`prompt.pt`（OmniVoice 声线 embedding 缓存，
     损坏或模型升级后自动重建）。**目录名用 id，不用音色名**：用户会重命名、用中文/空格。
   - 接口：`GET /api/tts/voices`（system + custom + engine/download 状态）、
@@ -231,9 +232,16 @@
     当前视频精准切片 → 建音色）、`/api/tts/voices/upload`、`PATCH|DELETE /api/tts/voices/{id}`、
     `PUT .../ref-text`、`POST /api/tts/model/download`、`GET /api/tts/model/verify`
     （只读校验权重，0 字节文件也算缺失；设置页「校验 / 补齐」先走它，完整时不再弹下载确认）。
-  - 缓存键 =「引擎 + voice_id + 参考音频指纹(mtime/size) + ref_text + 文本 + 速度」，
-    命中直接返回文件名；`{output_dir}/tts_cache` 只留最近 240 个。音频流仍是
-    `/media/tts/{file}?token=`（`<audio>` 发不了 Authorization 头）。
+  - 缓存键 =「引擎 + voice_id + 参考音频指纹(mtime/size) + ref_text + 文本 + 速度 +
+    响度版本（`lufs-v1:-18`）」，命中直接返回文件名；`{output_dir}/tts_cache`
+    只留最近 240 个。音频流仍是 `/media/tts/{file}?token=`（`<audio>` 发不了
+    Authorization 头）。
+  - **响度统一**（2026-11 用户报障：克隆朗读比系统语音/视频小声一截）。OmniVoice
+    的输出幅度会跟着参考音频走（参考 −27～−40 LUFS 时输出也落在这个区间），
+    和 `say`（≈ −25 LUFS）没有共同基准。因此两处收口：建音色时参考音频经两遍
+    ffmpeg `loudnorm` 归一到 −20 LUFS；每次合成都先在临时文件上归一到
+    −18 LUFS / −1.5 dBTP，再原子替换进缓存。归一化只是增强项：没有 ffmpeg、
+    极短或全静音片段都只记日志并保留原文件，不能让朗读 500。
   - 资源：克隆模型**首次真正合成才加载**；空闲 `KIKUSUB_TTS_IDLE_SECONDS`（默认 300s）
     自动卸载；`JobManager` 的 `on_heavy_job` 在 transcribe / proxy / export 开跑前调
     `TTSManager.release()`。`KIKUSUB_TTS_DEVICE=cpu|mps` 可强制设备，
@@ -241,11 +249,14 @@
   - 下载走 `core/tts/model_store.py` 的独立后台线程（不占 `JobManager` 单槽），
     进度由 `/api/tts/voices` 的 `engine.download` 带出；模型约 3.3GB，**不随包分发**。
   - 前端：`store.tts` 的 `voiceId`/`speed` 落 `localStorage['kikusub.ttsVoiceId']` /
-    `['kikusub.ttsSpeed']`（旧 `ttsVoice`/`ttsRate` 自动迁移）。右侧检查器负责音色下拉
-    （克隆/系统分组）、**上传参考音频（原生对话框默认落在上次上传目录 / 当前视频目录，
-    可一次选多段，每段各建一个音色）**、**从当前句截取**、**音色库（保存/试听/设为默认/
-    重命名/删除/在访达中打开）**、模型下载；字幕表与波形右键「以此句音频新建音色…」
-    仍走 `extractTtsVoiceFromCue()`。参考音频提示只保留一行「3–10 秒、单人、干声、无音乐」。
+    `['kikusub.ttsSpeed']`（旧 `ttsVoice`/`ttsRate` 自动迁移）。右侧检查器把 TTS 面板
+    收成「播放卡片 + 操作 chip」：卡片里是带「朗读 / 停止 / 生成中」文字的实心主按钮、
+    音色/语速下拉和当前声线的参考信息（时长、来源、「音量已对齐」）；卡片下是
+    **上传 / 截取 / 音色库（带数量）/ 管理** 四个 chip，模型未就绪时另有一条实心
+    下载 CTA。音色库用图标动作（试听 / 设为默认 / 管理）而不是一行文字链接。
+    参考音频约束（3–10 秒、单人干声）放在上传/截取入口的 title 与各自面板提示里，
+    不再常驻一条灰字。字幕表与波形右键「以此句音频新建音色…」仍走
+    `extractTtsVoiceFromCue()`。
     换句/换片仍必须 `stopTts()`；不做云端 TTS，不读 AI Key。
   - **降级是硬要求**：没装 `omnivoice`、没下模型、MPS 失败（回退 CPU）都必须只让克隆
     引擎不可用，系统语音与界面不能卡死；合成失败返回可读的 502/503，前端弹 toast。
