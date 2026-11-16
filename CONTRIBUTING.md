@@ -34,14 +34,18 @@ cd desktop && npm install && npm run build && cd ..
 > 命令的行为都取决于你激活了哪个）。同理：用 `python -m pytest`，不要用 `python3`——
 > 在 macOS 上 `python3` 常指向 Homebrew 的新版本，通常没装本项目依赖。
 
-启动开发版：
+启动开发版（会显示窗口，这是给人看的入口）：
 
 ```bash
-cd desktop && npx electron .
+cd desktop && npm start
 ```
 
-> 某些 Electron 宿主（例如 WorkBuddy）会在 shell 里留下 `ELECTRON_RUN_AS_NODE=1`，它会让 Electron 退化成纯 Node。启动前清掉：
-> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .`
+> **无窗口铁律**：自动化/智能体验证不许弹窗（见 `AGENTS.md` §0.5）。开发模式默认不建可见
+> 窗口，直接 `npx electron .` 会被拒绝；请用 `--screenshot` 或 `tools/shots/` 的静默脚本。
+>
+> 某些 Electron 宿主（例如 WorkBuddy）会在 shell 里留下 `ELECTRON_RUN_AS_NODE=1`，它会让
+> Electron 退化成纯 Node。`npm start` 已经清掉；手工拼命令时用
+> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS KIKUSUB_ALLOW_WINDOW=1 npx electron .`。
 
 只想调接口时，sidecar 可以单独跑：
 

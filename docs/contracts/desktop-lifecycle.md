@@ -126,3 +126,29 @@
   `pruneLogs()` 执行同一策略。
 - 设置页「清理旧日志」走 `POST /api/diagnostics/log/clean`，是同一份 `prune_logs()`；
   不要为了“清空”去 truncate 活动日志（会破坏 handler 的 inode/offset）。
+
+### 3.7 窗口可见性：验证一律无窗口（2026-11-16 用户红线）
+
+用户的原话是「每次改个功能都反复弹 Electron 窗口，干扰这台电脑上别的事，之后不许再弹」。
+这条契约把「不弹窗」做成**默认行为**，而不是让智能体记得别弹——记忆会失效，默认值不会。
+
+- **判定只有一处**：`desktop/main/windowmode.cjs` 的 `resolveWindowMode()`（纯函数，
+  `desktop/test/window-mode.test.cjs` 覆盖）。主进程只按结果执行，不许在别处再写一份
+  `show() / 不 show()` 的判断。
+
+  | 启动方式 | 结果 |
+  | --- | --- |
+  | `--screenshot` / `KIKUSUB_SHOT` | 不显示，透明窗口取帧后退出 |
+  | `KIKUSUB_NO_WINDOW=1`（CI / 自动化总开关） | 不显示，进程照常跑 |
+  | 未打包且无 `KIKUSUB_ALLOW_WINDOW=1` | **拒绝启动**：打印无窗口验证路径，退出码 2（不建窗口、不起 sidecar、不计启动失败） |
+  | `npm start` / `desktop/run.sh`（已带 `ALLOW_WINDOW=1`） | 显示 |
+  | 打包后的 `.app` 双击 / Dock / Finder | 显示（用户意图明确） |
+
+- **截图不再 `showInactive()`**：旧实现会让窗口在桌面上亮 4.5–5.5 秒——这正是「反复弹窗」的
+  主要来源。现在窗口 `setOpacity(0)` + `setHasShadow(false)` + `setIgnoreMouseEvents(true)`，
+  并隐藏 Dock 图标；窗口仍参与合成，`capturePage()` 的帧与可见时一致，桌面上什么都看不到。
+- **`tools/pack/rebuild.sh` 默认只构建装配，不打开**：`--open` 才是人的动作；`--no-open`
+  仍接受（等价于默认）。
+- **不许智能体代劳**：`npx electron .`、`npm start`、`desktop/run.sh`、
+  `open *.app`、`rebuild.sh --open` 都属于「人要看界面」的操作。要确认界面就截图落盘，
+  用 `read_image` 看 PNG。规则入口在 `AGENTS.md` §0.5 与红线 13。

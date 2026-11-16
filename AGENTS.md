@@ -1,6 +1,6 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-14 20:05
+updated: 2026-11-16 22:30
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
@@ -16,6 +16,19 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 2. 按要改的域打开 `docs/contracts/` 里对应的那一份，**别凭记忆改**；
 3. 动手前先让基线变绿：`pytest -q` + `python -m core.smoke`。
    **用 `python`（3.12，依赖齐全），不要用 `python3`**——本机 `python3` 是 3.14，连 pytest 都没装。
+4. 全程**不许在本机弹出窗口**（§0.5）。验证一律走无窗口路径，截图落盘后用 `read_image` 看。
+
+## 0.5 无窗口铁律（2026-11-16 用户红线）
+
+**改这个仓库的任何功能，都不许在用户桌面上弹出任何窗口。** 窗口 / Dock 图标 / 抢焦点都会打断
+用户在这台电脑上正在做的别的事，而验证不需要看见界面。
+
+- **禁止**（只许用户自己做）：`npx electron .`、`npm start`、`desktop/run.sh`、
+  `open build/pack/KikuSub.app`、`rebuild.sh --open`；裸跑 `rebuild.sh` 只构建装配、不打开。
+- **允许**（全程无窗口）：`pytest`、`npm run check` / `check:svelte` / `build` / `test:main`、
+  `npx electron . --screenshot=…`、`tools/shots/` 下的静默脚本；截图落盘后用 `read_image` 看。
+- **代码兜底**：未打包启动默认拒绝建窗口（退出码 2）；截图用透明窗口取帧。判定与细节见
+  [desktop-lifecycle §3.7](docs/contracts/desktop-lifecycle.md)，守卫是 `tests/test_no_window_policy.py`。
 
 ## 1. 项目定位与运行方式
 
@@ -33,8 +46,12 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 开发模式（安装 `requirements.txt`、`desktop/npm install` 与系统 `ffmpeg` 后）：
 
 ```bash
-cd desktop && npm run build && npx electron .
+cd desktop && npm run build && npm start   # 人类手动看界面；智能体一律别用（§0.5）
 ```
+
+> 开发模式默认**不弹窗**：`npm start` / `desktop/run.sh` 是显式的人入口（内部设
+> `KIKUSUB_ALLOW_WINDOW=1`）；直接 `npx electron .` 会被主进程拒绝。智能体验证用
+> `--screenshot`（无窗口）。
 
 sidecar 也可以单独启动：`source .venv/bin/activate && python -m server --port 0`，stdout 首行输出 `{"event":"ready","port":…,"token":…}`。
 
@@ -46,6 +63,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | --- | --- |
 | `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 八视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
 | `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
+| `desktop/main/windowmode.cjs` | **窗口可见性判定（纯函数）**：截图 / `KIKUSUB_NO_WINDOW` / 开发模式默认拒绝 / 显式允许 / 打包版，五种角色的唯一实现；单测在 `desktop/test/window-mode.test.cjs`。智能体不许弹窗的代码兜底在这里。 |
 | `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
 | `server/` | **服务层（FastAPI）**。`python -m server` 启动。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
 | `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import；结构建议在 `routes_structure.py`。 |
@@ -65,7 +83,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理与后台线程 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 评测台：`score_srt.py` 纯标准库打分（CER/块准确率/劈词计数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 数字基线。改断句或 VAD 参数前后必须跑同一区间；素材用 `--fixtures` 指（不随仓库）。 |
-| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配 → 打开）。改 Python 后必须先重打 sidecar。 |
+| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配；**默认不打开**，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）与 `file_tag` / `legacy_tags`（产物文件名标签）。设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
 | `core/sherpa_asr.py` | 两个中文引擎的推理外壳（SenseVoice-Small / FireRedASR2-AED，sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
@@ -89,7 +107,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | 你要改的东西 | 先读 | 关键契约 |
 | --- | --- | --- |
 | 核对台交互、字幕块聚合、选区、时间线缩放、主题令牌、历史、查找替换、TTS | [docs/contracts/review-console.md](docs/contracts/review-console.md) | 单击/框选阈值、50 步统一历史、`duration/69` 缩放、主题覆盖块、选区 clamp |
-| 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关 | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关 |
+| 启动/退出清理、日志与诊断、模型目录、快捷键、单实例、截图开关、**无窗口模式** | [docs/contracts/desktop-lifecycle.md](docs/contracts/desktop-lifecycle.md) | 退出前清理顺序、日志留存、`--screenshot` 取证开关、窗口可见性判定（§3.7） |
 | AI 提案 / 双源 / 结构建议 / 断句重排 / 翻译轨 / 技能 | [docs/contracts/ai-proposal.md](docs/contracts/ai-proposal.md) | 源指纹 digest / digest_b、结构校验、`apply_polish()`、D-1～D-6、A1–A10、结构建议 3.7.5 |
 | 提示词模板、成片导出、手动代理、媒体 Range | [docs/contracts/export-and-prompt.md](docs/contracts/export-and-prompt.md) | 导出设置必须走 `setExport*`、代理写 `*.part.mp4` 再 rename |
 | 参数规格、预设、引擎绑定 | [docs/contracts/params-and-presets.md](docs/contracts/params-and-presets.md) | 保存/载入都必须带引擎、跨引擎 409、种子预设 = 当前默认值 |
@@ -117,8 +135,10 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    resetExportStyle`，禁止直接写 `exporter.*`。
 9. **改 Python 就先重打 sidecar**：`bash tools/pack/build_sidecar.sh`（或 `tools/pack/rebuild.sh`）；
    `build_app.sh` 会因为 sidecar 比源码旧直接退出，这是有意的。
-10. **改前端必须真验证**：`cd desktop && npm run build`，然后实际过一遍单击跳转、抖动单击不建选区、
-    缩放、保存；只看编译通过不算验证。
+10. **改前端必须真验证，但不许开窗**：`cd desktop && npm run build && npm run check:svelte`，
+    再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
+    或跑 `node tools/shots/verify_reshape_flow.mjs`；只看编译通过不算验证。
+    **「手点一遍」不许成为打开窗口的理由**（§0.5）。
 11. **两个大文件只许变短**（`lib/store.svelte.ts` 3315 行 / `views/ReviewView.svelte` 3877 行）：
     改它们前，先把
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
@@ -127,6 +147,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag`），推理对象与分派进 `core/pipeline.py`；
     `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护一份引擎 key 白名单
     （加中文引擎时踩过：`if payload.engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
+13. **不许弹窗**：任何验证都走无窗口路径（§0.5）。`npx electron .`、`npm start`、`open *.app`、
+    `rebuild.sh --open` 只允许用户自己做，不许代劳；截完图用 `read_image` 看，不要摆到桌面上。
 
 ## 5. 改动纪律（提交流程）
 
@@ -152,8 +174,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | 纯文档（`docs/`、`AGENTS.md`） | `pytest -q tests/test_docs_health.py` | 同左 |
 | `core/` 算法 | `pytest -q -m "not integration"` | `pytest -q`；改断句/VAD 必须用 `tools/eval/score_srt.py` 跑同一区间 |
 | `server/` 路由 | `pytest -q -m "not needs_ffmpeg"` | `pytest -q` |
-| `desktop/main/`（主进程） | `npm run test:main` | 同上 + 真的启动一次 `npx electron .` |
-| `desktop/renderer/`（`.svelte` / `.ts`） | `npm run check` + `npm run check:svelte` | `npm run build` + 按红线 10 手点（单击/抖动/缩放/保存） |
+| `desktop/main/`（主进程） | `npm run test:main` | 同上 + 无窗口冒烟：`npx electron . --screenshot=/tmp/kikusub-main.png`（不要裸跑） |
+| `desktop/renderer/`（`.svelte` / `.ts`） | `npm run check` + `npm run check:svelte` | `npm run build` + 静默断言（红线 10：`--screenshot` / `verify_reshape_flow.mjs`，**不开窗**） |
 | 样式、布局、主题 | 上面两条 | `bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline` |
 | 改了 Python（`core/` `server/`） | 上面 + `bash tools/pack/build_sidecar.sh` | `bash tools/pack/rebuild.sh --no-open` |
 | 发版 | — | `bash tools/release/preflight.sh --with-tests` |
@@ -163,41 +185,12 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 ## 6. 发版
 
-**唯一依据是 [docs/release.md](docs/release.md)**（四步：合入审查 → 本地实测 → 打包分发 → 发布日志）。
-顺序固定：`app/macos` 测试绿 → bump `desktop/package.json` 的 version → 合入 `main` → 在 `main` 上打 tag。
-
-```bash
-bash tools/release/preflight.sh --with-tests   # 程序化闸门：版本/tag/分支/sidecar/图标/测试
-bash tools/pack/rebuild.sh --no-open           # 重打 sidecar + 构建渲染层 + 装配
-bash tools/pack/build_dmg.sh                   # 出 DMG
-```
-
-CI 的 `release-tag` job 会拦两件事：tag 与 `package.json` 版本不一致、tag 的提交不在 `main` 上。
-本地可选装钩子：`git config core.hooksPath tools/git-hooks`（推发版 tag 前自动跑 preflight）。
+**唯一依据是 [docs/release.md](docs/release.md)**：`app/macos` 测试绿 → bump `desktop/package.json`
+版本 → 合入 `main` → 在 `main` 打 tag。闸门：`bash tools/release/preflight.sh --with-tests`；
+CI 的 `release-tag` job 拦「tag ≠ 版本」与「tag 不在 main」。本地可选钩子：
+`git config core.hooksPath tools/git-hooks`。
 
 ## 7. 进行中的专项（跨会话必须能接上）
 
-- **转录引擎标定**：四引擎均已完成一轮。
-  - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](docs/转录标定-AnimeWhisper-2026-11.md)
-    （分窗 VAD、默认参数、句首尾发声剔除）。
-  - Qwen3-ASR + CTC：[转录标定-Qwen-2026-11.md](docs/转录标定-Qwen-2026-11.md)
-    （分窗 VAD 是最大收益；内存建议已修正）。
-  - 中文两个引擎：[转录标定-中文-2026-11.md](docs/转录标定-中文-2026-11.md)
-    （四处修复；脚本在 `tune/zh`）。
-  - **四引擎标定完成**：默认参数固化为引擎绑定预设，旧预设已删除；见
-    [预设契约](docs/contracts/params-and-presets.md)。
-  - **通用对齐层已落地**（`core/align_layer.py`）：借 Qwen 的 acoustic-only CTC 头给任意
-    日语文本打逐字时间，Anime Whisper 侧是 `whisper.use_ctc_alignment`（默认关）。
-    精度 p90 约 320ms，没到 ±150ms 门槛，所以没设默认；细节见
-    [Qwen 标定文档](docs/转录标定-Qwen-2026-11.md) §4，门槛在 `docs/backlog.md` P1-5。
-- **日语引擎优化路线**（[docs/日语引擎优化路线-2026-11.md](docs/日语引擎优化路线-2026-11.md)）：
-  **P0-2 评测台已入库**：`tools/eval/` 的 `run_clip.py` / `probe_window.py` /
-  `baseline.json`，用法与素材口径见 `tools/eval/README.md`（素材不随仓库）。
-  **P0-1 已完成**：`qwen.vad_onset_pad_ms` 默认 400（Test 二 CER 13.42%→11.47%、句首缺字
-  5→1；Test 一 12.97%→12.22%；长片不劣化），whisper 同改法 CER +1.61pt，**不启用**。
-  闸门 `onset_gate` 只在 A/B 里用、不进参数面板（实测按文档口径无效）。
-  - **P0-3a 完成**：置信度特征 AUC 全 <0.75（最好 0.703），按止损线**不进 audit**；
-    诊断脚本 `tools/eval/qwen_confidence_diag.py`。
-  - **P1-1 完成**：`kind="compare"` 只回文本；单句复核保留，批量复核入口已按双引擎重构删除；
-    `transcribe_window()` + 空闲 180s 卸载。下一步 P1-3 词表 / P1-2 对齐 spike。
-  - **双引擎复核与工作流重构已完成**（S1–S4）：见 [需求文档](docs/双引擎复核与工作流-需求-2026-11.md)。
+引擎标定、日语优化路线 P0–P3 等长期专项的「做到哪、下一步」已拆到
+[in-progress.md](docs/contracts/in-progress.md)；接手时先读那一页，别在这里重复。

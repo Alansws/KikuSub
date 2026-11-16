@@ -215,8 +215,12 @@ cd desktop && npm install && cd ..     # Electron + Svelte toolchain
 ```bash
 cd desktop
 npm run build          # build the renderer
-npx electron .         # start (spawns the Python sidecar)
+npm start              # start (spawns the Python sidecar; shows a window)
 ```
+
+> Dev mode does **not** open a window by default (see [AGENTS.md](AGENTS.md) §0.5): `npm start`
+> is the explicit human entry point; agents/automation must use
+> `npx electron . --screenshot=…` for silent verification.
 
 The sidecar can also run on its own while debugging the API:
 
@@ -225,8 +229,9 @@ source .venv/bin/activate
 python -m server --port 0        # first stdout line: {"event":"ready","port":…,"token":…}
 ```
 
-> If your shell exports `ELECTRON_RUN_AS_NODE=1` (some Electron hosts do), clear it:
-> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .`
+> If your shell exports `ELECTRON_RUN_AS_NODE=1` (some Electron hosts do), `npm start` clears it;
+> to launch by hand use
+> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS KIKUSUB_ALLOW_WINDOW=1 npx electron .`.
 
 ### Packaging
 

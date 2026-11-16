@@ -218,8 +218,11 @@ cd desktop && npm install && cd ..     # Electron + Svelte 构建链
 ```bash
 cd desktop
 npm run build          # 构建渲染层
-npx electron .         # 启动（自动拉起 Python sidecar）
+npm start              # 启动（自动拉起 Python sidecar；会显示窗口）
 ```
+
+> 开发模式默认不弹窗（见 [AGENTS.md](AGENTS.md) §0.5）：`npm start` 是显式的人入口；
+> 智能体/自动化一律用 `npx electron . --screenshot=…` 静默取证。
 
 sidecar 也可以单独跑，方便调接口：
 
@@ -228,8 +231,8 @@ source .venv/bin/activate
 python -m server --port 0        # 首行输出 {"event":"ready","port":…,"token":…}
 ```
 
-> 如果 shell 里存在 `ELECTRON_RUN_AS_NODE=1`（某些 Electron 宿主会设），启动前清掉：
-> `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .`
+> 如果 shell 里存在 `ELECTRON_RUN_AS_NODE=1`（某些 Electron 宿主会设），`npm start` 已经
+> 帮你清掉；手工启动时用 `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS KIKUSUB_ALLOW_WINDOW=1 npx electron .`。
 
 ### 打包成 .app
 
