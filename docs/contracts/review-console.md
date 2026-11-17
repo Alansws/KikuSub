@@ -233,7 +233,9 @@
 - **可自定义快捷键（2026-11 修订）**：`desktop/renderer/src/lib/shortcuts.svelte.ts` 是唯一映射，
   ⌘K 打开面板录制新组合（该快捷键本身也可改）。默认值：Enter 删除当前字幕（底部多选时一起删）、
   Space 播放 / 暂停、↑↓ 上下句、⌘F 查找、⌘↩ 添加空字幕、**⌘G / ⇧⌘G 查找下一处 / 上一处**
-  （`scope: 'find'`，只在查找栏打开时生效，见 §3.4.2）；视图键按工作流固定为
+  （`scope: 'find'`，只在查找栏打开时生效，见 §3.4.2）；专业剪辑键（2026-11-17）：
+  **← / → 逐帧、⌘← / ⌘→ 逐秒、Q / E 入点 / 出点、W 切割、⇧Space 试听、N 磁吸、
+  ⇧Z 全片 / 还原、1 / 2 / 3 倍速（⇧2 归 1×）**，详见 §3.4.6；视图键按工作流固定为
   **⌘1 导入 / ⌘2 转写 / ⌘3 核对台 / ⌘4 双引擎复核 / ⌘5 润色 / ⌘6 断句重排 / ⌘7 翻译 / ⌘8 导出**。
   润色与翻译是独立页面，不再共用页签；提示词库与任务详报不占键；设置页走系统惯例 ⌘,
   （侧栏「设置」右侧显示提示），它和 ⌘Z/⇧⌘Z、⌘O、⌘E、⌘Q 等一起列在面板「固定快捷键」组，
@@ -392,3 +394,52 @@
   `--accent-soft` 底；只在没有可用引擎时给一条 `--warn` 提示并把 CTA 换成
   「去设置启用复核引擎」（跳设置页），避免一个永远灰着的按钮。
 - **仍不自动采用**：`adoptAlternative()` 只调 `updateCue()`（服务端一步历史，⌘Z 可退）。
+
+#### 3.4.6 核对台专业剪辑操作（2026-11-17）
+
+> 目标是把核对台从「点一下、拖一下」补成能靠键盘逐帧精修的剪辑台。所有键都进
+> `shortcuts.svelte.ts` 同一张表，可在 ⌘K 重绑；文本框 / 输入框 / 下拉 / range 滑杆 /
+> contenteditable 内一律让位。
+
+- **逐帧 / 逐秒**：`←` / `→` 后退 / 前进 1 帧，`⌘←` / `⌘→` 后退 / 前进 1 秒。
+  - 帧率来自 `MediaInfo.video_fps`（`server/media.py` 的 ffprobe `avg_frame_rate` 优先、
+    `r_frame_rate` 兜底）；纯音频 / 未知帧率回落 `FALLBACK_FPS=30`（33.3ms）。
+  - 逐帧用帧号 `Math.round(play.time / step) ± 1`，避免连续按键累计浮点漂移；
+    步进前 `video.pause()`，结果 clamp 到 `[0, duration]`，再走统一 `seekTo()`。
+  - **高速连按必须以同步写回的 `play.time` 为基准**：`seekTo()` 是同步的，而
+    `video.currentTime` 在异步解码完成前还是旧值；读后者会让连按原地踏步。
+    `lib/transport.svelte.ts` 的注释与 `verify_review_transport.mjs` 的 10 连按断言守着这条。
+  - `←/→` 与 `⌘←/⌘→` 在核对台显式 `preventDefault()`；主进程没有 history accelerator，
+    但仍加导航守卫，避免任何组合把页面带离应用。输入控件内的方向键保持原生行为。
+  - `allowOnControls` 只放行按钮 / 链接：用户点过播放按钮后方向键仍然生效；
+    textarea / input（含 range）/ select / contenteditable 永远让位。
+- **入点 / 出点**：`Q` / `E` 把当前字幕的入点 / 出点对齐播放头。
+  - 纯校验在 `lib/cueEdit.ts`：入点必须 `< end - 0.05`，出点必须 `> start + 0.05`；
+    失败只 toast，不改字幕。
+  - 提交走 `updateCue()` → 服务端一步历史（自动标签「修改第 N 条时间」），⌘Z 可撤回。
+  - 只作用于 `play.selected`；多选状态不改其它块。
+- **切割**：`W` 在播放头切割当前字幕，复用 `splitCueAt()`；右键与键盘共用
+  `canSplitAt()` 的 0.05 秒边距，禁止两套口径。播放头不在当前字幕内 / 太靠近两端只 toast。
+- **试听**：`⇧Space` 调 `previewRange(cue.start, cue.end)`，复用现有 `stopAt`，播到句末
+  自动停；不 seek 到别处、不改缩放、不改跟随。
+- **磁吸（`N`，默认开）**：拖底部字幕块时吸附播放头与邻句边缘，`--accent` 虚线参考线。
+  - 纯函数在 `lib/cueSnap.ts`；候选在 `beginCueDrag` 时冻结（含当时播放头），拖动中
+    播放头继续走不会抖；抓取半径 7px 换算成秒后封顶 120ms；带滞回。
+  - clamp 后边缘不再等于候选就丢弃参考线（不画骗人的线）。只作用于
+    `cue-move / cue-l / cue-r`，**不碰**单击跳转、4px 框选、播放头擦洗、进度条。
+  - 偏好存 `localStorage['kikusub.snap']`；开关不进历史。
+- **全片适应（`⇧Z`）**：`lib/timelineView.ts` 的 `toggleFitView()` 记住当前视窗切到全片，
+  再按恢复；不改跟随，不改 `FOCUS_ZOOM=69` 的聚焦公式。
+- **倍速（`1` / `2` / `3`，`⇧2` 归 1×）**：固定档位 `0.5× / 1× / 1.5× / 2×`。
+  - `1` 降一档并播放，`3` 升一档并播放，`2` 暂停并保留倍速；`⇧2` 归 1×。
+  - 显式 `video.preservesPitch = true`，日语台词变速不变调；换片静默复位 1×。
+  - 非 1× 时时间码旁出现可点击的倍速标签，单击恢复 1×；标签不是历史编辑。
+  - **不做真倒放**：HTML5 `playbackRate` 不支持负值，定时 seek 模拟反向会与 rAF 推进 /
+    音频解码打架；产品上只承诺倍速，不承诺反向穿梭。
+- **历史与红线**：入点 / 出点 / 切割走服务端统一历史；步进、试听、磁吸、全片、倍速
+  都不进历史。吸附只叠加在 `cueDragTimes()` 之后，不碰 `CLICK_SLOP=4`、进度条
+  click-to-seek 与 `duration/69`。`store.svelte.ts` 未增行；`ReviewView` 预算从
+  3877 → 3808 → 3802（`tests/test_big_file_budget.py`）。
+- **回归**：`desktop/test/frameStep.test.mjs`、`cueEdit.test.mjs`、`cueSnap.test.mjs`、
+  `timelineView.test.mjs`、`playbackRate.test.mjs`；Python `tests/test_media_probe.py`；
+  真实界面 `tools/shots/verify_review_transport.mjs`（24fps 片源，无窗口）。

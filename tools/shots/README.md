@@ -99,6 +99,21 @@ node tools/shots/verify_cue_clipboard.mjs
 截图落在系统临时目录的 `kikusub-cue-clipboard/cue-clipboard.png`（macOS 通常是
 `$TMPDIR/kikusub-cue-clipboard/`）。契约口径见 `docs/contracts/review-console.md` §3.4.2。
 
+## 核对台专业剪辑回归
+
+`←/→` 逐帧、`⌘←/⌘→` 逐秒、`Q/E` 入出点、`W` 切割、`⇧Space` 试听、`N` 磁吸、
+`⇧Z` 全片切换、`1/2/3` 倍速，以及「高速连按以同步 `play.time` 为基准」和
+「方向键不触发 WebView 前进/后退」。脚本生成 24fps 测试片，断言真实界面里的时间码、
+字幕行、`video.playbackRate / preservesPitch` 与 URL/history。
+
+```bash
+node tools/shots/verify_review_transport.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_review_transport.mjs
+```
+
+截图落在系统临时目录的 `kikusub-review-transport/review-transport.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.6。
+
 ## 设置页专用矩阵
 
 设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：

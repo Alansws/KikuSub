@@ -80,6 +80,11 @@
   里的重复也要在该行标红。旧版 `view.ai=mod+4 / view.export=mod+5` 只在仍是旧默认值
   时迁移到 `⌘4..⌘7`（双引擎复核 / 润色 / 翻译 / 导出）；2026-11 加「断句重排」后再次顺延到
 `⌘4..⌘8`（… / 润色 / 断句重排 / 翻译 / 导出）。两次迁移都只在「仍是旧默认值」时改，用户自定义过的键不覆盖。
+- **按钮焦点与输入控件**：`allowOnControls` 只让传输键（←/→、↑/↓、⇧Space）在按钮 / 链接
+  焦点上生效；`textarea` / `input`（含 `type=range` 滑杆）/ `select` / `contenteditable`
+  永远让位。`onKey` 顶部先 `isComposing || keyCode===229` 早退，日语输入法组合中不抢键。
+- **方向键不触发网页 history**：核对台的 ←/→、⌘←/⌘→ 显式 `preventDefault()`；主进程菜单
+  没有 back/forward accelerator，但仍保留导航守卫。输入控件内的方向键保持原生行为。
 
 #### 退出前清理（⌘Q / 关窗）
 
