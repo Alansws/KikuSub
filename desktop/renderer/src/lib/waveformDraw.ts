@@ -54,6 +54,90 @@ export function rulerLabel(t: number, step: number): string {
 
 import type { Cue } from './api';
 
+export interface RulerInput {
+  viewStart: number;
+  viewSpan: number;
+  width: number;
+  rulerH: number;
+  separator: string;
+  separatorStrong: string;
+  text: string;
+  xOf: (time: number) => number;
+}
+
+/** 顶部时间刻度 + 刻度条底线。 */
+export function paintRuler(ctx: CanvasRenderingContext2D, input: RulerInput) {
+  const step = pickRulerStep(input.viewSpan);
+  ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
+  ctx.textBaseline = 'top';
+  const first = Math.ceil(input.viewStart / step) * step;
+  for (let t = first; t <= input.viewStart + input.viewSpan; t += step) {
+    const x = Math.round(input.xOf(t)) + 0.5;
+    const major = Math.abs(t / (step * 5) - Math.round(t / (step * 5))) < 1e-6;
+    ctx.fillStyle = major ? input.separatorStrong : input.separator;
+    ctx.fillRect(x, 0, 1, major ? 7 : 4);
+    if (major || step >= 5) {
+      ctx.fillStyle = input.text;
+      const label = rulerLabel(t, step);
+      const lw = ctx.measureText(label).width;
+      // 最右一格的标签别被画布裁掉：贴着右边界时向左放
+      ctx.fillText(
+        label,
+        x + 4 + lw > input.width ? Math.max(0, x - lw - 4) : x + 3,
+        1,
+      );
+    }
+  }
+  ctx.fillStyle = input.separator;
+  ctx.fillRect(0, input.rulerH - 0.5, input.width, 1);
+}
+
+/** 字幕覆盖区：在波形背后垫一层极淡的蓝，同区间只画一次。 */
+export function paintCueWash(
+  ctx: CanvasRenderingContext2D,
+  cues: readonly Cue[],
+  viewStart: number,
+  viewSpan: number,
+  width: number,
+  rulerH: number,
+  laneTop: number,
+  color: string,
+  xOf: (time: number) => number,
+) {
+  const drawn = new Set<string>();
+  for (const cue of cues) {
+    if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
+    const key = `${cue.start}:${cue.end}`;
+    if (drawn.has(key)) continue;
+    drawn.add(key);
+    const x0 = Math.max(0, xOf(cue.start));
+    const x1 = Math.min(width, xOf(cue.end));
+    if (x1 <= x0) continue;
+    ctx.fillStyle = color;
+    ctx.fillRect(x0, rulerH, Math.max(1, x1 - x0), laneTop - rulerH);
+  }
+}
+
+/** 当前选中行的区间高亮（不是选区）：中性墨，不叠蓝。 */
+export function paintSelectedCueWash(
+  ctx: CanvasRenderingContext2D,
+  cue: Pick<Cue, 'start' | 'end'>,
+  viewStart: number,
+  width: number,
+  rulerH: number,
+  laneTop: number,
+  color: string,
+  xOf: (time: number) => number,
+) {
+  const x0 = Math.max(0, xOf(cue.start));
+  const x1 = Math.min(width, xOf(cue.end));
+  if (x1 <= x0) return;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.5;
+  ctx.fillRect(x0, rulerH, Math.max(1, x1 - x0), laneTop - rulerH);
+  ctx.globalAlpha = 1;
+}
+
 export interface CueBlocksInput {
   cues: readonly Cue[];
   viewStart: number;
@@ -118,6 +202,24 @@ export function paintCueBlocks(ctx: CanvasRenderingContext2D, input: CueBlocksIn
       ctx.fillRect(x0 + bw - 3.5, blockY + 4, 1.5, blockH - 8);
     }
   }
+}
+
+/** 磁吸参考线：从刻度条贯穿到轨道底部的虚线。 */
+export function drawSnapGuide(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  height: number,
+  color: string,
+) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.85;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(Math.round(x) + 0.5, 0);
+  ctx.lineTo(Math.round(x) + 0.5, height);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export interface PeakBarsInput {

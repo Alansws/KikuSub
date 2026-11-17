@@ -24,10 +24,11 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 # 2026-11-14：新增「断句重排」视图，`View` 联合类型必须多一行（没有可抽的纯逻辑）。
 # 2026-11-15：代理提示抽成 ProxyGate + videoFallback，导入不再自动压代理。
 # 2026-11-16：开发种子注入（applyDevSeed）抽到 `lib/devSeed.ts`，store 降到 3287。
-# 2026-11-17：波形绘制 / 时间轴视窗 / 切割校验抽到 lib，ReviewView 降到 3808。
+# 2026-11-17：波形绘制 / 时间轴视窗 / 切割校验抽到 lib，ReviewView 降到 3808；
+#              同轮专业剪辑操作（逐帧/磁吸/倍速）完成后再降到 3802。
 BUDGET = {
     "lib/store.svelte.ts": 3287,
-    "views/ReviewView.svelte": 3808,
+    "views/ReviewView.svelte": 3802,
 }
 
 

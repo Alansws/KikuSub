@@ -47,7 +47,15 @@
   import { refreshAltReview } from './lib/dualReview.svelte';
   import { applyDevSeed } from './lib/devSeed';
   import { copySelectedCue, pasteCueAtPlayhead } from './lib/cueClipboard.svelte';
-  import { stepFrames, stepSeconds } from './lib/transport.svelte';
+  import {
+    pauseSpeed,
+    resetRate,
+    speedDown,
+    speedUp,
+    stepFrames,
+    stepSeconds,
+  } from './lib/transport.svelte';
+  import { toggleSnap } from './lib/snapPrefs.svelte';
   import {
     alignSelectedCueEnd,
     alignSelectedCueStart,
@@ -62,6 +70,7 @@
     api_focus: () => void;
     api_deleteSelected: () => void;
     api_findStep: (d: number) => void;
+    api_toggleFit: () => void;
   } | undefined = $state();
   let dragging = $state(false);
   /** 紧凑模式（≤900px CSS 视口）：检查器变成抽屉，内容区拿回整宽。 */
@@ -377,6 +386,24 @@
       case 'review.auditionCue':
         auditionSelectedCue();
         return;
+      case 'review.toggleSnap':
+        toggleSnap();
+        return;
+      case 'review.toggleFit':
+        if (app.view === 'review') review?.api_toggleFit();
+        return;
+      case 'review.speedDown':
+        speedDown();
+        return;
+      case 'review.speedPause':
+        pauseSpeed();
+        return;
+      case 'review.speedUp':
+        speedUp();
+        return;
+      case 'review.speedReset':
+        resetRate();
+        return;
       case 'review.deleteCue':
         if (app.view === 'review') review?.api_deleteSelected();
         return;
@@ -439,6 +466,12 @@
     'review.outPoint',
     'review.splitAtPlayhead',
     'review.auditionCue',
+    'review.toggleSnap',
+    'review.toggleFit',
+    'review.speedDown',
+    'review.speedPause',
+    'review.speedUp',
+    'review.speedReset',
   ]);
 
   function onKey(e: KeyboardEvent) {

@@ -92,6 +92,32 @@ export function revealTimelineView(
   return clampTimelineView(time - view.span * anchor, view.span, duration, minSpan);
 }
 
+/**
+ * 全片适应 ↔ 上一次缩放。
+ *
+ * 已经处于全片（跨度 ≥ 96%）时恢复记住的视窗；否则记住当前视窗并切到全片。
+ * 不改跟随、不改 69× 聚焦公式。
+ */
+export function toggleFitView(
+  current: TimelineView,
+  saved: TimelineView | null,
+  duration: number,
+  minSpan: number,
+): TimelineFitState {
+  if (!(duration > 0)) return { view: current, saved, fitted: true };
+  const fitted = current.span >= duration * 0.96;
+  if (fitted) {
+    if (!saved) return { view: current, saved, fitted: true };
+    const view = clampTimelineView(saved.start, saved.span, duration, minSpan);
+    return { view, saved: null, fitted: false };
+  }
+  return {
+    view: clampTimelineView(0, duration, duration, minSpan),
+    saved: clampTimelineView(current.start, current.span, duration, minSpan),
+    fitted: true,
+  };
+}
+
 /** 全片适应。 */
 export function fitTimelineView(
   duration: number,

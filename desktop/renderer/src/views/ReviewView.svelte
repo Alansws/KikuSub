@@ -75,21 +75,26 @@
     stepSelection,
   } from '../lib/selection';
   import { canSplitAt } from '../lib/cueEdit';
-  import { attachVideo, detachVideo } from '../lib/transport.svelte';
+  import { collectSnapTargets, snapCueTimes, snapThreshold } from '../lib/cueSnap';
+  import { snapPrefs } from '../lib/snapPrefs.svelte';
+  import { attachVideo, detachVideo, resetRate, transport } from '../lib/transport.svelte';
   import {
     clampTimelineView,
     focusTimelineSpan,
     revealTimelineView,
     sliderToSpan,
     spanToSlider,
+    toggleFitView,
     zoomTimelineView,
   } from '../lib/timelineView';
   import {
+    drawSnapGuide,
     paintCueBlocks,
+    paintCueWash,
     paintPeakBars,
-    pickRulerStep,
+    paintRuler,
+    paintSelectedCueWash,
     roundRect,
-    rulerLabel,
   } from '../lib/waveformDraw';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
@@ -120,6 +125,10 @@
   const duration = $derived(app.media?.duration ?? 0);
   let viewStart = $state(0);
   let viewSpan = $state(60);
+  /** 全片适应前记住的视窗；再次 ⇧Z 恢复。 */
+  let preFitView = $state<{ start: number; span: number } | null>(null);
+  /** 拖字幕块时命中的参考线；松开 / 取消即清空。 */
+  let snapGuide = $state<number | null>(null);
   /**
    * 跟随是「用户偏好」，不是临时状态：
    * 只由用户点按钮改变，并持久化。缩放/平移波形、单击跳转、点字幕行、
@@ -384,6 +393,9 @@
     play.duration = d;
     viewStart = 0;
     viewSpan = d || 60;
+    preFitView = null;
+    snapGuide = null;
+    resetRate(false);
     selection = null;
     peaks = [];
     peaksFrom = 0;
@@ -466,41 +478,20 @@
     const mid = RULER_H + (laneTop - RULER_H) / 2;
     const ampH = Math.max(8, (laneTop - RULER_H) * 0.94);
 
-    // 字幕覆盖区在波形背后垫一层极淡的蓝：不抢波形，但一眼能看出「这段有字幕」。
-    // 同区间的双语行只画一次，否则重叠区间会越叠越深。
-    const drawn = new Set<string>();
-    for (const cue of app.cues) {
-      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
-      const key = `${cue.start}:${cue.end}`;
-      if (drawn.has(key)) continue;
-      drawn.add(key);
-      const x0 = Math.max(0, xOf(cue.start));
-      const x1 = Math.min(w, xOf(cue.end));
-      if (x1 <= x0) continue;
-      ctx.fillStyle = cueWash;
-      ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
-    }
+    // 字幕覆盖区在波形背后垫一层极淡的蓝（同区间双语行只画一次）。
+    paintCueWash(ctx, app.cues, viewStart, viewSpan, w, RULER_H, laneTop, cueWash, xOf);
 
     // 时间刻度
-    const step = pickRulerStep(viewSpan);
-    ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
-    ctx.textBaseline = 'top';
-    const first = Math.ceil(viewStart / step) * step;
-    for (let t = first; t <= viewStart + viewSpan; t += step) {
-      const x = Math.round(xOf(t)) + 0.5;
-      const major = Math.abs(t / (step * 5) - Math.round(t / (step * 5))) < 1e-6;
-      ctx.fillStyle = major ? sepStrong : sep;
-      ctx.fillRect(x, 0, 1, major ? 7 : 4);
-      if (major || step >= 5) {
-        ctx.fillStyle = text3;
-        const label = rulerLabel(t, step);
-        const lw = ctx.measureText(label).width;
-        // 最右一格的标签别被画布裁掉：贴着右边界时向左放
-        ctx.fillText(label, x + 4 + lw > w ? Math.max(0, x - lw - 4) : x + 3, 1);
-      }
-    }
-    ctx.fillStyle = sep;
-    ctx.fillRect(0, RULER_H - 0.5, w, 1);
+    paintRuler(ctx, {
+      viewStart,
+      viewSpan,
+      width: w,
+      rulerH: RULER_H,
+      separator: sep,
+      separatorStrong: sepStrong,
+      text: text3,
+      xOf,
+    });
 
     // 波形：逐像素取该像素覆盖的所有采样点的最大值（纯绘制见 lib/waveformDraw）。
     const n = peaks.length;
@@ -517,17 +508,10 @@
       }
     }
 
-    // 选中行的区间高亮（不是选区，只是当前条目）：中性墨，别再加一层蓝
-    if (play.selected >= 0 && app.cues[play.selected]) {
-      const sel = app.cues[play.selected];
-      const x0 = Math.max(0, xOf(sel.start));
-      const x1 = Math.min(w, xOf(sel.end));
-      if (x1 > x0) {
-        ctx.fillStyle = sepStrong;
-        ctx.globalAlpha = 0.5;
-        ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
-        ctx.globalAlpha = 1;
-      }
+    // 选中行的区间高亮（不是选区，只是当前条目）：中性墨，别再加一层蓝。
+    const selected = play.selected >= 0 ? app.cues[play.selected] : null;
+    if (selected) {
+      paintSelectedCueWash(ctx, selected, viewStart, w, RULER_H, laneTop, sepStrong, xOf);
     }
 
     // ---------------- 底部字幕轨道 ----------------
@@ -555,6 +539,7 @@
       accent,
       xOf,
     });
+    if (snapGuide !== null) drawSnapGuide(ctx, xOf(snapGuide), h, accent);
   }
 
   $effect(() => {
@@ -569,6 +554,7 @@
     void laneSelection;
     void app.theme;
     void waveW;
+    void snapGuide;
     void play.time;
     requestAnimationFrame(draw);
   });
@@ -803,6 +789,9 @@
     anchorT: number;
     curStart: number | null;
     curEnd: number | null;
+    /** 本次拖动开始时冻结的吸附候选（含当时播放头）。 */
+    snapTargets: number[];
+    activeGuide: number | null;
   } | null = null;
 
   function xPlayhead() {
@@ -941,6 +930,8 @@
       anchorT: timeAt(e.clientX),
       curStart: null,
       curEnd: null,
+      snapTargets: collectSnapTargets(app.cues, block.indices, play.time, duration),
+      activeGuide: null,
     };
     dragMode = edge === 'move' ? 'cue-move' : edge === 'start' ? 'cue-l' : 'cue-r';
     dragKey = block.key;
@@ -955,7 +946,19 @@
     const drag = cueDrag;
     if (!drag) return;
     const max = duration > 0 ? duration : Math.max(drag.end, t0());
-    const { start, end } = cueDragTimes(drag, t, max);
+    const base = cueDragTimes(drag, t, max);
+    const snapped = snapCueTimes(
+      base,
+      drag.edge,
+      drag.snapTargets,
+      snapThreshold(waveW, viewSpan),
+      max,
+      drag.activeGuide,
+      snapPrefs.enabled,
+    );
+    const { start, end } = snapped;
+    drag.activeGuide = snapped.guide;
+    snapGuide = snapped.guide;
     if (drag.curStart === start && drag.curEnd === end) return;
     drag.curStart = start;
     drag.curEnd = end;
@@ -980,6 +983,7 @@
     dragMode = 'none';
     dragKey = '';
     cueTip = null;
+    snapGuide = null;
     waveCursor = 'crosshair';
     if (!drag) return;
     const moved =
@@ -2076,6 +2080,13 @@
     focusPlayhead();
   }
 
+  /** ⇧Z：全片适应 / 回到上一次缩放。 */
+  export function api_toggleFit() {
+    const next = toggleFitView({ start: viewStart, span: viewSpan }, preFitView, duration, MIN_SPAN);
+    preFitView = next.saved;
+    setView(next.view.start, next.view.span);
+  }
+
   /** 供 App 的「查找：上一处 / 下一处」快捷键调用。 */
   export function api_findStep(delta: number) {
     if (!findState.open) return;
@@ -2150,6 +2161,9 @@
         <Icon name={play.playing ? 'pause' : 'play'} size={11} />
       </button>
       <span class="tp-time" title={app.media?.video_fps ? `${app.media.video_fps.toFixed(3)} fps` : '未探测到帧率，逐帧按 30fps 步进'}>{tc(play.time)}</span>
+      {#if transport.rate !== 1}
+        <button class="mini-text tp-rate" onclick={() => resetRate()} title="恢复 1×（⇧2）">{transport.rate}×</button>
+      {/if}
       <div
         class="tp-track"
         class:dragging={trackDrag}
@@ -2831,6 +2845,13 @@
     font-family: var(--font-mono);
     min-width: 38px;
     text-align: right;
+  }
+  .tp-rate {
+    height: 18px;
+    padding: 0 var(--sp-1);
+    color: var(--accent);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
   .tp-track {
     flex: 1;

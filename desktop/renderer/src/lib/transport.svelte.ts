@@ -12,6 +12,7 @@
 
 import { app, play, seekTo, toast } from './store.svelte';
 import { FALLBACK_FPS, normalizeFps, stepFrameTime, stepSecondTime } from './frameStep';
+import { nextSpeed, speedLabel } from './playbackRate';
 
 export const transport = $state({
   video: null as HTMLVideoElement | null,
@@ -76,4 +77,50 @@ export function stepSeconds(direction: -1 | 1): void {
 /** 当前媒体的有效帧率；界面提示用。 */
 export function effectiveFps(): number {
   return normalizeFps(app.media?.video_fps) || FALLBACK_FPS;
+}
+
+function applyRate(rate: number): void {
+  transport.rate = rate;
+  const video = transport.video;
+  if (video) {
+    video.playbackRate = rate;
+    // 日语台词变速不变调；Chromium 默认 true，这里显式写死，别依赖默认值。
+    video.preservesPitch = true;
+  }
+}
+
+function playIfPaused(): void {
+  const video = transport.video;
+  if (video?.paused) void video.play().catch(() => {});
+}
+
+/** 降一档倍速并播放。 */
+export function speedDown(): void {
+  if (!requireMedia()) return;
+  const rate = nextSpeed(transport.rate, -1);
+  applyRate(rate);
+  playIfPaused();
+  toast(`倍速 ${speedLabel(rate)}`);
+}
+
+/** 升一档倍速并播放。 */
+export function speedUp(): void {
+  if (!requireMedia()) return;
+  const rate = nextSpeed(transport.rate, 1);
+  applyRate(rate);
+  playIfPaused();
+  toast(`倍速 ${speedLabel(rate)}`);
+}
+
+/** 暂停并保留当前倍速。 */
+export function pauseSpeed(): void {
+  const video = transport.video;
+  if (video && !video.paused) video.pause();
+  play.playing = false;
+}
+
+/** 归 1×；换片时用 `notify=false` 静默复位。 */
+export function resetRate(notify = true): void {
+  applyRate(1);
+  if (notify) toast('倍速 1×');
 }
