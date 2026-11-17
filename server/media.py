@@ -55,6 +55,8 @@ class MediaInfo:
     video_width: int = 0
     video_height: int = 0
     video_bitrate: int = 0
+    # 源视频平均帧率（avg_frame_rate 优先，r_frame_rate 兜底）。纯音频 / 未知为 0。
+    video_fps: float = 0.0
     has_video: bool = False
     # 是否已经存在压好的 480p 监看代理。由 MediaStore 在探测时刷新。
     proxy_ready: bool = False
@@ -93,6 +95,7 @@ class MediaInfo:
             "video_width": self.video_width,
             "video_height": self.video_height,
             "video_bitrate": self.video_bitrate,
+            "video_fps": self.video_fps,
             "has_video": self.has_video,
             "needs_proxy": self.needs_proxy,
             "proxy_reason": self.proxy_reason,
@@ -111,7 +114,9 @@ def _ffprobe_json(path: Path) -> dict:
         proc = run_command(
             [
                 "ffprobe", "-v", "error",
-                "-show_entries", "format=duration,bit_rate:stream=codec_type,codec_name,width,height,bit_rate",
+                "-show_entries",
+                "format=duration,bit_rate:"
+                "stream=codec_type,codec_name,width,height,bit_rate,avg_frame_rate,r_frame_rate",
                 "-of", "json", str(path),
             ],
             timeout=FFPROBE_TIMEOUT_S,
@@ -130,6 +135,32 @@ def _ffprobe_json(path: Path) -> dict:
         return json.loads(proc.stdout or "{}")
     except ValueError:
         return {}
+
+
+def _parse_frame_rate(raw: object) -> float:
+    """把 ffprobe 的帧率字符串（``24000/1001`` / ``25``）转成浮点。
+
+    非法字符串、分母为 0、超出 1–240 的异常值一律返回 0，交给调用方退回
+    ``r_frame_rate`` 或前端 30fps 兜底。不要在探测阶段猜一个帧率——猜错会让
+    逐帧步进整体偏移。
+    """
+
+    text = str(raw or "").strip()
+    if not text:
+        return 0.0
+    try:
+        if "/" in text:
+            num_text, den_text = text.split("/", 1)
+            num = float(num_text)
+            den = float(den_text)
+            value = num / den if den else 0.0
+        else:
+            value = float(text)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (1.0 <= value <= 240.0):
+        return 0.0
+    return round(value, 6)
 
 
 @dataclass
@@ -193,6 +224,9 @@ class MediaStore:
             if kind == "video" and not info.has_video:
                 info.video_codec = codec
                 info.has_video = True
+                info.video_fps = _parse_frame_rate(
+                    stream.get("avg_frame_rate")
+                ) or _parse_frame_rate(stream.get("r_frame_rate"))
                 try:
                     info.video_width = int(stream.get("width") or 0)
                     info.video_height = int(stream.get("height") or 0)
