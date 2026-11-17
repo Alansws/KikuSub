@@ -71,6 +71,34 @@ node tools/shots/verify_reshape_flow.mjs --scenario stale
 同样走 `--screenshot` 静默路径（透明窗口 + `capturePage` + `app.exit`，桌面上不出现），
 断言失败退出码非 0。契约口径见 `docs/contracts/ai-proposal.md` §3.7.6。
 
+## 清理标点回归
+
+用户报障过的两类行（2026-11-17「句中顿号被换成空格」「行尾省略号点了不动」）有专门的
+行为回归：种子字幕里放上截图那几句 + 两个反例，在真实界面里打开「清理标点」浮层，断言
+统计、三条 before→after、标红字符、两组口径（句中 / 省略号）切换、v2 偏好键。
+
+```bash
+node tools/shots/verify_punct_clean.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_punct_clean.mjs
+```
+
+截图落在 `/tmp/kikusub-punct-verify/punct-clean.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.4。
+
+## 复制 / 粘贴字幕回归
+
+气声句（吸って / 入って）从「偶尔转对的一条」复制到两个播放头位置，是 2026-11-17 的新流程。
+脚本在真实界面里断言：检查器复制按钮与 `⌘⇧C` 都会先提交未失焦的草稿、粘贴后是 4 条 /
+再粘 5 条、一次撤回回到 4 条、播放头与缩放不变、新句被选中。
+
+```bash
+node tools/shots/verify_cue_clipboard.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_cue_clipboard.mjs
+```
+
+截图落在系统临时目录的 `kikusub-cue-clipboard/cue-clipboard.png`（macOS 通常是
+`$TMPDIR/kikusub-cue-clipboard/`）。契约口径见 `docs/contracts/review-console.md` §3.4.2。
+
 ## 设置页专用矩阵
 
 设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：
