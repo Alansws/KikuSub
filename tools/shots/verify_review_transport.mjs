@@ -110,6 +110,20 @@ const EVAL = String.raw`
       await press('z', { meta: true, code: 'KeyZ' });
       await sleep(320);
     };
+    const laneY = () => wave().getBoundingClientRect().bottom - 10;
+    const dragCue = async (fromT, toT) => {
+      const rect = wave().getBoundingClientRect();
+      const x0 = rect.left + (fromT / 8) * rect.width;
+      const x1 = rect.left + (toT / 8) * rect.width;
+      const y = laneY();
+      const base = { bubbles: true, clientY: y, pointerId: 7, button: 0, pointerType: 'mouse' };
+      wave().dispatchEvent(new PointerEvent('pointerdown', { ...base, clientX: x0 }));
+      await sleep(90);
+      wave().dispatchEvent(new PointerEvent('pointermove', { ...base, clientX: x1 }));
+      await sleep(90);
+      wave().dispatchEvent(new PointerEvent('pointerup', { ...base, clientX: x1 }));
+      await sleep(500);
+    };
 
     await waitFor(() => rows().length === 3 && document.querySelector('video'));
     await sleep(400);
@@ -182,7 +196,59 @@ const EVAL = String.raw`
     await sleep(1500);
     const afterAudition = { paused: video()?.paused, time: timeValue() };
 
-    // 9) URL / history 没有被方向键带走
+    // 9) 磁吸：第 3 条 4.0–5.0 的入点拖到 4.47，应吸附到播放头 4.5
+    document.querySelector('.row[data-i="2"]')?.click();
+    await sleep(120);
+    await seekTo(4.5);
+    await dragCue(4.0, 4.47);
+    const snapOnStart = rowInfo()[2]?.start;
+    // N 关闭后再拖 4.5 → 4.53：不应吸附
+    await press('n', { code: 'KeyN' });
+    const snapOffToast = toast();
+    // 把播放头挪开 8px 抓取区，否则 pointerdown 会先被播放头擦洗接走。
+    await seekTo(4.2);
+    await dragCue(4.5, 4.53);
+    const snapOffStart = rowInfo()[2]?.start;
+    await press('n', { code: 'KeyN' });
+    const snapOnToast = toast();
+
+    // 10) ⇧Z 全片适应 / 回到上次缩放
+    document.querySelector('.zbtn[aria-label="放大波形"]')?.click();
+    await sleep(150);
+    const zoomBeforeFit = document.querySelector('.zoom-slider')?.value ?? '';
+    await press('Z', { code: 'KeyZ', shift: true });
+    const zoomFitted = document.querySelector('.zoom-slider')?.value ?? '';
+    await press('Z', { code: 'KeyZ', shift: true });
+    const zoomRestored = document.querySelector('.zoom-slider')?.value ?? '';
+
+    // 11) 倍速：3 → 1.5× 播放；2 → 暂停保留；标签可点回 1×；⇧2 归 1×
+    await press('3', { code: 'Digit3', wait: 260 });
+    const rateUp = {
+      rate: video().playbackRate,
+      pitch: video().preservesPitch,
+      playing: !video().paused,
+    };
+    const badgeText = document.querySelector('.tp-rate')?.textContent.trim() ?? '';
+    await press('2', { code: 'Digit2', wait: 220 });
+    const ratePaused = { rate: video().playbackRate, paused: video().paused };
+    document.querySelector('.tp-rate')?.click();
+    await sleep(220);
+    const rateAfterBadge = {
+      rate: video().playbackRate,
+      badge: Boolean(document.querySelector('.tp-rate')),
+    };
+    await press('3', { code: 'Digit3', wait: 120 });
+    await press('2', { code: 'Digit2', shift: true, wait: 220 });
+    const rateAfterShift2 = {
+      rate: video().playbackRate,
+      badge: Boolean(document.querySelector('.tp-rate')),
+      toast: toast(),
+    };
+    // 截图时停在「1.5× 已暂停」状态，让倍速标签可见
+    await press('3', { code: 'Digit3', wait: 160 });
+    await press('2', { code: 'Digit2' });
+
+    // 12) URL / history 没有被方向键带走
     const urlAfter = location.href;
     const historyAfter = history.length;
 
@@ -206,6 +272,18 @@ const EVAL = String.raw`
       afterSplitUndo,
       afterTrim,
       afterAudition,
+      snapOnStart,
+      snapOffStart,
+      snapOffToast,
+      snapOnToast,
+      zoomBeforeFit,
+      zoomFitted,
+      zoomRestored,
+      rateUp,
+      badgeText,
+      ratePaused,
+      rateAfterBadge,
+      rateAfterShift2,
       urlBefore,
       urlAfter,
       historyBefore,
@@ -349,6 +427,34 @@ check(
   '试听停在出点附近',
   Math.abs(result.afterAudition.time - 1.2) < 0.08,
   result.afterAudition,
+);
+check('磁吸开：入点吸附到播放头 4.5', result.snapOnStart === '00:04.500', result.snapOnStart);
+check('N 关闭磁吸并提示', result.snapOffToast.includes('磁吸吸附：关'), result.snapOffToast);
+check('磁吸关：入点停在 4.530 不吸附', result.snapOffStart === '00:04.530', result.snapOffStart);
+check('N 再次开启磁吸', result.snapOnToast.includes('磁吸吸附：开'), result.snapOnToast);
+check('⇧Z 切到全片（滑杆 0）', result.zoomFitted === '0', {
+  before: result.zoomBeforeFit,
+  fitted: result.zoomFitted,
+});
+check('再次 ⇧Z 恢复上次缩放', result.zoomRestored === result.zoomBeforeFit, {
+  before: result.zoomBeforeFit,
+  restored: result.zoomRestored,
+});
+check('3 升到 1.5× 并播放', result.rateUp.rate === 1.5 && result.rateUp.playing, result.rateUp);
+check('倍速保持音调（preservesPitch）', result.rateUp.pitch === true, result.rateUp);
+check('非 1× 时出现倍速标签', result.badgeText === '1.5×', result.badgeText);
+check('2 暂停但保留 1.5×', result.ratePaused.rate === 1.5 && result.ratePaused.paused, result.ratePaused);
+check(
+  '点击倍速标签恢复 1× 并消失',
+  result.rateAfterBadge.rate === 1 && result.rateAfterBadge.badge === false,
+  result.rateAfterBadge,
+);
+check(
+  '⇧2 归 1× 并提示',
+  result.rateAfterShift2.rate === 1 &&
+    result.rateAfterShift2.badge === false &&
+    result.rateAfterShift2.toast.includes('倍速 1×'),
+  result.rateAfterShift2,
 );
 check('方向键没有改变 URL', result.urlAfter === result.urlBefore, {
   before: result.urlBefore,
