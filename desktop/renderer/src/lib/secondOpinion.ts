@@ -19,9 +19,55 @@ export interface CompareRange {
   next_start?: number;
 }
 
-/** 日语两个引擎互为「另一引擎」；当前是其他引擎时默认用 qwen。 */
+/**
+ * 两个日语引擎互为「另一引擎」；当前是其他引擎时默认用 qwen。
+ *
+ * 只做 `pickReviewEngine()` 的兜底：用户选过的引擎优先。语种不同的引擎不会进
+ * 候选（`sharesLanguage()`），所以这里的兜底不会把中文引擎送进日语复核。
+ */
 export function otherEngineKey(current: string): string {
   return current === 'qwen' ? 'whisper' : 'qwen';
+}
+
+/** 一比一送复核的引擎选项（注册表提供能力与安装态，这里只做纯逻辑）。 */
+export interface ReviewEngineChoice {
+  key: string;
+  label: string;
+  /** 设置里启用：停用的引擎不在复核下拉里可选。 */
+  enabled: boolean;
+  /** 权重已下载：没下载的引擎跑不了，选项里置灰。 */
+  installed: boolean;
+}
+
+/**
+ * 选出「另一引擎」。
+ *
+ * 用户选过且仍然可用就尊重用户；否则退回两引擎互斥的默认（当前是 Qwen 就用
+ * Whisper，反之亦然）；再不行取注册表顺序里第一个已就绪的。返回空串表示
+ * 没有可用的复核引擎，界面据此禁用按钮并给出原因。
+ */
+export function pickReviewEngine(
+  choices: ReviewEngineChoice[],
+  current: string,
+  preferred = '',
+): string {
+  const ready = choices.filter((item) => item.enabled && item.installed && item.key !== current);
+  if (!ready.length) return '';
+  if (preferred && ready.some((item) => item.key === preferred)) return preferred;
+  const fallback = otherEngineKey(current);
+  return ready.find((item) => item.key === fallback)?.key ?? ready[0].key;
+}
+
+/**
+ * 两个引擎能不能复核同一句：至少要共享一种语种。
+ *
+ * 用中文引擎去复核日语字幕只会拿到乱码般的文本，用户还会以为「另一引擎更差」。
+ * 语种未知（旧注册表 / 导入稿）时不限制，交给 `reviewable` 能力位把关。
+ */
+export function sharesLanguage(a?: string[], b?: string[]): boolean {
+  if (!a?.length || !b?.length) return true;
+  const known = new Set(a);
+  return b.some((language) => known.has(language));
 }
 
 /**

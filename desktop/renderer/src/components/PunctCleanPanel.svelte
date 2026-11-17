@@ -15,14 +15,14 @@
     applyPunctClean,
     closePunctPanel,
     currentPunctPlan,
+    punctOptions,
     punctPanel,
-    setPunctSpace,
-    togglePunctEllipsis,
+    setPunctEllipsis,
+    setPunctMid,
   } from '../lib/punctuationPanel.svelte';
+  import { markedSpans } from '../lib/punctuation';
   import { app } from '../lib/store.svelte';
 
-  /** 会被删掉 / 换掉的那些字符（预览里加删除线）。半角 `...` 也拆成点显示。 */
-  const OLD_MARKS = '、，。．,…';
   const PREVIEW_LINES = 3;
 
   let panelEl: HTMLDivElement | undefined = $state();
@@ -34,6 +34,7 @@
       index,
       before: app.cues[index]?.text ?? '',
       after: plan.texts[index] ?? '',
+      marks: markedSpans(app.cues[index]?.text ?? '', punctOptions()),
     })),
   );
 
@@ -50,33 +51,9 @@
   }
 
   /**
-   * 「原文」行：只给**这次真要删掉**的字符上色。
-   * 省略号默认是保留的，若按固定字符集染色会误标成「要删」（`。…` 里的 `。` 删、`…` 留），
-   * 所以这里先把省略号整体跳过去。开关打开时才把它算作要删。
+   * 「原文」行：只给**这次真要删掉**的字符上色（见 `markedSpans`）。
+   * 省略号与受保护的小数点由规则层判定，组件不再自己写一份正则。
    */
-  function oldSegments(text: string) {
-    const out: { text: string; hit: boolean }[] = [];
-    const push = (chunk: string, hit: boolean) => {
-      const last = out[out.length - 1];
-      if (last && last.hit === hit) last.text += chunk;
-      else out.push({ text: chunk, hit });
-    };
-    let i = 0;
-    while (i < text.length) {
-      if (!punctPanel.stripEllipsis) {
-        const rest = text.slice(i);
-        const ell = /^(?:…+|⋯+|‥+|\.{3,})/.exec(rest);
-        if (ell) {
-          push(ell[0], false);
-          i += ell[0].length;
-          continue;
-        }
-      }
-      push(text[i], OLD_MARKS.includes(text[i]));
-      i += 1;
-    }
-    return out;
-  }
   const newSegments = (text: string) => segments(text, (ch) => ch === ' ' || ch === '\u3000');
 
   // 浮层打开期间：点空白处关闭、Esc 关闭、Enter 直接应用（不落到「删除当前字幕」上）。
@@ -129,28 +106,63 @@
 
     <div class="pp-row">
       <span class="pp-label">句中</span>
-      <div class="pp-seg" role="group" aria-label="句中空格宽度">
+      <div class="pp-seg" role="group" aria-label="句中标记处理方式">
         <button
-          class:on={punctPanel.space === 'half'}
-          aria-pressed={punctPanel.space === 'half'}
-          onclick={() => setPunctSpace('half')}
+          class:on={punctPanel.mid === 'delete'}
+          aria-pressed={punctPanel.mid === 'delete'}
+          title="直接删掉，不留空格（日语字幕不靠空格断句）"
+          onclick={() => setPunctMid('delete')}
+        >
+          删掉
+        </button>
+        <button
+          class:on={punctPanel.mid === 'half'}
+          aria-pressed={punctPanel.mid === 'half'}
+          title="换成一个半角空格"
+          onclick={() => setPunctMid('half')}
         >
           半角空格
         </button>
         <button
-          class:on={punctPanel.space === 'full'}
-          aria-pressed={punctPanel.space === 'full'}
-          onclick={() => setPunctSpace('full')}
+          class:on={punctPanel.mid === 'full'}
+          aria-pressed={punctPanel.mid === 'full'}
+          title="换成一个全角空格"
+          onclick={() => setPunctMid('full')}
         >
           全角空格
         </button>
       </div>
     </div>
 
-    <label class="pp-check">
-      <input type="checkbox" checked={punctPanel.stripEllipsis} onchange={togglePunctEllipsis} />
-      连 … / ... 一并清掉
-    </label>
+    <div class="pp-row">
+      <span class="pp-label">省略号</span>
+      <div class="pp-seg" role="group" aria-label="省略号处理方式">
+        <button
+          class:on={punctPanel.ellipsis === 'trailing'}
+          aria-pressed={punctPanel.ellipsis === 'trailing'}
+          title="只清行尾的 …（句中的是语气，保留）"
+          onclick={() => setPunctEllipsis('trailing')}
+        >
+          行尾删
+        </button>
+        <button
+          class:on={punctPanel.ellipsis === 'all'}
+          aria-pressed={punctPanel.ellipsis === 'all'}
+          title="连句中的 … 一起清掉"
+          onclick={() => setPunctEllipsis('all')}
+        >
+          全部删
+        </button>
+        <button
+          class:on={punctPanel.ellipsis === 'keep'}
+          aria-pressed={punctPanel.ellipsis === 'keep'}
+          title="省略号全部保留"
+          onclick={() => setPunctEllipsis('keep')}
+        >
+          保留
+        </button>
+      </div>
+    </div>
 
     <div class="pp-stat">
       <span><b>{count}</b> 条 / {app.cues.length} 条会改</span>
@@ -162,7 +174,7 @@
         {#each preview as item (item.index)}
           <div class="pp-line">
             <div class="pp-old">
-              {#each oldSegments(item.before) as seg}<span class:del={seg.hit}>{seg.text}</span>{/each}
+              {#each item.marks as seg}<span class:del={seg.hit}>{seg.text}</span>{/each}
             </div>
             <div class="pp-new">
               {#each newSegments(item.after) as seg}<span class:sp={seg.hit}>{seg.text}</span>{/each}
@@ -252,7 +264,7 @@
   .pp-label {
     font-size: 12px;
     color: var(--text-2);
-    flex: 0 0 auto;
+    flex: 0 0 36px;
   }
   .pp-seg {
     display: flex;
@@ -263,13 +275,15 @@
   }
   .pp-seg button {
     appearance: none;
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
     height: 24px;
     border: 0;
     background: transparent;
     color: var(--text-2);
     font: inherit;
-    font-size: 12px;
+    font-size: 11.5px;
+    white-space: nowrap;
     cursor: default;
   }
   .pp-seg button + button {
@@ -278,18 +292,6 @@
   .pp-seg button.on {
     background: var(--control-on);
     color: var(--on-accent);
-  }
-  .pp-check {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-2);
-    cursor: default;
-  }
-  .pp-check input {
-    margin: 0;
-    accent-color: var(--control-on);
   }
   .pp-stat {
     display: flex;

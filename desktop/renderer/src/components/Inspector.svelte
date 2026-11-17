@@ -1,20 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { jobBusy } from '../lib/jobState';
   import QaPanel from './QaPanel.svelte';
-  import {
-    adoptAlternative,
-    alternativeText,
-    availableEngine,
-    availableEngineLabel,
-    cancelSecondOpinion,
-    currentEngineLabel,
-    dismissAlternative,
-    hasAlternative,
-    retrySecondOpinion,
-    secondOpinion,
-    runSecondOpinion,
-  } from '../lib/secondOpinion.svelte';
+  import SecondOpinionCard from './SecondOpinionCard.svelte';
   import {
     app,
     deleteCue,
@@ -61,7 +48,16 @@
     type TrackMode,
   } from '../lib/store.svelte';
   import { tc } from '../lib/time';
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
+  import {
+    clearCueClip,
+    copySelectedCue,
+    cueClip,
+    pasteCueAtPlayhead,
+  } from '../lib/cueClipboard.svelte';
+  import { clipSummary } from '../lib/cueClip';
+  import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
+  import { registerCueDraftCommit } from '../lib/cueDraftCommit';
 
   const cue = $derived(app.cues[play.selected] ?? null);
   const qaPending = $derived(Number(qa.payload?.counts?.pending ?? 0));
@@ -494,6 +490,10 @@
     if (targetChanged) await updateTranslation(index, nextTarget);
   }
 
+  // 快捷键复制 / 粘贴前也要先提交文本框里的草稿；注册到共享桥，App.svelte
+  // 与检查器按钮走同一条等待逻辑。
+  onMount(() => registerCueDraftCommit(commit));
+
   function remove() {
     if (!cue) return;
     deleteCue(play.selected);
@@ -667,11 +667,24 @@
 
   {#if cue}
     <div class="actions">
-      <button class="btn" onclick={() => previewRange(cue.start, cue.end)}>
-        <Icon name="play" size={11} />试听
+      <button
+        class="btn"
+        onclick={() => previewRange(cue.start, cue.end)}
+        title="试听原片这一句的原声（在下方对照两个引擎的 TTS）"
+      >
+        <Icon name="play" size={11} />试听原声
       </button>
       <button class="btn ghost" onclick={() => focusRange(cue.start, cue.end)} title="在波形上聚焦放大这一句">
         <Icon name="search" size={11} />聚焦
+      </button>
+      <button
+        class="btn icon ghost"
+        data-copy-cue
+        onclick={() => copySelectedCue()}
+        title={`复制这句的字幕文本与时长（${formatCombo(comboOf('review.copyCue'))}）；再把播放头移到目标位置粘贴`}
+        aria-label="复制这句字幕"
+      >
+        <Icon name="copy" size={12} />
       </button>
       <button class="btn icon ghost danger" onclick={remove} title="删除此句">
         <Icon name="trash" size={12} />
@@ -688,58 +701,29 @@
     </div>
   {/if}
 
-  {#if cue}
-    <div class="second-opinion">
-      <div class="so-head">
-        <b>另一引擎复核</b>
-        <span>{currentEngineLabel()} → {availableEngineLabel() || '另一个引擎未启用'}</span>
-      </div>
-      {#if secondOpinion.status === 'running'}
-        <div class="so-progress" aria-hidden="true">
-          <i style="width:{Math.round(secondOpinion.ratio * 100)}%"></i>
-        </div>
-        <div class="so-stage">{secondOpinion.stage || '正在复核…'}</div>
-        <div class="so-actions">
-          <button class="btn mini ghost" onclick={() => cancelSecondOpinion()}>取消</button>
-        </div>
-      {:else if hasAlternative(play.selected)}
-        <div class="so-grid">
-          <div class="so-col">
-            <div class="so-label">{currentEngineLabel()}</div>
-            <div class="so-text">{cue.text || '∅'}</div>
-          </div>
-          <div class="so-col alt">
-            <div class="so-label">{availableEngineLabel()}</div>
-            <div class="so-text">{alternativeText(play.selected) || '∅'}</div>
-          </div>
-        </div>
-        <div class="so-actions">
-          <button class="btn mini primary" onclick={() => adoptAlternative(play.selected)}>采用这份</button>
-          <button class="btn mini ghost" onclick={() => retrySecondOpinion()}>再听一遍</button>
-          <button class="btn mini ghost" onclick={() => dismissAlternative()}>收起</button>
-        </div>
-      {:else}
-        <div class="so-tip" class:warn={secondOpinion.status === 'error'}>
-          {secondOpinion.status === 'error'
-            ? secondOpinion.error
-            : '把这一句的时间窗送给另一个引擎再听一遍；不会改动当前字幕，采用后才进历史。'}
-        </div>
-        <div class="so-actions">
-          <button
-            class="btn mini"
-            onclick={() => runSecondOpinion([play.selected])}
-            disabled={!availableEngine() || jobBusy()}
-            title={!availableEngine()
-              ? '另一个引擎已停用：到「设置 → 引擎与模型」里启用'
-              : jobBusy()
-                ? '有任务在跑（同一时间只允许一个重任务），结束后再复核'
-                : '换引擎要重新加载模型，约 20–40 秒'}
-          >
-            {secondOpinion.status === 'error' ? '重试' : '🎧 用另一引擎再听一遍'}
-          </button>
-        </div>
-      {/if}
+  {#if cueClip.value}
+    <div class="clip-strip" aria-label="字幕剪贴板">
+      <Icon name="paste" size={12} />
+      <span class="clip-text" title={cueClip.value.text}>{clipSummary(cueClip.value)}</span>
+      <button
+        class="link"
+        data-paste-cue
+        onclick={() => pasteCueAtPlayhead()}
+        title={`在播放头新建一条（${formatCombo(comboOf('review.pasteCue'))}）`}
+      >粘贴到播放头</button>
+      <button
+        class="btn icon ghost clip-clear"
+        onclick={clearCueClip}
+        title="清空字幕剪贴板"
+        aria-label="清空字幕剪贴板"
+      >
+        <Icon name="close" size={10} />
+      </button>
     </div>
+  {/if}
+
+  {#if cue}
+    <SecondOpinionCard index={play.selected} text={cue.text} />
   {/if}
 
   <div class="tts-block">
@@ -1443,94 +1427,40 @@
   .actions .btn.icon {
     flex: 0 0 28px;
   }
+  /* 字幕剪贴板：只在复制过之后出现；把「粘贴到播放头」放在一眼能看到的位置。 */
+  .clip-strip {
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--raise);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .clip-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .clip-clear {
+    flex: 0 0 22px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+  }
   .danger {
     color: var(--danger);
   }
 
-  .second-opinion {
-    margin-top: var(--sp-4);
-    padding: var(--sp-3) 0 0;
-    border-top: 1px solid var(--line-2);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-  }
-  .so-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--sp-2);
-    font-size: var(--fs-ui);
-  }
-  .so-head b {
-    font-weight: 600;
-  }
-  .so-head span {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-  }
-  .so-progress {
-    height: 3px;
-    border-radius: 2px;
-    background: var(--line-2);
-    overflow: hidden;
-  }
-  .so-progress i {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.12s linear;
-  }
-  .so-stage {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-  }
-  .so-tip {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-    line-height: 1.5;
-  }
-  .so-tip.warn {
-    color: var(--danger);
-  }
-  .so-grid {
-    display: grid;
-    gap: var(--sp-2);
-  }
-  .so-col {
-    padding: var(--sp-2) var(--sp-3);
-    border: 1px solid var(--line-2);
-    border-radius: var(--rad-card);
-    background: var(--fill);
-  }
-  .so-col.alt {
-    border-color: var(--accent);
-  }
-  .so-label {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-    margin-bottom: var(--sp-1);
-  }
-  .so-text {
-    font-size: var(--fs-body);
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .so-actions {
-    display: flex;
-    gap: var(--sp-2);
-    align-items: center;
-  }
   .mini {
     height: 26px;
     padding: 0 var(--sp-2);
     font-size: 12px;
-  }
-  .mini.on {
-    background: var(--accent-soft);
-    border-color: var(--accent-line);
-    color: var(--accent);
   }
   .tts-block {
     margin-top: var(--sp-4);

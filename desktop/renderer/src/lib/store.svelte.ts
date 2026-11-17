@@ -575,8 +575,13 @@ export const tts = $state({
   download: null as TtsDownloadStatus | null,
   loading: false,
   playing: false,
-  /** 正在朗读 / 生成的是哪一条字幕 */
+  /** 正在朗读 / 生成的是哪一条字幕；-1 = 音色试听，-2 = 调用方用 `tag` 标记的非字幕文本 */
   index: -1,
+  /**
+   * 非字幕文本的播放标识（第二引擎复核卡片的「朗读对照」用）。
+   * 空串 = 按字幕下标朗读（字幕表 / TTS 卡片）。
+   */
+  tag: '',
   filename: '',
   error: '',
 });
@@ -613,6 +618,7 @@ export function stopTts() {
   }
   tts.playing = false;
   tts.loading = false;
+  tts.tag = '';
 }
 
 /** 当前选中的音色（找不到时返回 null，界面据此提示「音色已失效」）。 */
@@ -722,7 +728,7 @@ export async function speakCue(index: number) {
 
 /** 音色管理里的「试听」：优先读当前句，没有字幕时用固定样例。 */
 export async function previewTtsVoice() {
-  if (tts.playing && tts.index === -1) {
+  if (tts.playing && tts.index === -1 && !tts.tag) {
     stopTts();
     return;
   }
@@ -731,7 +737,17 @@ export async function previewTtsVoice() {
   await speakText(sample, -1);
 }
 
-async function speakText(rawText: string, index: number) {
+/**
+ * 朗读任意一段文本（「另一引擎复核」的 TTS 对照）。
+ *
+ * `tag` 由调用方给（例如 `so:3:alt`），界面据此判断哪个按钮在播；
+ * `index=-2` 是「这段文字不属于字幕表」的哨兵，避免被字幕卡片当成当前句。
+ */
+export async function speakTextTagged(text: string, tag: string) {
+  await speakText(text, -2, tag);
+}
+
+async function speakText(rawText: string, index: number, tag = '') {
   const text = (rawText || '').trim();
   if (!text) {
     toast('这句没有文本，先输入日文再朗读', 'warn');
@@ -751,6 +767,7 @@ async function speakText(rawText: string, index: number) {
   const seq = ++ttsSeq;
   tts.loading = true;
   tts.index = index;
+  tts.tag = tag;
   tts.error = '';
   try {
     const result = await api.synthesizeTts({
@@ -1223,51 +1240,6 @@ export function setView(view: View) {
 // ---------------------------------------------------------------------------
 // 媒体
 // ---------------------------------------------------------------------------
-
-/**
- * 开发用：把主进程注入的「媒体 + 字幕」灌进当前会话。
- *
- * 必须在渲染进程里做——会话是 cookie 认的，主进程发的请求是另一个会话。
- * 打包后 `getDevSeed()` 恒为 null，这段不会执行。
- */
-export async function applyDevSeed(seed: {
-  mediaPath: string;
-  cues?: Cue[];
-  /** 仅开发截图用：导入一版字幕，验证「换字幕后右侧信息跟着换」。 */
-  subtitlePath?: string;
-  /** 仅开发截图用：灌一份假报告，验证旧报告不会配到新字幕上。 */
-  report?: ReportData | null;
-  /** 仅开发截图用：直接灌一份质检 payload，避免为了看面板真跑一次转写。 */
-  qa?: Record<string, any> | null;
-  /** 仅开发截图用：灌了质检 payload 后是否自动打开面板（默认打开）。 */
-  qaOpen?: boolean;
-  reviewSource?: ReviewSource | null;
-}) {
-  if (!seed?.mediaPath) return;
-  try {
-    // 走真实的 openMedia 路径（含代理提示，但不再自动开压制任务），这样截图/联调覆盖的是产品代码本身
-    await openMedia(seed.mediaPath);
-    if (seed.cues?.length) {
-      await api.replaceCues(seed.cues);
-      await refreshCues();
-    }
-    if (seed.report) app.report = seed.report;
-    if (seed.subtitlePath) {
-      // 走真实导入链路：服务端会把 review_source 改成 import，并暂停质检队列。
-      await openSubtitle(seed.subtitlePath);
-    } else if (seed.reviewSource) {
-      app.reviewSource = seed.reviewSource;
-    }
-    if (seed.qa) {
-      qa.payload = seed.qa;
-      qa.open = seed.qaOpen !== false;
-      if (qa.open) app.inspectorTab = 'qa';
-    }
-    setView('review');
-  } catch (err) {
-    toast(`种子注入失败：${(err as Error).message}`, 'error');
-  }
-}
 
 const SUBTITLE_EXTS = ['.srt', '.vtt'];
 

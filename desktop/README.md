@@ -51,8 +51,9 @@ desktop/
         ├── app.css           设计令牌（与静态高保真稿同一套值）
         ├── lib/api.ts        服务层客户端（Bearer + X-Kikusub-Session）
         ├── lib/store.svelte.ts   状态与动作（runes）
-        ├── components/       Sidebar / Toolbar / Inspector / StatusBar / Icon /
-        │                     ParamPanel / QaPanel / FirstRun / QuitPrompt
+        ├── lib/devSeed.ts    开发种子注入（仅 KIKUSUB_DEV_SEED）
+        ├── components/       Sidebar / Toolbar / Inspector / SecondOpinionCard /
+        │                     StatusBar / Icon / ParamPanel / QaPanel / FirstRun / QuitPrompt
         └── views/            Import / Transcribe / Review / Dual / Polish /
                               Reshape / Translate / Prompt / Export / Report / Settings
 ```
@@ -67,6 +68,8 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
 
 `KIKUSUB_DEV_SEED` 指向 `{ "mediaPath": "...", "cues": [{ "start": 0, "end": 2, "text": "…" }] }`，
 渲染进程会把它灌进当前会话后直接进核对屏——联调与截图不必每次真跑转写。打包后这个入口恒为 `null`。
+可选字段 `secondOpinion: { engine, index, text }` 会灌一份假的复核结果，用于不加载模型时截
+「另一引擎复核」卡片（种子注入实现在 `lib/devSeed.ts`）。
 
 还需要切视图时用 `KIKUSUB_DEV_EVAL`：里面的 JS 会在截图前于渲染进程执行一次，可以点
 `.sb-item` 切侧栏、点侧栏「润色」进提案台，再 `await` 一会儿等数据到位。截图前会
@@ -84,7 +87,9 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
 - **核对**：视频 + 波形 + 字幕轨道 + 检查器；质检队列默认收进右侧「质检待核」页签（可弹出为可拖动/缩放/归位的浮窗，不再遮挡画面与侧栏）；单击跳转、拖动框选、逐帧擦洗、字幕块整体/两端拖动、
   三态显示、暂存与导出、⌘Z 整块回退；顶部 50 步统一历史（字幕/译文/质检/导出/AI 草稿共用一条时间线，点任意一步跳回）、⌘F 查找替换（逐处替换/跳过、当前命中跟随滚动、整批替换保留跳过项、快捷键可自定义，原文/译文/双语）、
   右栏本机 TTS 对照（系统 say 兜底 + OmniVoice 克隆；可上传多段参考音频、从当前句截取、
-  在音色库中试听/设为默认；右键任意一句也能「以此句音频新建音色…」）、音轨右键添加 0.8 秒空字幕、聚焦统一 69×。
+  在音色库中试听/设为默认；右键任意一句也能「以此句音频新建音色…」）、「另一引擎复核」可选复核引擎
+  （注册表 `reviewable` 能力位）并对两版做逐字差异高亮、两版各自可 TTS 朗读（与上方「试听原声」
+  三方对照）、音轨右键添加 0.8 秒空字幕、聚焦统一 69×。
 - **双引擎复核**：两列只读 diff（= / ~ / + / −）；B 版可以由另一引擎整片转写「放进双引擎复核」产生，
   也可以直接导入工作流里已经做好的 SRT / VTT。B 版按媒体身份自动恢复，整列覆盖进同一条 ⌘Z 历史。
 - **润色 / 翻译台**：润色页做双栏（单源）或三栏 A | B | AI 终稿（双源）diff，左原文只读、

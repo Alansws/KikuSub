@@ -22,7 +22,6 @@
   import SettingsView from './views/SettingsView.svelte';
   import {
     app,
-    applyDevSeed,
     boot,
     cancelJob,
     closeFind,
@@ -46,6 +45,8 @@
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
   import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
+  import { applyDevSeed } from './lib/devSeed';
+  import { copySelectedCue, pasteCueAtPlayhead } from './lib/cueClipboard.svelte';
 
   let engine = $state('whisper');
   let review: {
@@ -353,6 +354,12 @@
         void tick().then(() => insertCueAt(play.time));
         return;
       }
+      case 'review.copyCue':
+        void copySelectedCue();
+        return;
+      case 'review.pasteCue':
+        void pasteCueAtPlayhead();
+        return;
       case 'review.find':
         openFind();
         return;

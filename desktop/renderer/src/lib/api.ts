@@ -42,6 +42,8 @@ export interface EngineInfo {
   downloadable: boolean;
   /** 推理运行时族：whisper / qwen / sherpa（服务端注册表给出）。 */
   family?: string;
+  /** 能否做「另一引擎复核」（窗口直送模型，只回文本）。 */
+  reviewable?: boolean;
   installed: boolean;
   size_bytes: number;
   enabled: boolean;
@@ -1054,8 +1056,15 @@ export const api = {
       body: JSON.stringify({ indices }),
     }),
 
-  /** 在指定下标插入一条（右键「添加字幕」/空字幕补录）。 */
-  insertCue: (index: number, cue: Cue) =>
+  /** 在指定下标插入一条（右键「添加字幕」/空字幕补录 / 粘贴字幕）。 */
+  insertCue: (
+    index: number,
+    cue: Cue & {
+      label?: string;
+      /** lang -> 该语种译文与生成时的原文快照；只写当前会话已有的轨。 */
+      translations?: Record<string, { text: string; base: string }>;
+    },
+  ) =>
     req<CueSnapshot & { index: number }>(`/api/cues/${index}/insert`, {
       method: 'POST',
       body: JSON.stringify({ index, ...cue }),

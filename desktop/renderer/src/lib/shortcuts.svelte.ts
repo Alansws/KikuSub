@@ -73,6 +73,24 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     def: 'mod+enter',
   },
   {
+    id: 'review.copyCue',
+    label: '复制选中的字幕',
+    group: '核对台',
+    scope: 'review',
+    // 不用 ⌘C：主进程编辑菜单的 role:'copy' 会先接走这个键；⌘⇧C 不与任何菜单
+    // / 固定快捷键冲突，文本框内仍由原生 ⌘C 处理。
+    def: 'mod+shift+c',
+    note: '文本 + 时长 + 译文；文本框内仍是系统复制',
+  },
+  {
+    id: 'review.pasteCue',
+    label: '粘贴字幕到播放头',
+    group: '核对台',
+    scope: 'review',
+    def: 'mod+shift+v',
+    note: '新建一条；起点=播放头，不改邻句时间轴',
+  },
+  {
     id: 'review.find',
     label: '查找与替换',
     group: '核对台',

@@ -60,6 +60,8 @@
     mic: '<rect x="6" y="1.8" width="4" height="7.2" rx="2"/><path d="M3.6 7.4a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8v2.4"/>',
     star: '<path d="M8 1.9l1.75 3.72 4.05.52-2.98 2.83.76 4.02L8 10.98l-3.58 2.01.76-4.02L2.2 6.14l4.05-.52z"/>',
     copy: '<rect x="5.4" y="5.4" width="8" height="8" rx="1.4"/><path d="M10.6 5.4V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.6a1.4 1.4 0 0 0 1.4 1.4h1.8"/>',
+    paste:
+      '<rect x="3.4" y="2.8" width="9.2" height="11.6" rx="1.4"/><path d="M6 2.8V1.5h4v1.3"/><path d="M5.7 7.1h4.6"/><path d="M5.7 9.9h3.1"/>',
   };
 
   const FILL: Record<string, string> = {
