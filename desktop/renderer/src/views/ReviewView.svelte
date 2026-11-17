@@ -74,6 +74,20 @@
     rangeSelection,
     stepSelection,
   } from '../lib/selection';
+  import { canSplitAt } from '../lib/cueEdit';
+  import {
+    clampTimelineView,
+    focusTimelineSpan,
+    sliderToSpan,
+    spanToSlider,
+    zoomTimelineView,
+  } from '../lib/timelineView';
+  import {
+    paintPeakBars,
+    pickRulerStep,
+    roundRect,
+    rulerLabel,
+  } from '../lib/waveformDraw';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -327,10 +341,7 @@
 
   // ---------------- 视窗与坐标 ----------------
   function clampView(start: number, span: number) {
-    const d = duration || span;
-    const s = Math.max(MIN_SPAN, Math.min(span, d || MIN_SPAN));
-    const a = Math.max(0, Math.min(start, Math.max(0, d - s)));
-    return { start: a, span: s };
+    return clampTimelineView(start, span, duration, MIN_SPAN);
   }
 
   /**
@@ -426,28 +437,6 @@
   });
 
   // ---------------- 画布 ----------------
-  function roundRect(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    r: number,
-  ) {
-    const rad = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(x, y, w, h, rad);
-      return;
-    }
-    ctx.moveTo(x + rad, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rad);
-    ctx.arcTo(x + w, y + h, x, y + h, rad);
-    ctx.arcTo(x, y + h, x, y, rad);
-    ctx.arcTo(x, y, x + w, y, rad);
-    ctx.closePath();
-  }
-
   function draw() {
     if (!canvas || !waveWrap) return;
     const w = waveWrap.clientWidth;
@@ -501,7 +490,7 @@
     }
 
     // 时间刻度
-    const step = pickStep(viewSpan);
+    const step = pickRulerStep(viewSpan);
     ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
     ctx.textBaseline = 'top';
     const first = Math.ceil(viewStart / step) * step;
@@ -521,45 +510,19 @@
     ctx.fillStyle = sep;
     ctx.fillRect(0, RULER_H - 0.5, w, 1);
 
-    // 波形：逐像素取该像素覆盖的所有采样点的最大值。
-    // 之前是「一个采样点画一根柱子」，放大后柱子间距会被拉开；逐像素合并后
-    // 无论缩放到多深都是一条连续的包络，不会出现可数的柱形。
+    // 波形：逐像素取该像素覆盖的所有采样点的最大值（纯绘制见 lib/waveformDraw）。
     const n = peaks.length;
-    const paintBars = (color: string, alpha: number, right: number) => {
-      if (!n) return;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = alpha;
-      const span = peaksSpan || 1;
-      const perBin = span / n;
-      const limit = Math.max(0, Math.min(w, right));
-      for (let x = 0; x < limit; x += 1) {
-        const t0 = viewStart + (x / w) * viewSpan;
-        const t1 = viewStart + ((x + 1) / w) * viewSpan;
-        let i0 = Math.floor((t0 - peaksFrom) / perBin);
-        let i1 = Math.ceil((t1 - peaksFrom) / perBin);
-        if (i1 <= 0 || i0 >= n) continue;
-        i0 = Math.max(0, i0);
-        i1 = Math.min(n, Math.max(i0 + 1, i1));
-        let amp = 0;
-        for (let i = i0; i < i1; i += 1) {
-          if (peaks[i] > amp) amp = peaks[i];
-        }
-        // 全局峰值归一化会让对白显得很小；用轻微 gamma 把弱信号抬起来，
-        // 满幅配乐仍然封顶，不会糊成一片。
-        const shaped = Math.min(1, Math.pow(Math.max(0, amp), 0.72) * 1.08);
-        const bh = Math.max(1.2, shaped * ampH);
-        ctx.fillRect(x, mid - bh / 2, 1, bh);
-      }
-      ctx.globalAlpha = 1;
-    };
     if (!n) {
       ctx.fillStyle = sepStrong;
       ctx.fillRect(0, Math.round(mid), w, 1);
     } else {
-      paintBars(waveColor, 0.9, w);
+      const base = { peaks, peaksFrom, peaksSpan, viewStart, viewSpan, width: w, mid, ampH };
+      paintPeakBars(ctx, { ...base, color: waveColor, alpha: 0.9, right: w });
       // 已播放段用 accent 再画一遍：当前进度在波形上一眼可见（比未播放段更深）
       const playedX = xOf(play.time);
-      if (playedX > 0.5) paintBars(accent, 0.9, playedX);
+      if (playedX > 0.5) {
+        paintPeakBars(ctx, { ...base, color: accent, alpha: 0.9, right: playedX });
+      }
     }
 
     // 选中行的区间高亮（不是选区，只是当前条目）：中性墨，别再加一层蓝
@@ -619,29 +582,6 @@
         ctx.fillRect(x0 + bw - 3.5, blockY + 4, 1.5, blockH - 8);
       }
     }
-  }
-
-  function pickStep(span: number) {
-    const candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
-    for (const c of candidates) {
-      if (span / c <= 12) return c;
-    }
-    return 900;
-  }
-
-  function rulerLabel(t: number, step: number) {
-    if (step < 1) {
-      // 按 0.1 秒取整再拆分，避免 99.999 → "1:39.10" 这种两位小数
-      const tenths = Math.round(Math.max(0, t) * 10);
-      const m = Math.floor(tenths / 600);
-      const s = Math.floor(tenths / 10) % 60;
-      return `${m}:${String(s).padStart(2, '0')}.${tenths % 10}`;
-    }
-    const total = Math.round(t);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    if (step < 60) return `${m}:${String(s).padStart(2, '0')}`;
-    return `${m}:00`;
   }
 
   $effect(() => {
@@ -1316,8 +1256,7 @@
     const menu = contextMenu;
     if (!menu || menu.index < 0) return false;
     const cue = app.cues[menu.index];
-    if (!cue) return false;
-    return menu.t > cue.start + 0.05 && menu.t < cue.end - 0.05;
+    return Boolean(cue && canSplitAt(cue, menu.t));
   }
 
   function splitHere() {
@@ -1466,26 +1405,19 @@
   }
 
   function zoomAt(time: number, factor: number) {
-    const nextSpan = Math.max(MIN_SPAN, Math.min(duration || viewSpan, viewSpan * factor));
-    const ratio = (time - viewStart) / (viewSpan || 1);
-    setView(time - ratio * nextSpan, nextSpan);
+    const next = zoomTimelineView({ start: viewStart, span: viewSpan }, time, factor, duration, MIN_SPAN);
+    setView(next.start, next.span);
   }
 
   function zoomSliderInput(e: Event) {
     const v = Number((e.currentTarget as HTMLInputElement).value);
     // 0=全景，100=最深
-    const minSpan = Math.max(MIN_SPAN, Math.min(1.2, (duration || 60) / 400));
-    const span = (duration || 60) * Math.pow(minSpan / (duration || 60), v / 100);
+    const span = sliderToSpan(v, duration, MIN_SPAN);
     const center = play.time;
     setView(center - span / 2, span);
   }
 
-  const sliderValue = $derived.by(() => {
-    const d = duration || 60;
-    const minSpan = Math.max(MIN_SPAN, Math.min(1.2, d / 400));
-    const v = (Math.log(viewSpan / d) / Math.log(minSpan / d)) * 100;
-    return Math.max(0, Math.min(100, v));
-  });
+  const sliderValue = $derived(spanToSlider(viewSpan, duration, MIN_SPAN));
 
   function fit() {
     setView(0, duration || viewSpan);
@@ -1493,8 +1425,7 @@
 
   /** 聚焦统一用同一个 span：duration / 69。媒体还没就绪时才退回 2–12 秒。 */
   function focusSpan() {
-    if (duration > 0) return Math.max(MIN_SPAN, duration / FOCUS_ZOOM);
-    return Math.max(2, Math.min(12, viewSpan / 6 || 6));
+    return focusTimelineSpan(duration, viewSpan, MIN_SPAN, FOCUS_ZOOM);
   }
 
   /** 一键聚焦：把播放头附近放大到固定 69×（不随当前缩放叠加）。 */
