@@ -227,12 +227,21 @@ async def create_job(
                 info = request.app.state.media.get(payload.media_id)
             except Exception as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            family = engine_registry.family_of(payload.engine)
-            if family not in {"whisper", "qwen"}:
+            spec = engine_registry.get(payload.engine)
+            if not spec.reviewable:
+                # 能力只看注册表（`core.engines.EngineSpec.reviewable`），
+                # 不在路由里再维护一份引擎 key 白名单（红线 #12）。
+                choices = " / ".join(
+                    item.key for item in engine_registry.ENGINES if item.reviewable
+                )
                 raise HTTPException(
                     status_code=422,
-                    detail=f"复核只支持 whisper / qwen；{payload.engine} 的权重是按需下载的",
+                    detail=(
+                        f"{spec.label} 不支持窗口复核：它没有把一段音频直接转成文本的入口。"
+                        f"可选引擎：{choices}"
+                    ),
                 )
+            family = engine_registry.family_of(payload.engine)
             values = dict(payload.params or {})
             config = _engine_config(payload.engine, family, values)
             job = manager.start_compare(

@@ -57,11 +57,26 @@ class CuePatch(BaseModel):
     text: str | None = None
 
 
+class InsertTranslation(BaseModel):
+    """随插入字幕一起带上的某语种译文。
+
+    ``base`` 是生成译文时的原文快照。粘贴一句带译文的字幕时必须原样带过来，
+    否则原来过期的译文会在新位置上被误标成「已同步」。
+    """
+
+    text: str = ""
+    base: str = ""
+
+
 class InsertRequest(BaseModel):
     index: int
     start: float
     end: float
     text: str = ""
+    # 右键「添加字幕」不传 label，仍回落到「插入第 N 条」。
+    label: str = ""
+    # 只写当前会话已经存在的语种；不存在的 lang 由 Session 直接忽略。
+    translations: dict[str, InsertTranslation] = Field(default_factory=dict)
 
 
 class SplitRequest(BaseModel):
@@ -583,7 +598,18 @@ def delete_cue(index: int, session: Session = Depends(get_session)) -> dict:
 def insert_cue(index: int, payload: InsertRequest, session: Session = Depends(get_session)) -> dict:
     _validate(payload.start, payload.end)
     target = payload.index if payload.index >= 0 else index
-    if not session.insert_cue(target, payload.start, payload.end, payload.text):
+    translations = {
+        lang: {"text": item.text, "base": item.base}
+        for lang, item in payload.translations.items()
+    }
+    if not session.insert_cue(
+        target,
+        payload.start,
+        payload.end,
+        payload.text,
+        label=payload.label,
+        translations=translations,
+    ):
         raise HTTPException(status_code=422, detail=f"插入位置 {payload.index} 越界")
     return {**_snapshot(session), "index": target}
 

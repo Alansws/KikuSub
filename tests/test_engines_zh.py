@@ -42,6 +42,26 @@ def test_whisper_and_qwen_stay_default_enabled():
     assert set(engines.KEYS) == {"whisper", "qwen", *ZH_KEYS}
 
 
+def test_window_review_capability_lives_in_the_registry():
+    """「另一引擎复核」只认注册表能力，不在接口里另写引擎白名单。
+
+    复核要把一条字幕窗口直接送模型（`transcribe_window`）：两个日语引擎有，
+    sherpa 两个中文引擎没有。新增引擎时改这里的能力位，路由与前端下拉自动跟进。
+    """
+
+    assert engines.get("whisper").reviewable is True
+    assert engines.get("qwen").reviewable is True
+    for key in ZH_KEYS:
+        assert engines.get(key).reviewable is False, key
+
+    reviewable = [spec.key for spec in engines.ENGINES if spec.reviewable]
+    assert reviewable == ["whisper", "qwen"]
+
+    for key in engines.KEYS:
+        status = engines.status(engines.get(key), include_size=False)
+        assert status["reviewable"] is engines.get(key).reviewable
+
+
 def test_family_of_rejects_unknown_engine():
     assert engines.family_of("sensevoice") == "sherpa"
     assert engines.family_of("whisper") == "whisper"

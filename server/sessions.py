@@ -643,14 +643,27 @@ class Session:
         end: float,
         text: str,
         label: str = "",
+        translations: dict[str, dict[str, str]] | None = None,
     ) -> bool:
-        """插入一条：译文轨在同一位置插入空占位，后续条目不会错位。"""
+        """插入一条：译文轨在同一位置插入空占位，后续条目不会错位。
+
+        ``translations`` 是「复制 / 粘贴一条带译文的字幕」用的：只覆盖**当前
+        会话已存在**的语种；不存在的 lang 直接忽略，绝不凭空新建一条残缺的轨。
+        每个语种的 ``base`` 原样写回，过期状态不会被粘贴洗掉。
+        """
         with self.lock:
             if not 0 <= index <= len(self.review_cues):
                 return False
             self._ensure_baseline()
             self.review_cues.insert(index, SubtitleCue(start=start, end=end, text=text))
             self._insert_translation_at(index)
+            for lang, item in (translations or {}).items():
+                track = self.translations.get(lang)
+                if track is None or not 0 <= index < len(track.texts):
+                    continue
+                track.texts[index] = str(item.get("text", ""))
+                if 0 <= index < len(track.base):
+                    track.base[index] = str(item.get("base", track.texts[index]))
             self._drop_translation_undo()
             self._record(label or f"插入第 {index + 1} 条")
             return True
