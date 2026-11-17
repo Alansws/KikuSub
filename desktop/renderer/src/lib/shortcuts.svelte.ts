@@ -23,6 +23,14 @@ export interface ShortcutDef {
   def: string;
   /** 输入框聚焦时是否仍然生效（视图切换、打开面板等）。 */
   allowInTyping?: boolean;
+  /**
+   * 按钮 / 链接获得焦点时是否仍然生效。
+   *
+   * 只对非输入控件放行：`textarea` / `input`（含 range 滑杆）/ `select` /
+   * `contenteditable` 永远让位。播放 / 步进这类传输键需要它——用户点过播放按钮后
+   * 焦点留在按钮上，方向键不能失效。
+   */
+  allowOnControls?: boolean;
   /** 同一组合在某个上下文里优先于另一组（保留给将来的多上下文动作）。 */
   note?: string;
 }
@@ -49,6 +57,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: '核对台',
     scope: 'review',
     def: 'arrowup',
+    allowOnControls: true,
   },
   {
     id: 'review.nextCue',
@@ -56,6 +65,75 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: '核对台',
     scope: 'review',
     def: 'arrowdown',
+    allowOnControls: true,
+  },
+  {
+    id: 'review.stepBack',
+    label: '后退 1 帧',
+    group: '核对台',
+    scope: 'review',
+    def: 'arrowleft',
+    // 方向键不能落到 WebView 的 history 上；App.onKey 还会兜一层 preventDefault。
+    allowOnControls: true,
+    note: '自动暂停；纯音频 / 未知帧率按 30fps 步进',
+  },
+  {
+    id: 'review.stepForward',
+    label: '前进 1 帧',
+    group: '核对台',
+    scope: 'review',
+    def: 'arrowright',
+    allowOnControls: true,
+    note: '自动暂停；纯音频 / 未知帧率按 30fps 步进',
+  },
+  {
+    id: 'review.stepBackSecond',
+    label: '后退 1 秒',
+    group: '核对台',
+    scope: 'review',
+    def: 'mod+arrowleft',
+    allowOnControls: true,
+  },
+  {
+    id: 'review.stepForwardSecond',
+    label: '前进 1 秒',
+    group: '核对台',
+    scope: 'review',
+    def: 'mod+arrowright',
+    allowOnControls: true,
+  },
+  {
+    id: 'review.inPoint',
+    label: '入点对齐播放头',
+    group: '核对台',
+    scope: 'review',
+    def: 'q',
+    note: '当前字幕；服务端一步历史，⌘Z 可撤回',
+  },
+  {
+    id: 'review.outPoint',
+    label: '出点对齐播放头',
+    group: '核对台',
+    scope: 'review',
+    def: 'e',
+    note: '当前字幕；服务端一步历史，⌘Z 可撤回',
+  },
+  {
+    id: 'review.splitAtPlayhead',
+    label: '在播放头切割当前字幕',
+    group: '核对台',
+    scope: 'review',
+    def: 'w',
+    note: '复用右键切割；⌘Z 可撤回',
+  },
+  {
+    id: 'review.auditionCue',
+    label: '试听选中的字幕',
+    group: '核对台',
+    scope: 'review',
+    def: 'shift+space',
+    allowOnControls: true,
+    note: '播到该句终点自动停住',
   },
   {
     id: 'review.deleteCue',
@@ -315,6 +393,29 @@ function normalizeKey(key: string): string {
   return key.toLowerCase();
 }
 
+/**
+ * 物理键 → 组合里的键名。
+ *
+ * 为什么不能只用 `e.key`：macOS 的 `⌥[` 会变成 `“`，JIS / AZERTY 布局下 Q/E/W 与
+ * 括号也不是 US 键位上的字符。这里按 `e.code` 兜底，保证「同一个物理键」在录制与
+ * 匹配时一致。文本框内仍然让位，所以不会影响正常输入。
+ */
+const CODE_KEYS: Record<string, string> = {
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  KeyQ: 'q',
+  KeyE: 'e',
+  KeyW: 'w',
+  Digit1: '1',
+  Digit2: '2',
+  Digit3: '3',
+};
+
+function eventKey(e: KeyboardEvent): string {
+  return CODE_KEYS[e.code] ?? normalizeKey(e.key);
+}
+
 interface ParsedCombo {
   mod: boolean;
   alt: boolean;
@@ -380,7 +481,7 @@ export function savedConflict(id: string): ShortcutConflict | null {
 
 /** 把一次 keydown 变成可持久化的组合；纯修饰键返回 null。 */
 export function comboFromEvent(e: KeyboardEvent): string | null {
-  const key = normalizeKey(e.key);
+  const key = eventKey(e);
   if (['meta', 'control', 'alt', 'shift'].includes(key)) return null;
   // Escape 保留给「取消 / 关闭」，不作为可绑定键
   if (key === 'escape') return null;
@@ -398,7 +499,7 @@ export function comboMatches(e: KeyboardEvent, combo: string): boolean {
   if (parsed.mod !== Boolean(e.metaKey || e.ctrlKey)) return false;
   if (parsed.alt !== Boolean(e.altKey)) return false;
   if (parsed.shift !== Boolean(e.shiftKey)) return false;
-  return normalizeKey(e.key) === parsed.key;
+  return eventKey(e) === parsed.key;
 }
 
 const KEY_LABEL: Record<string, string> = {
@@ -440,17 +541,20 @@ function isTextEntry(el: HTMLElement): boolean {
  * 时让位（那是激活与导航），字母键仍然可以触发用户自定义的动作——否则
  * 点过一次工具栏按钮后，用户把「删除」改成 s 就再也按不出来了。
  */
-function blocksShortcut(e: KeyboardEvent, target: EventTarget | null): boolean {
+function blocksShortcut(
+  e: KeyboardEvent,
+  target: EventTarget | null,
+  allowOnControls = false,
+): boolean {
   const el = target as HTMLElement | null;
   if (!el) return false;
+  // 文本输入永远让位；range 滑杆 / 复选框 / 下拉也保留原生键盘行为。
   if (isTextEntry(el)) return true;
   const tag = el.tagName;
   const key = normalizeKey(e.key);
-  if (tag === 'SELECT') return true;
+  if (tag === 'SELECT' || tag === 'INPUT') return true;
+  if (allowOnControls) return false;
   if (tag === 'BUTTON' || tag === 'A') {
-    return [' ', 'enter', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab'].includes(key);
-  }
-  if (tag === 'INPUT') {
     return [' ', 'enter', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab'].includes(key);
   }
   return false;
@@ -492,7 +596,7 @@ export function resolveShortcut(
     // 按快捷键是主要用法。焦点在正文编辑框里时仍然让位，不抢文字输入。
     if (def.scope === 'find') {
       if (!inFindBar && blocksShortcut(e, e.target)) continue;
-    } else if (!def.allowInTyping && blocksShortcut(e, e.target)) {
+    } else if (!def.allowInTyping && blocksShortcut(e, e.target, def.allowOnControls)) {
       continue;
     }
     return def;

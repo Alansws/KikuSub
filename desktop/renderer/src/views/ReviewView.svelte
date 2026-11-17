@@ -75,14 +75,17 @@
     stepSelection,
   } from '../lib/selection';
   import { canSplitAt } from '../lib/cueEdit';
+  import { attachVideo, detachVideo } from '../lib/transport.svelte';
   import {
     clampTimelineView,
     focusTimelineSpan,
+    revealTimelineView,
     sliderToSpan,
     spanToSlider,
     zoomTimelineView,
   } from '../lib/timelineView';
   import {
+    paintCueBlocks,
     paintPeakBars,
     pickRulerStep,
     roundRect,
@@ -340,16 +343,12 @@
   const rangeBusy = $derived(busy && app.jobMeta?.scope === 'range');
 
   // ---------------- 视窗与坐标 ----------------
-  function clampView(start: number, span: number) {
-    return clampTimelineView(start, span, duration, MIN_SPAN);
-  }
-
   /**
    * 改视窗只负责缩放/平移；跟随是独立偏好，绝不在这里被顺手关掉。
    * 专业剪辑软件也不会因为缩放时间线就取消「跟随播放头」。
    */
   function setView(start: number, span: number) {
-    const next = clampView(start, span);
+    const next = clampTimelineView(start, span, duration, MIN_SPAN);
     viewStart = next.start;
     viewSpan = next.span;
   }
@@ -362,15 +361,8 @@
    * 现在跟随开启时，任何 seek 都会补一次平移，不要求先播放。
    */
   function revealPlayhead(t = play.time) {
-    if (!follow) return;
-    const span = viewSpan;
-    if (!(span > 0) || !(duration > 0)) return;
-    // 已经在视窗里就不动，避免每次点当前句都把波形甩一下
-    if (t >= viewStart && t <= viewStart + span) return;
-    // 从右侧出去就从左侧 15% 处回来，反之亦然；缩放比例保持不变
-    const anchor = t > viewStart + span ? 0.85 : 0.15;
-    const next = clampView(t - span * anchor, span);
-    viewStart = next.start;
+    const next = revealTimelineView({ start: viewStart, span: viewSpan }, t, duration, MIN_SPAN, follow);
+    if (next.start !== viewStart) viewStart = next.start;
   }
 
   function xOf(time: number) {
@@ -543,45 +535,26 @@
     ctx.fillStyle = cueLane;
     ctx.fillRect(0, laneTop, w, LANE_H - 1);
 
-    const blockY = laneTop + 3;
-    const blockH = LANE_H - 6;
     const selectedCue = play.selected >= 0 ? app.cues[play.selected] : null;
-    const selectedKey = selectedCue ? `${selectedCue.start}:${selectedCue.end}` : '';
-    const picked = new Set(laneSelection);
-    drawn.clear();
-    for (const cue of app.cues) {
-      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
-      const key = `${cue.start}:${cue.end}`;
-      if (drawn.has(key)) continue;
-      drawn.add(key);
-      const x0 = Math.max(0, xOf(cue.start));
-      const x1 = Math.min(w, xOf(cue.end));
-      if (x1 <= x0 + 0.5) continue;
-      const bw = Math.max(2, x1 - x0 - 0.5);
-      const active = key === activeKey;
-      const touched = key === hoverKey || key === dragKey;
-      const chosen = picked.has(key);
-      ctx.fillStyle = active || chosen ? cueBlockActive : touched ? cueBlockHover : cueBlock;
-      if (chosen && !active) ctx.globalAlpha = 0.66;
-      roundRect(ctx, x0, blockY, bw, blockH, 2.5);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      // 当前句/悬停/选中块描一圈边，哪怕底色很浅也能一眼分清边界
-      if (active || touched || key === selectedKey || chosen) {
-        ctx.strokeStyle = chosen ? accent : cueEdge;
-        ctx.globalAlpha = active || chosen ? 0.95 : 0.45;
-        ctx.lineWidth = chosen ? 1.6 : 1;
-        roundRect(ctx, x0 + 0.5, blockY + 0.5, Math.max(1, bw - 1), blockH - 1, 2.5);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-      // 当前句/被拖动的块加两端抓手，告诉用户「这里可以左右拉」
-      if (active || touched) {
-        ctx.fillStyle = cueEdge;
-        ctx.fillRect(x0 + 2, blockY + 4, 1.5, blockH - 8);
-        ctx.fillRect(x0 + bw - 3.5, blockY + 4, 1.5, blockH - 8);
-      }
-    }
+    paintCueBlocks(ctx, {
+      cues: app.cues,
+      viewStart,
+      viewSpan,
+      width: w,
+      laneTop,
+      laneHeight: LANE_H,
+      selectedKey: selectedCue ? `${selectedCue.start}:${selectedCue.end}` : '',
+      activeKey,
+      hoverKey,
+      dragKey,
+      laneSelection,
+      cueBlock,
+      cueBlockHover,
+      cueBlockActive,
+      cueEdge,
+      accent,
+      xOf,
+    });
   }
 
   $effect(() => {
@@ -712,17 +685,19 @@
       viewSpan < duration * 0.96 &&
       (t > viewStart + viewSpan * 0.92 || t < viewStart + viewSpan * 0.02)
     ) {
-      const next = clampView(t - viewSpan * 0.15, viewSpan);
+      const next = clampTimelineView(t - viewSpan * 0.15, viewSpan, duration, MIN_SPAN);
       viewStart = next.start;
     }
   }
 
   function bindVideo(node: HTMLVideoElement) {
     video = node;
+    attachVideo(node);
     rafId = requestAnimationFrame(tick);
     return {
       destroy() {
         cancelAnimationFrame(rafId);
+        detachVideo(node);
         video = null;
       },
     };
@@ -1424,9 +1399,7 @@
   }
 
   /** 聚焦统一用同一个 span：duration / 69。媒体还没就绪时才退回 2–12 秒。 */
-  function focusSpan() {
-    return focusTimelineSpan(duration, viewSpan, MIN_SPAN, FOCUS_ZOOM);
-  }
+  const focusSpan = () => focusTimelineSpan(duration, viewSpan, MIN_SPAN, FOCUS_ZOOM);
 
   /** 一键聚焦：把播放头附近放大到固定 69×（不随当前缩放叠加）。 */
   function focusPlayhead() {
@@ -2176,7 +2149,7 @@
       >
         <Icon name={play.playing ? 'pause' : 'play'} size={11} />
       </button>
-      <span class="tp-time">{tc(play.time)}</span>
+      <span class="tp-time" title={app.media?.video_fps ? `${app.media.video_fps.toFixed(3)} fps` : '未探测到帧率，逐帧按 30fps 步进'}>{tc(play.time)}</span>
       <div
         class="tp-track"
         class:dragging={trackDrag}

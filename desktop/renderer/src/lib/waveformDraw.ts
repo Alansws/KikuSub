@@ -52,6 +52,74 @@ export function rulerLabel(t: number, step: number): string {
   return `${m}:00`;
 }
 
+import type { Cue } from './api';
+
+export interface CueBlocksInput {
+  cues: readonly Cue[];
+  viewStart: number;
+  viewSpan: number;
+  width: number;
+  laneTop: number;
+  laneHeight: number;
+  selectedKey: string;
+  activeKey: string;
+  hoverKey: string;
+  dragKey: string;
+  laneSelection: readonly string[];
+  cueBlock: string;
+  cueBlockHover: string;
+  cueBlockActive: string;
+  cueEdge: string;
+  accent: string;
+  xOf: (time: number) => number;
+}
+
+/**
+ * 底部字幕轨道块。
+ *
+ * 同区间的双语 / 三语行只画一次（按 `start:end` 去重）；选中、悬停、拖动、
+ * ⌘ 多选共用同一套配色与两端抓手。纯绘制，不读组件状态。
+ */
+export function paintCueBlocks(ctx: CanvasRenderingContext2D, input: CueBlocksInput) {
+  const blockY = input.laneTop + 3;
+  const blockH = input.laneHeight - 6;
+  const picked = new Set(input.laneSelection);
+  const drawn = new Set<string>();
+  for (const cue of input.cues) {
+    if (cue.end < input.viewStart || cue.start > input.viewStart + input.viewSpan) continue;
+    const key = `${cue.start}:${cue.end}`;
+    if (drawn.has(key)) continue;
+    drawn.add(key);
+    const x0 = Math.max(0, input.xOf(cue.start));
+    const x1 = Math.min(input.width, input.xOf(cue.end));
+    if (x1 <= x0 + 0.5) continue;
+    const bw = Math.max(2, x1 - x0 - 0.5);
+    const active = key === input.activeKey;
+    const touched = key === input.hoverKey || key === input.dragKey;
+    const chosen = picked.has(key);
+    ctx.fillStyle = active || chosen ? input.cueBlockActive : touched ? input.cueBlockHover : input.cueBlock;
+    if (chosen && !active) ctx.globalAlpha = 0.66;
+    roundRect(ctx, x0, blockY, bw, blockH, 2.5);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    // 当前句 / 悬停 / 选中块描一圈边，哪怕底色很浅也能一眼分清边界
+    if (active || touched || key === input.selectedKey || chosen) {
+      ctx.strokeStyle = chosen ? input.accent : input.cueEdge;
+      ctx.globalAlpha = active || chosen ? 0.95 : 0.45;
+      ctx.lineWidth = chosen ? 1.6 : 1;
+      roundRect(ctx, x0 + 0.5, blockY + 0.5, Math.max(1, bw - 1), blockH - 1, 2.5);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // 当前句 / 被拖动的块加两端抓手，告诉用户「这里可以左右拉」
+    if (active || touched) {
+      ctx.fillStyle = input.cueEdge;
+      ctx.fillRect(x0 + 2, blockY + 4, 1.5, blockH - 8);
+      ctx.fillRect(x0 + bw - 3.5, blockY + 4, 1.5, blockH - 8);
+    }
+  }
+}
+
 export interface PeakBarsInput {
   peaks: readonly number[];
   peaksFrom: number;

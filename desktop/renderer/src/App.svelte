@@ -47,6 +47,13 @@
   import { refreshAltReview } from './lib/dualReview.svelte';
   import { applyDevSeed } from './lib/devSeed';
   import { copySelectedCue, pasteCueAtPlayhead } from './lib/cueClipboard.svelte';
+  import { stepFrames, stepSeconds } from './lib/transport.svelte';
+  import {
+    alignSelectedCueEnd,
+    alignSelectedCueStart,
+    auditionSelectedCue,
+    splitSelectedAtPlayhead,
+  } from './lib/cueEditActions';
 
   let engine = $state('whisper');
   let review: {
@@ -346,6 +353,30 @@
       case 'review.nextCue':
         if (app.view === 'review') review?.api_step(1);
         return;
+      case 'review.stepBack':
+        stepFrames(-1);
+        return;
+      case 'review.stepForward':
+        stepFrames(1);
+        return;
+      case 'review.stepBackSecond':
+        stepSeconds(-1);
+        return;
+      case 'review.stepForwardSecond':
+        stepSeconds(1);
+        return;
+      case 'review.inPoint':
+        void alignSelectedCueStart();
+        return;
+      case 'review.outPoint':
+        void alignSelectedCueEnd();
+        return;
+      case 'review.splitAtPlayhead':
+        void splitSelectedAtPlayhead();
+        return;
+      case 'review.auditionCue':
+        auditionSelectedCue();
+        return;
       case 'review.deleteCue':
         if (app.view === 'review') review?.api_deleteSelected();
         return;
@@ -402,7 +433,18 @@
     }
   }
 
+  /** 这些动作按住不放会连续触发；切割 / 入出点 / 试听必须只在第一次按下时执行。 */
+  const NO_REPEAT_ACTIONS = new Set([
+    'review.inPoint',
+    'review.outPoint',
+    'review.splitAtPlayhead',
+    'review.auditionCue',
+  ]);
+
   function onKey(e: KeyboardEvent) {
+    // 日语输入法组合中不抢键（否则 J/K/L、[ / ]、数字键会被当成命令）。
+    if (e.isComposing || e.keyCode === 229) return;
+
     // ⌘, 是 macOS 的「设置…」惯例。菜单里也绑了同一条，但菜单快捷键在
     // 输入框聚焦时会被输入法/文本框吃掉，这里再兜一层。
     const mod = e.metaKey || e.ctrlKey;
@@ -470,12 +512,27 @@
       return;
     }
 
+    // 核对台的 ← / →、⌘← / ⌘→ 是传输键：即使动作被用户改绑到别处、或焦点在按钮上，
+    // 也不能让 WebView 解释成 history 前进/后退。输入控件（含 range 滑杆）保持原生。
+    const arrowNav = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+    const nativeArrowConsumer =
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable);
+    if (app.view === 'review' && arrowNav && !nativeArrowConsumer) {
+      e.preventDefault();
+    }
+
     // 用户自定义的快捷键：输入框聚焦时只有 allowInTyping 的动作生效。
     const action = resolveShortcut(e, app.view, { findOpen: findState.open });
     if (action) {
       // 快捷键面板是模态：只有「再按一次打开键」能关闭，其余按键不穿透到核对台。
       if (shortcuts.open && action.id !== 'shortcuts.open') return;
       e.preventDefault();
+      // 步进允许按住连发；离散编辑动作只认第一次按下，避免长按切出一串字幕。
+      if (e.repeat && NO_REPEAT_ACTIONS.has(action.id)) return;
       runShortcut(action.id);
       return;
     }

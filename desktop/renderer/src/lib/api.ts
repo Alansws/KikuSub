@@ -19,6 +19,8 @@ export interface MediaInfo {
   video_width: number;
   video_height: number;
   video_bitrate: number;
+  /** 源视频平均帧率；纯音频 / 未知时缺省或 0（前端按 30fps 兜底）。 */
+  video_fps?: number;
   has_video: boolean;
   needs_proxy: boolean;
   proxy_reason: string;

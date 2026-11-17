@@ -73,6 +73,25 @@ export function spanToSlider(span: number, duration: number, minSpan: number): n
   return Math.max(0, Math.min(100, v));
 }
 
+/**
+ * 跳转 / 播放时把播放头带回视窗。
+ *
+ * 跟随关闭、媒体未就绪、播放头已经在视窗内时都不动；从右侧出去就从左侧 15%
+ * 处回来，反之亦然，缩放比例保持不变。
+ */
+export function revealTimelineView(
+  view: TimelineView,
+  time: number,
+  duration: number,
+  minSpan: number,
+  follow: boolean,
+): TimelineView {
+  if (!follow || !(view.span > 0) || !(duration > 0)) return view;
+  if (time >= view.start && time <= view.start + view.span) return view;
+  const anchor = time > view.start + view.span ? 0.85 : 0.15;
+  return clampTimelineView(time - view.span * anchor, view.span, duration, minSpan);
+}
+
 /** 全片适应。 */
 export function fitTimelineView(
   duration: number,
