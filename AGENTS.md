@@ -85,7 +85,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `tools/eval/` | 评测台：`score_srt.py` 纯标准库打分（CER/块准确率/劈词计数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 数字基线。改断句或 VAD 参数前后必须跑同一区间；素材用 `--fixtures` 指（不随仓库）。 |
 | `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配；**默认不打开**，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
-| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）与 `file_tag` / `legacy_tags`（产物文件名标签）。设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
+| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）、`reviewable`（能否做窗口复核）与 `file_tag` / `legacy_tags`（产物文件名标签）。设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
 | `core/sherpa_asr.py` | 两个中文引擎的推理外壳（SenseVoice-Small / FireRedASR2-AED，sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
 | `core/text_cues_zh.py` | 中文分句的唯一实现（纯函数，无 torch）：token→字符时间轴、标点/停顿/字数切条。改中文断句口径先改这里的测试。 |
 | `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补；按字符偏移插回原文（不改英文大小写）。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
@@ -144,7 +144,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
     `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
     变成"先读完 4000 行"。
-12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag`），推理对象与分派进 `core/pipeline.py`；
+12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag` / `reviewable`），推理对象与分派进 `core/pipeline.py`；
     `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护一份引擎 key 白名单
     （加中文引擎时踩过：`if payload.engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
 13. **不许弹窗**：任何验证都走无窗口路径（§0.5）。`npx electron .`、`npm start`、`open *.app`、

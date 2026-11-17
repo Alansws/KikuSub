@@ -166,6 +166,34 @@
   **右键菜单与新建音色浮层必须用 `portal` 挂到 `body`**：`.view-enter.animated` 的切页动画
   `fill-mode: both` 会让计算后的 transform 变成 identity matrix，从而成为 `position: fixed`
   的包含块；留在里面会把菜单整体推偏「侧栏 + 工具栏」的距离（用户报过「离鼠标太远」）。
+- **复制 / 粘贴字幕（2026-11-17 新增）**：给气声 / 极轻的「吸って」「入って」这类
+  局部转写常常空结果的句子用——只要有一处转对了，就把它原样搬到第二处、第三处。
+  - **剪贴板内容**：原文 + 原时长 + 各语种译文（`{lang: {text, base}}`）。`base` 必须
+    原样带走，原来过期的译文在新句上仍然显示过期，不能被粘贴伪装成已同步。
+  - **粘贴规则**：`start = 播放头`，`end = start + 原时长`；只有片尾不够长才缩短
+    （`planCuePaste()`，纯函数在 `lib/cueClip.ts`）。与邻句重叠**允许**，只 toast 提示
+    条数与最大重叠秒数，绝不自动改邻句时间轴。插入下标按 `start` 排序，与
+    `insertCueAt()` 同口径。
+  - **只写当前会话已有的译文轨**：剪贴板跨片保留，粘贴时前端按
+    `app.translations` 过滤、服务端 `Session.insert_cue(translations=...)` 再按
+    `self.translations` 过滤一次；目标片没有的 lang 静默忽略，不报错、不新建残缺轨。
+  - **一步历史**：一次 `POST /api/cues/{index}/insert`，label 为
+    `粘贴字幕到 mm:ss.mmm`；原文与译文在同一份 `WorkspaceState` 快照里，⌘Z 一次退干净。
+    粘贴后只把 `play.selected` 切到新句并 `selectNonce += 1` 强制滚动；**不 seek、
+    不改缩放、不抢文本框焦点**（抢焦点会让下一次 ⌘⇧V 被输入框让位规则挡掉）。
+  - **快捷键**：默认 `⌘⇧C / ⌘⇧V`（`review.copyCue` / `review.pasteCue`，可在 ⌘K 改）。
+    不用 ⌘C / ⌘V：主进程编辑菜单的 `role:'copy'/'paste'` 会先接走这两个键；文本框内
+    仍保持原生复制粘贴。主进程菜单里没有 `⌘⇧C / ⌘⇧V` 的 accelerator，
+    `role:'toggleDevTools'` 的默认是 `⌥⌘I`，所以应用窗口里不会被 DevTools 抢走；
+    只有 DevTools 窗口自身获得焦点时，`⌘⇧C` 才归它的 Inspect Element。
+    两条动作都不设 `allowInTyping`，输入框聚焦时与现有核对台快捷键一样让位。
+  - **先提交草稿**：检查器通过 `lib/cueDraftCommit.ts` 注册自己的 `commit()`；
+    快捷键与检查器按钮都先 `await flushCueDraft()`，避免复制到还没提交的旧文本。
+  - **不碰两个大文件**：状态在 `lib/cueClipboard.svelte.ts`，UI 在 `Inspector.svelte`，
+    `store.svelte.ts` / `ReviewView.svelte` 不新增导出行；预算测试保持绿色。
+  - 回归：`desktop/test/cueClip.test.mjs`（纯函数）、`tests/test_server_cue_paste.py`
+    （一步历史 / 缺轨忽略 / base 保留）、`tools/shots/verify_cue_clipboard.mjs`
+    （无窗口真实界面）。
 - **切割 / 合并 / 多选删除（2026-11 新增）**：
   - 有字幕区域右键新增「切割字幕」：`POST /api/cues/{index}/split` 在光标时间把一句切成两段，
     **两段都保留完整原文**（用户明确要求：自动判断断点内容不可靠，先保留原句再分别删减）。
@@ -281,22 +309,37 @@
   `_apply_state` 恢复 `qa_payload` 时必须写回媒体同名 `.qa.json`。
 
 
-#### 3.4.4 批量清理标点（2026-11-15 新增）
+#### 3.4.4 批量清理标点（2026-11-15 新增，2026-11-17 改口径）
 
 转写模型爱在句尾补 `、` `。` `…`，有时补在句中；一行字幕末尾的顿号只会让画面显脏。
 这是**整轨一次性的文本整理**，不是 AI 提案，做完必须能一步撤回。
 
+> 2026-11-17 用户报障：句中 `、` 被换成空格（换全角空格时看着跟没清一样）、行尾 `…`
+> 默认不动，这两类「点了没效果」。改口径为**句中直接删掉、行尾省略号默认清**，并把
+> 半角 `｡` `､` 纳入识别。旧的两个选项没删，降级成面板里的可选口径。
+
 - **只清原文轨，永不碰译文轨**。中文译文套这条规则会变成「今 天 的 雨」，是破坏而不是
   整理。应用到译文轨的入口一律不做，也不加「顺便清译文」的复选框。
 - **规则是纯函数**：`desktop/renderer/src/lib/punctuation.ts`（零 import，`node --test`
-  能直接加载），单测 `desktop/test/punctuation.test.mjs`。改动规则先改那 15 条用例。
-  - 行首 / 行尾：删掉 `、，。．,.` 与残留空白；
-  - 句中：`、，。．` 换 **1 个**空格，半角 / 全角可选（默认半角，`localStorage['kikusub.punctClean']` 记住）；
-  - 省略号 `…` `...` 默认**保留**，但删掉紧贴其前的 `、` `。`（`。…` → `…`）；开关打开才一并清掉；
+  能直接加载），单测 `desktop/test/punctuation.test.mjs`（21 条）。改动规则先改那些用例。
+  - 行首 / 行尾：删掉 `、，。．｡､,.` 与残留空白；**行尾省略号默认也算行尾脏字符**
+    （含 `「吸って…」` 这种后面只剩收尾括号的、以及 `吸って…。` 后面只剩要删句号的）；
+  - **句中标记默认直接删掉、不补空格**（日语字幕不靠空格断句）：`吐いて、もう一回` →
+    `吐いてもう一回`，标记两侧紧贴的空白一起吃（`吐いて、 もう一回` 不留孤零零的空格）；
+  - **例外：紧邻英文 / 数字时补 1 个半角空格**，否则会粘词（`Thank you、またね` →
+    `Thank you またね`、`100、200` → `100 200`）；
+  - 旧口径仍在，降级为可选：句中换 1 个半角 / 全角空格（`mid: 'half' | 'full'`）；
+  - 省略号口径 `ellipsis`：`trailing`（默认，只清行尾）/ `all`（连句中的一起清）/
+    `keep`（全留）；句中的 `…`（`あの…そう`）是语气，默认保留；删 `、` `。` 紧贴的占位
+    省略号时直接删标记（`そうか、…` → `そうか`）；
   - 数字与英文上下文里的 `.` `,` 不动（`3.14` / `1,000` / `No.1` / `v2.0` / `A.I.`）；行尾的点仍按句末删；
   - 收尾括号 `」』）】》` 前的标点直接删、不补空格；
   - 空白**只合并、不换宽度**：`Thank you` 的半角空格不会被压成全角，全角空格也不会被压回半角；
   - 多行字幕逐行处理并保留 `\n`；清完是空的就回退原文（绝不产出空字幕）。
+  - 面板「原文」行的标红由 `markedSpans()` 算（同一份规则），组件不许再写一份正则，
+    否则预览会和实际结果对不上；受保护的小数点、句中的省略号都不标。
+- **偏好存 `localStorage['kikusub.punctClean.v2']`**（`{mid, ellipsis}`）。v1 的键不读也
+  不删：口径变了，读旧键会让老用户的 `space: 'half'` 把这次修复整个抵消掉。
 - **一次整轨提交 = 一步历史**：走 `POST /api/cues/replace-all`（与「全部替换」同一条路），
   `label = 清理标点（N 条）`；前端 `applyCueSnapshot` + `scheduleDraftSave` + `loadCueHistory`，
   字幕表、底部字幕块、历史面板、草稿暂存同一轮刷新，⌘Z 一次退干净。条数不变，
@@ -308,6 +351,44 @@
   所以按钮挂在 Toolbar，状态在 `lib/punctuationPanel.svelte.ts`，UI 在
   `components/PunctCleanPanel.svelte`。要把它挪进字幕表头，得先付出预算。
 - **形态是下拉浮层，不是模态确认框**：本应用里只有快捷键面板与退出确认是模态的。
-  浮层给「影响 N 条 / 行尾 N 处 · 句中 N 处」+ 三条 before→after，`Enter` 应用、
+  浮层给两组口径（句中「删掉 / 半角空格 / 全角空格」、省略号「行尾删 / 全部删 / 保留」）、
+  「影响 N 条 / 行尾 N 处 · 句中 N 处」，以及三条 before→after；`Enter` 应用、
   `Esc` 关闭、点外部关闭；焦点在浮层里时 `Enter` 交给按钮自己处理，不能穿透到
   「回车 = 删除当前字幕」。
+
+#### 3.4.5 另一引擎复核：可选引擎 + 逐字差异 + TTS 三方对照（2026-11-16）
+
+> 触发：用户指出「另一引擎」原来是自动取当前引擎的反面，引擎一多就不成立；并且
+> 上下两版只并排显示文字，差一两个助词时只能肉眼比对；也没法分别听两版 TTS。
+
+- **引擎由用户选，能力只看注册表**：`core/engines.EngineSpec.reviewable` 是唯一能力位
+  （当前 `whisper` / `qwen` 为 True，`sherpa` 两个中文引擎没有 `transcribe_window`）。
+  `POST /api/jobs` 的 `kind=compare` 用 `spec.reviewable` 拒绝不支持的引擎，**禁止**在
+  路由里再写 `{"whisper","qwen"}` 白名单（红线 #12）。新引擎只要补上
+  `transcribe_window()` 并打开 `reviewable`，复核下拉与接口自动跟进。
+- **候选怎么筛（前端 `lib/secondOpinion.svelte.ts`）**：`reviewable` + 不是当前稿的引擎 +
+  覆盖当前稿的**主语种**（注册表 `languages[0]`，经 `sharesLanguage()` 转为「候选是否支持
+  这个语种」）。只看主语种是刻意的：SenseVoice 同时会日语，但中文稿不该把日语引擎推荐成
+  「同语种」——两个引擎都听不清对方在说什么。设置里停用或权重未下载的仍列出来但置灰，
+  说明差什么。**当前稿的引擎优先读
+  `app.reviewSource.engine`**，导入稿识别不出才退回转写页当前选择——否则用户把转写页
+  切到 B 引擎后，核对台这张 A 稿的「另一引擎」会被错误地选成 A 自己。
+- **选择要记住**：`localStorage['kikusub.secondOpinionEngine']`（纯界面偏好，与 TTS 音色
+  同层）；用户没选过、或选的引擎失效时，退回两日语引擎互斥的默认（`otherEngineKey`）。
+  结果卡片上的引擎名取 `secondOpinion.engine`（这次结果真实用的那个），不是下拉当前值；
+  下拉换过引擎后「再听一遍」变成「换引擎重听」。
+- **差异高亮**：`lib/textDiff.ts` 的 `charDiff()` 与 `core/dual_review.char_ops` 同口径
+  （`eq` / `del` / `ins`，replace 拆成 del + ins），在两版文本里分别用红底删除线 / 绿底
+  标出，并在备选卡头显示「N 处不同」/「两版一致」。单句复核接口只回文本，这里在前端算
+  （两句几十个字，LCS 足够）；不要为一句 diff 再加一次服务端往返。
+- **TTS 三方对照**：当前卡与备选卡各有一个「朗读」chip。当前稿复用 `speakCue()`——
+  它和下方 TTS 面板读的是同一句、同一音色，两个入口的「正在播」必须同步；备选稿是
+  字幕表之外的一段文字，走 `speakTextTagged(text, tag)`（同一套合成与缓存），
+  `tts.tag` 标记它、`tts.index=-2` 表示不属于字幕表，避免被当成当前句。
+  上方「试听」已更名为**「试听原声」**：原片声音 / 当前稿 TTS / 另一引擎稿 TTS 三份证据
+  同一屏可比。更换选中句仍由 `Inspector` 的 `$effect` 调 `stopTts()`。
+- **界面**：卡片抽到 `components/SecondOpinionCard.svelte`（`Inspector` 只负责挂载），
+  形态与 TTS 面板一致：白卡 + 引擎点 + 文本，备选卡用 `--accent-line` 描边与
+  `--accent-soft` 底；只在没有可用引擎时给一条 `--warn` 提示并把 CTA 换成
+  「去设置启用复核引擎」（跳设置页），避免一个永远灰着的按钮。
+- **仍不自动采用**：`adoptAlternative()` 只调 `updateCue()`（服务端一步历史，⌘Z 可退）。
