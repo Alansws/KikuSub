@@ -16,7 +16,9 @@
     seekToMark,
     updateMark,
   } from '../lib/chapters.svelte';
+  import { setExportClip, toast } from '../lib/store.svelte';
   import { play } from '../lib/store.svelte';
+  import { clipCaption, scopeForChapter } from '../lib/clipRange';
   import { parseTimeInput, tcShort } from '../lib/time';
 
   let title = $state('');
@@ -71,6 +73,23 @@
 
   function cancelEdit() {
     editing = null;
+  }
+
+  /**
+   * 把这个区间章节设为「处理范围」：润色、翻译、导出三处共用这一份。
+   * 时刻点不提供这个入口——它是点，不是可处理的片段。
+   */
+  function useAsClip(mark: { id: string; title: string; start: number; end: number | null }) {
+    if (mark.end === null) return;
+    const scope = scopeForChapter({
+      id: mark.id,
+      title: mark.title || '未命名章节',
+      start: mark.start,
+      end: mark.end,
+      label: mark.title,
+    });
+    setExportClip(scope);
+    toast(`处理范围已设为 ${clipCaption(scope)}（润色 / 翻译 / 导出通用）`);
   }
 </script>
 
@@ -182,6 +201,16 @@
               </span>
             </button>
             <div class="ops">
+              {#if mark.end !== null}
+                <button
+                  class="iconbtn"
+                  onclick={() => useAsClip(mark)}
+                  title="仅处理此片段：把这一章设为润色 / 翻译 / 导出范围"
+                  aria-label="仅处理此片段"
+                >
+                  <Icon name="film" size={11} />
+                </button>
+              {/if}
               <button class="iconbtn" onclick={() => beginEdit(mark)} title="编辑标题与时间" aria-label="编辑标记">
                 <Icon name="pencil" size={11} />
               </button>
@@ -202,6 +231,7 @@
 
   <p class="hint">
     单击标记跳转；标题与时间可在这里改。标记随影片保存（换片 / 重启不丢），导出时按顺序写入容器。
+    区间章节右侧的「仅处理此片段」会把这一段设为润色 / 翻译 / 导出的范围。
     {#if play.duration > 0}
       当前播放头 {tcShort(play.time)}。
     {/if}

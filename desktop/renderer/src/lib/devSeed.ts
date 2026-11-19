@@ -9,7 +9,8 @@
  * 打包后 `getDevSeed()` 恒为 null，不会调用这里。
  */
 
-import { api, type Cue, type ReportData, type ReviewSource } from './api';
+import { api, type ChapterMark, type Cue, type ReportData, type ReviewSource } from './api';
+import { loadChapters } from './chapters.svelte';
 import {
   app,
   openMedia,
@@ -49,6 +50,8 @@ export async function applyDevSeed(seed: {
     dialogOpen?: boolean;
   };
   reviewSource?: ReviewSource | null;
+  /** 仅开发截图 / 无窗口回归用：灌一份章节 / 时刻点标记（走真实保存链路）。 */
+  chapters?: ChapterMark[];
 }) {
   if (!seed?.mediaPath) return;
   try {
@@ -57,6 +60,10 @@ export async function applyDevSeed(seed: {
     if (seed.cues?.length) {
       await api.replaceCues(seed.cues);
       await refreshCues();
+    }
+    if (seed.chapters?.length) {
+      await api.saveChapters({ marks: seed.chapters, label: '开发种子：章节标记' });
+      await loadChapters(true);
     }
     if (seed.report) app.report = seed.report;
     if (seed.subtitlePath) {

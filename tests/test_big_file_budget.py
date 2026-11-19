@@ -32,8 +32,9 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              抽完并接线后的实测值就是新预算（只许再降）。
 # 2026-11-20（片段范围）：局部处理 / 导出范围要给 store 加状态与请求字段，先把两块
 #              纯逻辑抽走：导出文案标签 → lib/exportLabels.ts、导出样式持久化 →
-#              lib/exportStorage.ts（store 降到 3258），再用腾出的行数接线
-#              `exporter.clip` + `setExportClip()`。
+#              lib/exportStorage.ts（store 先降到 3228），再用腾出的行数接线
+#              `exporter.clip` + `setExportClip()`（接线后 3258）。净预算仍是从
+#              3278 下调到 3258——这次没有为了加功能而放宽任何行数。
 BUDGET = {
     "lib/store.svelte.ts": 3258,
     "views/ReviewView.svelte": 3787,

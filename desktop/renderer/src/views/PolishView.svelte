@@ -11,6 +11,7 @@
    * `apply_polish()`，一次 ⌘Z 全退。
    */
   import Icon from '../components/Icon.svelte';
+  import ClipScopePicker from '../components/ClipScopePicker.svelte';
   import SourceSwitch from '../components/ai/SourceSwitch.svelte';
   import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
@@ -38,11 +39,11 @@
   } from '../lib/aiWorkspace.svelte';
   import { altEngineLabel, dual, loadAltDiff, refreshAltReview } from '../lib/dualReview.svelte';
   import { api, type AiConfig } from '../lib/api';
+  import { clipSpan, formatRange } from '../lib/clipRange';
   import { bRefsFor } from '../lib/previewDiff';
   import { loadPrompts, promptItemsFor, prompts, selectPromptTemplate } from '../lib/promptStore.svelte';
-  import { rowsInSegment } from '../lib/aiSegments';
   import { recallScroll, rememberScroll } from '../lib/scrollMemory';
-  import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
+  import { app, exporter, focusRange, jumpToCue, setExportClip, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -87,9 +88,20 @@
   /** A 的每一条对应哪段 B（只在时间真正重叠时取，不混入邻句）。 */
   const bRefs = $derived(dual.exists ? bRefsFor(app.cues, dual.cues) : []);
 
+  /** 处理范围 → 全片 1 基区间；全片时区间就是 1…n。 */
+  const scopeSpan = $derived(clipSpan(app.cues, exporter.clip));
+  const scoped = $derived(exporter.clip.end > 0);
+  /** 范围外的行不参与表格、计数与应用（范围外的建议本来也不会被写回）。 */
+  const scopedRows = $derived(
+    scoped ? rows.filter((r) => r.i >= scopeSpan.from && r.i <= scopeSpan.to) : rows,
+  );
+  const scopeTitle = $derived(
+    scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
+  );
+
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
-  const changedCount = $derived(rows.filter((r) => r.changed).length);
-  const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
+  const changedCount = $derived(scopedRows.filter((r) => r.changed).length);
+  const acceptedCount = $derived(scopedRows.filter((r) => r.changed && r.accepted).length);
   const activeSegment = $derived(
     ai.longMode && ai.segments.length
       ? ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]
@@ -101,7 +113,11 @@
    * 没生效（用户报障）。断句重排页是同一口径。
    */
   const segmentRows = $derived(
-    ai.longMode && activeSegment ? rowsInSegment(rows, activeSegment) : rows,
+    ai.longMode && activeSegment
+      ? scopedRows.filter(
+          (r) => r.i >= (activeSegment?.from ?? 0) && r.i <= (activeSegment?.to ?? 0),
+        )
+      : scopedRows,
   );
   const visible = $derived(
     ai.proposal && ai.changedOnly ? segmentRows.filter((r) => r.changed) : segmentRows,
@@ -134,7 +150,7 @@
    * 点时间码去核对台再回来时（`{#key app.view}` 会重建页面）恢复到离开处。
    */
   const listKey = $derived(
-    `polish:${app.media?.id ?? ''}:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}`,
+    `polish:${app.media?.id ?? ''}:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}:${scoped ? `${scopeSpan.from}-${scopeSpan.to}` : 'full'}`,
   );
   let restoredKey = '';
 
@@ -201,6 +217,8 @@
     void dual.count;
     void app.cuesRevision;
     void ai.mode;
+    void exporter.clip.start;
+    void exporter.clip.end;
     if (app.connected && ai.kind === 'polish') {
       if (ai.mode === 'dual' && !dual.exists && dual.mediaId === (app.media?.id ?? '')) {
         setAiMode('single');
@@ -276,6 +294,7 @@
         onchange={(id) =>
           void selectPromptTemplate(id, ai.mode === 'dual' ? 'polish_dual' : 'polish_single')}
       />
+      <ClipScopePicker compact label="处理范围" disabled={ai.generating} />
       <div class="aiw-spacer"></div>
       <button class="btn ghost sm" onclick={() => setView('prompts')} title="打开提示词库">
         提示词库
@@ -433,13 +452,25 @@
   {/if}
 
   <div class="aiw-subbar">
+    {#if scoped}
+      <span
+        class="aiw-chip accent"
+        title="表格、复制提示词、粘贴回填、写回都只作用于这个范围；范围外保持原样"
+      >
+        片段 · {scopeTitle} · <b>{scopeSpan.count}</b> / {app.cues.length} 条
+      </span>
+      <button
+        class="aiw-link"
+        onclick={() => setExportClip({ start: 0, end: 0, label: '' })}
+        title="回到全片处理"
+      >全片</button>
+    {:else}
+      <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
+    {/if}
     {#if activeSegment}
       <span class="aiw-chip accent" title="表格、复制提示词、粘贴回填都只作用于这一段">
         第 <b>{ai.segmentIndex + 1}</b>/<b>{ai.segments.length}</b> 段 · 第 <b>{activeSegment.from}–{activeSegment.to}</b> 条
       </span>
-      <span class="aiw-chip" title="全片条数">全片 <b>{app.cues.length}</b> 条</span>
-    {:else}
-      <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
     {/if}
     {#if ai.proposal}
       <span class="aiw-chip">改动 <b class:hot={changedCount > 0}>{changedCount}</b></span>

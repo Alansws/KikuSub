@@ -6,6 +6,7 @@
    * 写进译文平行轨，核对台可切到双语；原文与时间轴一个字节都不改。
    */
   import Icon from '../components/Icon.svelte';
+  import ClipScopePicker from '../components/ClipScopePicker.svelte';
   import {
     ai,
     applyAiProposal,
@@ -30,7 +31,8 @@
     selectPromptTemplate,
     selectedPromptTemplate,
   } from '../lib/promptStore.svelte';
-  import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
+  import { clipSpan, formatRange } from '../lib/clipRange';
+  import { app, exporter, focusRange, jumpToCue, setExportClip, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -55,11 +57,21 @@
     });
   });
 
+  /** 处理范围 → 全片 1 基区间；表格、复制提示词、粘贴回填、应用都只作用于它。 */
+  const scopeSpan = $derived(clipSpan(app.cues, exporter.clip));
+  const scoped = $derived(exporter.clip.end > 0);
+  const scopeTitle = $derived(
+    scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
+  );
+  const scopedRows = $derived(
+    scoped ? rows.filter((r) => r.i >= scopeSpan.from && r.i <= scopeSpan.to) : rows,
+  );
+
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
-  const changedCount = $derived(rows.filter((r) => r.changed).length);
-  const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
-  const visible = $derived(ai.changedOnly ? rows.filter((r) => r.changed) : rows);
-  const hasNotes = $derived(rows.some((r) => r.note.trim().length > 0));
+  const changedCount = $derived(scopedRows.filter((r) => r.changed).length);
+  const acceptedCount = $derived(scopedRows.filter((r) => r.changed && r.accepted).length);
+  const visible = $derived(ai.changedOnly ? scopedRows.filter((r) => r.changed) : scopedRows);
+  const hasNotes = $derived(scopedRows.some((r) => r.note.trim().length > 0));
   const translateTemplates = $derived(promptItemsFor('translate'));
 
   $effect(() => {
@@ -126,6 +138,7 @@
       <option value="zh-Hant">繁體中文</option>
       <option value="en">English</option>
     </select>
+    <ClipScopePicker compact label="处理范围" disabled={ai.generating} />
     {#if translateTemplates.length}
       <select
         class="lang"
@@ -210,7 +223,17 @@
 
   {#if ai.proposal}
     <div class="bar">
-      <span>共 <b>{app.cues.length}</b> 条</span>
+      {#if scoped}
+        <span class="scope-chip" title="只处理这一段；范围外译文原样保留">
+          片段 · {scopeTitle} · <b>{scopeSpan.count}</b> / {app.cues.length} 条
+        </span>
+        <button class="link" onclick={() => setExportClip({ start: 0, end: 0, label: '' })}>
+          全片
+        </button>
+        <span class="sep"></span>
+      {:else}
+        <span>共 <b>{app.cues.length}</b> 条</span>
+      {/if}
       <span class="sep"></span>
       <span>AI 改动 <b class="warn">{changedCount}</b> 处</span>
       <span class="sep"></span>
@@ -376,6 +399,9 @@
   .bar b {
     color: var(--text);
     font-variant-numeric: tabular-nums;
+  }
+  .scope-chip {
+    color: var(--accent);
   }
   .bar b.warn {
     color: var(--warn);

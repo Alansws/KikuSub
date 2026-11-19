@@ -163,6 +163,16 @@ export interface ExportPlan {
   style?: SubtitleStylePayload;
   /** 本次导出会写入容器的章节（`write_chapters` 关闭时为空）。 */
   chapters?: { start: number; end: number; start_ms: number; end_ms: number; title: string }[];
+  /** 片段导出信息；全片时为空对象。 */
+  clip?: ClipInfo;
+}
+
+/** 片段范围（秒，原片时间）。`end <= 0` = 全片。 */
+export interface ClipInfo {
+  start: number;
+  end: number;
+  duration: number;
+  label: string;
 }
 
 /** 烧录硬字幕的样式（只对 mode='burn' 生效）。 */
@@ -218,6 +228,11 @@ export interface ExportJobPayload {
   export_srt?: boolean;
   /** 把章节 / 时刻点标记写进容器（默认开启）。 */
   write_chapters?: boolean;
+  /** 片段导出（0 / 0 = 全片）：只导出这一段，字幕与章节平移到 0 起。 */
+  clip_start?: number;
+  clip_end?: number;
+  /** 片段标签（章节标题）；空值由服务端按时间范围生成。 */
+  clip_label?: string;
   out_dir?: string;
   style?: SubtitleStylePayload;
 }
@@ -242,6 +257,8 @@ export interface ExportResult {
   subtitle_count: number;
   skipped: number;
   srt_path?: string;
+  /** 片段导出信息；全片时为空对象。 */
+  clip?: ClipInfo;
 }
 
 export interface ParamSpec {
@@ -425,6 +442,8 @@ export interface AiProposal {
     /** 双源润色额外绑定第二版；单源提案没有这两个字段（向后兼容）。 */
     count_b?: number;
     digest_b?: string;
+    /** 片段提案：作用范围（全片 1 基、含两端），i 仍是全片序号。 */
+    range?: { from: number; to: number; count: number };
   };
   model?: string;
   entry?: string;
@@ -570,6 +589,8 @@ export interface AiProposalPayload {
   digest_match: boolean;
   source_count: number;
   current_count: number;
+  total_count?: number;
+  range?: { from: number; to: number } | null;
 }
 
 /** 结构建议（Phase 1）：外部模型只给 ops，本地绑定 digest/revision。 */
@@ -1215,7 +1236,13 @@ export const api = {
 
   exportCues: (
     format: 'SRT' | 'VTT' | 'TXT',
-    opts: { track?: TrackMode; lang?: string } = {},
+    opts: {
+      track?: TrackMode;
+      lang?: string;
+      clipStart?: number;
+      clipEnd?: number;
+      clipLabel?: string;
+    } = {},
   ) =>
     req<{
       path: string;
@@ -1228,10 +1255,18 @@ export const api = {
       count: number;
       track: string;
       lang: string;
+      clip: string | null;
       skipped: number;
     }>('/api/cues/export', {
       method: 'POST',
-      body: JSON.stringify({ format, track: opts.track ?? 'source', lang: opts.lang ?? '' }),
+      body: JSON.stringify({
+        format,
+        track: opts.track ?? 'source',
+        lang: opts.lang ?? '',
+        clip_start: opts.clipStart ?? 0,
+        clip_end: opts.clipEnd ?? 0,
+        clip_label: opts.clipLabel ?? '',
+      }),
     }),
 
   /** 工作草稿：核对精修期间的全量暂存，不碰导出文件夹里的交付文件。 */
@@ -1411,13 +1446,21 @@ export const api = {
     kind: 'translate' | 'polish' = 'translate',
     lang = 'zh-Hans',
     templateId = '',
-    opts: { mode?: 'single' | 'dual'; from?: number; to?: number } = {},
+    opts: {
+      mode?: 'single' | 'dual';
+      from?: number;
+      to?: number;
+      rangeFrom?: number;
+      rangeTo?: number;
+    } = {},
   ) => {
     const q = new URLSearchParams({ kind, lang });
     if (templateId) q.set('template_id', templateId);
     if (opts.mode) q.set('mode', opts.mode);
     if (opts.from !== undefined) q.set('from_index', String(opts.from));
     if (opts.to !== undefined) q.set('to_index', String(opts.to));
+    if (opts.rangeFrom !== undefined) q.set('range_from', String(opts.rangeFrom));
+    if (opts.rangeTo !== undefined) q.set('range_to', String(opts.rangeTo));
     return req<{
       prompt: string;
       count: number;
@@ -1427,6 +1470,8 @@ export const api = {
       mode?: 'single' | 'dual';
       from?: number;
       to?: number;
+      range_from?: number;
+      range_to?: number;
       category?: string;
       template_id: string;
       template_name: string;
@@ -1487,6 +1532,8 @@ export const api = {
     text: string;
     from_index?: number;
     to_index?: number;
+    range_from?: number;
+    range_to?: number;
     mode?: 'single' | 'dual';
   }) =>
     req<{
@@ -1496,6 +1543,8 @@ export const api = {
       mode?: 'single' | 'dual';
       from?: number;
       to?: number;
+      range_from?: number;
+      range_to?: number;
       expected?: number;
     }>('/api/ai/from-srt', {
       method: 'POST',
@@ -1506,7 +1555,10 @@ export const api = {
   getTranslations: () => req<TranslationsPayload>('/api/translations'),
 
   applyTranslation: (body: { lang: string; texts?: string[]; proposal?: AiProposal }) =>
-    req<TranslationTrack>('/api/translations', { method: 'POST', body: JSON.stringify(body) }),
+    req<TranslationTrack & { partial?: boolean; applied?: number; range?: { from: number; to: number } }>(
+      '/api/translations',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 
   /** 按路径导入译文 SRT / VTT；按时间对齐到当前原文时间轴。 */
   importTranslation: (path: string, lang: string) =>
@@ -1642,6 +1694,9 @@ export const api = {
       lang: string;
       dst_lang?: string;
       mode?: 'single' | 'dual';
+      /** 处理范围（1 基、含两端）：只生成这一段的提案。 */
+      from_index?: number;
+      to_index?: number;
     },
     key: string,
   ) =>

@@ -14,12 +14,14 @@
 import { api, type AiProposal } from './api';
 import { aiBridge } from './aiBridge';
 import { needsSegments, planSegments, type AiSegment } from './aiSegments';
+import { clipSpan, formatRange, isFullClip } from './clipRange';
 import { dual } from './dualReview.svelte';
 import {
   applyCueSnapshot,
   applyHistoryMeta,
   app,
   currentExportUiState,
+  exporter,
   loadCueHistory,
   loadTranslations,
   refreshCues,
@@ -115,7 +117,26 @@ export function segmentKey(segment: AiSegment): string {
   return `${segment.from}-${segment.to}`;
 }
 
-/** 重算长片分段（进入双源模式 / 换片 / 第二版变化后调用）。 */
+/**
+ * 当前「处理范围」（全片 / 章节区间 / 自定义）对应的全片 1 基区间。
+ *
+ * 与核对台 / 导出页共用 `exporter.clip` 这一份状态：在润色页选了「章节1」，
+ * 切到翻译页、导出页看到的还是它。全片时区间就是 1…n。
+ */
+export function aiScopeSpan(): { from: number; to: number; count: number } {
+  return clipSpan(app.cues, exporter.clip);
+}
+
+export function aiScoped(): boolean {
+  return !isFullClip(exporter.clip);
+}
+
+/** 处理范围的一句话（提示词 / 状态条 / toast 共用）。 */
+export function aiScopeLabel(): string {
+  return aiScoped() ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '';
+}
+
+/** 重算长片分段（进入双源模式 / 换片 / 第二版 / 处理范围变化后调用）。 */
 export function planAiSegments() {
   if (ai.kind !== 'polish' || ai.mode !== 'dual' || !dual.exists) {
     ai.segments = [];
@@ -123,15 +144,36 @@ export function planAiSegments() {
     ai.segmentIndex = 0;
     return;
   }
+  // 片段范围内只对这一段的 A 做分段；段号仍换算成**全片序号**，
+  // 这样表格、复制提示词、粘贴回填用的是同一套坐标。
+  const span = aiScopeSpan();
+  const offset = Math.max(0, span.from - 1);
+  const cuesA = span.count ? app.cues.slice(offset, span.to) : [];
   // 注意：这里刻意用局部变量算完后一次性写回。如果写成「先写 ai.segments、
   // 再从 ai.segments.length 取上限」，调用方是 $effect 时就会自读自写同一份
   // state，Svelte 5 会一直重跑这个 effect 到 effect_update_depth_exceeded，
   // 表现是页面巨卡、点了分段按钮高亮不动。
-  const longMode = needsSegments(app.cues, dual.cues);
-  const segments = longMode ? planSegments(app.cues, dual.cues) : [];
+  const longMode = cuesA.length > 0 && needsSegments(cuesA, dual.cues);
+  const segments = longMode
+    ? planSegments(cuesA, dual.cues).map((segment) => ({
+        ...segment,
+        from: segment.from + offset,
+        to: segment.to + offset,
+      }))
+    : [];
   ai.longMode = longMode;
   ai.segments = segments;
   ai.segmentIndex = Math.min(ai.segmentIndex, Math.max(0, segments.length - 1));
+}
+
+/** 当前内容段（长片分段的当前段或整段处理范围）：`from`/`to` 为全片序号。 */
+function aiContentSpan(): { from: number; to: number } {
+  const span = aiScopeSpan();
+  if (ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length) {
+    const segment = ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)];
+    return { from: segment.from, to: segment.to };
+  }
+  return { from: span.from || 1, to: span.to || Math.max(1, app.cues.length) };
 }
 
 export function resetAi() {
@@ -416,20 +458,23 @@ export async function copyAiPrompt() {
   }
   planAiSegments();
   const templateId = ai.kind === 'translate' ? promptSelectedId('translate') : '';
-  let from: number | undefined;
-  let to: number | undefined;
-  let segmentLabel = '';
-  if (ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length) {
-    const segment = ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)];
-    from = segment.from;
-    to = segment.to;
-    segmentLabel = ` · 第 ${segment.from}–${segment.to} 段`;
+  const span = aiScopeSpan();
+  const scoped = aiScoped();
+  if (scoped && !span.count) {
+    toast('这个处理范围里没有字幕：换一个章节或时间点', 'warn');
+    return false;
   }
+  const content = aiContentSpan();
+  const segmented =
+    ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length > 0;
+  const segmentLabel = segmented ? ` · 第 ${content.from}–${content.to} 段` : scoped ? ` · ${aiScopeLabel()}` : '';
   try {
     const res = await api.getAiPrompt(ai.kind, ai.lang, templateId, {
       mode: ai.kind === 'polish' ? ai.mode : 'single',
-      from,
-      to,
+      from: content.from,
+      to: content.to,
+      rangeFrom: scoped ? span.from : undefined,
+      rangeTo: scoped ? span.to : undefined,
     });
     if (window.kikusub?.writeClipboard) {
       await window.kikusub.writeClipboard(res.prompt);
@@ -495,17 +540,26 @@ export async function parseAiPastedSrt() {
   }
   ai.parsing = true;
   try {
+    const span = aiScopeSpan();
+    const scoped = aiScoped();
+    if (scoped && !span.count) {
+      toast('这个处理范围里没有字幕：换一个章节或时间点', 'warn');
+      return;
+    }
     const segmented =
       ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length > 0;
     const segment = segmented
       ? ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]
       : null;
+    const content = aiContentSpan();
     const res = await api.aiFromSrt({
       kind: ai.kind,
       lang: ai.kind === 'translate' ? ai.lang : '',
       text,
-      from_index: segment?.from,
-      to_index: segment?.to,
+      from_index: content.from,
+      to_index: content.to,
+      range_from: scoped ? span.from : undefined,
+      range_to: scoped ? span.to : undefined,
       mode: ai.kind === 'polish' ? ai.mode : 'single',
     });
     let proposal = res.proposal;
@@ -607,7 +661,11 @@ export async function applyAiTranslation() {
     setTrackLang(lang);
     setTrackMode('both');
     scheduleDraftSave();
-    toast(`已应用 ${res.count} 条译文，核对台已切到双语`);
+    toast(
+      res.partial && res.range
+        ? `已局部应用第 ${res.range.from}–${res.range.to} 条译文（范围外保留原样），核对台已切到双语`
+        : `已应用 ${res.count} 条译文，核对台已切到双语`,
+    );
   } catch (err) {
     toast((err as Error).message, 'error');
   } finally {
@@ -719,9 +777,14 @@ async function startAiGeneration(kind: 'polish' | 'translate') {
     return;
   }
 
+  const span = aiScopeSpan();
+  if (aiScoped() && !span.count) {
+    toast('这个处理范围里没有字幕：换一个章节或时间点', 'warn');
+    return;
+  }
   ai.generating = true;
   ai.progress = 0;
-  ai.stage = '正在提交…';
+  ai.stage = aiScoped() ? `正在提交（${aiScopeLabel()}）…` : '正在提交…';
   try {
     const job = await api.createAiJob(
       {
@@ -733,6 +796,8 @@ async function startAiGeneration(kind: 'polish' | 'translate') {
         lang: 'ja',
         dst_lang: kind === 'translate' ? ai.lang : '',
         mode: kind === 'polish' ? ai.mode : 'single',
+        from_index: aiScoped() ? span.from : undefined,
+        to_index: aiScoped() ? span.to : undefined,
       },
       key,
     );

@@ -33,6 +33,7 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import { clipCaption, isFullClip, normalizeClip, type ClipScope } from './clipRange';
 import {
   exportModeLabel,
   exportQualityLabel,
@@ -953,6 +954,8 @@ export const exporter = $state({
   exportSrt: true,
   /** 有章节 / 时刻点标记时是否写进输出容器（默认开启）。 */
   writeChapters: true,
+  /** 处理 / 导出范围（`end <= 0` = 全片）：润色、翻译、导出三处共用同一份。 */
+  clip: { start: 0, end: 0, label: '' } as ClipScope,
   /** 烧录样式（仅 mode='burn' 生效）。 */
   style: initialExportStyle.style,
   styles: null as ExportStyleOptions | null,
@@ -1644,6 +1647,7 @@ export type ExportUiState = {
   writeChapters: boolean;
   outDir: string;
   style: SubtitleStylePayload;
+  clip: ClipScope;
 };
 
 /** 同一根滑杆 / 颜色盘连续输入多久算「一次调整」。 */
@@ -1666,6 +1670,7 @@ export function currentExportUiState(): ExportUiState {
     writeChapters: exporter.writeChapters,
     outDir: exporter.outDir,
     style: { ...exporter.style },
+    clip: { ...exporter.clip },
   };
 }
 
@@ -1688,6 +1693,9 @@ function applyServerExportUi(raw: Record<string, any> | null | undefined) {
   if (typeof raw.outDir === 'string') exporter.outDir = raw.outDir;
   if (raw.style && typeof raw.style === 'object') {
     exporter.style = { ...exporter.style, ...raw.style };
+  }
+  if (raw.clip && typeof raw.clip === 'object') {
+    exporter.clip = normalizeClip({ ...exporter.clip, ...raw.clip }, app.media?.duration || 0);
   }
   exportCoalesce = null;
   saveExportStyle();
@@ -1812,6 +1820,21 @@ export function setExportChapters(enabled: boolean) {
     (from, to) => `写入章节标记 ${from.writeChapters ? '开' : '关'} → ${to.writeChapters ? '开' : '关'}`,
     () => {
       exporter.writeChapters = enabled;
+    },
+  );
+}
+
+/**
+ * 处理 / 导出范围（全片 / 章节区间 / 自定义）。**润色、翻译、导出共用这一份**，
+ * 所以它进统一历史：⌘Z 会把三处的范围一起退回上一步。
+ */
+export function setExportClip(scope: ClipScope) {
+  const next = isFullClip(scope) ? { start: 0, end: 0, label: '' } : normalizeClip(scope, app.media?.duration || 0);
+  editExportUi(
+    'clip',
+    (from, to) => `处理范围 ${clipCaption(from.clip)} → ${clipCaption(to.clip)}`,
+    () => {
+      exporter.clip = next;
     },
   );
 }
@@ -1988,6 +2011,9 @@ export async function refreshExportPlan() {
       preset: exporter.preset,
       export_srt: exporter.exportSrt,
       write_chapters: exporter.writeChapters,
+      clip_start: exporter.clip.start,
+      clip_end: exporter.clip.end,
+      clip_label: exporter.clip.label,
       out_dir: exporter.outDir,
       style: exporter.style,
     });
@@ -2023,6 +2049,7 @@ export function resetExportPanel(options: { record?: boolean; keepOutDir?: boole
     exporter.preset = 'balanced';
     exporter.exportSrt = true;
     exporter.writeChapters = true;
+    exporter.clip = { start: 0, end: 0, label: '' };
     exporter.style = { ...DEFAULT_EXPORT_STYLE };
     exporter.previewText = '';
     exporter.previewZoom = false;
@@ -2070,6 +2097,9 @@ export async function startExport() {
       preset: exporter.preset,
       export_srt: exporter.exportSrt,
       write_chapters: exporter.writeChapters,
+      clip_start: exporter.clip.start,
+      clip_end: exporter.clip.end,
+      clip_label: exporter.clip.label,
       out_dir: exporter.outDir,
       style: exporter.style,
     });
@@ -2388,7 +2418,7 @@ export async function restoreDraft() {
  */
 export async function exportCues(
   format: 'SRT' | 'VTT' | 'TXT' = 'SRT',
-  opts: { track?: TrackMode; lang?: string } = {},
+  opts: { track?: TrackMode; lang?: string; clipStart?: number; clipEnd?: number; clipLabel?: string } = {},
 ) {
   if (!app.cues.length) {
     toast('当前没有可导出的字幕', 'warn');
