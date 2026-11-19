@@ -318,8 +318,10 @@
   重发一次，不占重试次数。
 - **Qwen 推理模型**：模型名含 `qwen` / `think` 时，`build_prompt(no_think=True)` 会在
   user 末尾追加 `/no_think`；否则 LM Studio 里的 Qwen3.8 常把答案全写进
-  `reasoning_content`、content 为空。加载本地模型时建议把上下文限制在 8k 左右，
-  本功能最多几百字，不需要长上下文。
+  `reasoning_content`、content 为空。本地模型还会带 assistant 前缀 `{"text": "`，
+  让模型直接续写 JSON（实测 Qwen3.8 27B 从「只出推理」变为稳定返回 JSON、约 2–5 秒）；
+  云端模型不带前缀。加载本地模型时建议把上下文限制在 8k 左右，本功能最多几百字，
+  不需要长上下文。
 - **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
   结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
 - **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 结果校验）、
