@@ -423,6 +423,9 @@
   **整片平行译文轨**：范围外已有的译文与空位原样保留，不重排、不清空；没有旧轨时建一条
   整片长度、范围外为空的轨。`base` 只更新这一段（范围外是否过期照旧如实反映），
   `set_translation()` 压一步统一历史。
+- **文件位置不变**：片段提案仍写在 `{stem}.ai-polish.json` / `{stem}.{lang}.ai-translate.json`，
+  最后一次生成 / 粘贴 / 导入的提案覆盖同名文件；`source.range` 说明它绑定的是哪一段，
+  应用 / 校验 / 译文合并都以提案自身的 range 为准（不跟界面当前选择走）。
 - **界面**：`components/ClipScopePicker.svelte`（全片 / 区间章节 / 自定义，显示命中条数
   `291 / 899`）+ `lib/clipRange.ts`（与 `core/clip_range.py` 同一套 0.1s 蹭边阈值与章节选项
   规则）。状态只有一份：`store.exporter.clip`，走 `setExportClip()` 进统一历史，
