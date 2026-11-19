@@ -14,12 +14,14 @@ M1 只做「提案 → 双栏 diff → 应用」这一层，**不调用任何模
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from core import ai_arbitrate
 from core import ai_client
 from core import ai_polish
 from core import ai_proposal as proposals
@@ -51,11 +53,22 @@ class AiConfigPatch(BaseModel):
     chunk_cues: int | None = None
     translate_chunk_cues: int | None = None
     context_cues: int | None = None
+    # 单句判定模型覆盖：空字符串 = 清除覆盖、跟随全局。
+    arbitrate_base_url: str | None = None
+    arbitrate_model: str | None = None
 
 
 class AiTestRequest(BaseModel):
     base_url: str = ""
     model: str = ""
+
+
+class ArbitrateRequest(BaseModel):
+    text_a: str = ""
+    text_b: str = ""
+    before: list[str] = Field(default_factory=list)
+    after: list[str] = Field(default_factory=list)
+    lang: str = "ja"
 
 
 class AiJobRequest(BaseModel):
@@ -117,13 +130,22 @@ def _ai_settings(request: Request) -> dict:
 
 
 def _config_payload(settings: dict) -> dict:
+    base_url = str(settings.get("ai_base_url") or "")
+    arbitrate_url = str(settings.get("ai_arbitrate_base_url") or "")
+    arbitrate_model = str(settings.get("ai_arbitrate_model") or "")
+    resolved_arbitrate_url = arbitrate_url or base_url
     return {
         "enabled": bool(settings.get("ai_enabled")),
-        "base_url": str(settings.get("ai_base_url") or ""),
+        "base_url": base_url,
         "model": str(settings.get("ai_model") or ""),
         "chunk_cues": int(settings.get("ai_max_chunk_cues") or 0),
         "translate_chunk_cues": int(settings.get("ai_translate_chunk_cues") or 0),
         "context_cues": int(settings.get("ai_context_cues") or 0),
+        "arbitrate_base_url": arbitrate_url,
+        "arbitrate_model": arbitrate_model,
+        # 本地 OpenAI 兼容服务可以不填 Key；路由据此放行。
+        "key_optional": ai_client.is_local_url(base_url),
+        "arbitrate_key_optional": ai_client.is_local_url(resolved_arbitrate_url),
         # 密钥不归服务层管：渲染进程从 safeStorage 解密后按请求头带上（§5.2.1）
         "key_held_by": "renderer",
     }
@@ -177,6 +199,13 @@ def patch_config(payload: AiConfigPatch, request: Request) -> dict:
         patch["ai_translate_chunk_cues"] = payload.translate_chunk_cues
     if payload.context_cues is not None:
         patch["ai_context_cues"] = payload.context_cues
+    if payload.arbitrate_base_url is not None:
+        url = payload.arbitrate_base_url.strip()
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="判定模型 Base URL 必须以 http:// 或 https:// 开头")
+        patch["ai_arbitrate_base_url"] = url.rstrip("/")
+    if payload.arbitrate_model is not None:
+        patch["ai_arbitrate_model"] = payload.arbitrate_model.strip()
     if not patch:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 
@@ -192,17 +221,121 @@ def test_ai(payload: AiTestRequest, request: Request) -> dict:
     """设置页「测试连接」：一次最小往返，不打印任何请求头。"""
     settings = _ai_settings(request)
     key = (request.headers.get("x-ai-key") or "").strip()
+    base_url = payload.base_url or str(settings.get("ai_base_url") or "")
     config = ai_client.AiConfig(
-        base_url=payload.base_url or str(settings.get("ai_base_url") or ""),
+        base_url=base_url,
         model=payload.model or str(settings.get("ai_model") or ""),
         api_key=key,
         timeout_s=30.0,
+        allow_no_key=ai_client.is_local_url(base_url),
     )
     try:
         return ai_client.test_connection(config)
     except ai_client.AiError as exc:
         # 424：调用方给的东西没问题，是上游不可用（附录 B）
         raise HTTPException(status_code=424, detail=exc.message) from exc
+
+
+@router.post("/api/ai/arbitrate")
+def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
+    """单句 AI 判定：只回文本，不落盘、不改字幕、不进历史。"""
+    settings = _ai_settings(request)
+    if not settings.get("ai_enabled"):
+        raise HTTPException(status_code=503, detail="AI 优化未启用：设置 → 实验功能里打开它")
+
+    text_a = (payload.text_a or "").strip()
+    text_b = (payload.text_b or "").strip()
+    if not text_a and not text_b:
+        raise HTTPException(status_code=422, detail="两版都为空，没有可判定的文本")
+    if text_a and text_b and text_a == text_b:
+        raise HTTPException(status_code=422, detail="两版一致，不需要 AI 判定")
+
+    override = bool(
+        str(settings.get("ai_arbitrate_base_url") or "").strip()
+        or str(settings.get("ai_arbitrate_model") or "").strip()
+    )
+    base_url = str(
+        settings.get("ai_arbitrate_base_url")
+        or settings.get("ai_base_url")
+        or ""
+    )
+    model = str(
+        settings.get("ai_arbitrate_model")
+        or settings.get("ai_model")
+        or ""
+    )
+    key = (
+        request.headers.get("x-ai-arbitrate-key" if override else "x-ai-key") or ""
+    ).strip()
+    # 覆盖地址指回全局网络时，允许判定 Key 留空并复用全局 Key；本地模型则
+    # 由 allow_no_key 放行，**不**把全局 Key 发给本机服务。
+    if override and not key and not ai_client.is_local_url(base_url):
+        key = (request.headers.get("x-ai-key") or "").strip()
+    config = ai_client.AiConfig(
+        base_url=base_url,
+        model=model,
+        api_key=key,
+        timeout_s=120.0,
+        allow_no_key=ai_client.is_local_url(base_url),
+    )
+    if not key and not config.allow_no_key:
+        raise HTTPException(
+            status_code=401,
+            detail="单句判定模型还没有配置 API Key" if override else "还没有配置 API Key",
+        )
+    try:
+        config.ensure_ready()
+    except ai_client.AiError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+    # Qwen3 系推理模型默认把答案写进 reasoning_content、content 为空；/no_think
+    # 是它认识的软开关。只对 model 名带 qwen/think 的模型追加，避免影响其它模型。
+    model_lower = config.model.lower()
+    system, user = ai_arbitrate.build_prompt(
+        lang=payload.lang,
+        text_a=text_a,
+        text_b=text_b,
+        before=payload.before[-10:],
+        after=payload.after[:10],
+        no_think="qwen" in model_lower or "think" in model_lower,
+    )
+    started = time.perf_counter()
+    try:
+        data = ai_client.chat_json(
+            config, system, user, retries=1, temperature=0.1
+        )
+        try:
+            result = ai_arbitrate.parse_result(data)
+        except ai_arbitrate.ArbitrationError:
+            data = ai_client.chat_json(
+                config,
+                system + ai_arbitrate.STRICT_HINT,
+                user,
+                retries=1,
+                temperature=0.1,
+            )
+            result = ai_arbitrate.parse_result(data)
+    except ai_client.AiError as exc:
+        # 上游鉴权失败与网络/服务失败分开说，但不回显 Key 或请求体。
+        detail = (
+            f"模型服务拒绝鉴权（{exc.status}）：检查 API Key"
+            if exc.status in (401, 403)
+            else exc.message
+        )
+        raise HTTPException(
+            status_code=424 if exc.status in (401, 403) else 502,
+            detail=detail,
+        ) from exc
+    except ai_arbitrate.ArbitrationError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"模型返回格式不正确：{exc}"
+        ) from exc
+
+    return {
+        **result,
+        "model": config.model,
+        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+    }
 
 
 @router.post("/api/ai/jobs", status_code=201)
@@ -217,19 +350,21 @@ async def create_ai_job(
         raise HTTPException(status_code=503, detail="AI 优化未启用：设置 → 实验功能里打开它")
 
     key = (request.headers.get("x-ai-key") or "").strip()
-    if not key:
-        raise HTTPException(status_code=401, detail="还没有配置 API Key")
 
     texts = _current_texts(session)
     if not texts:
         raise HTTPException(status_code=409, detail="当前没有可润色的字幕")
 
+    base_url = payload.base_url or str(settings.get("ai_base_url") or "")
     config = ai_client.AiConfig(
-        base_url=payload.base_url or str(settings.get("ai_base_url") or ""),
+        base_url=base_url,
         model=payload.model or str(settings.get("ai_model") or ""),
         api_key=key,
         timeout_s=180.0,
+        allow_no_key=ai_client.is_local_url(base_url),
     )
+    if not key and not config.allow_no_key:
+        raise HTTPException(status_code=401, detail="还没有配置 API Key")
     try:
         config.ensure_ready()
     except ai_client.AiError as exc:

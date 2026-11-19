@@ -45,6 +45,10 @@ DEFAULTS: dict = {
     "ai_max_chunk_cues": 200,
     "ai_translate_chunk_cues": 120,
     "ai_context_cues": 5,
+    # 单句 AI 判定的可选模型覆盖；两个都空 = 跟随上面的全局 AI 配置。
+    # Key 也不在这里：覆盖 Key 与全局 Key 一样由主进程 `aiKey`（scope=arbitrate）加密保存。
+    "ai_arbitrate_base_url": "",
+    "ai_arbitrate_model": "",
 }
 
 def _normalize(raw: dict | None) -> dict:
@@ -72,6 +76,12 @@ def _normalize(raw: dict | None) -> dict:
     model = raw.get("ai_model")
     if isinstance(model, str) and model.strip():
         data["ai_model"] = model.strip()
+    arbitrate_url = raw.get("ai_arbitrate_base_url")
+    if isinstance(arbitrate_url, str):
+        data["ai_arbitrate_base_url"] = arbitrate_url.strip().rstrip("/")
+    arbitrate_model = raw.get("ai_arbitrate_model")
+    if isinstance(arbitrate_model, str):
+        data["ai_arbitrate_model"] = arbitrate_model.strip()
     for key, low, high in (
         ("ai_max_chunk_cues", *CHUNK_RANGE),
         ("ai_translate_chunk_cues", *CHUNK_RANGE),
@@ -139,8 +149,16 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         merged["export_dir"] = patch.get("export_dir") or ""
     if "video_export_dir" in patch:
         merged["video_export_dir"] = patch.get("video_export_dir") or ""
-    for key in ("ai_enabled", "ai_base_url", "ai_model",
-                "ai_max_chunk_cues", "ai_translate_chunk_cues", "ai_context_cues"):
+    for key in (
+        "ai_enabled",
+        "ai_base_url",
+        "ai_model",
+        "ai_max_chunk_cues",
+        "ai_translate_chunk_cues",
+        "ai_context_cues",
+        "ai_arbitrate_base_url",
+        "ai_arbitrate_model",
+    ):
         if key in patch:
             merged[key] = patch[key]
     normalized = _normalize(merged)

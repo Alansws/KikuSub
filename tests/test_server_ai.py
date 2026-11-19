@@ -229,7 +229,15 @@ def test_get_config_has_defaults(ctx):
     assert body["enabled"] is False
     assert body["base_url"].startswith("http")
     assert body["key_held_by"] == "renderer"
-    assert "key" not in json.dumps({k: v for k, v in body.items() if k != "key_held_by"})
+    # Key 本身不能出现；key_optional 只是布尔能力声明，不携带任何密钥。
+    safe = {
+        k: v
+        for k, v in body.items()
+        if k not in {"key_held_by", "key_optional", "arbitrate_key_optional"}
+    }
+    assert "key" not in json.dumps(safe)
+    assert body["key_optional"] is False
+    assert body["arbitrate_key_optional"] is False
 
 
 def test_patch_config_persists(ctx):
@@ -580,3 +588,184 @@ def test_delete_translate_proposal_uses_lang_path(ctx):
 
     assert client.delete("/api/ai/proposal?kind=translate&lang=zh-Hans", headers=AUTH).json()["removed"] is True
     assert not target.exists()
+
+
+# --------------------------------------------------------------------------- 单句判定
+
+
+def _set_local_ai(client, *, override: bool = False):
+    _enable_ai(client)
+    payload = {"base_url": "https://api.deepseek.com", "model": "deepseek-chat"}
+    if override:
+        payload.update(
+            {
+                "arbitrate_base_url": "http://127.0.0.1:1234/v1",
+                "arbitrate_model": "qwen-local",
+            }
+        )
+    else:
+        payload.update(
+            {"base_url": "http://127.0.0.1:1234/v1", "model": "qwen-local"}
+        )
+    res = client.patch("/api/ai/config", headers=AUTH, json=payload)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_config_payload_has_arbitrate_override(ctx):
+    client, _ = ctx
+    body = client.get("/api/ai/config", headers=AUTH).json()
+    assert body["arbitrate_base_url"] == ""
+    assert body["arbitrate_model"] == ""
+    assert body["key_optional"] is False
+    assert body["arbitrate_key_optional"] is False
+
+    local = _set_local_ai(client)
+    assert local["key_optional"] is True
+    assert local["arbitrate_key_optional"] is True
+
+
+def test_patch_arbitrate_override_can_clear(ctx):
+    client, _ = ctx
+    _set_local_ai(client, override=True)
+    res = client.patch(
+        "/api/ai/config",
+        headers=AUTH,
+        json={"arbitrate_base_url": "", "arbitrate_model": ""},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["arbitrate_base_url"] == ""
+    assert body["arbitrate_model"] == ""
+
+
+def test_arbitrate_requires_enabled(ctx):
+    client, _ = ctx
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={"text_a": "A", "text_b": "B", "before": [], "after": [], "lang": "ja"},
+    )
+    assert res.status_code == 503
+
+
+def test_arbitrate_remote_without_key_is_401(ctx):
+    client, _ = ctx
+    _enable_ai(client)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={"text_a": "A", "text_b": "B", "before": [], "after": [], "lang": "ja"},
+    )
+    assert res.status_code == 401
+
+
+def test_arbitrate_rejects_empty_or_identical(ctx):
+    client, _ = ctx
+    _enable_ai(client)
+    empty = client.post(
+        "/api/ai/arbitrate",
+        headers={**AUTH, "X-AI-Key": "k"},
+        json={"text_a": "", "text_b": "", "before": [], "after": [], "lang": "ja"},
+    )
+    assert empty.status_code == 422
+    same = client.post(
+        "/api/ai/arbitrate",
+        headers={**AUTH, "X-AI-Key": "k"},
+        json={"text_a": "同じ", "text_b": "同じ", "before": [], "after": [], "lang": "ja"},
+    )
+    assert same.status_code == 422
+
+
+def test_arbitrate_local_without_key_and_no_history(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client)
+    seen = {}
+
+    def fake_chat(config, system, user, **kw):
+        seen["base_url"] = config.base_url
+        seen["model"] = config.model
+        seen["key"] = config.api_key
+        seen["has_timecode"] = "00:00" in user or "-->" in user
+        return {"text": "今日は雨だ", "note": "同音字修正"}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    before = _texts(client)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={
+            "text_a": "今日は飴だ",
+            "text_b": "今日は雨だ",
+            "before": ["おはよう"],
+            "after": ["行ってきます"],
+            "lang": "ja",
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["text"] == "今日は雨だ"
+    assert body["note"] == "同音字修正"
+    assert body["model"] == "qwen-local"
+    assert seen["key"] == ""
+    assert seen["has_timecode"] is False
+    assert _texts(client) == before
+
+
+def test_arbitrate_uses_override_model_and_key(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client, override=True)
+    seen = {}
+
+    def fake_chat(config, system, user, **kw):
+        seen.update(base_url=config.base_url, model=config.model, key=config.api_key)
+        return {"text": "A 修正", "note": ""}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers={**AUTH, "X-AI-Arbitrate-Key": "arb-key", "X-AI-Key": "global-key"},
+        json={"text_a": "A", "text_b": "B", "before": [], "after": [], "lang": "ja"},
+    )
+    assert res.status_code == 200, res.text
+    assert seen["base_url"] == "http://127.0.0.1:1234/v1"
+    assert seen["model"] == "qwen-local"
+    assert seen["key"] == "arb-key"
+
+
+def test_arbitrate_retries_once_on_bad_output_then_502(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client)
+    calls = {"n": 0}
+
+    def fake_chat(config, system, user, **kw):
+        calls["n"] += 1
+        return {"wrong": True}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={"text_a": "A", "text_b": "B", "before": [], "after": [], "lang": "ja"},
+    )
+    assert res.status_code == 502
+    assert calls["n"] == 2
+
+
+def test_arbitrate_local_override_does_not_forward_global_key(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client, override=True)
+    seen = {}
+
+    def fake_chat(config, system, user, **kw):
+        seen["key"] = config.api_key
+        return {"text": "A 修正", "note": ""}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers={**AUTH, "X-AI-Key": "global-key"},
+        json={"text_a": "A", "text_b": "B", "before": [], "after": [], "lang": "ja"},
+    )
+    assert res.status_code == 200, res.text
+    assert seen["key"] == ""

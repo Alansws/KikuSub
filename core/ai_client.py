@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
@@ -50,6 +51,9 @@ class AiConfig:
     model: str = ""
     api_key: str = field(default="", repr=False)
     timeout_s: float = 120.0
+    # 本机 / 局域网的 OpenAI 兼容服务通常不校验 Key。路由层用 is_local_url()
+    # 决定是否放行；默认 False 保持云端「必须先配 Key」的旧行为。
+    allow_no_key: bool = False
 
     def ensure_ready(self) -> None:
         scheme = urlparse(self.base_url.strip()).scheme
@@ -57,8 +61,30 @@ class AiConfig:
             raise AiError("Base URL 必须以 http:// 或 https:// 开头")
         if not self.model.strip():
             raise AiError("还没有填写模型名")
-        if not self.api_key.strip():
+        if not self.api_key.strip() and not self.allow_no_key:
             raise AiError("还没有配置 API Key", status=401)
+
+
+def is_local_url(base_url: str) -> bool:
+    """这个地址是否指向本机 / 局域网（本地模型不需要 Key）。
+
+    覆盖 LM Studio / Ollama / llama.cpp 常见的监听地址：loopback、RFC1918
+    私网、链路本地、`.local` 与 Docker 的 host 别名。解析不出 host 的一律
+    当作远程，让 401 的旧保护继续生效。
+    """
+    try:
+        host = (urlparse((base_url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in {"localhost", "host.docker.internal"} or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
 
 
 def endpoint(base_url: str) -> str:
@@ -91,11 +117,14 @@ def _post(url: str, payload: dict, cfg: AiConfig) -> tuple[int, str]:
         method="POST",
         headers={
             "Content-Type": "application/json",
-            # 这一行是唯一携带 key 的地方；不要把它复制到日志里。
-            "Authorization": f"Bearer {cfg.api_key}",
             "Accept": "application/json",
         },
     )
+    # 这一行是唯一携带 key 的地方；不要把它复制到日志里。
+    # 本地无 Key 服务连空 Authorization 都不发，避免个别网关把空 Bearer 当鉴权失败。
+    if cfg.api_key.strip():
+        request.add_header("Authorization", f"Bearer {cfg.api_key.strip()}")
+
     try:
         with urllib.request.urlopen(request, timeout=cfg.timeout_s) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
@@ -134,16 +163,37 @@ class AiCancelled(RuntimeError):
 # --------------------------------------------------------------------------- 解析
 
 
+_THINK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
+_FENCE_RE = re.compile(r"```[A-Za-z0-9_+.-]*[ \t]*\r?\n?(.*?)```", re.DOTALL)
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[^|>]*\|>")
+# 有些本地模型会把推理写进 `<think>` 后输出 JSON，但没有闭合标签。JSON 仍以 `{`
+# 开始，所以兜底逻辑照常；这里只处理有闭合标签的常见情况，避免误删正文。
+
+
+def _strip_reasoning(text: str) -> str:
+    """剥掉 `qwen3` / `deepseek-r1` 一类模型外露的 `<think>…</think>`。"""
+    cleaned = _THINK_RE.sub("", text)
+    cleaned = _SPECIAL_TOKEN_RE.sub("", cleaned)
+    return cleaned
+
+
+def _strip_code_fences(text: str) -> str:
+    """剥掉 Markdown ```json 围栏；支持围栏前后还有说明文字。"""
+    match = _FENCE_RE.search(text)
+    if match:
+        return match.group(1)
+    cleaned = re.sub(r"^\s*```[A-Za-z0-9_+.-]*[ \t]*", "", text)
+    return re.sub(r"```\s*$", "", cleaned)
+
+
 def json_from_text(text: str) -> dict:
     """从模型输出里取出 JSON 对象。
 
-    真实模型经常包一层 ```json 围栏，或在前后加一句"好的"。这里做两级兜底，
-    仍失败就抛 AiError——**不做猜测性修复**，宁可让上层重试。
+    真实模型经常包一层 ```json 围栏、外露 `<think>` 推理，或在前后加一句"好的"。
+    这里依次剥掉围栏 / 推理块 / 特殊 token，再做一次 `{…}` 兜底；仍失败就抛
+    AiError——**不做猜测性修复**，宁可让上层重试。
     """
-    raw = (text or "").strip().lstrip("\ufeff")
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
+    raw = _strip_code_fences(_strip_reasoning((text or "").strip().lstrip("\ufeff"))).strip()
     try:
         data = json.loads(raw)
     except ValueError:
@@ -173,6 +223,12 @@ def _extract_content(body: str) -> str:
         content = "".join(
             part.get("text", "") for part in content if isinstance(part, dict)
         )
+    if not isinstance(content, str) or not content.strip():
+        # 少数推理模型（Qwen3 / R1 一类）把最终答案也写进 reasoning_content，
+        # content 留空。这里兜底读一次；如果里面没有 JSON，上层仍会重问/报错。
+        reasoning = message.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            content = reasoning
     if not isinstance(content, str) or not content.strip():
         raise AiError("模型返回了空内容")
     return content
@@ -223,10 +279,14 @@ def chat_json(
             _wait(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)], cancel)
             continue
 
-        # 兼容网关对 response_format 的支持不一致（DeepSeek 只要求 prompt 里出现 json，
-        # 也有网关直接 400）。**任何** 400 都先去掉该字段重发一次，不占重试次数：
-        # 若 400 另有原因，下一次仍会 400，那时如实上报，不会掩盖真实错误。
-        if status == 400 and not plain_tried and "response_format" in payload:
+        # 兼容网关 / 本地推理服务对 response_format 的支持不一致：DeepSeek 只要求
+        # prompt 里出现 json，LM Studio / llama.cpp / 部分网关直接 400/404/422。
+        # 先去掉该字段重发一次，不占重试次数；若错误另有原因，下一次会如实上报。
+        if (
+            status in (400, 404, 422)
+            and not plain_tried
+            and "response_format" in payload
+        ):
             plain_tried = True
             payload.pop("response_format", None)
             log.info(
