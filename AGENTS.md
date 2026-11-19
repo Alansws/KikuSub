@@ -139,7 +139,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
     或跑 `node tools/shots/verify_reshape_flow.mjs` / `verify_review_transport.mjs`；
     只看编译通过不算验证。**「手点一遍」不许成为打开窗口的理由**（§0.5）。
-11. **两个大文件只许变短**（`lib/store.svelte.ts` 3287 行 / `views/ReviewView.svelte` 3802 行）：
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3258 行 / `views/ReviewView.svelte` 3787 行）：
     改它们前，先把
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
     `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发

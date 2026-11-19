@@ -393,3 +393,41 @@
   `tools/shots/verify_arbitration_dialog.mjs`（常驻区 / 空识别提示 / 草稿持久 / 浮窗
   拖动缩放 / Esc / 发送追问与清空重判分离 / 请求体无旧 history / 撤销同步结果卡 /
   复制反馈 / 文本可选中 / 单一对话入口）。
+
+#### 3.7.8 片段范围：局部润色 / 局部翻译（2026-11-20）
+
+长片常常只核对一段（例如第 291–581 条）。范围由用户在润色 / 翻译 / 导出页选（全片 /
+区间章节 / 自定义起止），三处共用同一份状态；本章只约束 AI 链路。
+
+- **提案的身份**：`source.range = {"from": 291, "to": 581, "count": 291}`。
+  - `items` 的 `i` **仍是全片 1 基序号**（291…581），界面直接用全局 `#i` 对行，
+    长片分段粘贴也不换坐标系；
+  - `source.digest` **只覆盖这一段**的原文（`source_digest(scope_texts)`）：模型看到多少
+    就绑定多少。范围外（例如第 1 条）改了字幕不会 409——那本来就不该让这段提案失效；
+    范围内改了才 409「源文本已变化」；
+  - 没有 `source.range` 的旧提案 = 整片，行为与之前完全一致。
+- **生成**：`POST /api/ai/jobs` 的 `from_index` / `to_index`（1 基、含两端）。
+  `server/jobs.py` 先切出这一段再交给 `ai_polish.run_polish()` / `ai_translate.run_translate()`，
+  两者用 `cue_span` 只调整 `items` 的序号基线与 `source.range`；**分块、结构重问、取消口径不变**。
+  双源润色的 `digest_b` 仍绑定**整片第二版**（B 只作参考），B 的时间窗取本段的绝对时间。
+- **手动提示词**：`GET /api/ai/prompt` 新增 `range_from` / `range_to`（作用范围）；原有的
+  `from_index` / `to_index` 是**当前分段**（长片分段 + 范围可以叠加）。润色与翻译都只把
+  这一段写成 SRT；`range_text` 明确「本次只处理片段第 X–Y 条（全片共 N 条）」。
+- **粘贴回填**：`POST /api/ai/from-srt` 的 `range_from` / `range_to` 决定提案覆盖哪一段，
+  `from_index` / `to_index` 决定这次实际回填的段内区间；段外条目保持原文（分段粘贴语义不变）。
+- **应用**：`POST /api/ai/apply` 用 `source.range` 调
+  `core.ai_proposal.apply_polish_range()`——它只把全局序号映射成段内序号后**调用
+  `apply_polish()`**，段外条目逐字节拼回。仍然是「整批一次历史」：`replace_review()` 一步，
+  ⌘Z 一次退回。
+- **译文局部合并**：`POST /api/translations` 带片段提案时，按原始索引把这一段译文合并进
+  **整片平行译文轨**：范围外已有的译文与空位原样保留，不重排、不清空；没有旧轨时建一条
+  整片长度、范围外为空的轨。`base` 只更新这一段（范围外是否过期照旧如实反映），
+  `set_translation()` 压一步统一历史。
+- **界面**：`components/ClipScopePicker.svelte`（全片 / 区间章节 / 自定义，显示命中条数
+  `291 / 899`）+ `lib/clipRange.ts`（与 `core/clip_range.py` 同一套 0.1s 蹭边阈值与章节选项
+  规则）。状态只有一份：`store.exporter.clip`，走 `setExportClip()` 进统一历史，
+  润色页 / 翻译页 / 导出页 / 章节面板「仅处理此片段」读写同一份。
+- **回归**：`tests/test_clip_scope.py`（片段 digest 只绑本段、范围外改动不 409、范围内
+  改动 409、局部译文合并保留范围外、提示词只含本段、任务链路真按范围生成）、
+  `tests/test_clip_range.py`（边界/夹紧/章节平移/文件名标签）、
+  `tools/shots/verify_clip_scope.mjs`（三页共用范围、表格只剩 4 行、一键带入）。

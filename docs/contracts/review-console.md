@@ -543,6 +543,10 @@
   （终点留空 = 时刻点）、删除。导入/历史/换片统一经 `lib/chapters.svelte.ts`。
 - **导出**：见 [export-and-prompt.md](export-and-prompt.md) §3.8.2。导出页开关走
   `setExportChapters()`（进统一历史），有标记时默认开并显示数量。
+- **「仅处理此片段」**：区间章节（`end` 有值）的操作区多一个按钮，把这个章节设为
+  **处理 / 导出范围**（`setExportClip()`，进统一历史）。润色、翻译、导出三页共用这
+  一份；时刻点不提供该入口（它是点，不是可处理的片段）。契约见
+  [ai-proposal.md](ai-proposal.md) §3.7.8。
 - **回归**：`tests/test_chapters.py`（衔接/夹紧/重复 id/转义/持久化/一步历史/撤销
   写盘）、`tests/test_export_chapters.py`（三种模式 + `ffprobe -show_chapters`）、
   `tools/shots/verify_chapters.mjs`（真实界面：添加/编辑/⌘Z/旗标跳转/仅封装导出）。
