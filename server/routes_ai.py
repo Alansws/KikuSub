@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from core import ai_arbitrate
 from core import ai_client
+from core import ai_local_model
 from core import ai_polish
 from core import ai_proposal as proposals
 from core import ai_translate
@@ -56,11 +57,17 @@ class AiConfigPatch(BaseModel):
     # 单句判定模型覆盖：空字符串 = 清除覆盖、跟随全局。
     arbitrate_base_url: str | None = None
     arbitrate_model: str | None = None
+    local_context: int | None = None
+    auto_arbitrate: bool | None = None
 
 
 class AiTestRequest(BaseModel):
     base_url: str = ""
     model: str = ""
+
+
+class LocalModelLoadRequest(BaseModel):
+    context: int = ai_local_model.DEFAULT_CONTEXT
 
 
 class ArbitrateRequest(BaseModel):
@@ -129,6 +136,19 @@ def _ai_settings(request: Request) -> dict:
     return settings_store.load_settings(settings_path(request))
 
 
+def _arbitrate_target(settings: dict) -> tuple[str, str, bool]:
+    """单句判定实际使用的 base_url / model；任一覆盖字段非空即视为覆盖。"""
+    override = bool(
+        str(settings.get("ai_arbitrate_base_url") or "").strip()
+        or str(settings.get("ai_arbitrate_model") or "").strip()
+    )
+    base_url = str(
+        settings.get("ai_arbitrate_base_url") or settings.get("ai_base_url") or ""
+    )
+    model = str(settings.get("ai_arbitrate_model") or settings.get("ai_model") or "")
+    return base_url, model, override
+
+
 def _config_payload(settings: dict) -> dict:
     base_url = str(settings.get("ai_base_url") or "")
     arbitrate_url = str(settings.get("ai_arbitrate_base_url") or "")
@@ -143,9 +163,13 @@ def _config_payload(settings: dict) -> dict:
         "context_cues": int(settings.get("ai_context_cues") or 0),
         "arbitrate_base_url": arbitrate_url,
         "arbitrate_model": arbitrate_model,
+        "local_context": int(settings.get("ai_local_context") or ai_local_model.DEFAULT_CONTEXT),
+        "auto_arbitrate": bool(settings.get("ai_auto_arbitrate")),
         # 本地 OpenAI 兼容服务可以不填 Key；路由据此放行。
         "key_optional": ai_client.is_local_url(base_url),
         "arbitrate_key_optional": ai_client.is_local_url(resolved_arbitrate_url),
+        # 只有本机 LM Studio 才显示「本地上下文档位 / 加载重载」。
+        "arbitrate_loopback": ai_local_model.is_loopback(resolved_arbitrate_url),
         # 密钥不归服务层管：渲染进程从 safeStorage 解密后按请求头带上（§5.2.1）
         "key_held_by": "renderer",
     }
@@ -206,6 +230,15 @@ def patch_config(payload: AiConfigPatch, request: Request) -> dict:
         patch["ai_arbitrate_base_url"] = url.rstrip("/")
     if payload.arbitrate_model is not None:
         patch["ai_arbitrate_model"] = payload.arbitrate_model.strip()
+    if payload.local_context is not None:
+        if payload.local_context not in ai_local_model.CONTEXT_CHOICES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"本地上下文档位只能是 {', '.join(map(str, ai_local_model.CONTEXT_CHOICES))}",
+            )
+        patch["ai_local_context"] = payload.local_context
+    if payload.auto_arbitrate is not None:
+        patch["ai_auto_arbitrate"] = payload.auto_arbitrate
     if not patch:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 
@@ -236,6 +269,30 @@ def test_ai(payload: AiTestRequest, request: Request) -> dict:
         raise HTTPException(status_code=424, detail=exc.message) from exc
 
 
+@router.get("/api/ai/local-model/status")
+def local_model_status(request: Request) -> dict:
+    """只读探测本机 LM Studio 的模型与 context；远程地址返回 not_local。"""
+    settings = _ai_settings(request)
+    base_url, model, _ = _arbitrate_target(settings)
+    return ai_local_model.status(base_url, model)
+
+
+@router.post("/api/ai/local-model/load")
+def local_model_load(payload: LocalModelLoadRequest, request: Request) -> dict:
+    """按档位卸载并重载本机 LM Studio 模型；不参与单句判定请求。"""
+    if payload.context not in ai_local_model.CONTEXT_CHOICES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"本地上下文档位只能是 {', '.join(map(str, ai_local_model.CONTEXT_CHOICES))}",
+        )
+    settings = _ai_settings(request)
+    base_url, model, _ = _arbitrate_target(settings)
+    try:
+        return ai_local_model.load(base_url, model, payload.context)
+    except ai_local_model.LocalModelError as exc:
+        raise HTTPException(status_code=422, detail=exc.args[0]) from exc
+
+
 @router.post("/api/ai/arbitrate")
 def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
     """单句 AI 判定：只回文本，不落盘、不改字幕、不进历史。"""
@@ -250,20 +307,7 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
     if text_a and text_b and text_a == text_b:
         raise HTTPException(status_code=422, detail="两版一致，不需要 AI 判定")
 
-    override = bool(
-        str(settings.get("ai_arbitrate_base_url") or "").strip()
-        or str(settings.get("ai_arbitrate_model") or "").strip()
-    )
-    base_url = str(
-        settings.get("ai_arbitrate_base_url")
-        or settings.get("ai_base_url")
-        or ""
-    )
-    model = str(
-        settings.get("ai_arbitrate_model")
-        or settings.get("ai_model")
-        or ""
-    )
+    base_url, model, override = _arbitrate_target(settings)
     key = (
         request.headers.get("x-ai-arbitrate-key" if override else "x-ai-key") or ""
     ).strip()

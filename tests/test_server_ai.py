@@ -771,3 +771,69 @@ def test_arbitrate_local_override_does_not_forward_global_key(ctx, monkeypatch):
     )
     assert res.status_code == 200, res.text
     assert seen["key"] == ""
+
+
+# --------------------------------------------------------------------------- 本地上下文档位 / 自动判定
+
+
+def test_config_local_context_and_auto_defaults(ctx):
+    client, _ = ctx
+    body = client.get("/api/ai/config", headers=AUTH).json()
+    assert body["local_context"] == 2048
+    assert body["auto_arbitrate"] is False
+    assert body["arbitrate_loopback"] is False
+
+
+def test_patch_local_context_and_auto(ctx):
+    client, _ = ctx
+    res = client.patch(
+        "/api/ai/config",
+        headers=AUTH,
+        json={"local_context": 4096, "auto_arbitrate": True},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["local_context"] == 4096
+    assert body["auto_arbitrate"] is True
+
+    bad = client.patch("/api/ai/config", headers=AUTH, json={"local_context": 1024})
+    assert bad.status_code == 422
+
+
+def test_local_status_route(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client)
+    seen = {}
+
+    def fake_status(base_url, model):
+        seen.update(base_url=base_url, model=model)
+        return {"available": True, "loaded": True, "context_length": 2048}
+
+    monkeypatch.setattr("core.ai_local_model.status", fake_status)
+    res = client.get("/api/ai/local-model/status", headers=AUTH)
+    assert res.status_code == 200
+    assert res.json()["context_length"] == 2048
+    assert seen["base_url"] == "http://127.0.0.1:1234/v1"
+    assert seen["model"] == "qwen-local"
+
+
+def test_local_load_route(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client, override=True)
+    seen = {}
+
+    def fake_load(base_url, model, context):
+        seen.update(base_url=base_url, model=model, context=context)
+        return {"ok": True, "reloaded": True, "model": model, "context_length": context}
+
+    monkeypatch.setattr("core.ai_local_model.load", fake_load)
+    res = client.post(
+        "/api/ai/local-model/load", headers=AUTH, json={"context": 4096}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["context_length"] == 4096
+    assert seen["context"] == 4096
+    assert seen["model"] == "qwen-local"
+
+    bad = client.post("/api/ai/local-model/load", headers=AUTH, json={"context": 1234})
+    assert bad.status_code == 422

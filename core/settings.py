@@ -29,6 +29,9 @@ DEFAULT_AI_BASE_URL = "https://api.deepseek.com"
 # 分块条数的允许区间：太小会让模型丢掉上下文，太大会撞输出上限。
 CHUNK_RANGE = (20, 2000)
 CONTEXT_RANGE = (0, 30)
+# 本地 LM Studio 的上下文档位；默认 2048，省内存且对单句判定足够。
+LOCAL_CONTEXT_CHOICES = (2048, 4096, 8192)
+DEFAULT_LOCAL_CONTEXT = 2048
 
 DEFAULTS: dict = {
     "enabled_engines": list(engines.DEFAULT_ENABLED),
@@ -49,6 +52,10 @@ DEFAULTS: dict = {
     # Key 也不在这里：覆盖 Key 与全局 Key 一样由主进程 `aiKey`（scope=arbitrate）加密保存。
     "ai_arbitrate_base_url": "",
     "ai_arbitrate_model": "",
+    # 本地 LM Studio 重载档位；只有点「加载 / 重载本地模型」时使用。
+    "ai_local_context": DEFAULT_LOCAL_CONTEXT,
+    # 两版不一致时自动触发一次单句判定；默认关闭，避免无形消耗额度。
+    "ai_auto_arbitrate": False,
 }
 
 def _normalize(raw: dict | None) -> dict:
@@ -82,6 +89,13 @@ def _normalize(raw: dict | None) -> dict:
     arbitrate_model = raw.get("ai_arbitrate_model")
     if isinstance(arbitrate_model, str):
         data["ai_arbitrate_model"] = arbitrate_model.strip()
+    local_context = raw.get("ai_local_context")
+    if isinstance(local_context, int) and not isinstance(local_context, bool):
+        if local_context in LOCAL_CONTEXT_CHOICES:
+            data["ai_local_context"] = local_context
+    auto_arbitrate = raw.get("ai_auto_arbitrate")
+    if isinstance(auto_arbitrate, bool):
+        data["ai_auto_arbitrate"] = auto_arbitrate
     for key, low, high in (
         ("ai_max_chunk_cues", *CHUNK_RANGE),
         ("ai_translate_chunk_cues", *CHUNK_RANGE),
@@ -158,6 +172,8 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         "ai_context_cues",
         "ai_arbitrate_base_url",
         "ai_arbitrate_model",
+        "ai_local_context",
+        "ai_auto_arbitrate",
     ):
         if key in patch:
             merged[key] = patch[key]
