@@ -388,6 +388,24 @@ function changedIndexes(): number[] {
   return out;
 }
 
+/** 当前处理范围里的全片序号；全片时返回 null（不额外过滤）。 */
+function scopeIndexes(): Set<number> | null {
+  if (!aiScoped()) return null;
+  const span = aiScopeSpan();
+  const set = new Set<number>();
+  for (let i = span.from; i <= span.to && span.count > 0; i += 1) set.add(i);
+  return set;
+}
+
+/**
+ * 应用前的范围过滤：即使磁盘上是一份**整片**提案，选了片段范围也只会写回这一段。
+ * （片段提案本身由服务端按 source.range 兜底；这里保证整片提案也不会越界。）
+ */
+function withinScope(indices: number[]): number[] {
+  const allowed = scopeIndexes();
+  return allowed ? indices.filter((i) => allowed.has(i)) : indices;
+}
+
 async function applyPolishWith(accept: number[] | null, label: string) {
   if (!ai.proposal || ai.applying) return;
   if (ai.proposal.kind === 'translate') return applyAiTranslation();
@@ -421,13 +439,13 @@ async function applyPolishWith(accept: number[] | null, label: string) {
 
 /** 默认：只应用「已采纳且确有差异」的条目。 */
 export async function applyAiProposal() {
-  const accepted = changedIndexes().filter((i) => ai.accept[i] !== false);
+  const accepted = withinScope(changedIndexes().filter((i) => ai.accept[i] !== false));
   return applyPolishWith(accepted, accepted.length ? '已应用采纳的修改' : '没有需要应用的修改');
 }
 
 /** 应用全部差异句（忽略逐条拒绝）。 */
 export async function applyAiAllDiffs() {
-  return applyPolishWith(changedIndexes(), '已应用全部差异句');
+  return applyPolishWith(withinScope(changedIndexes()), '已应用全部差异句');
 }
 
 /** 仅应用已采纳的差异句（与默认一致，单独给按钮一个明确语义）。 */
@@ -435,9 +453,11 @@ export async function applyAiAcceptedDiffs() {
   return applyAiProposal();
 }
 
-/** 整列全部采纳并应用（第 3 栏全量写回核对台）。 */
+/** 整列全部采纳并应用（第 3 栏全量写回核对台；片段范围时只写这一段）。 */
 export async function applyAiWholeColumn() {
-  return applyPolishWith(null, '已整列应用 AI 终稿');
+  const allowed = scopeIndexes();
+  const all = allowed ? [...allowed] : null;
+  return applyPolishWith(all, '已整列应用 AI 终稿');
 }
 
 /**

@@ -66,6 +66,13 @@
   const scopedRows = $derived(
     scoped ? rows.filter((r) => r.i >= scopeSpan.from && r.i <= scopeSpan.to) : rows,
   );
+  /** 磁盘上的译文建议可能来自另一个范围：提示一句，避免以为是当前这一段。 */
+  const proposalRange = $derived(ai.proposal?.source.range ?? null);
+  const rangeMismatch = $derived(
+    Boolean(proposalRange) &&
+      scoped &&
+      (proposalRange!.from !== scopeSpan.from || proposalRange!.to !== scopeSpan.to),
+  );
 
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
   const changedCount = $derived(scopedRows.filter((r) => r.changed).length);
@@ -257,6 +264,14 @@
     <div class="note err">
       <Icon name="warn" size={11} />
       <span>源文本已变化：这份建议是针对另一版字幕生成的，应用会被拒绝。</span>
+    </div>
+  {:else if rangeMismatch && proposalRange}
+    <div class="note warn">
+      <Icon name="warn" size={11} />
+      <span>
+        这份译文建议覆盖第 {proposalRange.from}–{proposalRange.to} 条，当前处理范围是第
+        {scopeSpan.from}–{scopeSpan.to} 条：应用会按建议自己的范围写回。
+      </span>
     </div>
   {/if}
 
