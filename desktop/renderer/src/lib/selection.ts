@@ -15,6 +15,17 @@ export function laneKey(cue: Cue): string {
   return `${cue.start}:${cue.end}`;
 }
 
+/**
+ * 一条字幕对应的时间选区（点行 / 点底部轨道块时使用）。
+ *
+ * 零长度或倒序的字幕不产生选区——那种时间轴本身就不合法，写成选区只会让
+ * 「转写选区」提交一个空区间。返回 null 时调用方应保持当前选区不变。
+ */
+export function cueRange(cue: Cue | null | undefined): { start: number; end: number } | null {
+  if (!cue || !(cue.end > cue.start)) return null;
+  return { start: cue.start, end: cue.end };
+}
+
 /** ⌘ 多选：有就移除、没有就追加（返回新数组，调用方负责赋值）。 */
 export function toggleLaneSelection(keys: string[], key: string): string[] {
   return keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key];

@@ -55,6 +55,7 @@
   import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
+  import { isTypingTarget } from '../lib/typing';
   import {
     BLANK_FRAME_TIMEOUT_MS,
     hasDecodedFrame,
@@ -66,6 +67,7 @@
     cueBlockAtX,
     cueDragTimes,
     cueIndexAtTime,
+    cueRange,
     deleteTargets,
     indicesForLaneKeys,
     indicesInRange,
@@ -992,7 +994,8 @@
       (Math.abs(drag.curStart - drag.start) > 1e-6 ||
         Math.abs(drag.curEnd - drag.end) > 1e-6);
     if (!moved) {
-      // 点了一下字幕块：和点表格行一样，直接把播放头放到这句开头
+      // 点了一下字幕块：和点表格行一样 seek，并把选区落到这一句。
+      selection = { start: drag.start, end: drag.end };
       seek(drag.start + 0.02);
       return;
     }
@@ -1429,12 +1432,15 @@
     if (follow) revealPlayhead(play.time);
   }
 
-  function selectCue(i: number, doSeek = true) {
+  function selectCue(i: number, doSeek = true, withRange = false) {
+    const cue = app.cues[i];
+    if (!cue) return;
     play.selected = i;
     rangeAnchor = i;
     // 普通单击 = 单选。集合必须同步成 {这一句}，否则之后 ⌘ 点第二句只能得到一条。
-    laneSelection = app.cues[i] ? [laneKey(app.cues[i])] : [];
-    if (doSeek) seek(app.cues[i].start + 0.02);
+    laneSelection = [laneKey(cue)];
+    if (withRange) selection = cueRange(cue);
+    if (doSeek) seek(cue.start + 0.02);
   }
 
   // ---------------- 查找与替换（⌘F，覆盖原文 / 译文 / 双语） ----------------
@@ -1937,19 +1943,6 @@
     toast('已把时间选区同步到转写页，可直接开始局部转写');
   }
 
-  /** 用户正在输入框里打字时，不要自动改选中行，否则会把草稿换掉。 */
-  function isTyping() {
-    const el = document.activeElement as HTMLElement | null;
-    if (!el) return false;
-    if (el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
-    if (el.tagName === 'INPUT') {
-      const type = (el as HTMLInputElement).type;
-      // 缩放滑块也是 input：它失焦后不该继续拦住自动同步
-      return !['range', 'checkbox', 'radio', 'button', 'submit', 'file'].includes(type);
-    }
-    return false;
-  }
-
   let revealRaf = 0;
 
   function revealRow(i: number) {
@@ -2006,7 +1999,7 @@
     }
     if (first === lastRevealed) return;
     lastRevealed = first;
-    if (isTyping()) return;
+    if (isTypingTarget()) return;
     if (!selectedInBlock && play.selected !== first) play.selected = first;
     revealRow(selectedInBlock ? play.selected : first);
   });
@@ -2075,6 +2068,13 @@
   export function api_step(delta: number) {
     const next = Math.max(0, Math.min(app.cues.length - 1, play.selected + delta));
     if (app.cues[next]) selectCue(next);
+  }
+
+  /** Esc：只清时间选区，不动当前行 / 多选集合。返回是否真的清掉了。 */
+  export function api_clearSelection(): boolean {
+    if (!selection) return false;
+    selection = null;
+    return true;
   }
   export function api_focus() {
     focusPlayhead();
@@ -2491,7 +2491,7 @@
                 rangeSelectTo(i);
                 return;
               }
-              selectCue(i);
+              selectCue(i, true, true);
             }}
             oncontextmenu={(e) => onCueContextMenu(e, i)}
             ondblclick={() => previewRange(cue.start, cue.end)}

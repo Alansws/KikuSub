@@ -71,6 +71,7 @@
     api_deleteSelected: () => void;
     api_findStep: (d: number) => void;
     api_toggleFit: () => void;
+    api_clearSelection: () => boolean;
   } | undefined = $state();
   let dragging = $state(false);
   /** 紧凑模式（≤900px CSS 视口）：检查器变成抽屉，内容区拿回整宽。 */
@@ -582,6 +583,13 @@
 
     if (e.key === 'Escape' && app.job?.status === 'running') {
       cancelJob();
+      return;
+    }
+
+    // 核对台的时间选区：Esc 只清选区，不丢当前选中行 / 多选集合。
+    // 放在任务取消之后，避免转写中按 Esc 把「取消任务」改成「清选区」。
+    if (e.key === 'Escape' && app.view === 'review' && review?.api_clearSelection()) {
+      e.preventDefault();
     }
   }
 

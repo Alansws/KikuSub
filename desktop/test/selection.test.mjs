@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   cueBlockAtX,
   cueDragTimes,
+  cueRange,
   keysInRange,
   rangeSelection,
 } from '../renderer/src/lib/selection.ts';
@@ -70,4 +71,11 @@ test('cueBlockAtX picks the narrowest block under the cursor', () => {
   assert.equal(block.key, '2:3');
   assert.deepEqual(block.indices, [1, 2]);
   assert.equal(cueBlockAtX(cues, 500, xOf), null);
+});
+
+test('cueRange returns the exact cue span and rejects invalid spans', () => {
+  assert.deepEqual(cueRange(cue(1.2, 3.4)), { start: 1.2, end: 3.4 });
+  assert.equal(cueRange(cue(2, 2)), null);
+  assert.equal(cueRange(cue(3, 1)), null);
+  assert.equal(cueRange(null), null);
 });
