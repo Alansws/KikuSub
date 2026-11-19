@@ -477,6 +477,34 @@ class _SherpaEngine:
             time_offset=time_offset,
         )
 
+    def transcribe_window(self, audio: np.ndarray, *, config: SherpaAsrConfig | None = None) -> str:
+        """把一段窗口音频直接送模（**不跑 VAD**）。
+
+        「另一引擎复核」（`core.second_opinion`）与核对台短选区的整段兜底
+        （`core.short_clip`）都走这条入口：窗口是调用方给的，再跑一次 VAD 只会
+        把轻声段重新切成空。FireRed 的原始输出没有标点，这里仍然补一次，
+        否则复核结果会在标点上看起来比原稿差。
+        """
+        cfg = config or self.config
+        self.load(config=cfg)
+        buf = np.ascontiguousarray(np.asarray(audio, dtype=np.float32))
+        if buf.size == 0:
+            return ""
+        text, _tokens, _timestamps = self._decode_segment(buf)
+        text = str(text or "").strip()
+        if (
+            self.supports_punc
+            and self._punc is not None
+            and cfg.use_punc
+            and text
+            and needs_punctuation(text)
+        ):
+            try:
+                text = self._punc.restore(text)
+            except Exception as exc:  # noqa: BLE001 - 标点是可选增强，不能拖垮识别
+                log.debug("窗口标点恢复失败（%s）：%s", self.key, exc)
+        return text.strip()
+
 
 class SenseVoiceEngine(_SherpaEngine):
     key = "sensevoice"

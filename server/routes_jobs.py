@@ -191,6 +191,10 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。
         write_audit=payload.apply != "replace_range",
+        # 短选区轻声兜底只给核对台的人工短选区：`replace_range` 就是「转写选区 /
+        # 重转此句 / 质检补录」三种入口的共同语义。整片与追加任务保持 False，
+        # 全局 VAD 默认值与整片「空结果」的防线因此都不动。
+        short_clip_fallback=payload.apply == "replace_range",
         param_values=dict(values),
     )
 
