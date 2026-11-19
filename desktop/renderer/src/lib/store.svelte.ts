@@ -33,6 +33,19 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import {
+  exportModeLabel,
+  exportQualityLabel,
+  exportResolutionLabel,
+  exportTrackLabel,
+  shortPath,
+} from './exportLabels';
+import {
+  DEFAULT_EXPORT_STYLE,
+  readSavedExportStyle,
+  readSavedPreviewText,
+  saveExportStyleLocal,
+} from './exportStorage';
 import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
@@ -921,40 +934,8 @@ export const settings = $state({
 });
 
 /** 烧录样式：字段与 core/video_export.py 的 SubtitleStyle 一一对应。 */
-const DEFAULT_EXPORT_STYLE: SubtitleStylePayload = {
-  preset: 'fansub',
-  font: 'pingfang',
-  weight: 'bold',
-  size: 1,
-  outline: 1,
-  shadow: true,
-  position: 'bottom',
-  margin: 4.5,
-  fill: '#FFFFFF',
-  outline_color: '#000000',
-};
-
-const EXPORT_STYLE_KEY = 'kikusub.exportStyle';
-const EXPORT_PREVIEW_TEXT_KEY = 'kikusub.exportPreviewText';
-
-function readSavedExportStyle(): { style: SubtitleStylePayload; saved: boolean } {
-  if (typeof localStorage === 'undefined') {
-    return { style: { ...DEFAULT_EXPORT_STYLE }, saved: false };
-  }
-  try {
-    const raw = JSON.parse(localStorage.getItem(EXPORT_STYLE_KEY) || 'null');
-    if (raw && typeof raw === 'object') {
-      return { style: { ...DEFAULT_EXPORT_STYLE, ...raw }, saved: true };
-    }
-  } catch {
-    /* 坏数据忽略，回默认 */
-  }
-  return { style: { ...DEFAULT_EXPORT_STYLE }, saved: false };
-}
-
 const initialExportStyle = readSavedExportStyle();
-const initialPreviewText =
-  (typeof localStorage !== 'undefined' && localStorage.getItem(EXPORT_PREVIEW_TEXT_KEY)) || '';
+const initialPreviewText = readSavedPreviewText();
 
 /** 成片导出面板状态。 */
 export const exporter = $state({
@@ -1598,12 +1579,7 @@ export async function loadExportStyles(force = false) {
 }
 
 export function saveExportStyle() {
-  try {
-    localStorage.setItem(EXPORT_STYLE_KEY, JSON.stringify(exporter.style));
-    localStorage.setItem(EXPORT_PREVIEW_TEXT_KEY, exporter.previewText.slice(0, 120));
-  } catch {
-    /* 存储不可用时只影响记忆，不影响导出 */
-  }
+  saveExportStyleLocal(exporter.style, exporter.previewText);
 }
 
 export function applyExportStylePreset(key: string) {
@@ -1823,7 +1799,7 @@ export function setExportResolution(resolution: ExportUiState['resolution']) {
 export function setExportQuality(preset: ExportUiState['preset']) {
   editExportUi(
     'quality',
-    (from, to) => `码率档位 ${exportQualityLabel(from.preset)} → ${exportQualityLabel(to.preset)}`,
+    (from, to) => `码率档位 ${exportQualityLabel(from.preset, exporter.options?.presets)} → ${exportQualityLabel(to.preset, exporter.options?.presets)}`,
     () => {
       exporter.preset = preset;
     },
@@ -1857,32 +1833,6 @@ export function setExportOutDir(path: string) {
     () => {
       exporter.outDir = path;
     },
-  );
-}
-
-function shortPath(path: string): string {
-  if (!path) return '—';
-  const parts = path.split('/').filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : path;
-}
-
-function exportModeLabel(mode: string): string {
-  return ({ burn: '烧录硬字幕', soft: '软字幕 MP4', copy: '仅封装' } as Record<string, string>)[mode] ?? mode;
-}
-
-function exportTrackLabel(track: string): string {
-  return ({ source: '原文', target: '译文', both: '双语' } as Record<string, string>)[track] ?? track;
-}
-
-function exportResolutionLabel(resolution: string): string {
-  return resolution === 'source' ? '原始' : resolution;
-}
-
-function exportQualityLabel(preset: string): string {
-  return (
-    exporter.options?.presets.find((item) => item.key === preset)?.label ??
-    ({ small: '小', balanced: '甜点', high: '高', ultra: '极高' } as Record<string, string>)[preset] ??
-    preset
   );
 }
 

@@ -30,8 +30,12 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              所以先把能抽的两块抽走：画布画法 → lib/waveformCanvas.ts、
 #              查找命中计算 → lib/findMatches.ts、旧播放头持久化 → lib/reviewViewport.ts。
 #              抽完并接线后的实测值就是新预算（只许再降）。
+# 2026-11-20（片段范围）：局部处理 / 导出范围要给 store 加状态与请求字段，先把两块
+#              纯逻辑抽走：导出文案标签 → lib/exportLabels.ts、导出样式持久化 →
+#              lib/exportStorage.ts（store 降到 3258），再用腾出的行数接线
+#              `exporter.clip` + `setExportClip()`。
 BUDGET = {
-    "lib/store.svelte.ts": 3278,
+    "lib/store.svelte.ts": 3258,
     "views/ReviewView.svelte": 3787,
 }
 
