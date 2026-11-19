@@ -301,7 +301,7 @@
   → 重问一次（附 `STRICT_HINT`），仍失败返回 502，不产生半份结果。结果不落盘，
   只存在当前会话内存；A/B 文本或时间变了就自动失效。
 - **界面**：`components/ArbitrationCard.svelte`，挂在 `SecondOpinionCard` 内部；
-  A/B 一致时不显示判定入口。第三版带「第三版 / 与当前稿一致 / 与 X 相同」徽章；
+  A/B 一致时不显示判定入口。第三版带「第三版 / 与当前稿一致 / 与 B 版相同」徽章；
   **即使与 B 相同也保留「采用（同 B 版）」按钮**。朗读走 `speakTextTagged()`，
   与 A/B 的 TTS 同一音色；不会自动采用。
 - **模型覆盖**：`settings.json` 的 `ai_arbitrate_base_url` / `ai_arbitrate_model` 为空
@@ -320,11 +320,24 @@
   user 末尾追加 `/no_think`；否则 LM Studio 里的 Qwen3.8 常把答案全写进
   `reasoning_content`、content 为空。本地模型还会带 assistant 前缀 `{"text": "`，
   让模型直接续写 JSON（实测 Qwen3.8 27B 从「只出推理」变为稳定返回 JSON、约 2–5 秒）；
-  云端模型不带前缀。加载本地模型时建议把上下文限制在 8k 左右，本功能最多几百字，
-  不需要长上下文。
+  云端模型不带前缀。本地模型默认加载 2048 context：本功能最多几百字，2048 已足够，
+  也最省内存。
+- **本地上下文档位**：`settings.json` 的 `ai_local_context` 只支持 2048 / 4096 / 8192，
+  默认 **2048**。设置页只在判定目标是 **本机 loopback LM Studio** 时显示档位与
+  「加载 / 重载本地模型」按钮；远程 API、局域网地址或非 LM Studio 服务不显示/不执行。
+  重载走 `POST /api/ai/local-model/load`：先 `POST /api/v1/models/unload` 卸掉该模型的
+  已加载实例，再 `POST /api/v1/models/load` 带 `context_length` 加载；按钮立即生效。
+  判定前只做一次轻量 status 探测，**只有模型未加载或档位不符才校准一次**；模型已在
+  目标档位时是纯 no-op，绝不每个请求重载 27B。实现集中在 `core/ai_local_model.py`，
+  不污染 `ai_client.py`。
+- **自动判定（P2-4）**：`settings.json` 的 `ai_auto_arbitrate` 默认 `false`。开启后，
+  B 引擎复核完成且 A/B 不一致时自动触发一次判定；同一媒体 + 同一句 + 同一 B 文本
+  只自动跑一次，避免选中/重渲染造成重复调用。切换句子、改 A/B、卡片卸载或点取消
+  都会通过 `AbortController` 中断在途请求。不做提示词库第六类，也不做 QaPanel 入口。
 - **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
   结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
 - **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 结果校验）、
-  `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、字幕不变）、
-  `desktop/test/arbitration.test.mjs`（上下文 / 分类 / 失效）、
+  `tests/test_ai_local_model.py`（loopback 限制 / 卸载后重载 / 同档位 no-op）、
+  `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、字幕不变、
+  上下文档位/自动开关）、`desktop/test/arbitration.test.mjs`（上下文 / 分类 / 失效）、
   `tools/shots/verify_arbitration.mjs`（无窗口真实界面）。
