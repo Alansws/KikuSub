@@ -687,6 +687,7 @@ def test_arbitrate_local_without_key_and_no_history(ctx, monkeypatch):
         seen["model"] = config.model
         seen["key"] = config.api_key
         seen["has_timecode"] = "00:00" in user or "-->" in user
+        seen["prefill"] = kw.get("assistant_prefill")
         return {"text": "今日は雨だ", "note": "同音字修正"}
 
     monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
@@ -709,6 +710,7 @@ def test_arbitrate_local_without_key_and_no_history(ctx, monkeypatch):
     assert body["model"] == "qwen-local"
     assert seen["key"] == ""
     assert seen["has_timecode"] is False
+    assert seen["prefill"] == '{"text": "'
     assert _texts(client) == before
 
 

@@ -312,3 +312,26 @@ def test_extract_content_falls_back_to_reasoning_content():
     )
     assert client._extract_content(body) == '{"text": "ok"}'
     assert client.json_from_text(client._extract_content(body)) == {"text": "ok"}
+
+
+def test_chat_json_assistant_prefill_is_sent_and_joined(monkeypatch):
+    seen = []
+
+    def fake(url, payload, conf):
+        seen.append(payload)
+        body = json.dumps(
+            {
+                "choices": [
+                    {"message": {"content": 'もっと", "note": "理由"}'}}
+                ]
+            },
+            ensure_ascii=False,
+        )
+        return 200, body
+
+    monkeypatch.setattr(client, "_post", fake)
+    out = client.chat_json(
+        cfg(), "sys", "user", assistant_prefill='{"text": "'
+    )
+    assert out == {"text": "もっと", "note": "理由"}
+    assert seen[0]["messages"][-1] == {"role": "assistant", "content": '{"text": "'}

@@ -299,10 +299,18 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
         after=payload.after[:10],
         no_think="qwen" in model_lower or "think" in model_lower,
     )
+    # 本地推理模型（尤其 Qwen3 系）用 assistant 前缀把输出钉成 JSON；云端模型
+    # 走正常 JSON 模式，避免个别网关不接受 assistant 预填。
+    prefill = '{"text": "' if ai_client.is_local_url(base_url) else ""
     started = time.perf_counter()
     try:
         data = ai_client.chat_json(
-            config, system, user, retries=1, temperature=0.1
+            config,
+            system,
+            user,
+            retries=1,
+            temperature=0.1,
+            assistant_prefill=prefill,
         )
         try:
             result = ai_arbitrate.parse_result(data)
@@ -313,6 +321,7 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
                 user,
                 retries=1,
                 temperature=0.1,
+                assistant_prefill=prefill,
             )
             result = ai_arbitrate.parse_result(data)
     except ai_client.AiError as exc:

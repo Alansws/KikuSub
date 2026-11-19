@@ -245,6 +245,7 @@ def chat_json(
     cancel=None,
     retries: int = 2,
     temperature: float = 0.2,
+    assistant_prefill: str = "",
 ) -> dict:
     """发一次对话请求并要求返回 JSON 对象。
 
@@ -253,12 +254,17 @@ def chat_json(
     """
     cfg.ensure_ready()
     url = endpoint(cfg.base_url)
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    if assistant_prefill:
+        # 本地 Qwen 一类推理模型在“自由生成”时会把答案全写进 reasoning_content，
+        # content 为空；用 assistant 前缀把回复钉死在 JSON 上，模型会直接续写。
+        messages.append({"role": "assistant", "content": assistant_prefill})
     payload: dict[str, Any] = {
         "model": cfg.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
         "temperature": temperature,
         "stream": False,
         "response_format": {"type": "json_object"},
@@ -310,7 +316,10 @@ def chat_json(
                 f"模型服务拒绝了请求（{status}）", status=status, detail=body
             )
 
-        parsed = json_from_text(_extract_content(body))
+        content = _extract_content(body)
+        if assistant_prefill and not content.lstrip().startswith(("{", "[")):
+            content = assistant_prefill + content
+        parsed = json_from_text(content)
         log.info(
             "AI 调用成功 | host=%s | model=%s | %.1fs | prompt=%d 字",
             _host(cfg.base_url),
