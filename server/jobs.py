@@ -253,6 +253,7 @@ class JobManager:
         cues,
         translation_texts: list[str] | None,
         out_dir: Path,
+        chapters: list | None = None,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
@@ -267,6 +268,7 @@ class JobManager:
             list(cues),
             list(translation_texts or []),
             Path(out_dir),
+            list(chapters or []),
         )
         return job
 
@@ -279,6 +281,7 @@ class JobManager:
         cues,
         translation_texts: list[str],
         out_dir: Path,
+        chapters: list | None = None,
     ) -> None:
         from core import video_export
 
@@ -311,6 +314,7 @@ class JobManager:
                 options,
                 out_dir,
                 translation_texts=translation_texts,
+                chapters=list(chapters or []),
                 on_progress=on_progress,
                 cancel_event=job.token,
             )

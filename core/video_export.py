@@ -38,6 +38,7 @@ from .procutil import (
     terminate_process,
     unregister_process,
 )
+from .chapters import ChapterMark, layout_chapters, write_ffmetadata
 from .subtitles import SubtitleCue, cues_to_srt
 from .textio import next_available_path
 
@@ -464,6 +465,8 @@ class ExportOptions:
     preset: str = "balanced"
     burn_subtitles: bool = True
     export_srt: bool = True
+    # 有标记时默认写入章节（导出页的开关走 setExportChapters，进统一历史）
+    write_chapters: bool = True
     style: SubtitleStyle = field(default_factory=default_style)
 
     def validate(self) -> None:
@@ -497,6 +500,8 @@ class ExportPlan:
     warnings: list[str] = field(default_factory=list)
     source: SourceInfo = field(default_factory=SourceInfo)
     style: dict = field(default_factory=dict)
+    # 实际会写进容器的章节区间（已排序、已衔接/防重叠）
+    chapters: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -515,6 +520,7 @@ class ExportPlan:
             "warnings": self.warnings,
             "source": self.source.to_dict(),
             "style": self.style,
+            "chapters": self.chapters,
         }
 
 
@@ -603,8 +609,18 @@ def _copy_container(source: SourceInfo) -> tuple[str, str]:
     return "mkv", ".mkv"
 
 
-def plan_export(source: SourceInfo, options: ExportOptions) -> ExportPlan:
+def plan_export(
+    source: SourceInfo,
+    options: ExportOptions,
+    chapter_marks: list[ChapterMark] | None = None,
+) -> ExportPlan:
     options.validate()
+    # 章节在规划里就要算好：导出页要显示「写入后是这几段」，编码阶段不再改口径。
+    chapters = (
+        [chapter.to_dict() for chapter in layout_chapters(chapter_marks or [], source.duration)]
+        if (options.write_chapters and chapter_marks)
+        else []
+    )
     if not source.has_video or source.width <= 0 or source.height <= 0:
         raise ExportError("当前媒体没有可导出的视频画面（纯音频文件请直接导出字幕）")
     if options.mode == "burn":
@@ -643,6 +659,7 @@ def plan_export(source: SourceInfo, options: ExportOptions) -> ExportPlan:
             suffix=ext,
             warnings=warnings,
             source=source,
+            chapters=chapters,
         )
 
     target_height = RESOLUTIONS.get(options.resolution, 1080)
@@ -694,6 +711,7 @@ def plan_export(source: SourceInfo, options: ExportOptions) -> ExportPlan:
         suffix=ext,
         warnings=warnings,
         source=source,
+        chapters=chapters,
     )
 
 
@@ -1291,14 +1309,20 @@ def run_export(
     out_dir: Path,
     *,
     translation_texts: list[str] | None = None,
+    chapters: list[ChapterMark] | None = None,
     on_progress=None,
     cancel_event=None,
 ) -> dict:
-    """阻塞执行导出；成功返回结果字典，失败抛 :class:`ExportError` / ``CommandCancelled``。"""
+    """阻塞执行导出；成功返回结果字典，失败抛 :class:`ExportError` / ``CommandCancelled``。
+
+    ``chapters`` 是章节 / 时刻点标记；``options.write_chapters`` 为真且有内容时
+    会生成 FFMETADATA 并通过 ``-map_chapters`` 注入输出容器。三种模式
+    （burn / soft / copy）都支持——「仅封装」因此能在几秒内产出带章节的片子。
+    """
     options.validate()
     if not cues:
         raise ExportError("当前没有字幕，先转写或导入一份再导出")
-    plan = plan_export(info, options)
+    plan = plan_export(info, options, chapters)
     if options.mode == "burn":
         # 提前确认字体可用，别等编码到一半才报错
         _ensure_style_font(options.style)
@@ -1323,6 +1347,7 @@ def run_export(
 
     tmpdir = Path(tempfile.mkdtemp(prefix="kikusub-export-"))
     started = time.time()
+    chapter_intervals = plan.chapters
     try:
         srt_path = tmpdir / "subtitles.srt"
         srt_path.write_text(cues_to_srt(track_cues), encoding="utf-8")
@@ -1437,6 +1462,15 @@ def run_export(
 
         for sprite in extra_inputs:
             cmd += ["-loop", "1", "-i", str(sprite)]
+
+        # 章节：在最后一个输入之后追加 FFMETADATA，再按它的输入序号取 chapter。
+        # 输入序号 = 1(媒体) + 1(软/仅封装的字幕) + sprite 数；burn 模式没有字幕输入。
+        if chapter_intervals:
+            meta_path = tmpdir / "chapters.ffmetadata"
+            write_ffmetadata(meta_path, chapters or [], info.duration)
+            chapter_input = 1 + (0 if options.mode == "burn" else 1) + len(extra_inputs)
+            cmd += ["-i", str(meta_path)]
+            map_args += ["-map_chapters", str(chapter_input)]
         if filter_complex:
             cmd += ["-filter_complex", filter_complex]
 
@@ -1528,6 +1562,7 @@ def run_export(
             "preset": options.preset,
             "container": plan.container,
             "subtitle_count": len(track_cues),
+            "chapters": len(chapter_intervals),
             "skipped": skipped,
             "style": options.style.to_dict() if options.mode == "burn" else {},
         }

@@ -28,6 +28,7 @@ from .jobs import JobManager
 from .media import MediaError, MediaStore
 from .routes_ai import router as ai_router
 from .routes_alt_review import router as alt_review_router
+from .routes_chapters import router as chapters_router
 from .routes_cues import router as cues_router
 from .routes_export import router as export_router
 from .routes_jobs import router as jobs_router
@@ -210,6 +211,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     app.include_router(media_router)
     app.include_router(cues_router)
+    app.include_router(chapters_router)
     app.include_router(export_router)
     app.include_router(presets_router)
     app.include_router(prompts_router)
