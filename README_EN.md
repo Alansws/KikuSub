@@ -32,13 +32,13 @@ A Japanese subtitle tool that runs **entirely on your own machine**. Your video 
 - **Transcribe** — Silero VAD segments the speech, then a switchable Japanese engine produces timed subtitles.
 - **Review** — video and waveform side by side; drag a cue block to retime it, double-click to edit, ⌘Z to undo.
 - **QA** — missed speech, dropped lines and suspicious short cues are merged into one queue you can audition and patch.
-- **AI polish / structure suggestions / re-segmentation / translate** — your own model produces a *proposal*; you diff it in two columns, then apply the batch. A structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically; a re-segmentation lane replaces whole index ranges from a complete SRT. Translations live in a parallel track and export as source, target or bilingual.
+- **Dual-engine review / single-sentence AI arbitration / AI polish / structure suggestions / re-segmentation / translate** — when the two engines disagree on one line, the inspector can send just the two texts plus three lines of context before/after to your model; the answer appears as a third card with TTS and a one-click adopt (⌘Z undoes it). AI polish produces a *proposal* you diff in two columns, then apply the batch. A structure lane accepts the model's ops (merge / retime / replace text / insert / delete), previews them, and applies the selection atomically; a re-segmentation lane replaces whole index ranges from a complete SRT. Translations live in a parallel track and export as source, target or bilingual.
 - **Prompt library** — prompt templates as cards: click to select, double-click to edit; copying fills in the current SRT.
 - **Export** — SRT / VTT / TXT, or a one-click video export with burned-in / soft subtitles, resolution and a "small / sweet spot / high / ultra" bitrate ladder.
 - **Export settings are undoable too** — font size, outline, presets, mode, track, resolution and quality share one history with subtitles, translations, QA state and AI suggestion edits; ⌘Z always undoes the most recent step, and the history panel is a single list.
 - **Subtitle styles** — burned-in subtitles come with fansub-style presets (standard, heavy outline, rounded anime, movie serif, Japanese broadcast, light) plus per-field control over font, weight, size, outline, shadow and position. The preview renders with the real video frame and offers full-frame and font close-up views.
 
-Everything except the optional AI features is local inference.
+Everything except the optional AI features is local inference. AI endpoints can be cloud (DeepSeek) or self-hosted OpenAI-compatible servers such as LM Studio / Ollama; local servers may run without an API key, and the single-sentence arbitration lane can use a separate local model without changing the global polish/translate settings.
 
 ## Features
 
@@ -277,9 +277,11 @@ media file
 
 ## Configuring AI
 
-Under Settings → **AI & skills → AI options** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek.
+Under Settings → **AI & skills → AI options** you fill in three fields: **Base URL**, **model name**, **API key**. Any OpenAI-compatible `chat/completions` endpoint works; the default is DeepSeek. Local servers (LM Studio `http://127.0.0.1:1234/v1`, Ollama `http://127.0.0.1:11434/v1`, llama.cpp, vLLM) are detected as local and may leave the key empty.
 
-- **The key never enters `settings.json` or the logs.** The main process encrypts it with a machine-local master key (AES-256-GCM) and stores the ciphertext in `preferences.json` under an `aik1:` prefix; the master key is `{dataDir}/.ai-key` with mode 0600. The renderer decrypts it only for the request and sends it once as `X-AI-Key`; the server layer never reads, writes or logs it.
+An optional **single-sentence arbitration override** (Base URL / model / key) can point that one feature at a local model while polish/translate keep using the cloud endpoint. Its key is stored separately (`scope=arbitrate`, `aiArbitrateKey` ciphertext) and sent as `X-AI-Arbitrate-Key`; a local override never receives the global key.
+
+- **The key never enters `settings.json` or the logs.** The main process encrypts it with a machine-local master key (AES-256-GCM) and stores the ciphertext in `preferences.json` under an `aik1:` prefix; the master key is `{dataDir}/.ai-key` with mode 0600. The renderer decrypts it only for the request and sends it once as `X-AI-Key` (arbitration override: `X-AI-Arbitrate-Key`); the server layer never reads, writes or logs it.
 - Not using `safeStorage` is deliberate: the app ships as a DMG with ad-hoc signing, so the cdhash changes on every release and Keychain ACLs would invalidate every user's key on upgrade.
 - Generation runs in the single-slot job queue and reuses `/ws/jobs/{id}`. A malformed proposal is retried exactly once; after that the whole batch is abandoned rather than producing half a proposal.
 - A change rate above 40% raises a warning so the model cannot silently rewrite the dialogue.

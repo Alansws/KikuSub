@@ -114,6 +114,22 @@ node tools/shots/verify_review_transport.mjs
 截图落在系统临时目录的 `kikusub-review-transport/review-transport.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.6。
 
+## 点行选区与单句 AI 判定回归
+
+2026-11-20 新增两条用户报障/新流程的静默回归：
+
+```bash
+# 点表格行 / 点底部字幕块 → 选区工具条；Esc 只清选区、不丢当前行
+node tools/shots/verify_cue_selection.mjs
+
+# A/B + 第三版卡片：徽章、理由、朗读、采用按钮（dev seed，不加载模型）
+node tools/shots/verify_arbitration.mjs
+```
+
+两者都走 `--screenshot` 静默路径；沙箱环境加
+`KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`。截图落在系统临时目录的
+`kikusub-cue-selection/` 与 `kikusub-arbitration/`。
+
 ## 设置页专用矩阵
 
 设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：

@@ -72,7 +72,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 零样本克隆、音色仓库、懒加载/空闲卸载、权重下载。**不 import fastapi / gradio**；torch 只在 `load()` 延迟导入。 |
 | `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、从视频切片建音色、上传/重命名/删除、模型下载、`/media/tts/*` 音频流。 |
 | `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`；结构建议在 `ai_structure.py`。 |
-| `core/ai_client.py` | OpenAI 兼容的纯 urllib 客户端（不引 SDK），只管传输与 JSON 解析。 |
+| `core/ai_client.py` | OpenAI 兼容纯 urllib 客户端；本地空 Key、think/围栏剥离；单句判定在 `ai_arbitrate.py`。 |
 | `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间。 |
 | `core/i18n.py` | 双语排版的唯一构造：`bilingual_cues()`（一条两行，烧录/叠加层）与 `bilingual_entries()`（每语种一条，字幕交付文件）。 |
 | `core/transcribe.py` | 共用字幕数据结构/格式、时间解析、FFmpeg 音频抽取、Anime Whisper、Silero VAD 和启发式分句。 |

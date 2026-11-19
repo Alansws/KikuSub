@@ -282,3 +282,47 @@
   （冻结键 / 平移 / 段身份 / ⌘Z 认领 / 重新分段落位）在 `desktop/renderer/src/lib/reshapePlan.ts`
   （纯函数，`desktop/test/reshapePlan.test.mjs`），`reshape.svelte.ts` 只留状态壳。
   用例：`tests/test_reshape.py`、`desktop/test/reshapePlan.test.mjs`。
+
+#### 3.7.7 单句 AI 判定（第三版，2026-11-20）
+
+> 触发：核对台里 A/B 两版引擎对同一句的转写不一致时，用户当前只能截图两版和上下文
+> 发给外部 AI，再手工改回来。这条车道把「问 AI → 看第三版 → 采用」收进检查器。
+
+- **不是提案**：没有 digest、没有提案文件、不经过 `apply_polish()`；它是检查器里的
+  第三张卡，采用时走既有 `updateCue()`（服务端一步历史，⌘Z 可退）。
+- **只发文本**：`POST /api/ai/arbitrate` 收 `{text_a, text_b, before[], after[], lang}`；
+  前后文各最多 3 句、每句最多 200 字，**绝不**包含时间轴、音频、截图或整片字幕。
+- **上下文口径**：前端按 `start` 排序后找到当前句的位置，**排除当前句索引**再取前后
+  各 3 句。不能用 `end <= cue.start` / `start >= cue.end` 过滤——转写选区的
+  `padStart/padEnd` 会让邻句轻微重叠，重叠条件会漏掉边缘邻句。
+- **分语种提示词**：`core/ai_arbitrate.build_prompt()` 按 `lang` 选日语 / 中文模板；
+  中文素材不得套日语助词/活用规则，日语素材也不按中文语序重写。未知语种走通用模板。
+- **结果校验**：只收 `{text, note}`；`text` 为空、超长（>300 字）、含 `-->` 或时间码
+  → 重问一次（附 `STRICT_HINT`），仍失败返回 502，不产生半份结果。结果不落盘，
+  只存在当前会话内存；A/B 文本或时间变了就自动失效。
+- **界面**：`components/ArbitrationCard.svelte`，挂在 `SecondOpinionCard` 内部；
+  A/B 一致时不显示判定入口。第三版带「第三版 / 与当前稿一致 / 与 X 相同」徽章；
+  **即使与 B 相同也保留「采用（同 B 版）」按钮**。朗读走 `speakTextTagged()`，
+  与 A/B 的 TTS 同一音色；不会自动采用。
+- **模型覆盖**：`settings.json` 的 `ai_arbitrate_base_url` / `ai_arbitrate_model` 为空
+  时逐字段跟随全局 AI 配置；非空时用它们。覆盖 Key 与全局 Key **分开加密**：
+  `aikey` 的 `scope='arbitrate'` 存 `aiArbitrateKey`，请求头是
+  `X-AI-Arbitrate-Key`；覆盖地址是本机/局域网时允许空 Key，且**不**把全局 Key
+  转发给本机服务。
+- **本地兼容**：`core/ai_client.is_local_url()` 认定 loopback / RFC1918 / `.local` /
+  `host.docker.internal`；`AiConfig.allow_no_key=True` 时 `ensure_ready()` 允许空 Key，
+  `_post()` 连空 `Authorization` 都不发。
+- **稳健解析**：`json_from_text()` 先剥 `<think>…</think>`、`<|…|>` 特殊 token 与
+  Markdown 围栏，再兜底取 `{…}`；`_extract_content()` 在 content 为空时回退
+  `reasoning_content`。本地后端不支持 `response_format`（400/404/422）时去掉该字段
+  重发一次，不占重试次数。
+- **Qwen 推理模型**：模型名含 `qwen` / `think` 时，`build_prompt(no_think=True)` 会在
+  user 末尾追加 `/no_think`；否则 LM Studio 里的 Qwen3.8 常把答案全写进
+  `reasoning_content`、content 为空。加载本地模型时建议把上下文限制在 8k 左右，
+  本功能最多几百字，不需要长上下文。
+- **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
+  结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
+- **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 结果校验）、
+  `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、字幕不变）、
+  `desktop/test/arbitration.test.mjs`（上下文 / 分类 / 失效）、
+  `tools/shots/verify_arbitration.mjs`（无窗口真实界面）。
