@@ -70,12 +70,21 @@ class LocalModelLoadRequest(BaseModel):
     context: int = ai_local_model.DEFAULT_CONTEXT
 
 
+class ArbitrateHistoryItem(BaseModel):
+    role: str = ""
+    text: str = ""
+
+
 class ArbitrateRequest(BaseModel):
     text_a: str = ""
     text_b: str = ""
     before: list[str] = Field(default_factory=list)
     after: list[str] = Field(default_factory=list)
     lang: str = "ja"
+    # 用户的听音线索（空耳 / 罗马音 / 描述）；不是时间轴，也不是音频。
+    hint: str = Field(default="", max_length=ai_arbitrate.MAX_HINT_CHARS)
+    # 多轮追问记录；角色只认 user / assistant，具体轮数与字符预算由 core 裁剪。
+    history: list[ArbitrateHistoryItem] = Field(default_factory=list)
 
 
 class AiJobRequest(BaseModel):
@@ -302,10 +311,16 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
 
     text_a = (payload.text_a or "").strip()
     text_b = (payload.text_b or "").strip()
-    if not text_a and not text_b:
-        raise HTTPException(status_code=422, detail="两版都为空，没有可判定的文本")
-    if text_a and text_b and text_a == text_b:
-        raise HTTPException(status_code=422, detail="两版一致，不需要 AI 判定")
+    hint = (payload.hint or "").strip()
+    has_history = any((item.text or "").strip() for item in payload.history)
+    has_context = any((item or "").strip() for item in [*payload.before, *payload.after])
+    # 不再要求 A/B 双版且不一致：音量太小、B 引擎返回空、只有手动新建的空字幕块
+    # 时，只要还有听音线索 / 追问 / 上下文，就允许请求 AI 还原。
+    if not (text_a or text_b or hint or has_history or has_context):
+        raise HTTPException(
+            status_code=422,
+            detail="没有可判定的文本、上下文或听音线索",
+        )
 
     base_url, model, override = _arbitrate_target(settings)
     key = (
@@ -341,6 +356,10 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
         text_b=text_b,
         before=payload.before[-10:],
         after=payload.after[:10],
+        hint=hint,
+        history=[
+            {"role": item.role, "text": item.text} for item in payload.history
+        ],
         no_think="qwen" in model_lower or "think" in model_lower,
     )
     # 本地推理模型（尤其 Qwen3 系）用 assistant 前缀把输出钉成 JSON；云端模型

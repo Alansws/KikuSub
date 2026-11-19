@@ -660,7 +660,7 @@ def test_arbitrate_remote_without_key_is_401(ctx):
     assert res.status_code == 401
 
 
-def test_arbitrate_rejects_empty_or_identical(ctx):
+def test_arbitrate_requires_some_material(ctx):
     client, _ = ctx
     _enable_ai(client)
     empty = client.post(
@@ -669,12 +669,112 @@ def test_arbitrate_rejects_empty_or_identical(ctx):
         json={"text_a": "", "text_b": "", "before": [], "after": [], "lang": "ja"},
     )
     assert empty.status_code == 422
-    same = client.post(
+    # 只有空白上下文 / 空白线索同样算“没有材料”
+    blank = client.post(
         "/api/ai/arbitrate",
         headers={**AUTH, "X-AI-Key": "k"},
-        json={"text_a": "同じ", "text_b": "同じ", "before": [], "after": [], "lang": "ja"},
+        json={
+            "text_a": " ",
+            "text_b": "",
+            "before": [""],
+            "after": ["  "],
+            "hint": " ",
+            "history": [{"role": "user", "text": " "}],
+            "lang": "ja",
+        },
     )
-    assert same.status_code == 422
+    assert blank.status_code == 422
+
+
+def test_arbitrate_allows_identical_versions_with_context(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client)
+    seen = {}
+
+    def fake_chat(config, system, user, **kw):
+        seen["user"] = user
+        return {"text": "同じ", "note": ""}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={
+            "text_a": "同じ",
+            "text_b": "同じ",
+            "before": ["前のセリフ"],
+            "after": [],
+            "lang": "ja",
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert "前のセリフ" in seen["user"]
+
+
+def test_arbitrate_hint_only_uses_listening_clue(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client)
+    seen = {}
+
+    def fake_chat(config, system, user, **kw):
+        seen["system"] = system
+        seen["user"] = user
+        return {"text": "すごい", "note": "按听音线索还原"}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={"hint": "斯国一，听起来像 sugoi", "before": [], "after": [], "lang": "ja"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["text"] == "すごい"
+    assert "斯国一" in seen["user"] and "sugoi" in seen["user"]
+    assert "听音线索" in seen["user"]
+    assert "没有完整听清" in seen["system"]
+    assert "00:" not in seen["user"] and "-->" not in seen["user"]
+
+
+def test_arbitrate_history_only_and_keeps_recent_rounds(ctx, monkeypatch):
+    client, _ = ctx
+    _set_local_ai(client)
+    seen = {}
+
+    def fake_chat(config, system, user, **kw):
+        seen["system"] = system
+        seen["user"] = user
+        return {"text": "もう一回", "note": ""}
+
+    monkeypatch.setattr("core.ai_client.chat_json", fake_chat)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers=AUTH,
+        json={
+            "before": [],
+            "history": [
+                {"role": "user", "text": "听起来像 one more"},
+                {"role": "assistant", "text": "もう一回"},
+                {"role": "tool", "text": "被忽略的角色"},
+            ],
+            "lang": "ja",
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert "もう一回" in seen["user"]
+    assert "one more" in seen["user"]
+    assert "被忽略的角色" not in seen["user"]
+    assert "多轮追问" in seen["system"]
+
+
+def test_arbitrate_rejects_overlong_hint(ctx):
+    client, _ = ctx
+    _enable_ai(client)
+    res = client.post(
+        "/api/ai/arbitrate",
+        headers={**AUTH, "X-AI-Key": "k"},
+        json={"hint": "あ" * 401, "lang": "ja"},
+    )
+    assert res.status_code == 422
 
 
 def test_arbitrate_local_without_key_and_no_history(ctx, monkeypatch):
