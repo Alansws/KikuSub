@@ -702,7 +702,10 @@ def export_cues(
                 selected.cues, None, window.start, window.end
             )
         else:
-            picked_texts = [transcriptions[index] for index in selected.indices]
+            picked_texts = [
+                transcriptions[index] if index < len(transcriptions) else ""
+                for index in selected.indices
+            ]
             cues, shifted_texts = shift_cues_to_clip(
                 selected.cues, picked_texts, window.start, window.end
             )
