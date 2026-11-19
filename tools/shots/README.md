@@ -124,11 +124,16 @@ node tools/shots/verify_cue_selection.mjs
 
 # A/B + 第三版卡片：徽章、理由、朗读、采用按钮（dev seed，不加载模型）
 node tools/shots/verify_arbitration.mjs
+
+# 常驻 AI 区（B 返回空也能用）+ 听音线索草稿缓存 + 多轮对话浮窗拖动/缩放/Esc
+# 以及：发送追问 / 清空重判彻底分离（重判请求体无旧 history）、撤销追问后结果卡同步、
+# 复制按钮、文本可选中、右侧只保留一个对话入口
+node tools/shots/verify_arbitration_dialog.mjs
 ```
 
-两者都走 `--screenshot` 静默路径；沙箱环境加
+都走 `--screenshot` 静默路径；沙箱环境加
 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`。截图落在系统临时目录的
-`kikusub-cue-selection/` 与 `kikusub-arbitration/`。
+`kikusub-cue-selection/`、`kikusub-arbitration/` 与 `kikusub-arbitration-dialog/`。
 
 ## 设置页专用矩阵
 
@@ -169,3 +174,33 @@ node tools/shots/capture_ai_workbench.mjs --out docs/images/shots/baseline
 `settings` 页有少量运行时文本（模型目录、日志尾巴），PSNR 会落在 85–99dB 之间波动，
 不是回归。`transcribe` / `review` 在同样 seed 下是逐像素一致的（inf）。AI 三页的夹具时间戳固定，
 同一台机器上应接近逐像素一致；状态栏的加速设备（MPS / CPU）随机器不同，不作为跨机器基线。
+
+## 核对台工作现场持久化回归
+
+切去别的页面再回来，波形包络**不重新请求**、缩放 / 播放头 / 选区按原样恢复，快照按
+媒体路径写进 localStorage（最近 50 部）。脚本在真实界面里统计 `/peaks` 请求数并读回
+`localStorage['kikusub.reviewViewports']`。
+
+```bash
+node tools/shots/verify_review_viewport.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_review_viewport.mjs
+```
+
+截图落在系统临时目录的 `kikusub-review-viewport/review-viewport.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.7。
+
+## 章节 / 时刻点标记与成片写入回归
+
+检查器「章节」页签 + 波形顶部旗标：播放头插时刻点、选区设为章节（回车添加）、
+编辑标题、⌘Z 一次撤回、旗标单击跳转；随后用「仅封装」真实导出一次，再用
+`ffprobe -show_chapters` 读回容器里的章节（标题 / 起止 / 有序不重叠）。
+
+```bash
+node tools/shots/verify_chapters.mjs
+# 只截导出页（看「写入章节标记 N 个」开关）
+CHAPTERS_FINAL_VIEW=export node tools/shots/verify_chapters.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_chapters.mjs
+```
+
+截图落在 `kikusub-chapters/chapters-review.png` 与 `chapters-export.png`。
+契约口径见 `docs/contracts/review-console.md` §3.4.9 与 `export-and-prompt.md` §3.8.2。

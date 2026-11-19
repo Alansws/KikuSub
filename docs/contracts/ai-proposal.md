@@ -283,27 +283,72 @@
   （纯函数，`desktop/test/reshapePlan.test.mjs`），`reshape.svelte.ts` 只留状态壳。
   用例：`tests/test_reshape.py`、`desktop/test/reshapePlan.test.mjs`。
 
-#### 3.7.7 单句 AI 判定（第三版，2026-11-20）
+#### 3.7.7 单句 AI 辅助（第三版，2026-11-20）
 
 > 触发：核对台里 A/B 两版引擎对同一句的转写不一致时，用户当前只能截图两版和上下文
 > 发给外部 AI，再手工改回来。这条车道把「问 AI → 看第三版 → 采用」收进检查器。
+> 2026-11-20 扩展：ASR 完全没识别、B 引擎返回空、手动新建空字幕块时，只要能提供
+> 听音线索 / 追问记录 / 上下文之一，也能让 AI 还原，不再被「必须 A/B 双版且不一致」拦住。
 
 - **不是提案**：没有 digest、没有提案文件、不经过 `apply_polish()`；它是检查器里的
   第三张卡，采用时走既有 `updateCue()`（服务端一步历史，⌘Z 可退）。
-- **只发文本**：`POST /api/ai/arbitrate` 收 `{text_a, text_b, before[], after[], lang}`；
-  前后文各最多 3 句、每句最多 200 字，**绝不**包含时间轴、音频、截图或整片字幕。
+- **只发文本**：`POST /api/ai/arbitrate` 收
+  `{text_a, text_b, before[], after[], lang, hint?, history?}`。`hint` 是用户的听音
+  线索（空耳 / 罗马音 / 描述，≤400 字）；`history` 是最近的多轮追问
+  （`[{role: "user"|"assistant", text}]`）。前后文各最多 3 句、每句最多 200 字；
+  **绝不**包含时间轴、音频、截图或整片字幕。
+- **2048 context 预算**：`hint` ≤400 字、最多 6 轮追问、单条 ≤260 字；`core/ai_arbitrate.py`
+  先按 `MAX_USER_CHARS=1300` 从**最旧**的记录开始裁，再裁上下文，任何材料组合都不会
+  把 prompt 撑爆本地 2048 档位。
+- **422 放宽**：不再要求 A/B 都非空且不一致。只要 A/B 不一致、仅 A 或仅 B 非空、
+  有 `hint`、有 `history`、有上下文之一即可请求；只有 A、B、hint、上下文**全部为空**
+  才返回 422。两版一致但用户想复核也允许。
+- **提示词动态适配**：按实际材料走双版对照（dual）/ 两版一致复核（same）/ 单版纠偏
+  （single）/ 无识别纯靠上下文 + 听音线索还原（blind），并把 `hint`、`history` 作为
+  独立段落组织；输出仍是 `{"text": "...", "note": "..."}`，保留 `/no_think` 与本地
+  assistant 前缀。
 - **上下文口径**：前端按 `start` 排序后找到当前句的位置，**排除当前句索引**再取前后
   各 3 句。不能用 `end <= cue.start` / `start >= cue.end` 过滤——转写选区的
   `padStart/padEnd` 会让邻句轻微重叠，重叠条件会漏掉边缘邻句。
 - **分语种提示词**：`core/ai_arbitrate.build_prompt()` 按 `lang` 选日语 / 中文模板；
   中文素材不得套日语助词/活用规则，日语素材也不按中文语序重写。未知语种走通用模板。
+  听音线索只用于定位发音，最终输出必须是素材同语言的文本。
 - **结果校验**：只收 `{text, note}`；`text` 为空、超长（>300 字）、含 `-->` 或时间码
   → 重问一次（附 `STRICT_HINT`），仍失败返回 502，不产生半份结果。结果不落盘，
   只存在当前会话内存；A/B 文本或时间变了就自动失效。
-- **界面**：`components/ArbitrationCard.svelte`，挂在 `SecondOpinionCard` 内部；
-  A/B 一致时不显示判定入口。第三版带「第三版 / 与当前稿一致 / 与 B 版相同」徽章；
-  **即使与 B 相同也保留「采用（同 B 版）」按钮**。朗读走 `speakTextTagged()`，
-  与 A/B 的 TTS 同一音色；不会自动采用。
+- **界面常驻**：`components/ArbitrationCard.svelte` 挂在 `SecondOpinionCard` 内部、
+  **不在 `has` 分支里**；只要选中任意字幕行（含空字幕块、B 未跑或返回空）就用。
+  B 引擎返回空时明确提示「另一引擎未识别到内容，可补充听音线索直接让 AI 推断」。
+  A/B 一致不隐藏入口，按钮文案按材料自适应（让 AI 判定 / 辅助修正 / 根据线索推断）。
+- **听音线索输入**：AI 按钮上方是紧凑输入框（≤400 字，⌘↩ 快捷发送）；出结果后标签
+  变为「补充线索 / 追问」，并出现**独立的「发送追问」按钮**：只有输入框非空且用户明确
+  点它时，才把这条线索追加进 `history`。右侧边栏只展示**最新一轮**结果卡（含 TTS
+  朗读、复制与采用），不把长历史塞进窄边栏。
+- **重判与追问彻底分离（2026-11-20 用户报障）**：`arbitration.svelte.ts` 的 `runArbitration`
+  按 `mode` 分四路——`initial` / `followup` / `rejudge` / `auto`。`rejudge` 与 `auto`
+  **永远不发送 `history`**，请求体只带当前 A/B、前后文与（若输入框非空）本次新写的
+  `hint`；输入框为空时 `hint=""`。已有追问时主按钮文案变为「清空追问并重判」，绝不
+  再把上一轮追问或偏掉的 AI 回复喂回模型。`followup` 是唯一携带历史的路径。
+- **撤销 / 回退**：浮窗里每条用户追问右上角有「撤销这轮及之后」，底部还有
+  「↩ 撤回上一轮追问」。两者都在前端内存截断该轮及之后的 `messages`，并把右侧结果卡
+  同步回截断后最后一条 AI 回复；不重新请求模型。撤到只剩第 1 轮干净结果时，状态与
+  刚判完首轮完全一致。纯函数 `truncateFromUser()` / `lastUserPosition()` 在
+  `lib/arbitration.ts`，单测在 `desktop/test/arbitration.test.mjs`。
+- **多轮对话浮窗**：`components/ArbitrationDialog.svelte` 由卡片右上角「展开对话」
+  打开；可拖动 / 可缩放（参考质检浮窗，默认避开右侧「试听原声」）。浮窗内展示可折叠
+  上下文（前 3 / 后 3 句）与 A/B、完整历史、底部多行追问框；**每一条** AI 历史回复
+  都自带「朗读」「复制」与「采用」，采用同样走 `updateCue()`。
+- **只留一个对话入口**：右侧 AI 卡标题栏的「展开对话」是唯一入口；结果卡不再放
+  「查看对话 / 继续追问」这类重复按钮，窄边栏保持利落。
+- **可选中 / 可复制**：`SecondOpinionCard` 的 A/B 文本、`ArbitrationCard` 的 AI 文本
+  与理由、`ArbitrationDialog` 的上下文与每一轮台词/理由都显式 `user-select: text`，
+  允许划选局部假名或整句；A 卡、B 卡、AI 判定卡与浮窗每条 AI 回复的「朗读」旁都有
+  `CopyTextButton`，一键复制并短暂显示「已复制」。AI 结果与当前稿一致（按钮显示灰色
+  「当前稿」）时，复制入口仍保留。
+- **会话缓存**：对话按「媒体 + 起止时间」缓存在内存，切换句子不丢正在磨的对话；
+  该句时间 / A / B 被外部改写后线程判旧，界面提示「已失效」并要求重置，自动判定等
+  非 UI 路径也会从新快照重开，绝不把旧答案混进新请求。采用后同步线程快照，继续追问
+  不会立刻失效。
 - **模型覆盖**：`settings.json` 的 `ai_arbitrate_base_url` / `ai_arbitrate_model` 为空
   时逐字段跟随全局 AI 配置；非空时用它们。覆盖 Key 与全局 Key **分开加密**：
   `aikey` 的 `scope='arbitrate'` 存 `aiArbitrateKey`，请求头是
@@ -320,8 +365,8 @@
   user 末尾追加 `/no_think`；否则 LM Studio 里的 Qwen3.8 常把答案全写进
   `reasoning_content`、content 为空。本地模型还会带 assistant 前缀 `{"text": "`，
   让模型直接续写 JSON（实测 Qwen3.8 27B 从「只出推理」变为稳定返回 JSON、约 2–5 秒）；
-  云端模型不带前缀。本地模型默认加载 2048 context：本功能最多几百字，2048 已足够，
-  也最省内存。
+  云端模型不带前缀。本地模型默认加载 2048 context：本功能最多几百到一千多字，2048
+  已足够，也最省内存。
 - **本地上下文档位**：`settings.json` 的 `ai_local_context` 只支持 2048 / 4096 / 8192，
   默认 **2048**。设置页只在判定目标是 **本机 loopback LM Studio** 时显示档位与
   「加载 / 重载本地模型」按钮；远程 API、局域网地址或非 LM Studio 服务不显示/不执行。
@@ -331,13 +376,20 @@
   目标档位时是纯 no-op，绝不每个请求重载 27B。实现集中在 `core/ai_local_model.py`，
   不污染 `ai_client.py`。
 - **自动判定（P2-4）**：`settings.json` 的 `ai_auto_arbitrate` 默认 `false`。开启后，
-  B 引擎复核完成且 A/B 不一致时自动触发一次判定；同一媒体 + 同一句 + 同一 B 文本
-  只自动跑一次，避免选中/重渲染造成重复调用。切换句子、改 A/B、卡片卸载或点取消
-  都会通过 `AbortController` 中断在途请求。不做提示词库第六类，也不做 QaPanel 入口。
+  **只**在 B 引擎复核完成且 A、B 均非空且文本不一致时自动触发一次；同一媒体 + 同一句
+  + 同一 B 文本只自动跑一次，避免选中/重渲染造成重复调用。空白字幕、手动输入线索、
+  单版或两版一致都不会自动触发。切换句子、改 A/B、卡片卸载或点取消都会通过
+  `AbortController` 中断在途请求。不做提示词库第六类，也不做 QaPanel 入口。
 - **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
   结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
-- **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 结果校验）、
-  `tests/test_ai_local_model.py`（loopback 限制 / 卸载后重载 / 同档位 no-op）、
-  `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、字幕不变、
-  上下文档位/自动开关）、`desktop/test/arbitration.test.mjs`（上下文 / 分类 / 失效）、
-  `tools/shots/verify_arbitration.mjs`（无窗口真实界面）。
+- **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 动态模式 / 预算 /
+  结果校验）、`tests/test_ai_local_model.py`（loopback 限制 / 卸载后重载 / 同档位 no-op）、
+  `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、422 放宽、
+  hint/history 透传、字幕不变、文档位/自动开关）、
+  `desktop/test/arbitration.test.mjs`（上下文 / 分类 / 失效 / 线程键 / 追问裁剪 / 按钮文案 /
+  干净重判请求计划 / 撤销截断）、
+  `desktop/test/floatBox.test.mjs`（浮窗夹取）、
+  `tools/shots/verify_arbitration.mjs`（第三版真实界面）、
+  `tools/shots/verify_arbitration_dialog.mjs`（常驻区 / 空识别提示 / 草稿持久 / 浮窗
+  拖动缩放 / Esc / 发送追问与清空重判分离 / 请求体无旧 history / 撤销同步结果卡 /
+  复制反馈 / 文本可选中 / 单一对话入口）。

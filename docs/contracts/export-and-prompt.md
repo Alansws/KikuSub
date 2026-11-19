@@ -55,6 +55,22 @@
   `SPAWN_LOCK` 保证关机开始后不会再出生新的 ffmpeg；`server/__main__.py` 还有
   父进程看门狗（Electron 崩溃/被强杀时 sidecar 在 2s 内自杀）。
   **禁止**把这些改回裸 `subprocess.run` 或只 `child.kill()`。
+- **章节 / 时刻点写入（2026-11-20 新增）**：
+  - 导出页开关「写入章节标记」走 `setExportChapters()`（红线 8：进统一历史），
+    有标记时默认开，徽标显示当前标记数；`ExportOptions.write_chapters` 是唯一开关，
+    `GET /api/chapters` 的 `chapters` 是**实际会写进容器的区间**。
+  - 后端 `core/chapters.py` 按 `start` 排序并处理衔接/防重叠：时刻点 = 下一个标记
+    起点或片尾；区间不超过下一个起点；首个标记晚于 0 时补「开场」——MP4 的章节
+    是文本轨，ffmpeg 会把首章拉回 0，不补的话真实起点会丢。
+  - 生成 `;FFMETADATA1` + 每章 `[CHAPTER] / TIMEBASE=1/1000 / START / END / title`，
+    值里的 `\ ; # =` 与换行按 ffmetadata 规则转义（换行 = 反斜杠 + 真实换行）；
+    临时文件写好后追加为**最后一个输入**，再用 `-map_chapters <输入序号>` 注入。
+  - 三种模式都支持：`burn`（字幕精灵输入在前，序号 = 1 + sprite 数）、
+    `soft` / `copy`（序号 = 2）。「仅封装」因此几秒就能出带章节的 MP4/MKV，
+    不重编码、画质无损。
+  - 回归：`tests/test_export_chapters.py` 用 `ffprobe -show_chapters` 读回容器，
+    逐条核对标题 / 起止 / 有序不重叠（IINA 等播放器能直接跳转）；`burn` 用例在没有
+    中文字体的机器上按 marker skip。
 - **字幕样式（2026-11 新增）**：`SubtitleStyle`（字体/字重/字号/描边/阴影/位置/颜色）
   只影响 `burn`；字体以「文件名 + TTC 内 family/style 名」解析（macOS 的 PingFang、
   兰亭黑等位于 AssetsV2 的 hash 目录，禁止写死路径）。内置预设见 `STYLE_PRESETS`；

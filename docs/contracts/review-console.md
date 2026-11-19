@@ -457,3 +457,92 @@
 - **回归**：`desktop/test/frameStep.test.mjs`、`cueEdit.test.mjs`、`cueSnap.test.mjs`、
   `timelineView.test.mjs`、`playbackRate.test.mjs`；Python `tests/test_media_probe.py`；
   真实界面 `tools/shots/verify_review_transport.mjs`（24fps 片源，无窗口）。
+
+#### 3.4.7 核对台工作现场持久化（2026-11-20）
+
+用户报障：「核对到第 137 条，去转写页再回来，视窗回到全片、播放头回到 0」；
+以及切页回来波形先白一帧、同一段包络反复请求。两件事都在
+`desktop/renderer/src/lib/reviewViewport.ts`（纯函数 + 模块级缓存），组件只接线。
+
+- **波形包络缓存（仅内存）**：键 = `媒体 id | from | span | bins`，LRU 48 项。
+  命中时**同步**写回 `peaks / peaksFrom / peaksSpan`，不走 70ms 防抖、不再请求
+  `/peaks`——切页回来第一帧就有波形。只存内存：包络是派生数据，没有跨重启价值；
+  视窗宽度/高度变了 `bins` 变，旧分辨率不会被复用（否则画成锯齿）。
+- **每部影片的现场快照**：`{cueIndex, cueTime, playhead, viewStart, span, selection}`，
+  按**媒体文件路径**（不是 media id：重启后 id 会变）写
+  `localStorage['kikusub.reviewViewports']`，最近 **50 部**（LRU，`updatedAt` 淘汰）。
+  同一位置重复写会被跳过（核对台每 1.5s 落盘一次，播放头静止时不该每 1.5s 全量写盘）。
+- **时序**：恢复只在 `<video>` 的 **loadedmetadata** 之后发生（早于它写
+  `currentTime` 会被浏览器丢掉）；缩放 / 选区按 `duration` 夹紧（`planViewportRestore`），
+  越界或损坏的快照安全降级为「不恢复」。每次换片只恢复一次（`restoreDoneFor`）。
+- **换片先落盘**：媒体变化 effect 在复位 `viewStart / viewSpan / play.time` **之前**
+  先把上一条落盘；定时器回调与清理函数都校验 `app.media.path === 捕获值`，避免
+  换片后旧闭包用归零后的状态覆盖上一部片的现场。
+- **显式跳转优先**：`focusRange()`（双引擎复核 / 质检面板 / 报告页 / 翻译页点时间码）
+  先 `markExplicitJump(path)`；核对台恢复前 `takeExplicitJump(path)` 命中就**整次跳过**
+  历史恢复。标记带路径，只影响那一次、那一部片——不能用一个全局布尔，否则用户从
+  别的页面跳转后再换片会被上一次的标记影响。
+- **选中行恢复**：`resolveCueIndex()` 先看下标是否还指同一时间（±0.5s），字幕表被
+  重新转写 / 导入替换后按 `cueTime` 找最近的一条；找不到就不动。
+- **旧数据兼容**：没有新格式快照时退回 `localStorage['kikusub.lastPosition']`
+  （旧版只记一个全局播放头），升级不丢现场；`openMedia` 不再单独 seek 一次，
+  避免两处恢复互相覆盖。
+- **预算**：逻辑全在 lib（新增 `lib/waveformCanvas.ts`：把 `draw()` 的画法整段搬出；
+  `lib/findMatches.ts`：查找命中计算）；`ReviewView.svelte` 3802 → 3787，
+  `store.svelte.ts` 3287 → 3278（旧 playhead 持久化搬进 lib）。
+- **回归**：`desktop/test/reviewViewport.test.mjs`（LRU / clamp / 显式跳转优先级 /
+  旧键迁移 / 缓存键）；真实界面 `tools/shots/verify_review_viewport.mjs`
+  （切页回来不重新请求 /peaks、缩放 / 播放头 / 选区恢复、快照按路径落盘）。
+
+#### 3.4.8 短选区「轻声兜底」（2026-11-20，只作用于核对台人工短选区）
+
+整片转写里 VAD 没切出语音时返回空结果**是对的**（静音/雨声会被幻觉成字幕），
+但人工框选 2 秒有人在说话的气声句，默认阈值（Whisper 0.25 / Qwen 0.30）切不出来
+就会报「未检测到有效语音」——用户听到的和界面报的相反。
+
+- 触发条件只有一处：`server/routes_jobs.py` 把 `short_clip_fallback` 置为
+  `payload.apply == "replace_range"`，即「转写选区 / 重转此句 / 质检补录」。
+  **整片转写与追加（`replace` / `append`）永远是 False**，VAD 挡幻觉的防线不动。
+- 降级链（`core/short_clip.py`，纯函数 + 可注入重试）：
+  1. 先按当前参数跑（含用户自己调过的阈值）；
+  2. 空且选区 ≤ **20s**：阈值降到 **0.05** 静默重试一次；
+  3. 仍空且选区 ≤ **12s**：跳过 VAD，整段（保留 dynaudnorm）经
+     `engine.transcribe_window()` 送模一次，产出一条覆盖选区的字幕；
+  4. 再空才让 `pipeline` 报「未检测到有效语音」。
+- 字段名按引擎族的真实 schema 取（whisper `threshold`，qwen/sherpa `vad_threshold`），
+  不另造映射；用户已经把阈值调到 0.05 以下时跳过第 2 步。取消在任何一步之间生效，
+  整段解码期间的取消被吞成「没有结果」，不报成失败。
+- **未改动**：`core/params.py` 的默认值、`tools/eval/` 与 `baseline.json`、整片
+  转写、质检门控。Sherpa 新增的 `transcribe_window()` 只服务窗口复核与这条兜底。
+- **回归**：`tests/test_short_clip.py`（阈值/步骤/取消/解码取消）、
+  `tests/test_pipeline.py` 的 4 个 short_clip 用例（含「整片绝不做整段送模」）。
+
+#### 3.4.9 章节 / 时刻点标记（2026-11-20）
+
+- **数据**：`{id, start, end?, title}`；`end === null` = **时刻点**，
+  `end` 有值 = **场景区间**（`00:00 → 23:30 场景1`）。上限 500 条、标题 120 字。
+  唯一实现在 `core/chapters.py`（`ChapterMark / normalize_marks / layout_chapters /
+  ffmetadata_text`），前端不算顺序/衔接。
+- **衔接与防重叠**（`layout_chapters`）：按 `start` 稳定排序 → 夹进 `[0, duration]`
+  → 区间不超过下一个标记起点 → 时刻点结束于下一个起点或片尾 → 长度 <1ms 丢弃。
+  首个标记晚于 0 时**补一个「开场」章节**：MP4 的章节是一条文本轨，ffmpeg 会把首章
+  强行拉回 0；不补的话「12s 的时刻点」在 MP4 里会跳到片头。MKV 本来能保住起点，
+  但两份容器同一份章节表更可预期。
+- **持久化**：`{output_dir}/chapters/{stem}.{path+size+mtime}.chapters.json`
+  （原子写）。路径 + 大小 + mtime 分段：重新压制的同名片不会套上旧章节。
+  `server/routes_session.py` 的 `bind_media` 换片时 `session.sync_chapters()` 恢复。
+- **历史**：标记进 **`Session.history` 那条统一时间线**（`HistoryState.chapters`），
+  没有第二套撤销栈。整表提交 `POST /api/chapters`（`{marks, label}`）→
+  `session.set_chapters()` 先 `ensure_baseline()` 再落一步 `_record(label)`，
+  所以新建/改名/改时间/删除都是「一次操作 = 一步 ⌘Z」；`_apply_state` 撤销时
+  同时把边车写回磁盘（重启后不会看到撤销前的内容）。
+- **界面**：`components/ChapterTrack.svelte` 覆盖在刻度条下沿（`top: RULER_H`，
+  6px 色条 + 旗标；覆盖层 `pointer-events:none`，只有旗标可点——不能吃掉刻度擦洗）。
+  `components/ChaptersPanel.svelte` 是检查器第三个页签「章节」：输入标题回车 =
+  「有选区则设为章节，否则在播放头插时刻点」；列表支持点击跳转、编辑标题/起止
+  （终点留空 = 时刻点）、删除。导入/历史/换片统一经 `lib/chapters.svelte.ts`。
+- **导出**：见 [export-and-prompt.md](export-and-prompt.md) §3.8.2。导出页开关走
+  `setExportChapters()`（进统一历史），有标记时默认开并显示数量。
+- **回归**：`tests/test_chapters.py`（衔接/夹紧/重复 id/转义/持久化/一步历史/撤销
+  写盘）、`tests/test_export_chapters.py`（三种模式 + `ffprobe -show_chapters`）、
+  `tools/shots/verify_chapters.mjs`（真实界面：添加/编辑/⌘Z/旗标跳转/仅封装导出）。
