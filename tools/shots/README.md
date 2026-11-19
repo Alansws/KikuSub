@@ -135,6 +135,25 @@ node tools/shots/verify_arbitration_dialog.mjs
 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`。截图落在系统临时目录的
 `kikusub-cue-selection/`、`kikusub-arbitration/` 与 `kikusub-arbitration-dialog/`。
 
+## 片段范围（局部处理 / 导出）回归
+
+「只处理 / 只导出这一段」的三页联动（润色 / 翻译 / 导出）有专门回归：区间章节设为范围后，
+字幕条数变成 `4 / 5`、润色与翻译表格只剩 4 行、仅封装给出关键帧说明、字幕导出的 SRT
+已归零且只含这一段、成片 ffprobe 时长 = 12s 且「发射点」平移到 8.5s、章节面板
+「仅处理此片段」一键带入。
+
+```bash
+node tools/shots/verify_clip_scope.mjs
+# 截图停在润色页 / 翻译页
+KIKUSUB_FINAL_VIEW=polish node tools/shots/verify_clip_scope.mjs
+# 沙箱 / CI
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_clip_scope.mjs
+```
+
+截图落在系统临时目录的 `kikusub-clip-scope/clip-scope.png`。契约口径见
+[ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.8 与
+[export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
+
 ## 设置页专用矩阵
 
 设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：
