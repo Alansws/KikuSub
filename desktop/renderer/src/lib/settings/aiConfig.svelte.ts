@@ -34,6 +34,18 @@ export const aiState = $state({
   arbTestMsg: '',
   /** 高级参数展开时才有意义的“已保存”提示 */
   savedAt: 0,
+  /** 本机 LM Studio 探测 / 重载状态。 */
+  localModel: {
+    loading: false,
+    checked: false,
+    available: false,
+    loaded: false,
+    contextLength: null as number | null,
+    maxContext: null as number | null,
+    error: '',
+    loadingModel: false,
+    message: '',
+  },
 });
 
 export async function loadAiConfig() {
@@ -46,6 +58,7 @@ export async function loadAiConfig() {
     aiState.loading = false;
   }
   await refreshAiKey();
+  if (aiState.cfg?.arbitrate_loopback) void loadLocalModelStatus();
 }
 
 export async function refreshAiKey() {
@@ -104,9 +117,14 @@ export async function saveAiEndpoint(quiet = false): Promise<boolean> {
       context_cues: Number(aiState.cfg.context_cues) || 0,
       arbitrate_base_url: aiState.cfg.arbitrate_base_url.trim(),
       arbitrate_model: aiState.cfg.arbitrate_model.trim(),
+      local_context: aiState.cfg.local_context,
+      auto_arbitrate: aiState.cfg.auto_arbitrate,
     });
     if (ok) {
       aiState.savedAt = Date.now();
+      // 地址 / 模型可能刚切到本机 LM Studio：重新探测一次档位状态。
+      aiState.localModel.checked = false;
+      if (aiState.cfg?.arbitrate_loopback) void loadLocalModelStatus();
       // 输入框失焦时静默保存（macOS 设置面板的习惯），显式点「保存」才提示
       if (!quiet) toast('AI 配置已保存');
     }
@@ -196,6 +214,73 @@ export async function clearArbKey() {
     toast('已清除单句判定 Key');
   } catch (err) {
     toast((err as Error).message, 'error');
+  }
+}
+
+export async function loadLocalModelStatus(force = false): Promise<void> {
+  const cfg = aiState.cfg;
+  if (!cfg?.arbitrate_loopback) {
+    aiState.localModel = {
+      loading: false,
+      checked: true,
+      available: false,
+      loaded: false,
+      contextLength: null,
+      maxContext: null,
+      error: '',
+      loadingModel: false,
+      message: '',
+    };
+    return;
+  }
+  if (aiState.localModel.loading) return;
+  if (!force && aiState.localModel.checked) return;
+  aiState.localModel.loading = true;
+  try {
+    const status = await api.localModelStatus();
+    aiState.localModel.checked = true;
+    aiState.localModel.available = status.available;
+    aiState.localModel.loaded = Boolean(status.loaded);
+    aiState.localModel.contextLength = status.context_length ?? null;
+    aiState.localModel.maxContext = status.max_context_length ?? null;
+    aiState.localModel.error = status.error || '';
+  } catch (err) {
+    aiState.localModel.checked = true;
+    aiState.localModel.available = false;
+    aiState.localModel.error = (err as Error).message;
+  } finally {
+    aiState.localModel.loading = false;
+  }
+}
+
+export async function setLocalContext(context: number) {
+  if (!aiState.cfg) return;
+  const ok = await patchAi({ local_context: context });
+  if (ok) aiState.localModel.message = '档位已保存；点「加载 / 重载本地模型」后生效';
+}
+
+export async function toggleAutoArbitrate() {
+  if (!aiState.cfg) return;
+  const next = !aiState.cfg.auto_arbitrate;
+  if (await patchAi({ auto_arbitrate: next })) {
+    toast(next ? '已开启：两版不一致时自动 AI 判定' : '已关闭自动 AI 判定');
+  }
+}
+
+export async function reloadLocalModel(): Promise<void> {
+  if (!aiState.cfg || aiState.localModel.loadingModel) return;
+  aiState.localModel.loadingModel = true;
+  aiState.localModel.message = '';
+  try {
+    const result = await api.loadLocalModel(aiState.cfg.local_context);
+    aiState.localModel.message = result.reloaded
+      ? `已重载到 ${result.context_length}（${result.load_time_seconds ?? '—'}s）`
+      : `已在该档位（${result.context_length}）`;
+    await loadLocalModelStatus(true);
+  } catch (err) {
+    aiState.localModel.message = `加载失败：${(err as Error).message}`;
+  } finally {
+    aiState.localModel.loadingModel = false;
   }
 }
 

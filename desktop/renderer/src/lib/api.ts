@@ -438,11 +438,36 @@ export interface AiConfig {
   /** 单句判定模型覆盖；空串 = 该字段跟随全局。 */
   arbitrate_base_url: string;
   arbitrate_model: string;
+  /** 本地 LM Studio 的上下文档位；只有点「加载 / 重载」时生效。 */
+  local_context: number;
+  /** 两版不一致时自动触发一次单句判定。 */
+  auto_arbitrate: boolean;
   /** 当前地址是否本机/局域网：本地模型可以不带 Key。 */
   key_optional: boolean;
   arbitrate_key_optional: boolean;
+  /** 判定目标是否本机 loopback（设置页据此探测 LM Studio）。 */
+  arbitrate_loopback: boolean;
   /** 密钥不归服务层管；服务端只声明"由渲染进程持有" */
   key_held_by: string;
+}
+
+export interface LocalModelStatus {
+  available: boolean;
+  reason?: string;
+  error?: string;
+  loopback?: boolean;
+  model?: string;
+  loaded?: boolean;
+  context_length?: number | null;
+  max_context_length?: number | null;
+}
+
+export interface LocalModelLoadResult {
+  ok: boolean;
+  reloaded: boolean;
+  model: string;
+  context_length: number;
+  load_time_seconds?: number | null;
 }
 
 export interface AiArbitrationRequest {
@@ -1525,7 +1550,17 @@ export const api = {
     context_cues: number;
     arbitrate_base_url: string;
     arbitrate_model: string;
+    local_context: number;
+    auto_arbitrate: boolean;
   }>) => req<AiConfig>('/api/ai/config', { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  localModelStatus: () => req<LocalModelStatus>('/api/ai/local-model/status'),
+
+  loadLocalModel: (context: number) =>
+    req<LocalModelLoadResult>('/api/ai/local-model/load', {
+      method: 'POST',
+      body: JSON.stringify({ context }),
+    }),
 
   arbitrateAi: (
     payload: AiArbitrationRequest,

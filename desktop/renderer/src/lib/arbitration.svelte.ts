@@ -21,6 +21,8 @@ export const arbitration = $state({
   records: {} as Record<number, ArbitrationRecord>,
   /** 同一时间只允许判定一句；切换选中不会中断在途请求。 */
   runningIndex: -1,
+  /** 运行中的阶段文案（准备本地模型 / 判定中）。 */
+  stage: '',
   errors: {} as Record<number, string>,
   config: null as AiConfig | null,
   configLoading: false,
@@ -31,6 +33,19 @@ export const arbitration = $state({
 
 let inflight: AbortController | null = null;
 let configLoaded = false;
+/** 自动判定去重：同一媒体 + 同一句 + 同一 B 文本只自动跑一次。 */
+const autoTried = new Set<string>();
+
+export function takeAutoArbitrationKey(key: string): boolean {
+  if (autoTried.has(key)) return false;
+  autoTried.add(key);
+  // 长片里最多也就几百条字幕，给一个上限防止跨媒体无界增长。
+  if (autoTried.size > 2000) {
+    const oldest = autoTried.values().next().value;
+    if (oldest) autoTried.delete(oldest);
+  }
+  return true;
+}
 
 /** 覆盖只在 base_url / model 任一非空时生效；空则整组跟随全局。 */
 export function usesArbitrateOverride(cfg: AiConfig | null): boolean {
@@ -93,6 +108,33 @@ export function hasArbitration(index: number): boolean {
   return arbitrationRecord(index) !== null;
 }
 
+/**
+ * 首次判定前把本机 LM Studio 的 context 校准到设置档位。
+ *
+ * 只在 loopback LM Studio 上执行；同一 base/model/档位在一次应用生命周期里只
+ * 检查一次。模型已在该档位时是纯 no-op；未加载或档位不同才走一次 unload/load。
+ * 返回 false 表示取消或模型不可用（调用方应停止本次判定）。
+ */
+async function prepareLocalModel(cfg: AiConfig, signal: AbortSignal): Promise<boolean> {
+  try {
+    // 每次判定前只做一次轻量 status 探测；只有档位不符 / 模型未加载才重载。
+    // 这样 JIT 在 TTL 后按 LM Studio 默认档位重新加载时，也能在下一次判定前
+    // 自动校准回设置的 2048，而不是每个请求都盲目重载 27B。
+    const status = await api.localModelStatus();
+    if (signal.aborted) return false;
+    if (!status.available) return true; // 不是 LM Studio / 未运行：交给 chat 请求报错
+    if (status.loaded && status.context_length === cfg.local_context) return true;
+    arbitration.stage = `正在按 ${cfg.local_context} 准备本地模型…`;
+    await api.loadLocalModel(cfg.local_context);
+    if (signal.aborted) return false;
+    return true;
+  } catch (err) {
+    const index = arbitration.runningIndex;
+    if (index >= 0) arbitration.errors[index] = (err as Error).message;
+    return false;
+  }
+}
+
 export async function runArbitration(index: number): Promise<void> {
   if (arbitration.runningIndex >= 0) {
     toast('AI 正在判定另一句，等它完成或取消后再试', 'warn');
@@ -145,8 +187,17 @@ export async function runArbitration(index: number): Promise<void> {
   const controller = new AbortController();
   inflight = controller;
   arbitration.runningIndex = index;
+  arbitration.stage = '';
   delete arbitration.errors[index];
   try {
+    // 只在本机 LM Studio 上做一次「档位准备」：JIT 的默认 context 可能不是
+    // 设置里的档位；这里在**首次判定前**校准一次，而不是每个请求都重载。
+    if (cfg.arbitrate_loopback) {
+      const prepared = await prepareLocalModel(cfg, controller.signal);
+      if (!prepared) return;
+    }
+    if (controller.signal.aborted) return;
+    arbitration.stage = '';
     const result = await api.arbitrateAi(
       {
         text_a: cue.text,
@@ -178,6 +229,7 @@ export async function runArbitration(index: number): Promise<void> {
   } finally {
     if (inflight === controller) inflight = null;
     if (arbitration.runningIndex === index) arbitration.runningIndex = -1;
+    arbitration.stage = '';
   }
 }
 
@@ -186,6 +238,7 @@ export function cancelArbitration(): void {
   inflight?.abort();
   inflight = null;
   arbitration.runningIndex = -1;
+  arbitration.stage = '';
 }
 
 export function dismissArbitration(index: number): void {

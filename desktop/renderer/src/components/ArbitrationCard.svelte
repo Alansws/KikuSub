@@ -5,6 +5,7 @@
    * 只读展示，不自动采用；采用走 `adoptArbitration()` → `updateCue()`，
    * 服务端压一步统一历史。
    */
+  import { onDestroy } from 'svelte';
   import Icon from './Icon.svelte';
   import {
     arbitration,
@@ -63,8 +64,28 @@
     !tts.loaded || !tts.available || (ttsVoice()?.kind === 'clone' && !cloneEngineReady()),
   );
 
+  // 每次卡片挂载都强制读一次配置：设置页改了自动判定 / 档位 / 覆盖模型后，
+  // 从设置返回核对台不会拿到模块里的旧缓存。
   $effect(() => {
-    void loadArbitrationConfig();
+    void loadArbitrationConfig(true);
+  });
+
+  // 切换句子 / 改 A / 改 B 都中断在途判定；卡片卸载（换到没有 B 的句子、离开核对台）
+  // 也取消。请求本身由 AbortController 中断，服务端短请求会自行结束。
+  let lastContextKey = '';
+  $effect(() => {
+    const key = `${index}|${textA}|${textB}`;
+    if (!lastContextKey) {
+      lastContextKey = key;
+      return;
+    }
+    if (key === lastContextKey) return;
+    lastContextKey = key;
+    if (arbitration.runningIndex >= 0) cancelArbitration();
+  });
+
+  onDestroy(() => {
+    if (arbitration.runningIndex >= 0) cancelArbitration();
   });
 
   function speakResult() {
@@ -103,7 +124,7 @@
   {#if running}
     <div class="arb-running" role="status">
       <span class="spin"></span>
-      <span>AI 正在判定…</span>
+      <span>{arbitration.stage || 'AI 正在判定…'}</span>
       <button class="arb-link" onclick={() => cancelArbitration()}>取消</button>
     </div>
   {:else if record}

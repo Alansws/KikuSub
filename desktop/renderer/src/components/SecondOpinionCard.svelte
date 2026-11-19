@@ -13,6 +13,7 @@
   import ArbitrationCard from './ArbitrationCard.svelte';
   import { jobBusy } from '../lib/jobState';
   import {
+    app,
     cloneEngineReady,
     setView,
     speakCue,
@@ -40,6 +41,13 @@
     setReviewEngine,
   } from '../lib/secondOpinion.svelte';
   import { charDiff } from '../lib/textDiff';
+  import {
+    arbitration,
+    hasArbitration,
+    loadArbitrationConfig,
+    runArbitration,
+    takeAutoArbitrationKey,
+  } from '../lib/arbitration.svelte';
 
   let { index, text }: { index: number; text: string } = $props();
 
@@ -55,6 +63,27 @@
   const running = $derived(secondOpinion.status === 'running');
   const failed = $derived(secondOpinion.status === 'error' ? secondOpinion.error : '');
   const busy = $derived(jobBusy() || running);
+
+  // P2-4：两版不一致时自动判定。只在用户开启开关后生效，同一句 + 同一 B 文本
+  // 只自动跑一次；切换句子 / 编辑 / 取消由 ArbitrationCard 的 AbortController 中断。
+  $effect(() => {
+    const cfg = arbitration.config;
+    if (!cfg) {
+      void loadArbitrationConfig();
+      return;
+    }
+    if (!cfg.auto_arbitrate || !cfg.enabled) return;
+    if (secondOpinion.status !== 'done' || !has) return;
+    const cue = app.cues[index];
+    if (!cue) return;
+    const a = (text || '').trim();
+    const b = (altText || '').trim();
+    if (!a || !b || a === b) return;
+    if (hasArbitration(index) || arbitration.runningIndex >= 0) return;
+    const key = `${app.media?.id || ''}:${index}:${cue.start}:${cue.end}:${b}`;
+    if (!takeAutoArbitrationKey(key)) return;
+    void runArbitration(index);
+  });
 
   /**
    * 两版文本的 TTS 用同一套音色：

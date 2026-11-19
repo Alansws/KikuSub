@@ -15,8 +15,11 @@
     saveAiEndpoint,
     saveAiKey,
     saveArbKey,
+    setLocalContext,
     testAiConnection,
     toggleAi,
+    toggleAutoArbitrate,
+    reloadLocalModel,
   } from '../../../lib/settings/aiConfig.svelte';
 
   const cfg = $derived(aiState.cfg);
@@ -144,7 +147,7 @@
       <div class="set-row-main">
         <span class="set-row-title">单句判定模型覆盖（可选）</span>
         <span class="set-row-desc">
-          两版引擎不一致时，右侧「AI 判定」默认用上面的全局配置；这里可单独指向本机模型（如 LM Studio / Ollama），留空则跟随全局。
+          两版引擎不一致时，右侧「AI 判定」默认用上面的全局配置；这里可单独指向本机模型（如 LM Studio / Ollama），留空则跟随全局。本机 LM Studio 在运行时，下方会出现上下文档位与重载按钮。
         </span>
       </div>
     </div>
@@ -241,6 +244,78 @@
         </button>
       </div>
     </div>
+  </div>
+
+  <div class="set-group">
+    <div class="set-row">
+      <div class="set-row-main">
+        <span class="set-row-title">两版不一致时自动 AI 判定</span>
+        <span class="set-row-desc">
+          开启后，B 引擎复核完成且与当前稿不一致时自动判定一次；切换句子、编辑或取消都会中断在途请求。默认关闭。
+        </span>
+      </div>
+      <div class="set-row-ctl">
+        <button
+          class="switch"
+          class:on={cfg.auto_arbitrate}
+          role="switch"
+          aria-checked={cfg.auto_arbitrate}
+          aria-label="两版不一致时自动 AI 判定"
+          onclick={toggleAutoArbitrate}
+        >
+          <span class="knob"></span>
+        </button>
+      </div>
+    </div>
+
+    {#if cfg.arbitrate_loopback && aiState.localModel.available}
+      <div class="set-row">
+        <div class="set-row-main">
+          <span class="set-row-title">本地上下文档位</span>
+          <span class="set-row-desc">
+            仅对 LM Studio 生效；2048 最省内存，单句判定不需要长上下文。切换档位后点右侧按钮重载，判定请求本身不会重载模型。
+          </span>
+        </div>
+        <div class="set-row-ctl">
+          <select
+            class="ai-input mono"
+            value={cfg.local_context}
+            aria-label="本地上下文档位"
+            onchange={(e) => void setLocalContext(Number((e.currentTarget as HTMLSelectElement).value))}
+          >
+            <option value={2048}>2048（推荐 · 省内存）</option>
+            <option value={4096}>4096</option>
+            <option value={8192}>8192</option>
+          </select>
+          <button
+            class="btn sm"
+            onclick={reloadLocalModel}
+            disabled={aiState.localModel.loadingModel || aiState.localModel.loading}
+          >
+            {aiState.localModel.loadingModel ? '加载中…' : '加载 / 重载本地模型'}
+          </button>
+        </div>
+      </div>
+      <div class="set-row">
+        <div class="set-row-main">
+          <span class="set-row-desc">
+            {#if aiState.localModel.loading}
+              正在读取 LM Studio 状态…
+            {:else if aiState.localModel.loaded}
+              已加载 · 当前 context {aiState.localModel.contextLength ?? '—'}
+              {#if aiState.localModel.contextLength !== cfg.local_context}
+                · 与所选档位不同，点上方按钮重载后生效
+              {/if}
+            {:else}
+              模型未加载；首次判定会由 LM Studio JIT 按它自己的默认档位加载
+            {/if}
+            {#if aiState.localModel.message}
+              · {aiState.localModel.message}
+            {/if}
+          </span>
+        </div>
+      </div>
+    {/if}
   </div>
 
   {#if aiState.keyBroken}
