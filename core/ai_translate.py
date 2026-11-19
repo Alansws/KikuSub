@@ -156,6 +156,7 @@ def run_translate(
     context_cues: int = 5,
     source_path: str = "",
     entry: str = "in-app",
+    cue_span: tuple[int, int] | None = None,
     cancel=None,
     on_progress=None,
 ) -> tuple[dict, list[str], list[dict]]:
@@ -202,9 +203,10 @@ def run_translate(
 
     report(1.0, "校验译文")
 
+    base = int(cue_span[0]) if cue_span is not None else 1
     items = [
         {
-            "i": idx,
+            "i": base + idx - 1,
             "before": texts[idx - 1],
             "after": merged[idx]["text"],
             "note": merged[idx]["note"],
@@ -223,9 +225,10 @@ def run_translate(
         glossary=glossary,
         chunks=len(chunks),
         source_path=source_path,
+        cue_span=cue_span,
     )
 
-    check = proposals.validate_proposal(proposal, texts)
+    check = proposals.validate_proposal(proposal, texts, span=cue_span)
     if not check.ok:
         raise client.AiError("模型输出未通过校验：" + "；".join(check.errors[:3]))
     return proposal, check.warnings, glossary
@@ -263,32 +266,74 @@ def proposal_from_srt(
     dst_lang: str,
     *,
     entry: str = "manual",
+    from_index: int = 1,
+    to_index: int | None = None,
+    range_from: int | None = None,
+    range_to: int | None = None,
 ) -> tuple[dict, list[str]]:
     """把模型回吐的 SRT 变成 translate 提案。
 
     - 条数必须与当前字幕一致，否则整批拒绝（合并/漏翻都会在这里被抓住）；
     - 文本按**顺序**对齐，不用它给的序号，也不看它给的时间戳；
     - 时间戳偏差过大时给一条 warning（多半是模型改写了时间轴或整体错位）。
+
+    ``range_from`` / ``range_to`` 是「处理范围」（1 基、含两端）：提案只覆盖这一段，
+    ``items`` 的 ``i`` 仍是全片序号；``from_index`` / ``to_index`` 是这次粘贴的内容段
+    （长片分段时只回填本段，其余条目保持原文）。
     """
     from .proposal_srt import align_model_srt
 
-    pairs, warnings = align_model_srt(srt_text, cues, reject_hint="漏翻")
+    source_texts = [c.text for c in cues]
+    total = len(source_texts)
+    if total <= 0:
+        raise client.AiError("当前没有字幕")
+    first, last = 1, total
+    if range_from is not None or range_to is not None:
+        first = max(1, int(range_from or 1))
+        last = total if range_to is None else min(total, int(range_to))
+        if first > last:
+            raise client.AiError(f"处理范围不合法：第 {first}–{last} 条")
+    clipped = (first, last) != (1, total)
+    scope_texts = list(source_texts[first - 1 : last])
+    start = max(first, int(from_index or 1))
+    end = last if to_index is None else min(last, int(to_index))
+    if start > end:
+        raise client.AiError(f"片段范围不合法：第 {start}–{end} 条")
+    pairs, warnings = align_model_srt(
+        srt_text,
+        list(cues[start - 1 : end]),
+        reject_hint="漏翻",
+        scope_label=f"本段期望第 {start}–{end} 条（共 {end - start + 1} 条）",
+    )
+    overrides: dict[int, str] = {}
+    for offset, (_before, after) in enumerate(pairs):
+        overrides[start + offset] = after
     items = [
-        {"i": idx, "before": before, "after": after, "note": ""}
-        for idx, (before, after) in enumerate(pairs, start=1)
+        {
+            "i": first + offset,
+            "before": before,
+            "after": overrides.get(first + offset, before),
+            "note": "",
+        }
+        for offset, before in enumerate(scope_texts)
     ]
 
     proposal = proposals.build_proposal(
         kind="translate",
         src_lang="ja",
         dst_lang=dst_lang,
-        texts=[c.text for c in cues],
+        texts=scope_texts,
         items=items,
         model="manual-paste",
         entry=entry,
         chunks=1,
+        cue_span=(first, last) if clipped else None,
     )
-    check = proposals.validate_proposal(proposal, [c.text for c in cues])
+    check = proposals.validate_proposal(
+        proposal, scope_texts, span=(first, last) if clipped else None
+    )
     if not check.ok:
         raise client.AiError("；".join(check.errors[:3]))
+    if clipped:
+        warnings = [f"本次只作用于第 {first}–{last} 条"] + warnings
     return proposal, warnings + check.warnings

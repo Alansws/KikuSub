@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -169,14 +170,63 @@ def apply_translation(
         kind = data.get("kind")
         if kind != "translate":
             raise HTTPException(status_code=422, detail="这不是一份翻译提案")
-        check = proposals.validate_proposal(data, [c.text for c in cues])
+        total = len(cues)
+        try:
+            first, last = proposals.source_span(data, total)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        scoped = (first, last) != (1, total)
+        check = proposals.validate_proposal(
+            data,
+            [c.text for c in cues[first - 1 : last]],
+            span=(first, last) if scoped else None,
+        )
         if not check.ok:
             raise HTTPException(
                 status_code=check.status,
                 detail="；".join(check.errors) or "提案无效",
             )
-        texts = [str(item.get("after") or "") for item in sorted(data["items"], key=lambda it: it["i"])]
+        scope_texts = [
+            str(item.get("after") or "")
+            for item in sorted(data["items"], key=lambda it: it["i"])
+        ]
         entry = str(data.get("entry") or "in-app")
+        if scoped:
+            # 局部应用：按原始索引把这 N 条译文合并进整片平行轨，范围外原样保留。
+            # 旧轨没有 / 条数对不上时，创建一个整片长度、范围外为空位的轨。
+            previous = session.translations.get(lang)
+            if previous is not None and len(previous.texts) == total:
+                texts = list(previous.texts)
+                base = list(previous.base) + [""] * (total - len(previous.base))
+                created_at = previous.created_at
+            else:
+                texts = [""] * total
+                base = [c.text for c in cues]
+                created_at = time.time()
+            for offset, text in enumerate(scope_texts):
+                index = first - 1 + offset
+                texts[index] = text
+                base[index] = cues[index].text
+            session.set_translation(
+                TranslationTrack(
+                    lang=lang,
+                    texts=texts,
+                    base=base[:total],
+                    created_at=created_at,
+                    entry=entry,
+                ),
+                label=f"局部应用 {lang} 译文（第 {first}–{last} 条，{len(scope_texts)} 条）",
+            )
+            result = track_payload(session, lang)
+            result.update(
+                {
+                    "partial": True,
+                    "range": {"from": first, "to": last},
+                    "applied": len(scope_texts),
+                }
+            )
+            return result
+        texts = scope_texts
     else:
         texts = [str(t or "") for t in (payload.texts or [])]
 

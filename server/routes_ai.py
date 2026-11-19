@@ -98,6 +98,9 @@ class AiJobRequest(BaseModel):
     dst_lang: str = ""
     # polish 专用：single = 只吃 A；dual = 同时参考第二版 B（要求会话里有 alt_review）
     mode: str = "single"
+    # 处理范围（1 基、含两端）：只给这一段的字幕生成提案，其余条目不动。
+    from_index: int = 1
+    to_index: int | None = None
 
 
 class PasteSrtRequest(BaseModel):
@@ -108,6 +111,9 @@ class PasteSrtRequest(BaseModel):
     from_index: int = 1
     to_index: int | None = None
     mode: str = "single"
+    # 处理范围：提案只覆盖这一段（source.range），items 的 i 仍是全片序号。
+    range_from: int | None = None
+    range_to: int | None = None
 
 
 class ImportRequest(BaseModel):
@@ -186,6 +192,68 @@ def _config_payload(settings: dict) -> dict:
 
 def _current_texts(session: Session) -> list[str]:
     return [cue.text for cue in session.review_cues]
+
+
+def _scope_span(total: int, range_from: int | None, range_to: int | None) -> tuple[int, int]:
+    """「处理范围」→ 全片 1 基闭区间；两端都缺省 = 整片。非法范围 422。"""
+    if total <= 0:
+        raise HTTPException(status_code=409, detail="当前没有字幕")
+    if range_from is None and range_to is None:
+        return (1, total)
+    try:
+        first = int(range_from if range_from is not None else 1)
+        last = int(range_to if range_to is not None else total)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="处理范围不合法") from exc
+    first = max(1, first)
+    last = min(total, last)
+    if first > last:
+        raise HTTPException(
+            status_code=422, detail=f"处理范围不合法：第 {first}–{last} 条（共 {total} 条）"
+        )
+    return (first, last)
+
+
+def _range_text(first: int, last: int, start: int, end: int, total: int) -> str:
+    """提示词里的范围说明（润色 / 翻译共用同一口径）。"""
+    if (first, last) == (1, total):
+        if (start, end) == (1, total):
+            return f"全片共 {total} 条。"
+        return f"本段第 {start}–{end} 条（全片共 {total} 条）；只输出这些条目。"
+    if (start, end) == (first, last):
+        return f"本次只处理片段第 {first}–{last} 条（全片共 {total} 条）；只输出这些条目。"
+    return (
+        f"本次只处理片段第 {first}–{last} 条（全片共 {total} 条）；"
+        f"当前分段是其中第 {start}–{end} 条，只输出这些条目。"
+    )
+
+
+def _proposal_span(request_data: dict, total: int) -> tuple[int, int]:
+    """提案声明的作用范围（旧提案 = 整片）；越界 → 422。"""
+    try:
+        return proposals.source_span(request_data, total)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validate_scoped(
+    data: dict, texts: list[str], alt_texts: list[str] | None
+) -> tuple[proposals.ProposalCheck, tuple[int, int]]:
+    """按提案自己的 ``source.range`` 取出这一段再做校验。
+
+    digest 只绑这一段（模型看到多少就绑定多少），``items`` 的 ``i`` 仍是全片序号，
+    所以校验时必须把「全片序号 → 段内文本」一起交给 ``validate_proposal``。
+    """
+    total = len(texts)
+    first, last = _proposal_span(data, total)
+    scoped = (first, last) != (1, total)
+    check = proposals.validate_proposal(
+        data,
+        texts[first - 1 : last],
+        alt_texts,
+        span=(first, last) if scoped else None,
+    )
+    return check, (first, last)
 
 
 def _path_for(request: Request, session: Session, kind: str, lang: str) -> Path:
@@ -426,6 +494,8 @@ async def create_ai_job(
     texts = _current_texts(session)
     if not texts:
         raise HTTPException(status_code=409, detail="当前没有可润色的字幕")
+    first, last = _scope_span(len(texts), payload.from_index, payload.to_index)
+    cue_span = None if (first, last) == (1, len(texts)) else (first, last)
 
     base_url = payload.base_url or str(settings.get("ai_base_url") or "")
     config = ai_client.AiConfig(
@@ -476,6 +546,7 @@ async def create_ai_job(
                 ),
                 source_path="",
                 out_path=out_path,
+                cue_span=cue_span,
                 session_id=session.id,
                 loop=asyncio.get_running_loop(),
             )
@@ -493,6 +564,7 @@ async def create_ai_job(
             source_path="",
             out_path=out_path,
             dual=(kind == "polish" and mode == "dual"),
+            cue_span=cue_span,
             session_id=session.id,
             loop=asyncio.get_running_loop(),
         )
@@ -510,6 +582,8 @@ def get_manual_prompt(
     mode: str = "single",
     from_index: int = 1,
     to_index: int | None = None,
+    range_from: int | None = None,
+    range_to: int | None = None,
     session: Session = Depends(get_session),
 ) -> dict:
     """「一键复制提示词」：把当前字幕整成 SRT 塞进所选模板，供用户粘到任意聊天窗。
@@ -529,30 +603,28 @@ def get_manual_prompt(
         raise HTTPException(status_code=409, detail="当前没有第二版字幕：先在转写页把另一引擎的稿放进双引擎复核，或到双引擎复核页导入一份已有字幕")
 
     total = len(cues)
-    start = max(1, int(from_index or 1))
-    end = total if to_index is None else min(total, int(to_index))
+    # 作用范围（处理范围）与内容范围（当前分段）分开：整片时段落完全一致。
+    first, last = _scope_span(total, range_from, range_to)
+    start = max(first, int(from_index or first))
+    end = last if to_index is None else min(last, int(to_index))
     if start > end:
         raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
-    span = (start, end)
-    full = span == (1, total)
+    full = (first, last) == (1, total)
+    content_full = (start, end) == (first, last)
     if kind == "polish":
         # 润色也支持「复制提示词 → 网页版模型 → 粘回来」；不绑定 AI 优化。
         indices = list(range(start - 1, end))
         srt_a = ai_polish.srt_block(cues, indices)
         srt_b = ""
         if mode == "dual" and alt is not None:
-            if full:
+            if full and content_full:
                 srt_b = ai_polish.srt_block(alt.cues)
             else:
                 t0 = cues[start - 1].start
                 t1 = cues[end - 1].end
                 b_indices = ai_polish.dual_context_cues(alt.cues, t0, t1)
                 srt_b = ai_polish.srt_block(alt.cues, b_indices)
-        range_text = (
-            f"本片段第 {start}–{end} 条（共 {total} 条）；只输出这些条目。"
-            if not full
-            else f"全片共 {total} 条。"
-        )
+        range_text = _range_text(first, last, start, end, total)
         category = (
             prompt_store.CATEGORY_POLISH_DUAL
             if mode == "dual"
@@ -583,29 +655,37 @@ def get_manual_prompt(
             "mode": mode,
             "from": start,
             "to": end,
+            "range_from": first,
+            "range_to": last,
             "template_id": template["id"],
             "template_name": template["name"],
             "category": category,
         }
-    srt = cues_to_srt(cues)
+    # 翻译：剪成这一段的 SRT（长片一次贴不进去时也走同一条路）
+    content_cues = list(cues[start - 1 : end])
+    srt = cues_to_srt(content_cues)
+    range_note = _range_text(first, last, start, end, total) if not full or not content_full else ""
     prompt, template = prompt_store.render_prompt(
         srt,
         ai_translate.lang_name(lang),
         template_id=template_id or None,
         category=prompt_store.CATEGORY_TRANSLATE,
+        range_text=range_note,
         settings_path=settings_path(request),
     )
     if template is None:
         raise HTTPException(status_code=500, detail="提示词库为空")
     return {
         "prompt": prompt,
-        "count": len(cues),
-        "total": len(cues),
+        "count": len(content_cues),
+        "total": total,
         "lang": lang,
         "chars": len(prompt),
         "mode": "single",
-        "from": 1,
-        "to": len(cues),
+        "from": start,
+        "to": end,
+        "range_from": first,
+        "range_to": last,
         "template_id": template["id"],
         "template_name": template["name"],
         "category": prompt_store.CATEGORY_TRANSLATE,
@@ -634,8 +714,10 @@ def proposal_from_pasted_srt(
         if alt is None or not alt.cues:
             raise HTTPException(status_code=409, detail="当前没有第二版字幕，无法做双源润色")
     texts_b = [cue.text for cue in alt.cues] if (kind == "polish" and alt is not None) else None
-    start = max(1, int(payload.from_index or 1))
-    end = len(cues) if payload.to_index is None else min(len(cues), int(payload.to_index))
+    total = len(cues)
+    first, last = _scope_span(total, payload.range_from, payload.range_to)
+    start = max(first, int(payload.from_index or first))
+    end = last if payload.to_index is None else min(last, int(payload.to_index))
     if start > end:
         raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
     try:
@@ -646,9 +728,19 @@ def proposal_from_pasted_srt(
                 from_index=start,
                 to_index=end,
                 texts_b=texts_b if mode == "dual" else None,
+                range_from=first,
+                range_to=last,
             )
         else:
-            proposal, warnings = ai_translate.proposal_from_srt(payload.text, cues, lang)
+            proposal, warnings = ai_translate.proposal_from_srt(
+                payload.text,
+                cues,
+                lang,
+                from_index=start,
+                to_index=end,
+                range_from=first,
+                range_to=last,
+            )
     except ai_client.AiError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
@@ -658,6 +750,8 @@ def proposal_from_pasted_srt(
         "mode": mode,
         "from": start,
         "to": end,
+        "range_from": first,
+        "range_to": last,
         "expected": end - start + 1,
     }
 
@@ -680,7 +774,9 @@ def get_proposal(
         )
     texts = _current_texts(session)
     alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
-    check = proposals.validate_proposal(data, texts, alt_texts)
+    check, span = _validate_scoped(data, texts, alt_texts)
+    first, last = span
+    scoped = (first, last) != (1, len(texts))
     return {
         "path": str(path),
         "proposal": data,
@@ -689,7 +785,9 @@ def get_proposal(
         "warnings": check.warnings,
         "digest_match": check.digest_match,
         "source_count": int((data.get("source") or {}).get("count") or 0),
-        "current_count": len(texts),
+        "current_count": last - first + 1 if scoped else len(texts),
+        "total_count": len(texts),
+        "range": {"from": first, "to": last} if scoped else None,
     }
 
 
@@ -716,14 +814,19 @@ def save_proposal(
         data["dst_lang"] = data.get("dst_lang") or lang
 
     alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
-    check = proposals.validate_proposal(data, texts, alt_texts)
+    check, span = _validate_scoped(data, texts, alt_texts)
     if not check.ok:
         return _rejected(check)
 
     path = _path_for(request, session, kind, lang)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_text_atomic(path, proposals.dump_proposal(data))
-    return {"path": str(path), "count": len(data.get("items") or []), "warnings": check.warnings}
+    return {
+        "path": str(path),
+        "count": len(data.get("items") or []),
+        "range": {"from": span[0], "to": span[1]} if span != (1, len(texts)) else None,
+        "warnings": check.warnings,
+    }
 
 
 @router.delete("/api/ai/proposal")
@@ -774,7 +877,7 @@ def import_proposal(
         data["dst_lang"] = data.get("dst_lang") or lang
 
     alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
-    check = proposals.validate_proposal(data, texts, alt_texts)
+    check, span = _validate_scoped(data, texts, alt_texts)
     if not check.ok:
         return _rejected(check)
 
@@ -785,6 +888,7 @@ def import_proposal(
         "path": str(dest),
         "from": str(src),
         "count": len(data.get("items") or []),
+        "range": {"from": span[0], "to": span[1]} if span != (1, len(texts)) else None,
         "warnings": check.warnings,
     }
 
@@ -812,20 +916,33 @@ def apply_proposal(
             raise HTTPException(status_code=409, detail="找不到提案文件，请先生成或导入一份")
 
     alt_texts = [cue.text for cue in session.alt_review.cues] if session.alt_review else None
-    check = proposals.validate_proposal(data, _current_texts(session), alt_texts)
+    check, span = _validate_scoped(data, _current_texts(session), alt_texts)
     if not check.ok:
         return _rejected(check)
 
     accept = None if payload.accept is None else {int(i) for i in payload.accept}
-    new_cues, changed = proposals.apply_polish(
+    # 片段提案只替换对应索引区间；写回仍然只走 apply_polish（这里只换索引口径）。
+    scoped = span != (1, len(cues))
+    new_cues, changed = proposals.apply_polish_range(
         cues,
         list(data.get("items") or []),
+        span if scoped else None,
         accept=accept,
         edits={int(k): v for k, v in (payload.edits or {}).items()},
     )
 
     # 空应用 / 无实际改动：不压历史，让 can_undo 保持原样（文档 §4.2.2 第 5 步）
     if changed:
-        session.replace_review(new_cues, label=f"应用 AI 提案（{changed} 处）")
+        label = (
+            f"应用 AI 提案（片段 {span[0]}–{span[1]}，{changed} 处）"
+            if scoped
+            else f"应用 AI 提案（{changed} 处）"
+        )
+        session.replace_review(new_cues, label=label)
 
-    return {**_snapshot(session), "changed": changed, "warnings": check.warnings}
+    return {
+        **_snapshot(session),
+        "changed": changed,
+        "range": {"from": span[0], "to": span[1]} if scoped else None,
+        "warnings": check.warnings,
+    }

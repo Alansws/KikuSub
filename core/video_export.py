@@ -39,6 +39,14 @@ from .procutil import (
     unregister_process,
 )
 from .chapters import ChapterMark, layout_chapters, write_ffmetadata
+from .clip_range import (
+    ClipWindow,
+    clip_tag,
+    clip_window,
+    safe_label,
+    shift_chapters_to_clip,
+    shift_cues_to_clip,
+)
 from .subtitles import SubtitleCue, cues_to_srt
 from .textio import next_available_path
 
@@ -467,7 +475,20 @@ class ExportOptions:
     export_srt: bool = True
     # 有标记时默认写入章节（导出页的开关走 setExportChapters，进统一历史）
     write_chapters: bool = True
+    # 片段导出（0 / 0 = 全片）：只输出 [clip_start, clip_end] 这一段，字幕、软字幕轨、
+    # 硬字幕精灵与 ffmetadata 章节都平移到片段坐标（见 core/clip_range.py）。
+    clip_start: float = 0.0
+    clip_end: float = 0.0
+    # 文件名里的安全标签（章节标题 + 时间范围），避免覆盖整片成片。
+    clip_label: str = ""
     style: SubtitleStyle = field(default_factory=default_style)
+
+    def window(self, duration: float = 0.0) -> ClipWindow | None:
+        """片段窗口；`None` = 全片。非法范围抛 :class:`ExportError`。"""
+        try:
+            return clip_window(self.clip_start, self.clip_end, duration)
+        except ValueError as exc:
+            raise ExportError(str(exc)) from exc
 
     def validate(self) -> None:
         if self.mode not in MODES:
@@ -478,6 +499,7 @@ class ExportOptions:
             raise ExportError(f"未知分辨率：{self.resolution}")
         if self.preset not in PRESETS:
             raise ExportError(f"未知码率档位：{self.preset}")
+        self.window()
         self.style.validate()
         if self.track != "source" and not self.lang.strip():
             raise ExportError("导出译文时必须指定语种")
@@ -502,6 +524,8 @@ class ExportPlan:
     style: dict = field(default_factory=dict)
     # 实际会写进容器的章节区间（已排序、已衔接/防重叠）
     chapters: list[dict] = field(default_factory=list)
+    # 片段导出信息；全片时是空 dict。
+    clip: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -521,6 +545,7 @@ class ExportPlan:
             "source": self.source.to_dict(),
             "style": self.style,
             "chapters": self.chapters,
+            "clip": self.clip,
         }
 
 
@@ -615,10 +640,25 @@ def plan_export(
     chapter_marks: list[ChapterMark] | None = None,
 ) -> ExportPlan:
     options.validate()
+    marks = list(chapter_marks or [])
+    window = options.window(source.duration)
+    # 片段导出：时间轴长度、章节、码率估算都按这一段的时长来算。
+    timeline = window.duration if window is not None else source.duration
+    clip_marks = shift_chapters_to_clip(marks, window.start, window.end) if window else marks
+    clip_info = (
+        {
+            "start": round(window.start, 3),
+            "end": round(window.end, 3),
+            "duration": round(window.duration, 3),
+            "label": options.clip_label or clip_tag(window.start, window.end),
+        }
+        if window is not None
+        else {}
+    )
     # 章节在规划里就要算好：导出页要显示「写入后是这几段」，编码阶段不再改口径。
     chapters = (
-        [chapter.to_dict() for chapter in layout_chapters(chapter_marks or [], source.duration)]
-        if (options.write_chapters and chapter_marks)
+        [chapter.to_dict() for chapter in layout_chapters(clip_marks, timeline)]
+        if (options.write_chapters and marks)
         else []
     )
     if not source.has_video or source.width <= 0 or source.height <= 0:
@@ -632,6 +672,11 @@ def plan_export(
         _ensure_style_font(options.style)
 
     warnings: list[str] = []
+    if window is not None:
+        warnings.append(
+            f"片段导出：只输出 {_clock_text(window.start)} → {_clock_text(window.end)}"
+            f"（{window.duration:.1f}s），字幕与章节已平移到 0 起。"
+        )
     if options.mode == "copy":
         container, ext = _copy_container(source)
         height = _even(source.height)
@@ -640,10 +685,16 @@ def plan_export(
             1, int(source.size * 8 / max(0.001, source.duration))
         )
         audio_bitrate = source.audio_bitrate or 0
-        estimated = int(source.size * 1.01)
+        ratio = (timeline / source.duration) if source.duration > 0 else 1.0
+        estimated = int(source.size * max(0.01, ratio) * 1.01)
         if container == "mkv":
             warnings.append("源编码组合不适合 MP4，输出 MKV；画质无损，但 QuickTime 可能打不开。")
         warnings.append("仅封装不重编码：视频/音频原样复制，几秒完成，体积与源接近。")
+        if window is not None:
+            warnings.append(
+                "仅封装按关键帧切片：起点会对齐到最近的关键帧，首尾可能多出或短路几秒；"
+                "要精确到帧请改用「烧录硬字幕」或「软字幕 MP4」重编码。"
+            )
         return ExportPlan(
             mode=options.mode,
             track=options.track,
@@ -652,14 +703,15 @@ def plan_export(
             height=height,
             video_bitrate=video_bitrate,
             audio_bitrate=audio_bitrate,
-            duration=source.duration,
+            duration=timeline,
             estimated_bytes=estimated,
-            estimated_seconds=max(2.0, min(45.0, source.duration * 0.01)),
+            estimated_seconds=max(2.0, min(45.0, timeline * 0.01)),
             container=container,
             suffix=ext,
             warnings=warnings,
             source=source,
             chapters=chapters,
+            clip=clip_info,
         )
 
     target_height = RESOLUTIONS.get(options.resolution, 1080)
@@ -682,12 +734,12 @@ def plan_export(
     audio_bitrate = (192_000 if height >= 720 else 128_000) if source.has_audio else 0
     if not source.has_audio:
         warnings.append("源文件没有音轨，成片将没有声音。")
-    if source.duration > 0:
-        estimated = int((video_bitrate + audio_bitrate) * source.duration / 8 * 1.01)
+    if timeline > 0:
+        estimated = int((video_bitrate + audio_bitrate) * timeline / 8 * 1.01)
     else:
         estimated = 0
     speed = {"small": 2.6, "balanced": 2.2, "high": 1.5, "ultra": 0.9}[options.preset]
-    estimated_seconds = max(2.0, source.duration / speed) if source.duration else 0.0
+    estimated_seconds = max(2.0, timeline / speed) if timeline else 0.0
 
     if source.video_bitrate > 0 and video_bitrate < source.video_bitrate * 0.7:
         warnings.append("目标码率低于源文件，暗部/纹理会有可见损失；在意画质可选「高」或「极高」。")
@@ -704,7 +756,7 @@ def plan_export(
         height=height,
         video_bitrate=video_bitrate,
         audio_bitrate=audio_bitrate,
-        duration=source.duration,
+        duration=timeline,
         estimated_bytes=estimated,
         estimated_seconds=estimated_seconds,
         container=container,
@@ -712,7 +764,13 @@ def plan_export(
         warnings=warnings,
         source=source,
         chapters=chapters,
+        clip=clip_info,
     )
+
+
+def _clock_text(seconds: float) -> str:
+    total = max(0.0, float(seconds))
+    return f"{int(total // 3600):d}:{int(total % 3600 // 60):02d}:{total % 60:05.2f}"
 
 
 # --------------------------------------------------------------------------- 字体 / 字幕精灵
@@ -1282,6 +1340,14 @@ def _unique_path(path: Path) -> Path:
     return next_available_path(path)
 
 
+def _clip_file_tag(options: ExportOptions, window: ClipWindow | None) -> str:
+    """片段导出的文件名安全标签；全片返回空串（文件名保持原样）。"""
+    if window is None:
+        return ""
+    label = safe_label(options.clip_label)
+    return clip_tag(window.start, window.end, label)
+
+
 def _suffix_for(track: str, lang: str) -> str:
     if track == "target":
         return f".{lang}"
@@ -1322,7 +1388,20 @@ def run_export(
     options.validate()
     if not cues:
         raise ExportError("当前没有字幕，先转写或导入一份再导出")
-    plan = plan_export(info, options, chapters)
+    window = options.window(info.duration)
+    # plan_export 自己会把章节搬到片段坐标（导出页预览与实际写盘同一口径）；
+    # 这里只额外算一份给 ffmetadata 用，**不要**把平移结果再交给 plan_export。
+    clip_chapters = (
+        shift_chapters_to_clip(list(chapters or []), window.start, window.end)
+        if window is not None
+        else list(chapters or [])
+    )
+    # 片段导出：字幕 / 译文先搬到片段坐标，导出器只认 0 起的时间轴。
+    if window is not None:
+        cues, translation_texts = shift_cues_to_clip(
+            cues, translation_texts, window.start, window.end
+        )
+    plan = plan_export(info, options, list(chapters or []))
     if options.mode == "burn":
         # 提前确认字体可用，别等编码到一半才报错
         _ensure_style_font(options.style)
@@ -1337,7 +1416,11 @@ def run_export(
     res_tag = options.resolution
     if options.resolution != "source" and plan.height != RESOLUTIONS.get(options.resolution):
         res_tag = f"{plan.height}p"
-    out_path = _unique_path(out_dir / f"{stem}{suffix}.{res_tag}.{options.preset}{ext}")
+    tag = _clip_file_tag(options, window)
+    tag_part = f".{tag}" if tag else ""
+    out_path = _unique_path(
+        out_dir / f"{stem}{suffix}{tag_part}.{res_tag}.{options.preset}{ext}"
+    )
 
     track_cues, skipped = _subtitle_cues(cues, options.track, translation_texts)
     # 空字幕不烧进画面
@@ -1356,8 +1439,12 @@ def run_export(
             # 没有 -progress 时 ffmpeg 的 stdout 是空的，读线程会一直阻塞：
             # 进度停在 0%、取消也收不到。这个参数是进度与取消能工作的前提。
             "-nostats", "-progress", "pipe:1",
-            "-i", str(media_path),
         ]
+        if window is not None:
+            # 输入前 seek：解码丢弃到精确起点（重编码 = 帧级精确），输出时间戳从 0 起，
+            # 硬字幕精灵与软字幕轨的 0 起点因此与画面严格对齐。
+            cmd += ["-ss", f"{window.start:.3f}"]
+        cmd += ["-i", str(media_path)]
         extra_inputs: list[Path] = []
         filter_complex = ""
         map_args: list[str] = []
@@ -1463,14 +1550,21 @@ def run_export(
         for sprite in extra_inputs:
             cmd += ["-loop", "1", "-i", str(sprite)]
 
-        # 章节：在最后一个输入之后追加 FFMETADATA，再按它的输入序号取 chapter。
-        # 输入序号 = 1(媒体) + 1(软/仅封装的字幕) + sprite 数；burn 模式没有字幕输入。
+        # 章节：burn 输出没有字幕流，可以在同一次封装里写；soft / copy 不行——
+        # mov_text 字幕与 MP4 章节文本轨同一次封装会写坏章节头（ffmpeg 9.0.2 实测：
+        # 标题重复成末章、首章 END 变成「片段时长 - 首章结束」），ffprobe / 播放器都会
+        # 读到错的时间。所以那条路先出片、成功后用 `-c copy` 二次 remux 注入章节。
+        chapter_meta: Path | None = None
         if chapter_intervals:
-            meta_path = tmpdir / "chapters.ffmetadata"
-            write_ffmetadata(meta_path, chapters or [], info.duration)
-            chapter_input = 1 + (0 if options.mode == "burn" else 1) + len(extra_inputs)
-            cmd += ["-i", str(meta_path)]
-            map_args += ["-map_chapters", str(chapter_input)]
+            chapter_meta = tmpdir / "chapters.ffmetadata"
+            # 片段导出的章节已经是片段坐标；时长也必须用片段时长，否则末章会被拉到原片尾。
+            write_ffmetadata(chapter_meta, clip_chapters, plan.duration)
+            if options.mode == "burn":
+                chapter_input = 1 + len(extra_inputs)
+                cmd += ["-i", str(chapter_meta)]
+                map_args += ["-map_chapters", str(chapter_input)]
+            else:
+                stage = "正在编码（章节随后写入）…"
         if filter_complex:
             cmd += ["-filter_complex", filter_complex]
 
@@ -1490,6 +1584,11 @@ def run_export(
             tail_args += ["-c:a", "aac", "-b:a", str(plan.audio_bitrate or 128_000)]
         if plan.container == "mp4":
             tail_args += ["-movflags", "+faststart"]
+        if window is not None and options.mode == "copy":
+            # 仅封装按关键帧切片时时间戳可能从负值起算：归零让播放器能正常播。
+            # 重编码（burn / soft）的输入 seek 本身就从 0 起算，加了这个反而会把
+            # 字幕轨整体推后 3ms（AAC priming），没必要。
+            tail_args += ["-avoid_negative_ts", "make_zero"]
         if plan.duration > 0:
             tail_args += ["-t", f"{plan.duration:.3f}"]
         partial = out_path.with_name(f".{out_path.stem}.part{out_path.suffix}")
@@ -1520,6 +1619,29 @@ def run_export(
                     payload[key] = value
             on_progress(ratio, stage, payload)
 
+        def remux_chapters(source: Path, target: Path) -> tuple[int, str]:
+            """二次 remux：把 ffmetadata 里的章节注入成片（-c copy，不重编码）。"""
+            remux_cmd = [
+                "ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-nostats", "-progress", "pipe:1",
+                "-i", str(source), "-i", str(chapter_meta),
+                "-map", "0", "-map_chapters", "1", "-c", "copy",
+            ]
+            if plan.container == "mp4":
+                remux_cmd += ["-movflags", "+faststart"]
+            remux_cmd += [str(target)]
+
+            def chapter_progress(out_s: float, pct: int | None, extras: dict | None = None) -> None:
+                if on_progress is None:
+                    return
+                on_progress(
+                    0.99 + 0.01 * (pct or 0) / 100.0,
+                    "正在写入章节…",
+                    {"out_s": out_s},
+                )
+
+            return _progress_reader(remux_cmd, plan.duration, chapter_progress, cancel_event)
+
         last_error = ""
         for attempt, run_cmd in enumerate(variants):
             try:
@@ -1527,12 +1649,44 @@ def run_export(
                     run_cmd, plan.duration, progress, cancel_event
                 )
             except CommandCancelled:
-                try:
-                    partial.unlink()
-                except OSError:
-                    pass
+                for leftover in (partial,):
+                    try:
+                        leftover.unlink()
+                    except OSError:
+                        pass
                 raise
             if returncode == 0 and partial.exists() and partial.stat().st_size > 1024:
+                if chapter_meta is not None and options.mode != "burn":
+                    remuxed = partial.with_name(f".{partial.stem}.chapters{partial.suffix}")
+                    try:
+                        remux_code, remux_err = remux_chapters(partial, remuxed)
+                    except CommandCancelled:
+                        for leftover in (partial, remuxed):
+                            try:
+                                leftover.unlink()
+                            except OSError:
+                                pass
+                        raise
+                    if (
+                        remux_code == 0
+                        and remuxed.exists()
+                        and remuxed.stat().st_size > 1024
+                    ):
+                        remuxed.replace(out_path)
+                        try:
+                            partial.unlink()
+                        except OSError:
+                            pass
+                        break
+                    last_error = (
+                        tail(remux_err, 1600) or f"写入章节失败（ffmpeg 退出码 {remux_code}）"
+                    )
+                    for leftover in (partial, remuxed):
+                        try:
+                            leftover.unlink()
+                        except OSError:
+                            pass
+                    continue
                 partial.replace(out_path)
                 break
             last_error = tail(stderr, 1600) or f"ffmpeg 退出码 {returncode}"
@@ -1563,12 +1717,13 @@ def run_export(
             "container": plan.container,
             "subtitle_count": len(track_cues),
             "chapters": len(chapter_intervals),
+            "clip": dict(plan.clip),
             "skipped": skipped,
             "style": options.style.to_dict() if options.mode == "burn" else {},
         }
         if options.export_srt:
             try:
-                srt_out = _unique_path(out_dir / f"{stem}{suffix}.srt")
+                srt_out = _unique_path(out_dir / f"{stem}{suffix}{tag_part}.srt")
                 # 随片附带的字幕同样是交付文件：双语按「每语种一条 cue」写，
                 # 别写成一条两行——那会让用户重新导入核对台时挤成一行（D-4）。
                 srt_cues = (

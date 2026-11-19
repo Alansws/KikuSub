@@ -241,6 +241,7 @@ def run_polish(
     texts_b: list[str] | None = None,
     cues_a=None,
     cues_b=None,
+    cue_span: tuple[int, int] | None = None,
     cancel=None,
     on_progress=None,
 ) -> tuple[dict, list[str]]:
@@ -252,6 +253,9 @@ def run_polish(
 
     失败语义：任何一块最终失败都抛异常，**不产出半份提案**。
     取消语义：分块之间检查令牌，抛 `AiPolishCancelled`，同样不产出。
+
+    ``cue_span``：片段模式。``texts`` 已经是这一段（与 ``digest`` 一致），
+    ``items`` 的 ``i`` 用全片序号（``span[0]`` 起），与界面 ``#i`` 同一坐标系。
     """
     if not texts:
         raise client.AiError("没有可润色的字幕")
@@ -307,9 +311,10 @@ def run_polish(
     if on_progress:
         on_progress(1.0, "校验提案")
 
+    base = int(cue_span[0]) if cue_span is not None else 1
     items = [
         {
-            "i": idx,
+            "i": base + idx - 1,
             "before": texts[idx - 1],
             "after": merged[idx]["text"],
             "note": merged[idx]["note"],
@@ -327,9 +332,10 @@ def run_polish(
         chunks=len(chunks),
         source_path=source_path,
         texts_b=texts_b,
+        cue_span=cue_span,
     )
 
-    check = proposals.validate_proposal(proposal, texts, texts_b)
+    check = proposals.validate_proposal(proposal, texts, texts_b, span=cue_span)
     if not check.ok:
         raise client.AiError("模型输出未通过校验：" + "；".join(check.errors[:3]))
     return proposal, check.warnings
@@ -393,11 +399,17 @@ def proposal_from_srt(
     from_index: int = 1,
     to_index: int | None = None,
     texts_b: list[str] | None = None,
+    range_from: int | None = None,
+    range_to: int | None = None,
 ) -> tuple[dict, list[str]]:
     """把模型回吐的修正版 SRT 变成 polish 提案。
 
     ``from_index`` / ``to_index`` 用于长片分段粘贴：只解析本段（1 基、含两端），
     其余条目原样保留，这样多段粘贴回来能合并成一份完整提案。
+
+    ``range_from`` / ``range_to`` 是「处理范围」的片段区间（1 基、含两端）：
+    提案只覆盖这一段（``source.range`` + 本段 digest），``items`` 的 ``i`` 仍是
+    全片序号；内容段仍是 ``from_index``–``to_index``，所以分段粘贴也成立。
 
     与翻译通道同样只按**顺序**取文本，序号和时间戳一律丢弃；条数不一致整批拒绝。
     时间轴仍由 ``cues`` 提供（D-1 不破）。
@@ -409,48 +421,63 @@ def proposal_from_srt(
 
     source_texts = [c.text for c in cues]
     total = len(source_texts)
-    start = max(1, int(from_index or 1))
-    end = total if to_index is None else min(total, int(to_index))
+    if total <= 0:
+        raise client.AiError("当前没有字幕")
+    first, last = 1, total
+    if range_from is not None or range_to is not None:
+        first = max(1, int(range_from or 1))
+        last = total if range_to is None else min(total, int(range_to))
+        if first > last:
+            raise client.AiError(f"处理范围不合法：第 {first}–{last} 条")
+    clipped = (first, last) != (1, total)
+    scope_texts = list(source_texts[first - 1 : last])
+    start = max(first, int(from_index or 1))
+    end = last if to_index is None else min(last, int(to_index))
     if start > end:
         raise client.AiError(f"片段范围不合法：第 {start}–{end} 条")
     expected = end - start + 1
     slice_cues = list(cues[start - 1 : end])
-    scope = f"本段期望第 {start}–{end} 条（共 {expected} 条）"
+    scope_label = f"本段期望第 {start}–{end} 条（共 {expected} 条）"
     pairs, warnings = align_model_srt(
         srt_text,
         slice_cues,
         reject_hint="漏改",
-        scope_label=scope,
+        scope_label=scope_label,
     )
-    after_texts = list(source_texts)
+    overrides: dict[int, str] = {}
     for offset, (_before, after) in enumerate(pairs):
-        after_texts[start - 1 + offset] = after
+        overrides[start + offset] = after
     items = [
         {
-            "i": idx,
-            "before": source_texts[idx - 1],
-            "after": after_texts[idx - 1],
+            "i": first + offset,
+            "before": before,
             # 外部模型只回吐 SRT，没有「修改理由」；不要每行都写「手动粘贴」冒充理由。
             # 来源由提案的 entry=manual / model=manual-paste 表达。
+            "after": overrides.get(first + offset, before),
             "note": "",
         }
-        for idx in range(1, total + 1)
+        for offset, before in enumerate(scope_texts)
     ]
 
     proposal = proposals.build_proposal(
         kind="polish",
         src_lang="ja",
-        texts=source_texts,
+        texts=scope_texts,
         texts_b=texts_b,
         items=items,
         model="manual-paste",
         entry=entry,
         chunks=1,
+        cue_span=(first, last) if clipped else None,
     )
-    check = proposals.validate_proposal(proposal, source_texts, texts_b)
+    check = proposals.validate_proposal(
+        proposal, scope_texts, texts_b, span=(first, last) if clipped else None
+    )
     if not check.ok:
         raise client.AiError("；".join(check.errors[:3]))
     span = f"{start}–{end}" if (start, end) != (1, total) else ""
     if span:
         warnings = [f"已按第 {span} 条回填"] + warnings
+    if clipped:
+        warnings = [f"本次只作用于第 {first}–{last} 条"] + warnings
     return proposal, warnings + check.warnings
