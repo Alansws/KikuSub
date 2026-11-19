@@ -124,6 +124,27 @@ export interface ExportSourceInfo {
   container: string;
 }
 
+/** 章节 / 时刻点标记：`end === null` 表示时刻点（结束于下一个标记或片尾）。 */
+export interface ChapterMark {
+  id: string;
+  start: number;
+  end: number | null;
+  title: string;
+}
+
+export interface ChaptersPayload {
+  marks: ChapterMark[];
+  /** 实际写进容器的区间（已排序、已衔接 / 防重叠）。 */
+  chapters: { start: number; end: number; start_ms: number; end_ms: number; title: string }[];
+  count: number;
+  duration: number;
+  media_path: string;
+  can_undo?: boolean;
+  can_redo?: boolean;
+  undo_label?: string;
+  redo_label?: string;
+}
+
 export interface ExportPlan {
   mode: 'burn' | 'soft' | 'copy';
   track: 'source' | 'target' | 'both';
@@ -140,6 +161,8 @@ export interface ExportPlan {
   warnings: string[];
   source: ExportSourceInfo;
   style?: SubtitleStylePayload;
+  /** 本次导出会写入容器的章节（`write_chapters` 关闭时为空）。 */
+  chapters?: { start: number; end: number; start_ms: number; end_ms: number; title: string }[];
 }
 
 /** 烧录硬字幕的样式（只对 mode='burn' 生效）。 */
@@ -193,6 +216,8 @@ export interface ExportJobPayload {
   resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
   preset: 'small' | 'balanced' | 'high' | 'ultra';
   export_srt?: boolean;
+  /** 把章节 / 时刻点标记写进容器（默认开启）。 */
+  write_chapters?: boolean;
   out_dir?: string;
   style?: SubtitleStylePayload;
 }
@@ -470,12 +495,21 @@ export interface LocalModelLoadResult {
   load_time_seconds?: number | null;
 }
 
+export interface AiArbitrationHistoryItem {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export interface AiArbitrationRequest {
   text_a: string;
   text_b: string;
   before: string[];
   after: string[];
   lang: string;
+  /** 听音线索（空耳 / 罗马音 / 描述）；不是时间轴，也不是音频。 */
+  hint?: string;
+  /** 最近几轮追问；core 会再按轮数与字符预算裁剪。 */
+  history?: AiArbitrationHistoryItem[];
 }
 
 export interface AiArbitrationResult {
@@ -1070,6 +1104,15 @@ export const api = {
 
   // ---- 字幕 ----
   getCues: () => req<CueSnapshot>('/api/cues'),
+
+  getChapters: () => req<ChaptersPayload>('/api/chapters'),
+
+  /** 整表保存章节（一步历史）。label 决定历史面板里显示「做了什么」。 */
+  saveChapters: (body: { marks: ChapterMark[]; label: string }) =>
+    req<ChaptersPayload>('/api/chapters', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   /** 按路径导入 SRT / VTT，整表替换核对基线。 */
   importCues: (path: string) =>

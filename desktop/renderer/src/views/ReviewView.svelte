@@ -21,6 +21,7 @@
   import Icon from '../components/Icon.svelte';
   import ProxyGate from '../components/ProxyGate.svelte';
   import SelectionBar from '../components/SelectionBar.svelte';
+  import ChapterTrack from '../components/ChapterTrack.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
   import {
@@ -39,7 +40,6 @@
     mergeCuesAt,
     play,
     previewRange,
-    rememberPlayhead,
     replaceAllInTracks,
     replaceInCue,
     replaceInTranslation,
@@ -52,10 +52,23 @@
     transcribeRange,
     tts,
   } from '../lib/store.svelte';
+  import { chapters, loadChapters, seekToMark } from '../lib/chapters.svelte';
   import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
   import { isTypingTarget } from '../lib/typing';
+  import {
+    collectFindHits,
+    countSkippedHits,
+    escapeRe,
+    filterSkippedHits,
+    findHitKey,
+    ordinalOfHit,
+    skippedStartsByCueTrack,
+    type FindHit,
+    type FindSkipAnchor,
+    type FindTrack,
+  } from '../lib/findMatches';
   import {
     BLANK_FRAME_TIMEOUT_MS,
     hasDecodedFrame,
@@ -89,15 +102,18 @@
     toggleFitView,
     zoomTimelineView,
   } from '../lib/timelineView';
+  import { roundRect } from '../lib/waveformDraw';
+  import { paintReviewCanvas } from '../lib/waveformCanvas';
   import {
-    drawSnapGuide,
-    paintCueBlocks,
-    paintCueWash,
-    paintPeakBars,
-    paintRuler,
-    paintSelectedCueWash,
-    roundRect,
-  } from '../lib/waveformDraw';
+    cachedPeaks,
+    peakCacheKey,
+    planViewportRestore,
+    readViewportForRestore,
+    rememberViewport,
+    resolveCueIndex,
+    storePeaks,
+    takeExplicitJump,
+  } from '../lib/reviewViewport';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -127,6 +143,15 @@
   const duration = $derived(app.media?.duration ?? 0);
   let viewStart = $state(0);
   let viewSpan = $state(60);
+  /**
+   * `<video>` 的元数据是否就绪。历史现场的播放头必须等到这一刻再 seek：
+   * 早于 loadedmetadata 写 currentTime 会被浏览器丢掉，用户看到的是「没恢复」。
+   */
+  let videoMetaReady = $state(false);
+  /** 已经为哪部影片恢复过现场（每次换片只恢复一次）。 */
+  let restoreDoneFor = '';
+  /** 当前核对台里实际挂载的影片路径，用于换片前把上一条现场落盘。 */
+  let openedPath = '';
   /** 全片适应前记住的视窗；再次 ⇧Z 恢复。 */
   let preFitView = $state<{ start: number; span: number } | null>(null);
   /** 拖字幕块时命中的参考线；松开 / 取消即清空。 */
@@ -387,10 +412,45 @@
     return viewStart + ratio * viewSpan;
   }
 
-  // 媒体变化：视窗归零、清空选区与波形
+  /** 当前核对台状态 → 可持久化的现场快照。 */
+  function currentSnapshot() {
+    const cue = app.cues[play.selected];
+    return {
+      cueIndex: play.selected,
+      cueTime: cue?.start ?? 0,
+      playhead: play.time,
+      viewStart,
+      span: viewSpan,
+      selection: selection ? { start: selection.start, end: selection.end } : null,
+    };
+  }
+
+  /** 把某部影片的现场落盘（默认当前片）。切换影片前必须先调一次。 */
+  function persistViewport(path = app.media?.path ?? '') {
+    if (!path) return;
+    rememberViewport(path, currentSnapshot());
+  }
+
+  // 章节标记按媒体加载；检查器里的「将选区设为章节」需要当前时间选区。
+  $effect(() => {
+    const path = app.media?.path ?? '';
+    if (path) void loadChapters(true);
+  });
+  $effect(() => {
+    chapters.selection = selection ? { start: selection.start, end: selection.end } : null;
+  });
+
+  // 媒体变化：先把上一条的现场落盘，再视窗归零、清空选区与波形
   $effect(() => {
     void app.media?.id;
     void app.media?.duration;
+    const path = app.media?.path ?? '';
+    // 此刻还没执行下面的复位：viewStart / viewSpan / play.time 仍是上一条的值，
+    // 所以这里落盘拿到的才是用户离开时的现场（不是归零后的）。
+    if (openedPath && openedPath !== path) persistViewport(openedPath);
+    openedPath = path;
+    videoMetaReady = false;
+    restoreDoneFor = '';
     const d = app.media?.duration ?? 0;
     play.duration = d;
     viewStart = 0;
@@ -412,18 +472,35 @@
   let peakSeq = 0;
   let peakTimer = 0;
 
+  /**
+   * 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，不会退化成一排
+   * 可数的柱子。服务端只读这一小段样本，成本可忽略。缓存键必须带上它。
+   */
+  function binsFor(width: number) {
+    return Math.max(512, Math.min(12000, Math.round(width * 3)));
+  }
+
   async function fetchPeaks(id: string, from: number, span: number, width: number) {
+    const bins = binsFor(width);
+    const key = peakCacheKey(id, from, span, bins);
+    const hit = cachedPeaks(key);
+    if (hit) {
+      // 进程内缓存命中：切回核对台时不再闪一帧空白，也不再发同一个请求
+      peaks = hit;
+      peaksFrom = from;
+      peaksSpan = span;
+      loadingPeaks = false;
+      return;
+    }
     const seq = ++peakSeq;
     loadingPeaks = true;
     try {
-      // 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，
-      // 不会退化成一排可数的柱子。服务端只读这一小段样本，成本可忽略。
-      const bins = Math.max(512, Math.min(12000, Math.round(width * 3)));
       const data = await api.peaks(id, { from, to: from + span, bins });
       if (seq !== peakSeq) return;
       peaks = data.peaks;
       peaksFrom = from;
       peaksSpan = span;
+      storePeaks(key, data.peaks);
     } catch {
       if (seq === peakSeq) peaks = [];
     } finally {
@@ -437,111 +514,44 @@
     const from = viewStart;
     const span = viewSpan;
     if (!id || width <= 0 || span <= 0) return;
+    const hit = cachedPeaks(peakCacheKey(id, from, span, binsFor(width)));
+    if (hit) {
+      // 同步命中：不等 70ms 防抖，也不重新请求——切页回来时波形立刻就在
+      peaks = hit;
+      peaksFrom = from;
+      peaksSpan = span;
+      loadingPeaks = false;
+      return;
+    }
     clearTimeout(peakTimer);
     peakTimer = window.setTimeout(() => void fetchPeaks(id, from, span, width), 70);
     return () => clearTimeout(peakTimer);
   });
 
   // ---------------- 画布 ----------------
+  /** 画法整段在 lib/waveformCanvas.ts：组件只负责传当前状态。 */
   function draw() {
     if (!canvas || !waveWrap) return;
-    const w = waveWrap.clientWidth;
-    const h = waveWrap.clientHeight;
-    if (!w || !h) return;
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    // 播放时每帧都会重绘：只在尺寸真变了的时候重设画布，避免每帧重新分配位图。
-    const pw = Math.round(w * dpr);
-    const ph = Math.round(h * dpr);
-    if (canvas.width !== pw || canvas.height !== ph) {
-      canvas.width = pw;
-      canvas.height = ph;
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-
-    const css = getComputedStyle(document.documentElement);
-    const token = (name: string, fallback: string) =>
-      css.getPropertyValue(name).trim() || fallback;
-    const sep = token('--separator-soft', 'rgba(0,0,0,.06)');
-    const sepStrong = token('--separator', 'rgba(0,0,0,.1)');
-    const waveColor = token('--wave', '#7b8a99');
-    const accent = token('--accent', '#4f6bff');
-    const text3 = token('--text-3', '#98989d');
-    const cueLane = token('--cue-lane', 'rgba(0,0,0,.055)');
-    const cueWash = token('--cue-wash', 'rgba(0,122,255,.035)');
-    const cueBlock = token('--cue-block', 'rgba(0,122,255,.28)');
-    const cueBlockHover = token('--cue-block-hover', 'rgba(0,122,255,.46)');
-    const cueBlockActive = token('--cue-block-active', 'rgba(0,122,255,.82)');
-    const cueEdge = token('--cue-edge', 'rgba(0,122,255,.9)');
-
-    const laneTop = laneTopOf(h);
-    const mid = RULER_H + (laneTop - RULER_H) / 2;
-    const ampH = Math.max(8, (laneTop - RULER_H) * 0.94);
-
-    // 字幕覆盖区在波形背后垫一层极淡的蓝（同区间双语行只画一次）。
-    paintCueWash(ctx, app.cues, viewStart, viewSpan, w, RULER_H, laneTop, cueWash, xOf);
-
-    // 时间刻度
-    paintRuler(ctx, {
+    paintReviewCanvas({
+      canvas,
+      waveWrap,
+      peaks,
+      peaksFrom,
+      peaksSpan,
       viewStart,
       viewSpan,
-      width: w,
-      rulerH: RULER_H,
-      separator: sep,
-      separatorStrong: sepStrong,
-      text: text3,
-      xOf,
-    });
-
-    // 波形：逐像素取该像素覆盖的所有采样点的最大值（纯绘制见 lib/waveformDraw）。
-    const n = peaks.length;
-    if (!n) {
-      ctx.fillStyle = sepStrong;
-      ctx.fillRect(0, Math.round(mid), w, 1);
-    } else {
-      const base = { peaks, peaksFrom, peaksSpan, viewStart, viewSpan, width: w, mid, ampH };
-      paintPeakBars(ctx, { ...base, color: waveColor, alpha: 0.9, right: w });
-      // 已播放段用 accent 再画一遍：当前进度在波形上一眼可见（比未播放段更深）
-      const playedX = xOf(play.time);
-      if (playedX > 0.5) {
-        paintPeakBars(ctx, { ...base, color: accent, alpha: 0.9, right: playedX });
-      }
-    }
-
-    // 选中行的区间高亮（不是选区，只是当前条目）：中性墨，别再加一层蓝。
-    const selected = play.selected >= 0 ? app.cues[play.selected] : null;
-    if (selected) {
-      paintSelectedCueWash(ctx, selected, viewStart, w, RULER_H, laneTop, sepStrong, xOf);
-    }
-
-    // ---------------- 底部字幕轨道 ----------------
-    // 底槽：明确区分「轨道」与「波形」，哪怕整片都没有字幕也能看出这里有东西。
-    ctx.fillStyle = cueLane;
-    ctx.fillRect(0, laneTop, w, LANE_H - 1);
-
-    const selectedCue = play.selected >= 0 ? app.cues[play.selected] : null;
-    paintCueBlocks(ctx, {
       cues: app.cues,
-      viewStart,
-      viewSpan,
-      width: w,
-      laneTop,
-      laneHeight: LANE_H,
-      selectedKey: selectedCue ? `${selectedCue.start}:${selectedCue.end}` : '',
+      selectedIndex: play.selected,
+      playTime: play.time,
       activeKey,
       hoverKey,
       dragKey,
       laneSelection,
-      cueBlock,
-      cueBlockHover,
-      cueBlockActive,
-      cueEdge,
-      accent,
-      xOf,
+      snapGuide,
+      rulerH: RULER_H,
+      laneH: LANE_H,
+      resizeH: RESIZE_H,
     });
-    if (snapGuide !== null) drawSnapGuide(ctx, xOf(snapGuide), h, accent);
   }
 
   $effect(() => {
@@ -746,6 +756,36 @@
       play.playAfterSeek = false;
       void video.play().catch(() => {});
     }
+  });
+
+  /**
+   * 恢复这部影片上次的工作现场。
+   *
+   * 时机由 `videoMetaReady` 把关（`<video>` 的 loadedmetadata）：早于它 seek 会被
+   * 浏览器丢弃，缩放也没有 duration 可夹。显式跳转（双引擎复核 / 质检面板点
+   * 时间码）在 `focusRange()` 里记过一笔，这里消费掉并且**整次跳过历史恢复**，
+   * 保证「用户刚点的那一下」不会被旧位置覆盖。
+   */
+  $effect(() => {
+    const media = app.media;
+    const ready = videoMetaReady;
+    const d = duration;
+    if (!media || !ready || d <= 0 || restoreDoneFor === media.path) return;
+    restoreDoneFor = media.path;
+    const raw = readViewportForRestore(media.path);
+    const plan = planViewportRestore(raw, d, MIN_SPAN, {
+      explicit: takeExplicitJump(media.path),
+    });
+    if (!plan) return;
+    if (plan.span > 0) setView(plan.viewStart, plan.span);
+    if (plan.selection) selection = { start: plan.selection.start, end: plan.selection.end };
+    const index = resolveCueIndex(app.cues, raw);
+    if (index !== null) {
+      play.selected = index;
+      play.selectNonce += 1;
+    }
+    // metadata 已经就绪：这里的 seek 一定落得下去
+    if (plan.seekTo !== null) seekTo(plan.seekTo);
   });
 
   // 质检 / 选区聚焦请求
@@ -1163,15 +1203,21 @@
     selection = { start: Math.min(dragAnchor, t), end: Math.max(dragAnchor, t) };
   }
 
-  // 记住播放头：定时写 localStorage，重启后自动回到上次的位置。
+  // 工作现场定时落盘：播放头/视窗/选区一起存，重启或切页回来能接上。
   // 不在 $effect 里直接写：播放时 play.time 每帧变化，会变成每帧一次 localStorage。
   $effect(() => {
     const media = app.media;
     if (!media) return;
+    const path = media.path;
     const timer = setInterval(() => {
-      if (play.time > 0.2) rememberPlayhead(play.time);
-    }, 2500);
-    return () => clearInterval(timer);
+      // 换片后旧 effect 的清理可能晚一拍：只写仍然挂着的那部片
+      if (app.media?.path === path) persistViewport(path);
+    }, 1500);
+    return () => {
+      clearInterval(timer);
+      // 卸载（切去别的页面）时补一次；换片的情况由媒体变化 effect 负责
+      if (app.media?.path === path) persistViewport(path);
+    };
   });
 
   function t0() {
@@ -1448,26 +1494,6 @@
   /** 正在提交单处替换：挡住连点，避免两个 patch 请求把 pos 抢乱。 */
   let findBusy = $state(false);
 
-  type FindTrack = 'source' | 'target';
-  interface FindHit {
-    cue: number;
-    track: FindTrack;
-    start: number;
-    end: number;
-  }
-
-  /**
-   * 本轮查找里被「跳过」的命中点。
-   *
-   * 只认 (条 / 轨 / 起点)，不写字幕、不进历史。替换掉同一句里更靠前的命中时，
-   * `shiftFindAnchors()` 会把后面这些锚点一起平移，跳过标记不会因为字符前移而失效。
-   * 改查找词、切原文/译文模式或重开查找都会清空——「本轮」仅指这一次查找。
-   */
-  interface FindSkipAnchor {
-    cue: number;
-    track: FindTrack;
-    start: number;
-  }
   let findSkipped = $state<FindSkipAnchor[]>([]);
 
   /**
@@ -1479,70 +1505,25 @@
     app.track === 'target' ? ['target'] : app.track === 'both' ? ['source', 'target'] : ['source'],
   );
 
-  function escapeRe(text: string) {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
-  function findHitKey(hit: { cue: number; track: FindTrack; start: number }) {
-    return `${hit.cue}:${hit.track}:${hit.start}`;
-  }
-
   /** 所有命中（含已跳过）：记录属于第几条 / 哪条轨 / 在文本里的起止。 */
-  const rawFindMatches = $derived.by(() => {
-    const query = findState.query;
-    const hits: FindHit[] = [];
-    if (!query) return hits;
-    const flags = findState.caseSensitive ? 'g' : 'gi';
-    const source = escapeRe(query);
-    const tracks = findTracks;
-    app.cues.forEach((cue, index) => {
-      for (const track of tracks) {
-        const text = track === 'source' ? cue.text : translationTextAt(index);
-        if (!text) continue;
-        const re = new RegExp(source, flags);
-        let found: RegExpExecArray | null;
-        while ((found = re.exec(text)) !== null) {
-          hits.push({
-            cue: index,
-            track,
-            start: found.index,
-            end: found.index + found[0].length,
-          });
-          if (found[0].length === 0) re.lastIndex += 1;
-        }
-      }
-    });
-    return hits;
-  });
-
-  const skippedFindKeys = $derived(new Set(findSkipped.map((anchor) => findHitKey(anchor))));
-  /** 待处理命中：跳过的不再参与上一处/下一处/替换，本轮到它就直接略过。 */
-  const findMatches = $derived.by(() =>
-    rawFindMatches.filter((hit) => !skippedFindKeys.has(findHitKey(hit))),
+  const rawFindMatches = $derived(
+    collectFindHits(
+      app.cues,
+      findTracks,
+      findState.query,
+      findState.caseSensitive,
+      translationTextAt,
+    ),
   );
-  const skippedHitCount = $derived.by(() => {
-    if (!findSkipped.length) return 0;
-    let count = 0;
-    for (const hit of rawFindMatches) {
-      if (skippedFindKeys.has(findHitKey(hit))) count += 1;
-    }
-    return count;
-  });
 
+  const skippedFindKeys = $derived(new Set(findSkipped.map(findHitKey)));
+  /** 待处理命中：跳过的不再参与上一处/下一处/替换，本轮到它就直接略过。 */
+  const findMatches = $derived(filterSkippedHits(rawFindMatches, skippedFindKeys));
+  const skippedHitCount = $derived(
+    findSkipped.length ? countSkippedHits(rawFindMatches, skippedFindKeys) : 0,
+  );
   /** 某一轨里被跳过的起点，渲染删除线用；单行字幕与原文下标一致。 */
-  const skippedStarts = $derived.by(() => {
-    const map = new Map<string, Set<number>>();
-    for (const anchor of findSkipped) {
-      const key = `${anchor.cue}:${anchor.track}`;
-      let starts = map.get(key);
-      if (!starts) {
-        starts = new Set();
-        map.set(key, starts);
-      }
-      starts.add(anchor.start);
-    }
-    return map;
-  });
+  const skippedStarts = $derived(skippedStartsByCueTrack(findSkipped));
 
   const matchedCueSet = $derived(
     new Set((findState.open ? findMatches : []).map((hit) => hit.cue)),
@@ -1553,13 +1534,7 @@
     if (!findState.open) return null;
     const hit = findMatches[findState.pos];
     if (!hit) return null;
-    let ordinal = 0;
-    for (const raw of rawFindMatches) {
-      if (raw.cue !== hit.cue || raw.track !== hit.track) continue;
-      if (raw.start === hit.start) break;
-      ordinal += 1;
-    }
-    return { ...hit, ordinal };
+    return { ...hit, ordinal: ordinalOfHit(rawFindMatches, hit) };
   });
 
   const findPrevKey = $derived(formatCombo(comboOf('review.findPrev')));
@@ -2117,6 +2092,8 @@
             play.duration = e.currentTarget.duration || duration;
             const t = play.time;
             if (t > 0.2) e.currentTarget.currentTime = t;
+            // 现场的恢复 effect 等这个开关：metadata 之前 seek 会被浏览器丢掉
+            videoMetaReady = true;
           }}
           onloadeddata={(e) => {
             // 首帧真正出来：兜底计时与提示都作废（慢盘误判最多闪一下）。
@@ -2273,6 +2250,14 @@
       class:dragging={dragMode !== 'none'}
     >
       <canvas bind:this={canvas}></canvas>
+      <ChapterTrack
+        marks={chapters.marks}
+        {duration}
+        {viewStart}
+        {viewSpan}
+        rulerH={RULER_H}
+        onseek={(id) => seekToMark(id)}
+      />
 
       {#if cueTip}
         <div class="cue-tip" style="left:{cueTip.x}px">{cueTip.label}</div>

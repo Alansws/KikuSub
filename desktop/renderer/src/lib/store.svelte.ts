@@ -36,6 +36,7 @@ import { aiBridge } from './aiBridge';
 import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
+import { markExplicitJump } from './reviewViewport';
 
 export type View =
   | 'import'
@@ -77,7 +78,7 @@ export const app = $state({
   theme: 'light' as ThemeId,
   inspectorOpen: true,
   /** 右侧检查器当前页签：当前条目 / 质检待核。 */
-  inspectorTab: 'cue' as 'cue' | 'qa',
+  inspectorTab: 'cue' as 'cue' | 'qa' | 'chapters',
   /** 紧凑模式（≤900px CSS 视口）：检查器是抽屉，切页/换片时默认收起。 */
   compact: false,
   /** 当前识别引擎；工具栏切换时同步，核对台局部重转与质检补录都读它。 */
@@ -178,6 +179,9 @@ export function seekTo(time: number, opts: { stopAt?: number; play?: boolean } =
 export function focusRange(start: number, end: number) {
   const s = Math.max(0, Math.min(start, end));
   const e = Math.max(s + 0.05, Math.max(start, end));
+  // 双引擎复核 / 质检面板 / 报告页点时间码 = 显式跳转：核对台的「上次现场」
+  // 恢复必须让位，否则会被旧位置盖掉（lib/reviewViewport.ts 的 takeExplicitJump）。
+  markExplicitJump(app.media?.path ?? '');
   play.focus = { start: s, end: e, nonce: (play.focus?.nonce ?? 0) + 1 };
   seekTo(s);
 }
@@ -966,6 +970,8 @@ export const exporter = $state({
   preset: 'balanced' as 'small' | 'balanced' | 'high' | 'ultra',
   outDir: '',
   exportSrt: true,
+  /** 有章节 / 时刻点标记时是否写进输出容器（默认开启）。 */
+  writeChapters: true,
   /** 烧录样式（仅 mode='burn' 生效）。 */
   style: initialExportStyle.style,
   styles: null as ExportStyleOptions | null,
@@ -1245,7 +1251,6 @@ const SUBTITLE_EXTS = ['.srt', '.vtt'];
 
 // 上次会话：只存路径与小整数，不复制媒体/字幕；重启后按真实链路重新导入。
 const LAST_MEDIA_KEY = 'kikusub.lastMedia';
-const LAST_POSITION_KEY = 'kikusub.lastPosition';
 const LAST_SUBTITLE_KEY = 'kikusub.lastSubtitle';
 
 function rememberLastMedia(path: string) {
@@ -1274,32 +1279,6 @@ function savedLastSubtitle(): { path: string; mediaPath: string } | null {
     /* 旧格式 / 手改坏：忽略即可 */
   }
   return null;
-}
-
-/** 记住当前播放头（按媒体路径区分；换片后不会把上一部的时间带过来）。 */
-export function rememberPlayhead(time: number) {
-  const media = app.media;
-  if (!media || !Number.isFinite(time)) return;
-  try {
-    localStorage.setItem(
-      LAST_POSITION_KEY,
-      JSON.stringify({ path: media.path, time: Math.max(0, time) }),
-    );
-  } catch {
-    /* 同上 */
-  }
-}
-
-function savedPlayhead(mediaPath: string): number {
-  try {
-    const raw = JSON.parse(localStorage.getItem(LAST_POSITION_KEY) || 'null');
-    if (raw && raw.path === mediaPath && Number.isFinite(Number(raw.time))) {
-      return Number(raw.time);
-    }
-  } catch {
-    /* 忽略损坏的记录 */
-  }
-  return 0;
 }
 
 /** 内核未就绪时双击/拖入的媒体：握手完成后自动补导入，不丢用户的操作。 */
@@ -1402,10 +1381,6 @@ export async function openMedia(
             }
           }
         }
-      }
-      const position = savedPlayhead(info.path);
-      if (position > 0.2 && (!info.duration || position < info.duration - 0.2)) {
-        seekTo(position);
       }
       if (app.cues.length) setView('review');
     }
@@ -1690,6 +1665,7 @@ export type ExportUiState = {
   resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
   preset: 'small' | 'balanced' | 'high' | 'ultra';
   exportSrt: boolean;
+  writeChapters: boolean;
   outDir: string;
   style: SubtitleStylePayload;
 };
@@ -1711,6 +1687,7 @@ export function currentExportUiState(): ExportUiState {
     resolution: exporter.resolution,
     preset: exporter.preset,
     exportSrt: exporter.exportSrt,
+    writeChapters: exporter.writeChapters,
     outDir: exporter.outDir,
     style: { ...exporter.style },
   };
@@ -1731,6 +1708,7 @@ function applyServerExportUi(raw: Record<string, any> | null | undefined) {
   }
   if (['small', 'balanced', 'high', 'ultra'].includes(raw.preset)) exporter.preset = raw.preset;
   if (typeof raw.exportSrt === 'boolean') exporter.exportSrt = raw.exportSrt;
+  if (typeof raw.writeChapters === 'boolean') exporter.writeChapters = raw.writeChapters;
   if (typeof raw.outDir === 'string') exporter.outDir = raw.outDir;
   if (raw.style && typeof raw.style === 'object') {
     exporter.style = { ...exporter.style, ...raw.style };
@@ -1848,6 +1826,16 @@ export function setExportQuality(preset: ExportUiState['preset']) {
     (from, to) => `码率档位 ${exportQualityLabel(from.preset)} → ${exportQualityLabel(to.preset)}`,
     () => {
       exporter.preset = preset;
+    },
+  );
+}
+
+export function setExportChapters(enabled: boolean) {
+  editExportUi(
+    'chapters',
+    (from, to) => `写入章节标记 ${from.writeChapters ? '开' : '关'} → ${to.writeChapters ? '开' : '关'}`,
+    () => {
+      exporter.writeChapters = enabled;
     },
   );
 }
@@ -2049,6 +2037,7 @@ export async function refreshExportPlan() {
       resolution: exporter.resolution,
       preset: exporter.preset,
       export_srt: exporter.exportSrt,
+      write_chapters: exporter.writeChapters,
       out_dir: exporter.outDir,
       style: exporter.style,
     });
@@ -2083,6 +2072,7 @@ export function resetExportPanel(options: { record?: boolean; keepOutDir?: boole
     exporter.resolution = '1080p';
     exporter.preset = 'balanced';
     exporter.exportSrt = true;
+    exporter.writeChapters = true;
     exporter.style = { ...DEFAULT_EXPORT_STYLE };
     exporter.previewText = '';
     exporter.previewZoom = false;
@@ -2129,6 +2119,7 @@ export async function startExport() {
       resolution: exporter.resolution,
       preset: exporter.preset,
       export_srt: exporter.exportSrt,
+      write_chapters: exporter.writeChapters,
       out_dir: exporter.outDir,
       style: exporter.style,
     });
@@ -2934,7 +2925,7 @@ export async function refreshQa() {
 }
 
 /** 切换右侧检查器的页签；切到「质检待核」会从浮窗模式收回。 */
-export function setInspectorTab(tab: 'cue' | 'qa') {
+export function setInspectorTab(tab: 'cue' | 'qa' | 'chapters') {
   if (tab === 'qa' && qa.floating) {
     qa.floating = false;
     try {

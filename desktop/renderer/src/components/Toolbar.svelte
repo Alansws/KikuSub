@@ -18,6 +18,7 @@
     toggleTheme,
     undo,
   } from '../lib/store.svelte';
+  import { loadChapters } from '../lib/chapters.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
   import { closePunctPanel, openPunctPanel, punctPanel } from '../lib/punctuationPanel.svelte';
 
@@ -344,7 +345,10 @@
               class="hist-item"
               class:current={row.item.state === 'current'}
               class:undone={row.item.state === 'undone'}
-              onclick={() => jumpCueHistory(row.item.id)}
+              onclick={() => {
+                void jumpCueHistory(row.item.id);
+                void loadChapters(true);
+              }}
               title={row.item.state === 'current'
                 ? '当前状态'
                 : row.item.state === 'undone'

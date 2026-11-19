@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import QaPanel from './QaPanel.svelte';
+  import ChaptersPanel from './ChaptersPanel.svelte';
   import SecondOpinionCard from './SecondOpinionCard.svelte';
   import {
     app,
@@ -47,6 +48,7 @@
     uploadTtsVoices,
     type TrackMode,
   } from '../lib/store.svelte';
+  import { chapterCount } from '../lib/chapters.svelte';
   import { tc } from '../lib/time';
   import { tick, onMount } from 'svelte';
   import {
@@ -527,6 +529,17 @@
       质检待核
       {#if qaPending}<b>{qaPending}</b>{/if}
     </button>
+    <button
+      class="insp-tab"
+      class:on={app.inspectorTab === 'chapters'}
+      role="tab"
+      aria-selected={app.inspectorTab === 'chapters'}
+      onclick={() => setInspectorTab('chapters')}
+      title="章节与时刻点标记（会写入导出容器）"
+    >
+      章节
+      {#if chapterCount()}<b>{chapterCount()}</b>{/if}
+    </button>
     <div class="tabs-spacer"></div>
     {#if app.inspectorTab === 'cue'}
       <b class="tabs-index">{app.cues.length ? `#${play.selected + 1}` : '—'}</b>
@@ -540,7 +553,9 @@
       <Icon name="close" size={11} />
     </button>
   </div>
-  {#if app.inspectorTab === 'cue'}
+  {#if app.inspectorTab === 'chapters'}
+    <ChaptersPanel />
+  {:else if app.inspectorTab === 'cue'}
   <div class="ins-scroll">
   <div class="display-row">
     <div class="seg">

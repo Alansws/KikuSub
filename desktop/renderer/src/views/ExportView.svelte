@@ -29,6 +29,7 @@
     setExportOutDir,
     setExportQuality,
     setExportResolution,
+    setExportChapters,
     setExportSrt,
     setExportTrack,
     setPreviewText,
@@ -38,6 +39,7 @@
     toast,
     updateExportStyle,
   } from '../lib/store.svelte';
+  import { chapterCount } from '../lib/chapters.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
 
   let subFormat = $state<'SRT' | 'VTT' | 'TXT'>('SRT');
@@ -373,6 +375,21 @@
             {/if}
           {/if}
           <div class="spacer"></div>
+          <label
+            class="chk"
+            title={chapterCount()
+              ? '按起点排序写入容器；时刻点自动衔接到下一个标记或片尾。IINA 等播放器可直接跳转。'
+              : '还没有章节标记：到核对台右侧「章节」页签添加'}
+          >
+            <input
+              type="checkbox"
+              checked={exporter.writeChapters && chapterCount() > 0}
+              disabled={!chapterCount() || exporter.running}
+              onchange={(e) => setExportChapters(e.currentTarget.checked)}
+            />
+            写入章节标记
+            <span class="chapter-count">{chapterCount() ? `${chapterCount()} 个` : '暂无'}</span>
+          </label>
           <label class="chk">
             <input
               type="checkbox"
@@ -973,6 +990,13 @@
   .metrics.muted {
     color: var(--text-3);
   }
+  .chapter-count {
+    margin-left: var(--sp-1);
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
   .warn-text {
     color: var(--warn);
   }

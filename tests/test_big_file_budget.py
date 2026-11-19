@@ -26,9 +26,13 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 # 2026-11-16：开发种子注入（applyDevSeed）抽到 `lib/devSeed.ts`，store 降到 3287。
 # 2026-11-17：波形绘制 / 时间轴视窗 / 切割校验抽到 lib，ReviewView 降到 3808；
 #              同轮专业剪辑操作（逐帧/磁吸/倍速）完成后再降到 3802。
+# 2026-11-20：工作现场持久化 + 章节标记落在新 lib / 新组件里，但接线仍需占行，
+#              所以先把能抽的两块抽走：画布画法 → lib/waveformCanvas.ts、
+#              查找命中计算 → lib/findMatches.ts、旧播放头持久化 → lib/reviewViewport.ts。
+#              抽完并接线后的实测值就是新预算（只许再降）。
 BUDGET = {
-    "lib/store.svelte.ts": 3287,
-    "views/ReviewView.svelte": 3802,
+    "lib/store.svelte.ts": 3278,
+    "views/ReviewView.svelte": 3787,
 }
 
 
