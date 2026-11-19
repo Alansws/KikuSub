@@ -11,6 +11,7 @@
    */
   import Icon from './Icon.svelte';
   import ArbitrationCard from './ArbitrationCard.svelte';
+  import CopyTextButton from './CopyTextButton.svelte';
   import { jobBusy } from '../lib/jobState';
   import {
     app,
@@ -82,7 +83,7 @@
     if (hasArbitration(index) || arbitration.runningIndex >= 0) return;
     const key = `${app.media?.id || ''}:${index}:${cue.start}:${cue.end}:${b}`;
     if (!takeAutoArbitrationKey(key)) return;
-    void runArbitration(index);
+    void runArbitration(index, { mode: 'auto' });
   });
 
   /**
@@ -248,6 +249,7 @@
               <Icon name="speaker" size={11} /><span>朗读</span>
             {/if}
           </button>
+          <CopyTextButton text={text} title="复制当前稿这句文本" />
         </div>
         <div class="so-text" class:blank={!text}>
           {#if text}
@@ -269,7 +271,9 @@
           <span class="so-engine alt" title={altLabel}>
             <i class="so-dot" aria-hidden="true"></i>{altLabel}
           </span>
-          {#if diff.equal}
+          {#if !text.trim() && !altText.trim()}
+            <span class="so-badge same">两版均无内容</span>
+          {:else if diff.equal}
             <span class="so-badge same">两版一致</span>
           {:else}
             <span class="so-badge diff">{diff.hunks} 处不同</span>
@@ -290,6 +294,7 @@
               <Icon name="speaker" size={11} /><span>朗读</span>
             {/if}
           </button>
+          <CopyTextButton text={altText} title="复制另一引擎这句文本" />
         </div>
         <div class="so-text" class:blank={!altText}>
           {#if altText}
@@ -307,13 +312,14 @@
       </article>
     </div>
 
-    <ArbitrationCard {index} textA={text} textB={altText} />
-
     <div class="so-actions">
       <button
         class="btn primary mini"
         onclick={adopt}
-        title="把这一版写回当前字幕（可 ⌘Z 撤销）"
+        disabled={!altText.trim()}
+        title={!altText.trim()
+          ? '另一引擎没有识别到内容，暂无可采用的文本'
+          : '把这一版写回当前字幕（可 ⌘Z 撤销）'}
       >采用 B 版</button>
       <button
         class="btn ghost mini"
@@ -334,7 +340,7 @@
     {#if engineHint}
       <p class="so-tip hint">{engineHint}</p>
     {:else}
-      <p class="so-tip">出两版后，可在这里让 AI 结合上下文判定第三版。</p>
+      <p class="so-tip">也可以直接补一条听音线索，让下方 AI 先还原这一句。</p>
     {/if}
     {#if !readyEngine}
       <button
@@ -359,6 +365,12 @@
       </button>
     {/if}
   {/if}
+
+  {#if has && !altText.trim()}
+    <p class="so-tip hint">另一引擎未识别到内容；可在下方补听音线索，让 AI 直接推断。</p>
+  {/if}
+
+  <ArbitrationCard {index} textA={text} textB={altText} bAttempted={has} />
 </section>
 
 <style>
@@ -611,6 +623,9 @@
     white-space: pre-wrap;
     word-break: break-word;
     letter-spacing: -0.01em;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
   .so-text.blank {
     color: var(--text-3);

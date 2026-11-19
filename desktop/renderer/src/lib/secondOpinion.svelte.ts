@@ -349,6 +349,11 @@ export async function cancelSecondOpinion(): Promise<void> {
 export async function adoptAlternative(index = secondOpinion.index): Promise<void> {
   const record = matchingRecord(index);
   if (!record) return;
+  // B 引擎跑过但没识别出内容时，采用会把当前字幕清空；这里明确拒绝。
+  if (!record.text.trim()) {
+    toast('另一引擎没有识别到内容，暂无可采用的文本', 'warn');
+    return;
+  }
   await updateCue(index, { text: record.text });
   const rest = { ...secondOpinion.records };
   delete rest[index];

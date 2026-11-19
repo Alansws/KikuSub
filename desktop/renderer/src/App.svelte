@@ -6,6 +6,7 @@
   import StatusBar from './components/StatusBar.svelte';
   import Inspector from './components/Inspector.svelte';
   import QaPanel from './components/QaPanel.svelte';
+  import ArbitrationDialog from './components/ArbitrationDialog.svelte';
   import FirstRun from './components/FirstRun.svelte';
   import QuitPrompt from './components/QuitPrompt.svelte';
   import ShortcutsDialog from './components/ShortcutsDialog.svelte';
@@ -45,7 +46,9 @@
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
   import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
+  import { loadChapters } from './lib/chapters.svelte';
   import { applyDevSeed } from './lib/devSeed';
+  import { arbitration, closeArbitrationDialog } from './lib/arbitration.svelte';
   import { copySelectedCue, pasteCueAtPlayhead } from './lib/cueClipboard.svelte';
   import {
     pauseSpeed,
@@ -88,6 +91,13 @@
       viewsAnimate = true;
     });
     return () => cancelAnimationFrame(id);
+  });
+
+  // 章节标记属于「跟着影片走」的状态：换片后立即按新媒体重新加载，
+  // 导出页不必先经过核对台也能显示标记数量。
+  $effect(() => {
+    const path = app.media?.path ?? '';
+    if (path && app.connected) void loadChapters(true);
   });
 
   // 首次启动向导 / 退出前清理。两者都由主进程先问状态，不依赖 sidecar。
@@ -265,15 +275,25 @@
     return () => window.clearTimeout(id);
   });
 
+  /**
+   * 撤销 / 重做：章节标记和字幕在同一条历史里，服务端已经回滚，
+   * 这里补一次重读（标记不在 cue 快照的返回体里）。
+   */
+  function historyStep(kind: 'undo' | 'redo') {
+    if (kind === 'undo') undo();
+    else redo();
+    void loadChapters(true);
+  }
+
   // ---------------- 菜单 ----------------
   $effect(() => {
     return window.kikusub.onMenu((ev) => {
       switch (ev.type) {
         case 'undo':
-          undo();
+          historyStep('undo');
           break;
         case 'redo':
-          redo();
+          historyStep('redo');
           break;
         case 'play':
           review?.api_play();
@@ -500,6 +520,13 @@
       return;
     }
 
+    // AI 多轮对话浮窗在最上层：Esc 先收它，再轮到质检面板 / 查找栏 / 抽屉。
+    if (e.key === 'Escape' && arbitration.dialogOpen) {
+      e.preventDefault();
+      closeArbitrationDialog();
+      return;
+    }
+
     // 质检面板是浮层：Esc 先收起它，再轮到查找栏 / 抽屉。
     if (e.key === 'Escape' && qa.open) {
       e.preventDefault();
@@ -540,8 +567,7 @@
     if (mod && (e.key === 'z' || e.key === 'Z')) {
       if (!textEntry) {
         e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
+        historyStep(e.shiftKey ? 'redo' : 'undo');
       }
       return;
     }
@@ -668,6 +694,10 @@
 
       {#if qa.floating}
         <QaPanel mode="floating" />
+      {/if}
+
+      {#if app.view === 'review' && arbitration.dialogOpen}
+        <ArbitrationDialog />
       {/if}
     </div>
 

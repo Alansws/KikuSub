@@ -34,7 +34,20 @@ export async function applyDevSeed(seed: {
   /** 仅开发截图用：灌一份假的「另一引擎复核」结果，避免为看卡片真跑模型。 */
   secondOpinion?: { engine?: string; index?: number; text?: string };
   /** 仅开发截图用：灌一份假的「单句 AI 判定」结果，避免为看卡片真加载本地模型。 */
-  arbitration?: { index?: number; text?: string; note?: string; model?: string };
+  arbitration?: {
+    index?: number;
+    text?: string;
+    note?: string;
+    model?: string;
+    hint?: string;
+    history?: Array<{
+      role: 'user' | 'assistant';
+      text: string;
+      note?: string;
+      model?: string;
+    }>;
+    dialogOpen?: boolean;
+  };
   reviewSource?: ReviewSource | null;
 }) {
   if (!seed?.mediaPath) return;
