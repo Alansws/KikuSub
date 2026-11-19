@@ -11,7 +11,9 @@
   import { aiState } from '../../lib/settings/aiConfig.svelte';
   import { skillState, skillStatusLabel } from '../../lib/settings/skill.svelte';
 
-  const keyState = $derived(aiState.hasKey ? '已配置 Key' : '未配置 Key');
+  const keyState = $derived(
+    aiState.hasKey ? '已配置 Key' : aiState.cfg?.key_optional ? '本地可留空' : '未配置 Key',
+  );
   const skillMeta = $derived(skillStatusLabel(skillState.info));
 </script>
 

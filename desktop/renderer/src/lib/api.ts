@@ -435,8 +435,29 @@ export interface AiConfig {
   chunk_cues: number;
   translate_chunk_cues: number;
   context_cues: number;
+  /** 单句判定模型覆盖；空串 = 该字段跟随全局。 */
+  arbitrate_base_url: string;
+  arbitrate_model: string;
+  /** 当前地址是否本机/局域网：本地模型可以不带 Key。 */
+  key_optional: boolean;
+  arbitrate_key_optional: boolean;
   /** 密钥不归服务层管；服务端只声明"由渲染进程持有" */
   key_held_by: string;
+}
+
+export interface AiArbitrationRequest {
+  text_a: string;
+  text_b: string;
+  before: string[];
+  after: string[];
+  lang: string;
+}
+
+export interface AiArbitrationResult {
+  text: string;
+  note: string;
+  model: string;
+  elapsed_ms: number;
 }
 
 /** 双引擎复核对齐后的一行。`kind` 对应 = / ~ / + / −。 */
@@ -1502,7 +1523,28 @@ export const api = {
     chunk_cues: number;
     translate_chunk_cues: number;
     context_cues: number;
+    arbitrate_base_url: string;
+    arbitrate_model: string;
   }>) => req<AiConfig>('/api/ai/config', { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  arbitrateAi: (
+    payload: AiArbitrationRequest,
+    opts: {
+      globalKey: string;
+      arbitrateKey?: string;
+      useArbitrate: boolean;
+      signal?: AbortSignal;
+    },
+  ) =>
+    req<AiArbitrationResult>('/api/ai/arbitrate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: {
+        'X-AI-Key': opts.globalKey,
+        ...(opts.useArbitrate ? { 'X-AI-Arbitrate-Key': opts.arbitrateKey || '' } : {}),
+      },
+      signal: opts.signal,
+    }),
 
   testAi: (payload: { base_url: string; model: string }, key: string) =>
     req<{ ok: boolean; latency_ms: number; model: string; host: string }>('/api/ai/test', {

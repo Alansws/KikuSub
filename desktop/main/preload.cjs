@@ -50,10 +50,10 @@ contextBridge.exposeInMainWorld('kikusub', {
 
   // AI 密钥：加解密都在主进程，渲染进程只在发起请求那一刻取用
   aiKey: {
-    set: (text) => ipcRenderer.invoke('ai-key:set', text),
-    get: () => ipcRenderer.invoke('ai-key:get'),
-    clear: () => ipcRenderer.invoke('ai-key:clear'),
-    status: () => ipcRenderer.invoke('ai-key:status'),
+    set: (text, scope) => ipcRenderer.invoke('ai-key:set', text, scope),
+    get: (scope) => ipcRenderer.invoke('ai-key:get', scope),
+    clear: (scope) => ipcRenderer.invoke('ai-key:clear', scope),
+    status: (scope) => ipcRenderer.invoke('ai-key:status', scope),
   },
   pickDirectory: (payload) => ipcRenderer.invoke('dialog:pick-directory', payload),
 

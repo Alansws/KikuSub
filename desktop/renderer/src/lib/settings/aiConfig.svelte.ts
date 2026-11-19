@@ -22,9 +22,16 @@ export const aiState = $state({
   keyLegacy: false,
   /** 输入框里的新 Key（空字符串 = 没在改）。 */
   keyInput: '',
+  /** 单句判定覆盖 Key 的独立输入与状态。 */
+  arbKeyInput: '',
+  arbHasKey: false,
+  arbKeyBroken: false,
+  arbKeyLegacy: false,
   saving: false,
   testing: false,
   testMsg: '',
+  arbTesting: false,
+  arbTestMsg: '',
   /** 高级参数展开时才有意义的“已保存”提示 */
   savedAt: 0,
 });
@@ -43,7 +50,7 @@ export async function loadAiConfig() {
 
 export async function refreshAiKey() {
   try {
-    const status = await window.kikusub?.aiKey?.status?.();
+    const status = await window.kikusub?.aiKey?.status?.('global');
     aiState.keyReady = status?.available !== false;
     aiState.hasKey = Boolean(status?.has);
     aiState.keyBroken = Boolean(status?.broken);
@@ -53,6 +60,16 @@ export async function refreshAiKey() {
     aiState.hasKey = false;
     aiState.keyBroken = false;
     aiState.keyLegacy = false;
+  }
+  try {
+    const status = await window.kikusub?.aiKey?.status?.('arbitrate');
+    aiState.arbHasKey = Boolean(status?.has);
+    aiState.arbKeyBroken = Boolean(status?.broken);
+    aiState.arbKeyLegacy = Boolean(status?.legacy);
+  } catch {
+    aiState.arbHasKey = false;
+    aiState.arbKeyBroken = false;
+    aiState.arbKeyLegacy = false;
   }
 }
 
@@ -85,6 +102,8 @@ export async function saveAiEndpoint(quiet = false): Promise<boolean> {
       chunk_cues: Number(aiState.cfg.chunk_cues) || 200,
       translate_chunk_cues: Number(aiState.cfg.translate_chunk_cues) || 120,
       context_cues: Number(aiState.cfg.context_cues) || 0,
+      arbitrate_base_url: aiState.cfg.arbitrate_base_url.trim(),
+      arbitrate_model: aiState.cfg.arbitrate_model.trim(),
     });
     if (ok) {
       aiState.savedAt = Date.now();
@@ -127,22 +146,56 @@ export async function clearAiKey() {
   }
 }
 
-export async function testAiConnection() {
-  if (!aiState.cfg || aiState.testing) return;
-  aiState.testing = true;
-  aiState.testMsg = '';
+export async function testAiConnection(scope: 'global' | 'arbitrate' = 'global') {
+  if (!aiState.cfg) return;
+  const testing = scope === 'arbitrate' ? 'arbTesting' : 'testing';
+  const message = scope === 'arbitrate' ? 'arbTestMsg' : 'testMsg';
+  if (aiState[testing]) return;
+  aiState[testing] = true;
+  aiState[message] = '';
   try {
-    const key = await window.kikusub.aiKey.get();
-    if (!key) {
-      aiState.testMsg = '还没有保存 API Key';
+    const key = await window.kikusub.aiKey.get(scope);
+    const cfg = aiState.cfg;
+    const baseUrl =
+      scope === 'arbitrate' ? cfg.arbitrate_base_url || cfg.base_url : cfg.base_url;
+    const model = scope === 'arbitrate' ? cfg.arbitrate_model || cfg.model : cfg.model;
+    const res = await api.testAi({ base_url: baseUrl, model }, key || '');
+    aiState[message] = `连接正常 · ${res.latency_ms}ms · ${res.host}`;
+  } catch (err) {
+    aiState[message] = `连接失败：${(err as Error).message}`;
+  } finally {
+    aiState[testing] = false;
+  }
+}
+
+/** 保存单句判定覆盖 Key（与全局 Key 分开加密存放）。 */
+export async function saveArbKey() {
+  const text = aiState.arbKeyInput.trim();
+  if (!text) return;
+  try {
+    const res = await window.kikusub.aiKey.set(text, 'arbitrate');
+    if (!res?.ok) {
+      toast('保存失败：应用数据目录不可写', 'error');
       return;
     }
-    const res = await api.testAi({ base_url: aiState.cfg.base_url, model: aiState.cfg.model }, key);
-    aiState.testMsg = `连接正常 · ${res.latency_ms}ms · ${res.host}`;
+    aiState.arbKeyBroken = false;
+    aiState.arbKeyInput = '';
+    await refreshAiKey();
+    toast('单句判定 Key 已加密保存');
   } catch (err) {
-    aiState.testMsg = `连接失败：${(err as Error).message}`;
-  } finally {
-    aiState.testing = false;
+    toast((err as Error).message, 'error');
+  }
+}
+
+export async function clearArbKey() {
+  try {
+    await window.kikusub.aiKey.clear('arbitrate');
+    await refreshAiKey();
+    aiState.arbKeyBroken = false;
+    aiState.arbTestMsg = '';
+    toast('已清除单句判定 Key');
+  } catch (err) {
+    toast((err as Error).message, 'error');
   }
 }
 

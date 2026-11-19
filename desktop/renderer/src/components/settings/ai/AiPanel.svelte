@@ -10,9 +10,11 @@
   import {
     aiState,
     clearAiKey,
+    clearArbKey,
     loadAiConfig,
     saveAiEndpoint,
     saveAiKey,
+    saveArbKey,
     testAiConnection,
     toggleAi,
   } from '../../../lib/settings/aiConfig.svelte';
@@ -32,7 +34,7 @@
     <div class="set-row">
       <div class="set-row-main">
         <span class="set-row-title">启用 AI 优化</span>
-        <span class="set-row-desc">关闭后「润色 / 翻译」页仍可查看、导入已有建议，只是不能再生成。</span>
+        <span class="set-row-desc">关闭后「润色 / 翻译」页仍可查看、导入已有建议，只是不能再生成；单句 AI 判定也一并关闭。</span>
       </div>
       <div class="set-row-ctl">
         <button
@@ -51,7 +53,7 @@
     <div class="set-row">
       <div class="set-row-main">
         <span class="set-row-title">服务地址</span>
-        <span class="set-row-desc">改动离开输入框即保存（与 macOS 设置面板一致）。</span>
+        <span class="set-row-desc">改动离开输入框即保存。本地 OpenAI 兼容服务可填 http://127.0.0.1:1234/v1。</span>
       </div>
       <div class="set-row-ctl grow">
         <input
@@ -87,6 +89,8 @@
         <span class="set-row-desc">
           {#if aiState.hasKey}
             已保存，本机 AES-256-GCM 加密；输入新值可替换。
+          {:else if cfg.key_optional}
+            当前是本机/局域网地址，Key 可留空。
           {:else}
             还没有保存：填一次即可，之后每次请求由主进程解密。
           {/if}
@@ -124,8 +128,116 @@
         </span>
       </div>
       <div class="set-row-ctl">
-        <button class="btn sm" onclick={testAiConnection} disabled={aiState.testing || !aiState.hasKey}>
+        <button
+          class="btn sm"
+          onclick={() => testAiConnection('global')}
+          disabled={aiState.testing || !cfg.base_url || !cfg.model}
+        >
           {aiState.testing ? '测试中…' : '测试连接'}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="set-group">
+    <div class="set-row">
+      <div class="set-row-main">
+        <span class="set-row-title">单句判定模型覆盖（可选）</span>
+        <span class="set-row-desc">
+          两版引擎不一致时，右侧「AI 判定」默认用上面的全局配置；这里可单独指向本机模型（如 LM Studio / Ollama），留空则跟随全局。
+        </span>
+      </div>
+    </div>
+
+    <div class="set-row">
+      <div class="set-row-main">
+        <span class="set-row-title">判定服务地址</span>
+      </div>
+      <div class="set-row-ctl grow">
+        <input
+          class="ai-input mono"
+          bind:value={cfg.arbitrate_base_url}
+          spellcheck="false"
+          placeholder="留空 = 跟随全局"
+          aria-label="单句判定服务地址"
+          onblur={() => saveAiEndpoint(true)}
+        />
+      </div>
+    </div>
+
+    <div class="set-row">
+      <div class="set-row-main">
+        <span class="set-row-title">判定模型</span>
+      </div>
+      <div class="set-row-ctl grow">
+        <input
+          class="ai-input mono"
+          bind:value={cfg.arbitrate_model}
+          spellcheck="false"
+          placeholder="留空 = 跟随全局"
+          aria-label="单句判定模型名"
+          onblur={() => saveAiEndpoint(true)}
+        />
+      </div>
+    </div>
+
+    <div class="set-row">
+      <div class="set-row-main">
+        <span class="set-row-title">判定 API Key</span>
+        <span class="set-row-desc">
+          {#if aiState.arbHasKey}
+            已单独保存，与全局 Key 互不影响。
+          {:else if cfg.arbitrate_key_optional && cfg.arbitrate_base_url}
+            当前判定地址是本机/局域网，Key 可留空。
+          {:else}
+            留空时若判定地址指回全局地址，会使用全局 Key。
+          {/if}
+        </span>
+      </div>
+      <div class="set-row-ctl">
+        <span class="key-state" class:ok={aiState.arbHasKey}>
+          {aiState.arbHasKey ? '已配置' : '未配置'}
+        </span>
+        <input
+          class="ai-input key-input"
+          type="password"
+          bind:value={aiState.arbKeyInput}
+          spellcheck="false"
+          autocomplete="off"
+          placeholder={aiState.arbHasKey ? '输入新值可替换' : 'sk-… / 本地可留空'}
+          aria-label="单句判定 API Key"
+        />
+        <button
+          class="btn sm"
+          onclick={saveArbKey}
+          disabled={!aiState.arbKeyInput.trim() || !aiState.keyReady}
+        >
+          保存 Key
+        </button>
+        <button class="btn sm ghost" onclick={clearArbKey} disabled={!aiState.arbHasKey}>
+          清除
+        </button>
+      </div>
+    </div>
+
+    <div class="set-row">
+      <div class="set-row-main">
+        <span class="set-row-title">判定连接测试</span>
+        <span class="set-row-desc" class:test-ok={aiState.arbTestMsg.startsWith('连接正常')} class:test-bad={aiState.arbTestMsg.startsWith('连接失败')}>
+          {#if aiState.arbTestMsg}
+            {aiState.arbTestMsg}
+          {:else}
+            用判定地址与判定 Key 请求一次；本地模型不要求 Key。
+          {/if}
+        </span>
+      </div>
+      <div class="set-row-ctl">
+        <button
+          class="btn sm"
+          onclick={() => testAiConnection('arbitrate')}
+          disabled={aiState.arbTesting || !(cfg.arbitrate_base_url || cfg.base_url) || !(cfg.arbitrate_model || cfg.model)}
+        >
+          {aiState.arbTesting ? '测试中…' : '测试判定连接'}
         </button>
       </div>
     </div>
@@ -139,6 +251,12 @@
           ? '，它来自更早的钥匙串版本'
           : ''}。请在上面的输入框重新填一次。
       </span>
+    </div>
+  {/if}
+  {#if aiState.arbKeyBroken}
+    <div class="note-box warn">
+      <span class="note-icon"><Icon name="warn" size={13} /></span>
+      <span>单句判定的 Key 解不开（主密钥文件丢了或密文被改过），请在上面的判定 Key 输入框重填一次。</span>
     </div>
   {/if}
   {#if !aiState.keyReady}

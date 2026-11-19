@@ -189,7 +189,7 @@
     }
     try {
       const state = await window.kikusub?.aiKey?.status?.();
-      keyReady = state ? Boolean(state.has) : false;
+      keyReady = Boolean(state?.has) || Boolean(aiConfig?.key_optional);
     } catch {
       keyReady = false;
     }

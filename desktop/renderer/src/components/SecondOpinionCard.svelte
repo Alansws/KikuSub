@@ -10,6 +10,7 @@
    * 刻意只读：复核结果不会自动覆盖字幕，采用走既有 `updateCue()`（一步历史）。
    */
   import Icon from './Icon.svelte';
+  import ArbitrationCard from './ArbitrationCard.svelte';
   import { jobBusy } from '../lib/jobState';
   import {
     cloneEngineReady,
@@ -277,12 +278,14 @@
       </article>
     </div>
 
+    <ArbitrationCard {index} textA={text} textB={altText} />
+
     <div class="so-actions">
       <button
         class="btn primary mini"
         onclick={adopt}
         title="把这一版写回当前字幕（可 ⌘Z 撤销）"
-      >采用这份</button>
+      >采用 B 版</button>
       <button
         class="btn ghost mini"
         onclick={retry}
@@ -301,6 +304,8 @@
     {/if}
     {#if engineHint}
       <p class="so-tip hint">{engineHint}</p>
+    {:else}
+      <p class="so-tip">出两版后，可在这里让 AI 结合上下文判定第三版。</p>
     {/if}
     {#if !readyEngine}
       <button

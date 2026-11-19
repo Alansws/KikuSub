@@ -166,7 +166,11 @@ function skillTargetDir() {
 // 分发、ad-hoc 签名，每次发版 cdhash 都变，用户升级后就读不回旧条目——每个版本
 // 都要重填一次 Key，且没有 Developer ID 就无从修复。改成 0600 主密钥文件后，
 // 重装/升级/换 Electron 版本都不影响。实现见 desktop/main/aikey.cjs。
-const AI_KEY_FIELD = 'aiKey';
+const AI_KEY_FIELDS = { global: 'aiKey', arbitrate: 'aiArbitrateKey' };
+
+function aiKeyField(scope) {
+  return AI_KEY_FIELDS[scope] || AI_KEY_FIELDS.global;
+}
 
 function aiKeyFile() {
   return path.join(dataDir(), '.ai-key');
@@ -181,8 +185,8 @@ function writePreferences(payload) {
 }
 
 /** 读密钥；返回 `backend` 与 `broken`，调用方据此区分「没配」与「配了但读不出来」。 */
-function getAiKeyState() {
-  const blob = loadPreferences()[AI_KEY_FIELD];
+function getAiKeyState(scope) {
+  const blob = loadPreferences()[aiKeyField(scope)];
   if (typeof blob !== 'string' || !blob) {
     return { key: '', backend: 'none', broken: false, legacy: false };
   }
@@ -197,12 +201,12 @@ function getAiKeyState() {
   return { key: '', backend: 'none', broken: true, legacy: true };
 }
 
-function setAiKey(raw) {
+function setAiKey(raw, scope) {
   const text = String(raw || '').trim();
-  if (!text) return clearAiKey();
+  if (!text) return clearAiKey(scope);
   try {
     const blob = aikey.encrypt(text, aikey.ensureKeyFile(aiKeyFile()));
-    savePreferences({ [AI_KEY_FIELD]: blob });
+    savePreferences({ [aiKeyField(scope)]: blob });
     return { ok: true, backend: 'local', persistent: true };
   } catch (err) {
     mainLog(`[ai-key] 加密保存失败：${err && err.message ? err.message : err}`);
@@ -210,14 +214,15 @@ function setAiKey(raw) {
   }
 }
 
-function getAiKey() {
-  return getAiKeyState().key;
+function getAiKey(scope) {
+  return getAiKeyState(scope).key;
 }
 
-function clearAiKey() {
+function clearAiKey(scope) {
   const prefs = loadPreferences();
-  if (AI_KEY_FIELD in prefs) {
-    delete prefs[AI_KEY_FIELD];
+  const field = aiKeyField(scope);
+  if (field in prefs) {
+    delete prefs[field];
     try {
       writePreferences(prefs);
     } catch (err) {
@@ -1305,9 +1310,9 @@ ipcMain.handle('dialog:pick-audio', (_e, defaultDir) => pickAudio(defaultDir));
 ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultDir));
 
 // ---- AI 密钥 ----
-ipcMain.handle('ai-key:set', (_e, text) => setAiKey(text));
-ipcMain.handle('ai-key:get', () => getAiKey());
-ipcMain.handle('ai-key:clear', () => clearAiKey());
+ipcMain.handle('ai-key:set', (_e, text, scope) => setAiKey(text, scope));
+ipcMain.handle('ai-key:get', (_e, scope) => getAiKey(scope));
+ipcMain.handle('ai-key:clear', (_e, scope) => clearAiKey(scope));
 ipcMain.handle('skill:status', () => {
   try {
     return { ok: true, ...skill.status({ sourceDir: skillSourceDir(), targetDir: skillTargetDir() }) };
@@ -1332,8 +1337,8 @@ ipcMain.handle('skill:install', (_event, paths) => {
   }
 });
 
-ipcMain.handle('ai-key:status', () => {
-  const state = getAiKeyState();
+ipcMain.handle('ai-key:status', (_e, scope) => {
+  const state = getAiKeyState(scope);
   return {
     ok: true,
     // 本机加密与签名身份无关，永远可用

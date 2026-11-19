@@ -714,8 +714,8 @@ async function startAiGeneration(kind: 'polish' | 'translate') {
     return;
   }
   const key = await window.kikusub?.aiKey?.get?.();
-  if (!key) {
-    toast('还没有配置 API Key：设置 → AI 优化（实验功能）', 'warn');
+  if (!key && !cfg.key_optional) {
+    toast('还没有配置 API Key：设置 → AI 优化（实验功能）；本地模型可留空', 'warn');
     return;
   }
 
