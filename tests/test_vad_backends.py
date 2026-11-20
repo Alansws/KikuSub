@@ -140,3 +140,37 @@ def test_ensure_whisperseg_downloads_via_model_fetch(monkeypatch, tmp_path):
     # 已就绪时再调不重新下载。
     vad.ensure_whisperseg()
     assert len(calls) == 2
+
+
+def test_whisperseg_failure_falls_back_and_records_reason(monkeypatch):
+    def broken(*args, **kwargs):
+        raise vad.VadBackendError("下载失败：断网")
+
+    monkeypatch.setattr(vad, "_whisperseg_detect", broken)
+    monkeypatch.setattr(
+        vad, "_silero_detect", lambda *a, **k: [{"start": 0, "end": 1600}]
+    )
+    meta: dict = {}
+    stamps = vad.detect_speech_stamps(
+        np.zeros(1600, dtype=np.float32), None, threshold=0.25,
+        min_speech_ms=80, min_silence_ms=200, speech_pad_ms=250,
+        backend="whisperseg", fallback_backend="silero", backend_stats=meta,
+    )
+    assert stamps == [{"start": 0, "end": 1600}]
+    assert meta["requested"] == "whisperseg"
+    assert meta["used"] == "silero"
+    assert meta["fallback"] is True
+    assert "断网" in meta["reason"]
+
+
+def test_whisperseg_failure_without_fallback_raises(monkeypatch):
+    def broken(*args, **kwargs):
+        raise vad.VadBackendError("下载失败：断网")
+
+    monkeypatch.setattr(vad, "_whisperseg_detect", broken)
+    with pytest.raises(vad.VadBackendError, match="断网"):
+        vad.detect_speech_stamps(
+            np.zeros(1600, dtype=np.float32), None, threshold=0.25,
+            min_speech_ms=80, min_silence_ms=200, speech_pad_ms=250,
+            backend="whisperseg",
+        )

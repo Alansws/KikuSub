@@ -164,6 +164,22 @@ def _start_repair_summary(stats: dict | None) -> str:
     )
 
 
+def _vad_backend_summary(stats: dict | None) -> str:
+    """【VAD 切分器】一行：本次实际用了哪个、是否因权重不可用回退。"""
+    meta = (stats or {}).get("vad_backend")
+    if isinstance(meta, dict):
+        if meta.get("fallback"):
+            reason = str(meta.get("reason") or "WhisperSeg 权重不可用").strip()
+            if len(reason) > 120:
+                reason = reason[:117] + "…"
+            return f"⚠️ WhisperSeg 不可用，本次回退 Silero 20s（{reason}）"
+        used = str(meta.get("used") or "whisperseg")
+        return "WhisperSeg（推荐）" if used == "whisperseg" else "Silero 20s（兼容）"
+    if isinstance(meta, str) and meta:
+        return "WhisperSeg（推荐）" if meta == "whisperseg" else "Silero 20s（兼容）"
+    return "Silero 20s（本引擎固定）"
+
+
 def _nonverbal_section(segment_stats: dict | None) -> dict:
     """纯发声待核的 JSON section（文本报告只给摘要，明细在质检面板）。"""
     spans = list((segment_stats or {}).get("nonverbal_spans") or [])
@@ -796,6 +812,19 @@ def build_report_data(
             "id": "start_repair",
             "title": "句首静音拉回",
             "headline": _start_repair_summary(segment_stats),
+            "items": [],
+        },
+        {
+            "id": "vad_backend",
+            "title": "VAD 切分器",
+            "headline": _vad_backend_summary(segment_stats),
+            "note": (
+                "WhisperSeg 权重缺失或下载失败时会回退 Silero 20s；"
+                "回退只影响本次任务，可在「设置 → 引擎与模型」预下载后重试。"
+                if isinstance((segment_stats or {}).get("vad_backend"), dict)
+                and (segment_stats or {}).get("vad_backend", {}).get("fallback")
+                else ""
+            ),
             "items": [],
         },
     ]

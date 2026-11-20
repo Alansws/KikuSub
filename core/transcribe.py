@@ -1663,6 +1663,7 @@ class AnimeWhisperEngine:
         self.last_coverage_spans = []
         self.last_segment_stats = {}
         backend = resolve_backend(getattr(cfg, "vad_backend", None))
+        vad_meta: dict = {}
         stamps = detect_speech_stamps(
             audio,
             self._vad,
@@ -1671,13 +1672,15 @@ class AnimeWhisperEngine:
             min_silence_ms=int(cfg.min_silence_ms),
             speech_pad_ms=int(cfg.speech_pad_ms),
             backend=backend,
+            fallback_backend="silero",
+            backend_stats=vad_meta,
             progress_cb=(
                 (lambda ratio, message: progress_cb(0.02 + 0.06 * ratio, message))
                 if progress_cb
                 else None
             ),
         )
-        self.last_segment_stats["vad_backend"] = backend
+        self.last_segment_stats["vad_backend"] = vad_meta
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(
             stamps,

@@ -429,11 +429,20 @@ def detect_speech_stamps(
     overlap_s: float = VAD_WINDOW_OVERLAP_S,
     backend: str | None = None,
     progress_cb=None,
+    fallback_backend: str | None = None,
+    backend_stats: dict | None = None,
 ) -> list[dict]:
-    """按后端产出统一 stamps；默认路径与旧 Silero 实现完全一致。"""
+    """按后端产出统一 stamps；默认路径与旧 Silero 实现完全一致。
+
+    ``fallback_backend``：WhisperSeg 权重缺失且下载失败时，回退到该后端（产品侧传
+    ``"silero"``）。回退会写进 ``backend_stats`` 并让上层在报告里显式说明，不是静默
+    切换；不传则把 ``VadBackendError`` 原样抛给用户。
+    """
     name = resolve_backend(backend)
+    used = name
+    reason = ""
     if name == "silero":
-        return _silero_detect(
+        stamps = _silero_detect(
             audio,
             vad,
             threshold=threshold,
@@ -443,11 +452,40 @@ def detect_speech_stamps(
             window_s=window_s,
             overlap_s=overlap_s,
         )
-    return _whisperseg_detect(
-        audio,
-        threshold=threshold,
-        min_speech_ms=min_speech_ms,
-        min_silence_ms=min_silence_ms,
-        speech_pad_ms=speech_pad_ms,
-        progress_cb=progress_cb,
-    )
+    else:
+        try:
+            stamps = _whisperseg_detect(
+                audio,
+                threshold=threshold,
+                min_speech_ms=min_speech_ms,
+                min_silence_ms=min_silence_ms,
+                speech_pad_ms=speech_pad_ms,
+                progress_cb=progress_cb,
+            )
+        except VadBackendError as exc:
+            if not fallback_backend:
+                raise
+            used = resolve_backend(fallback_backend)
+            reason = str(exc)
+            log.warning("WhisperSeg 不可用，本次回退 %s：%s", used, exc)
+            _report_progress(
+                progress_cb, 0.5, f"WhisperSeg 不可用，已回退 {used} 20s 切分…"
+            )
+            stamps = _silero_detect(
+                audio,
+                vad,
+                threshold=threshold,
+                min_speech_ms=min_speech_ms,
+                min_silence_ms=min_silence_ms,
+                speech_pad_ms=speech_pad_ms,
+                window_s=window_s,
+                overlap_s=overlap_s,
+            )
+    if backend_stats is not None:
+        backend_stats.update({
+            "requested": name,
+            "used": used,
+            "fallback": used != name,
+            "reason": reason,
+        })
+    return stamps

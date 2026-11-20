@@ -176,7 +176,7 @@ def test_report_data_structure(tmp_path):
         align_stats={"segments": 5, "degraded": 0, "spans": []},
     )
     assert [s["id"] for s in data["sections"]] == [
-        "coverage", "missed", "cut_snap", "onset_pad", "start_repair",
+        "coverage", "missed", "cut_snap", "onset_pad", "start_repair", "vad_backend",
         "hallucination_dropped", "hallucination_suspect", "nonverbal", "alignment",
     ]
     assert data["quality"]["coverage"] == 0
