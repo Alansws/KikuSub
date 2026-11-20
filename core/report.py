@@ -121,6 +121,11 @@ def _onset_summary(stats: dict | None) -> str:
     （`extend_segment_onsets` 写进 segment_stats），不能写成产品宣传语。
     """
     stats = stats or {}
+    ignored = str(stats.get("onset_pad_ignored_backend") or "")
+    if ignored:
+        # 用户在 WhisperSeg 下填了句首提前：显式说明它不生效，别让报告显示成
+        # 「未启用」而让用户以为自己没保存。
+        return f"当前切分器 {ignored} 不使用句首补回（仅 Silero 生效）"
     pad = int(stats.get("onset_pad_ms", 0) or 0)
     if pad <= 0:
         return "未启用（句首提前 = 0 ms）"

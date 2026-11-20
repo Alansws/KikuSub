@@ -56,6 +56,14 @@ log = logging.getLogger(__name__)
 
 ProgressCb = Callable[[float, str], None]
 
+# 人声分离的两种用途。默认只喂 VAD：Demucs 的 vocals 轨会削掉日语清辅音的
+# 高频能量（す/そ/え 的 s 音），拿它送识别反而更容易错字；而 VAD 只看「哪里
+# 有人在唱/说」，干净人声正好解决 BGM 误检。`to_asr` 是旧行为，留给人声被
+# 纯歌声彻底盖死的极端素材。
+SEPARATE_MODE_VAD_ONLY = "vad_only"
+SEPARATE_MODE_TO_ASR = "to_asr"
+SEPARATE_MODES = (SEPARATE_MODE_VAD_ONLY, SEPARATE_MODE_TO_ASR)
+
 # 引擎是进程级单例：模型权重只加载一次，多任务复用。
 QWEN = QwenCtcEngine()
 SENSEVOICE = SenseVoiceEngine()
@@ -146,10 +154,17 @@ class TranscribeRequest:
     # 局部转写不该覆盖整片的质检队列：否则「重转这一句」会把用户刚核对完的
     # 待核进度全部冲掉。服务层在区间任务里置 False。
     write_audit: bool = True
-    # 强 BGM / 歌曲：先对「本次转写范围」做 Demucs 人声分离，再送 ASR。
+    # 强 BGM / 歌曲：先对「本次转写范围」做 Demucs 人声分离。
     # 整片任务（start_s/end_s 都为 None）= 0..media_duration_s；只填一端时另一端
     # 取片头/片尾。分离结果由 audio_cache 复用，换引擎重转不重复跑。
     separate_vocals: bool = False
+    # 分离出的人声**用在哪一步**：
+    # - ``vad_only``（默认）：人声只喂 VAD，ASR 仍听原声。分离会削掉日语清辅音
+    #   （す/そ/え 的辅音能量在 vocals 轨里很弱），原声送识别能保住这些细节，
+    #   同时用干净人声拿更准的切分边界。
+    # - ``to_asr``：旧行为，分离人声直接送 ASR；只在人声被纯歌声/极重混响
+    #   彻底盖死、原声里根本听不出词时才值得用。
+    separate_mode: str = SEPARATE_MODE_VAD_ONLY
     # 双引擎：本次整片结果写入第二版（不覆盖核对台）。服务层只在「核对台非空 +
     # 整片覆盖」时置 True；具体写内存/落盘由 server.jobs 负责。
     alt_review: bool = False
@@ -318,10 +333,16 @@ def run_transcription(
     )
     audio_path = media_path
     audio_start, audio_end = req.start_s, req.end_s
+    # 分离人声的用途：默认只作为 VAD 参考，ASR 仍读原声（逐字节等同未开分离）。
+    vad_audio_path: Path | None = None
     if req.separate_vocals:
         from . import separate as separate_mod
         from .audio_cache import ensure_vocals_wav
 
+        if req.separate_mode not in SEPARATE_MODES:
+            raise ValueError(
+                f"未知的人声分离用途 {req.separate_mode!r}；可选 {', '.join(SEPARATE_MODES)}"
+            )
         # 先验参数、再验依赖：探不到总时长是**用户能改**的问题（填起止时间），
         # 缺 demucs 是环境问题。反过来的顺序会让"没填区间"报成"缺 demucs"，
         # 测试里也直接卡在这一句（用户报障时同样拿到错误提示）。
@@ -330,12 +351,16 @@ def run_transcription(
             raise RuntimeError("人声分离依赖未安装（缺少 demucs）。")
         # 分离器与 ASR 不同时常驻：先让出当前引擎，分离器用完会自行 release。
         release_engine(req.engine_key)
-        cb(0.01, "正在准备人声分离（Demucs htdemucs）…")
+        if req.separate_mode == SEPARATE_MODE_TO_ASR:
+            detail = "分离人声后送识别（高级：只在人声被彻底盖住时用）"
+        else:
+            detail = "仅用于 VAD 切分，原声送识别"
+        cb(0.01, f"正在准备人声分离（Demucs htdemucs）· {detail}…")
 
         def _sep_progress(ratio: float, message: str) -> None:
             cb(0.01 + 0.06 * max(0.0, min(1.0, float(ratio))), message)
 
-        audio_path = ensure_vocals_wav(
+        vocals_path = ensure_vocals_wav(
             media_path,
             start=sep_start,
             end=sep_end,
@@ -343,11 +368,27 @@ def run_transcription(
             cancel_event=cancel_event,
             progress_cb=_sep_progress,
         )
-        audio_start, audio_end = None, None
-        log.info("人声分离就绪 | %s | %.1fs-%.1fs", audio_path.name, sep_start, sep_end)
+        if req.separate_mode == SEPARATE_MODE_TO_ASR:
+            audio_path = vocals_path
+            audio_start, audio_end = None, None
+        else:
+            # ASR 路径与未开分离**完全一致**：同一个媒体、同一组 start/end、
+            # 同一个 loudnorm 档位（audio_cache 会命中同一份 16k wav）。
+            vad_audio_path = vocals_path
+        log.info(
+            "人声分离就绪 | mode=%s | %s | %.1fs-%.1fs | asr=%s",
+            req.separate_mode,
+            vocals_path.name,
+            sep_start,
+            sep_end,
+            audio_path.name,
+        )
 
     def _run_engine(config_used):
         """按引擎族调一次转写；`config_used` 允许短选区兜底时换一份阈值配置。"""
+        # 只有 vad_only 才带这个额外参数：不传时各引擎行为与旧版逐字节一致，
+        # 也让测试替身/外部调用方不用跟着改签名。
+        extra_vad = {"vad_audio_path": vad_audio_path} if vad_audio_path else {}
         if is_sherpa:
             return engine.transcribe_file(
                 audio_path,
@@ -357,6 +398,7 @@ def run_transcription(
                 start_time_s=audio_start,
                 end_time_s=audio_end,
                 time_offset=req.time_offset,
+                **extra_vad,
             )
         if is_qwen:
             return engine.transcribe_file(
@@ -368,6 +410,7 @@ def run_transcription(
                 start_time_s=audio_start,
                 end_time_s=audio_end,
                 time_offset=req.time_offset,
+                **extra_vad,
             )
         return engine.transcribe_file(
             audio_path,
@@ -379,6 +422,7 @@ def run_transcription(
             start_time_s=audio_start,
             end_time_s=audio_end,
             time_offset=req.time_offset,
+            **extra_vad,
         )
 
     active_config = (
@@ -441,6 +485,22 @@ def run_transcription(
     coverage_spans = list(getattr(engine, "last_coverage_spans", []) or [])
     segment_stats = dict(getattr(engine, "last_segment_stats", {}) or {})
     align_stats = dict(getattr(engine, "last_align_stats", {}) or {})
+    if req.separate_vocals:
+        # 只做记录，不加报告 section：VAD stats 里的切分数字已经反映收益，
+        # 这条让报告/日志能回答「这次到底听的是原声还是分离人声」。
+        segment_stats["separation"] = {
+            "mode": req.separate_mode,
+            "asr_audio": (
+                "original"
+                if req.separate_mode == SEPARATE_MODE_VAD_ONLY
+                else "vocals"
+            ),
+        }
+        stats_note += (
+            "\n\n人声分离：仅 VAD 用分离人声，识别仍听原声"
+            if req.separate_mode == SEPARATE_MODE_VAD_ONLY
+            else "\n\n人声分离：分离人声直接送识别"
+        )
 
     if not cues:
         if is_interrupted:

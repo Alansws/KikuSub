@@ -180,3 +180,22 @@ def test_vad_backend_enum_defaults_and_validation():
         "whisperseg": "WhisperSeg（推荐）",
         "silero": "Silero 20s（兼容）",
     }
+
+
+def test_vad_backend_scoped_metadata():
+    """参数面板的「仅 Silero 生效」与推荐阈值都来自规格表，前端不另写一份。"""
+    onset = params.BY_KEY["whisper.vad_onset_pad_ms"]
+    assert onset.backend_only == "silero"
+    assert onset.to_dict()["backend_only"] == "silero"
+
+    threshold = params.BY_KEY["whisper.vad_threshold"]
+    assert threshold.to_dict()["backend_only"] is None
+    notes = threshold.to_dict()["backend_notes"]
+    assert "0.35" in notes["whisperseg"]
+    assert "0.25" in notes["silero"]
+    assert threshold.to_dict()["backend_recommended"] == {
+        "whisperseg": 0.35,
+        "silero": 0.25,
+    }
+    # 其余参数不带后端限定，避免前端误置灰。
+    assert params.BY_KEY["whisper.vad_min_silence_ms"].backend_only == ""

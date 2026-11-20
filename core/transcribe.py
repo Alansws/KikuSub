@@ -623,6 +623,24 @@ def load_audio_for_transcription(
         return load_wav_mono(wav_path)
 
 
+def clamp_stamps_to_audio(stamps: list[dict], total_samples: int) -> list[dict]:
+    """把 VAD 参考音频上的 stamps 夹到实际送模音频长度。
+
+    ``vad_only`` 人声分离时，VAD 跑在分离人声上、识别跑在原声上：两者是同一段
+    时间窗，长度应相同；但 44.1k → 16k 重采样、容器帧对齐可能差几个样本。
+    stamps 是样本下标，同一时间点在两份音频里是**同一个下标**（都是 16k），
+    所以不缩放、只夹紧，避免最后一段越界把尾句丢掉。
+    """
+    limit = max(0, int(total_samples))
+    out: list[dict] = []
+    for stamp in stamps or []:
+        start = max(0, min(limit, int(stamp.get("start", 0) or 0)))
+        end = max(0, min(limit, int(stamp.get("end", 0) or 0)))
+        if end > start:
+            out.append({"start": start, "end": end})
+    return out
+
+
 def load_wav_mono(path: str | Path) -> np.ndarray:
     audio, sr = sf.read(str(path), always_2d=False)
     if audio.ndim > 1:
@@ -1610,6 +1628,7 @@ class AnimeWhisperEngine:
         start_time_s: float | None = None,
         end_time_s: float | None = None,
         time_offset: float = 0.0,
+        vad_audio_path: str | Path | None = None,
     ) -> list[SubtitleCue]:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
@@ -1634,6 +1653,24 @@ class AnimeWhisperEngine:
             if progress_cb:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
+        vad_audio = None
+        if vad_audio_path is not None:
+            # 只解码给人声分离的 VAD 用；ASR 的 audio 已经按完全相同的参数读过，
+            # 两者各自走 audio_cache，未开分离的那条路径不会多一次解码。
+            if progress_cb:
+                progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
+            try:
+                vad_audio = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=cfg.enable_loudnorm,
+                    tmp_prefix="kikusub-vad-only-",
+                    cancel_event=cancel_event,
+                )
+            except CommandCancelled:
+                self.last_interrupted = True
+                if progress_cb:
+                    progress_cb(0.99, "🛑 已取消音频解码…")
+                return []
         return self._transcribe_array(
             audio,
             config=cfg,
@@ -1642,6 +1679,7 @@ class AnimeWhisperEngine:
             progress_cb=progress_cb,
             cancel_event=cancel_event,
             time_offset=time_offset,
+            vad_audio=vad_audio,
         )
 
     def _transcribe_array(
@@ -1654,9 +1692,10 @@ class AnimeWhisperEngine:
         progress_cb=None,
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
+        vad_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         if progress_cb:
-            progress_cb(0.08, "正在使用 Silero VAD 精确切分语音段落…")
+            progress_cb(0.08, "正在用 VAD 精确定位语音边界…")
 
         cfg = config or self.config
         self.last_missed_spans = []
@@ -1664,8 +1703,15 @@ class AnimeWhisperEngine:
         self.last_segment_stats = {}
         backend = resolve_backend(getattr(cfg, "vad_backend", None))
         vad_meta: dict = {}
+        # vad_only 人声分离：切分看干净人声，吐字听原声。两份音频是同一段时间，
+        # 样本下标可直接复用（只夹紧越界）；不传时与原实现逐字节一致。
+        vad_ref = audio
+        if vad_audio is not None:
+            candidate = np.asarray(vad_audio, dtype=np.float32)
+            if candidate.size:
+                vad_ref = candidate
         stamps = detect_speech_stamps(
-            audio,
+            vad_ref,
             self._vad,
             threshold=float(cfg.threshold),
             min_speech_ms=int(cfg.min_speech_ms),
@@ -1681,6 +1727,17 @@ class AnimeWhisperEngine:
             ),
         )
         self.last_segment_stats["vad_backend"] = vad_meta
+        if vad_ref is not audio:
+            stamps = clamp_stamps_to_audio(stamps, len(audio))
+            mismatch = abs(len(vad_ref) - len(audio)) / SAMPLE_RATE
+            if mismatch > 0.5:
+                log.warning(
+                    "VAD 参考音频与识别音频长度不一致（%.2fs），已按识别音频夹紧边界",
+                    mismatch,
+                )
+        self.last_segment_stats["vad_audio"] = (
+            "vocals" if vad_ref is not audio else "original"
+        )
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(
             stamps,
@@ -1692,10 +1749,17 @@ class AnimeWhisperEngine:
         )
         # 句首补回在合并之后：先扩再合并会把 0.3–0.5s 的句间空隙填掉，
         # 两句话被并成一个送模块。`0` 时原样返回，不改变任何旧行为。
+        # 它补偿的是 Silero 的起点系统性偏晚（P0-1 标定）；WhisperSeg 的帧级
+        # 概率已贴合真实发声，对它有值也不会生效——参数面板按同一口径置灰。
+        onset_pad_ms = int(cfg.onset_pad_ms)
+        used_backend = str(vad_meta.get("used") or backend)
+        if onset_pad_ms and used_backend != "silero":
+            self.last_segment_stats["onset_pad_ignored_backend"] = used_backend
+            onset_pad_ms = 0
         segments = extend_segment_onsets(
             segments,
             audio,
-            pad_ms=int(cfg.onset_pad_ms),
+            pad_ms=onset_pad_ms,
             gate=str(getattr(cfg, "onset_gate", ONSET_GATE_NONE) or ONSET_GATE_NONE),
             stats=self.last_segment_stats,
         )

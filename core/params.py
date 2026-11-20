@@ -39,6 +39,13 @@ class ParamSpec:
     # 映射到引擎配置 dataclass 的字段；None 表示直接透传给 transcribe_file
     config_field: str | tuple[str, ...] | None = None
     help: str = ""
+    # 只对某个「兄弟枚举值」生效的参数（例如只对 Silero 生效的句首补回）。
+    # 值为兄弟枚举的 value（如 "silero"），由前端按当前切分器置灰。
+    backend_only: str = ""
+    # 按兄弟枚举值给出的额外校准提示（如 WhisperSeg 推荐阈值 0.35）。
+    backend_notes: dict[str, str] | None = None
+    # 按兄弟枚举值给出的推荐数值；前端据此提供「采用推荐值」一键校准。
+    backend_recommended: dict[str, float] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -55,6 +62,11 @@ class ParamSpec:
             "step": self.step,
             "help": self.help,
             "is_config": self.config_field is not None,
+            "backend_only": self.backend_only or None,
+            "backend_notes": dict(self.backend_notes) if self.backend_notes else None,
+            "backend_recommended": (
+                dict(self.backend_recommended) if self.backend_recommended else None
+            ),
         }
 
 
@@ -86,8 +98,14 @@ SPECS: tuple[ParamSpec, ...] = (
     ParamSpec(
         "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.25,
         group="VAD", minimum=0.05, maximum=0.80, step=0.01, config_field="threshold",
-        help="调小对耳语更灵敏；调大抗噪更强、能过滤背景音乐。VAD 已改成分窗检测，"
-        "不再需要靠抬高阈值来压住误检。",
+        help="调小对耳语更灵敏；调大抗噪更强、能过滤背景音乐。两个切分器的概率刻度"
+        "不同：WhisperSeg 标定推荐 0.35，Silero 20s 推荐 0.25。旧预设里的 0.25 "
+        "带进 WhisperSeg 会让切分偏碎（P1 实测 CER 0.25→0.35 由 10.78% 降到 10.67%）。",
+        backend_notes={
+            "whisperseg": "WhisperSeg 标定推荐 0.35",
+            "silero": "Silero 20s 推荐 0.25",
+        },
+        backend_recommended={"whisperseg": 0.35, "silero": 0.25},
     ),
     ParamSpec(
         "whisper.vad_speech_pad_ms", "首尾留白 (ms)", WHISPER, "int", 250,
@@ -98,9 +116,13 @@ SPECS: tuple[ParamSpec, ...] = (
     ParamSpec(
         "whisper.vad_onset_pad_ms", "句首提前 (ms)", WHISPER, "int", 0,
         group="VAD", minimum=0, maximum=600, step=20, config_field="onset_pad_ms",
+        # 这是给 Silero 的起点系统性偏晚做的补偿；WhisperSeg 的帧级概率已经贴合
+        # 真实发声，再左扩只会把上一句的尾音带进来，所以只对 Silero 生效。
+        backend_only="silero",
         help="把 VAD 段起点整体向左扩。Silero 的起点系统性晚于真实发声，"
         "被吞的常是「す / そ / え」这类轻声起音的句首；0 = 关闭（与旧行为一致）。"
-        "不调阈值：调低会换来更多强制切分与音乐误检。",
+        "WhisperSeg 自身已贴合句首，此项对它不生效。不调阈值：调低会换来更多"
+        "强制切分与音乐误检。",
     ),
     ParamSpec(
         "whisper.vad_min_silence_ms", "判定停顿静音 (ms)", WHISPER, "int", 200,

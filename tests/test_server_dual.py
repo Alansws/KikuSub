@@ -251,3 +251,50 @@ def test_dual_secondary_failure_keeps_main(make_client, tmp_path):
 
     main = client.get("/api/cues", headers=AUTH).json()
     assert [cue["text"] for cue in main["cues"]] == ["主稿の台詞"]
+
+
+def test_dual_releases_primary_between_passes(make_client, tmp_path, monkeypatch):
+    """Pass A 之后必须真释放主引擎，再启动 Pass B（单槽不等于已让出显存）。"""
+    from core import pipeline
+
+    released: list[str] = []
+    monkeypatch.setattr(
+        pipeline, "release_engine", lambda key, *a, **k: released.append(key)
+    )
+    runner = _DualRunner(tmp_path)
+    client = make_client(runner)
+    media_id = _import_media(client, tmp_path)
+
+    job = _start_dual(client, media_id)
+    snapshot = _wait(client, job["id"])
+    assert snapshot["status"] == "done", snapshot
+    assert released == ["qwen"]
+    assert runner.calls == ["qwen", "whisper"]
+
+
+def test_dual_requests_share_range_and_vad_only_separation(make_client, tmp_path):
+    """区间 + vad_only 分离的 dual：两个 pass 用同一区间/同一分离档，第二列局部更新。"""
+    runner = _DualRunner(tmp_path)
+    client = make_client(runner)
+    media_id = _import_media(client, tmp_path)
+
+    job = _start_dual(
+        client,
+        media_id,
+        apply="replace_range",
+        start=4.0,
+        end=9.0,
+        separate_vocals=True,
+    )
+    snapshot = _wait(client, job["id"])
+    assert snapshot["status"] == "done", snapshot
+    assert len(runner.requests) == 2
+    primary, secondary = runner.requests
+    for request in (primary, secondary):
+        assert request.start_s == 4.0 and request.end_s == 9.0
+        assert request.separate_vocals is True
+        assert request.separate_mode == "vad_only"
+        assert request.alt_review_range is False or request is secondary
+    assert secondary.alt_review is True
+    assert secondary.alt_review_range is True
+    assert secondary.write_audit is False

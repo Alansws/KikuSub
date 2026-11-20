@@ -68,6 +68,9 @@ class TranscribeJobRequest(BaseModel):
     # 强 BGM / 歌曲：先对本次转写范围做 Demucs 人声分离（整片 = 0..总时长）。
     # 分离结果缓存在 audio_cache，换引擎重转直接复用。
     separate_vocals: bool = False
+    # 分离人声的用途：vad_only（默认）= 只用干净人声切分，识别仍听原声；
+    # to_asr = 分离人声直接送识别（旧行为，人声被彻底盖死时才用）。
+    separate_mode: str = Field(default="vad_only", pattern="^(vad_only|to_asr)$")
 
     @field_validator("engine", "secondary_engine")
     @classmethod
@@ -229,6 +232,7 @@ def _build_request(
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
         separate_vocals=payload.separate_vocals,
+        separate_mode=payload.separate_mode,
         # 只有核对台里的「单句/选区修正」保留原队列；转写页的整片或区间任务
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。

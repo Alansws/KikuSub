@@ -50,6 +50,7 @@ from .transcribe import (
     SubtitleCue,
     _is_blank,
     chunk_level_stats,
+    clamp_stamps_to_audio,
     load_audio_for_transcription,
     merge_vad_segments,
     vad_neg_threshold,
@@ -261,6 +262,7 @@ class _SherpaEngine:
         config: SherpaAsrConfig | None = None,
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
+        vad_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         cfg = config or self.config
         self.load(progress_cb=progress_cb, config=cfg)
@@ -276,8 +278,15 @@ class _SherpaEngine:
         from silero_vad import get_speech_timestamps
         import torch
 
+        # vad_only 人声分离：与 Whisper/Qwen 同一条路径——切分看干净人声、
+        # 识别仍听原声；样本下标同源，只夹紧越界。
+        vad_ref = audio
+        if vad_audio is not None:
+            candidate = np.asarray(vad_audio, dtype=np.float32)
+            if candidate.size:
+                vad_ref = candidate
         stamps = get_speech_timestamps(
-            torch.from_numpy(np.asarray(audio, dtype=np.float32)),
+            torch.from_numpy(np.asarray(vad_ref, dtype=np.float32)),
             self._vad,
             sampling_rate=SAMPLE_RATE,
             threshold=float(cfg.vad_threshold),
@@ -285,6 +294,11 @@ class _SherpaEngine:
             min_silence_duration_ms=int(cfg.vad_min_silence_ms),
             speech_pad_ms=int(cfg.vad_speech_pad_ms),
             neg_threshold=vad_neg_threshold(cfg.vad_threshold),
+        )
+        if vad_ref is not audio:
+            stamps = clamp_stamps_to_audio(stamps, len(audio))
+        self.last_segment_stats["vad_audio"] = (
+            "vocals" if vad_ref is not audio else "original"
         )
         segments = merge_vad_segments(
             stamps,
@@ -446,6 +460,7 @@ class _SherpaEngine:
         start_time_s: float | None = None,
         end_time_s: float | None = None,
         time_offset: float = 0.0,
+        vad_audio_path: str | Path | None = None,
     ) -> list[SubtitleCue]:
         self.last_coverage_spans = []
         cfg = config or self.config
@@ -469,12 +484,29 @@ class _SherpaEngine:
             if progress_cb:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
+        vad_audio = None
+        if vad_audio_path is not None:
+            if progress_cb:
+                progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
+            try:
+                vad_audio = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=cfg.enable_loudnorm,
+                    tmp_prefix="kikusub-vad-only-",
+                    cancel_event=cancel_event,
+                )
+            except CommandCancelled:
+                self.last_interrupted = True
+                if progress_cb:
+                    progress_cb(0.99, "🛑 已取消音频解码…")
+                return []
         return self.transcribe_array(
             audio,
             progress_cb=progress_cb,
             config=cfg,
             cancel_event=cancel_event,
             time_offset=time_offset,
+            vad_audio=vad_audio,
         )
 
     def transcribe_window(self, audio: np.ndarray, *, config: SherpaAsrConfig | None = None) -> str:
