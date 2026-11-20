@@ -153,6 +153,9 @@ class TranscribeRequest:
     # 双引擎：本次整片结果写入第二版（不覆盖核对台）。服务层只在「核对台非空 +
     # 整片覆盖」时置 True；具体写内存/落盘由 server.jobs 负责。
     alt_review: bool = False
+    # 区间 dual 的第二列局部更新：只替换 [start_s, end_s] 内的旧对照，
+    # 范围外原样保留；整片 dual 保持 False（整列覆盖）。
+    alt_review_range: bool = False
     # 核对台人工短选区（转写选区 / 重转此句 / 质检补录）才置 True：空结果时
     # 走 `core.short_clip` 的轻声兜底（0.05 阈值 → ≤12s 整段送模）。
     # **整片转写必须保持 False**，否则 VAD 挡幻觉的那道防线会被绕过。

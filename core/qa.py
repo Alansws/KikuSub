@@ -151,16 +151,25 @@ def apply_action(
             message = RESOLUTION_MESSAGES.get(resolution, "✅ 已标记为本条处理完成。")
             # 短句待确认点「保留」时，核对台可能因为「先设基线、后重转/删改」
             # 而缺少这句。这里幂等补齐，并强制刷新表格，避免状态与表格不同步。
-            if resolution == "kept" and str(item.get("kind") or "") in {"suspect", "nonverbal"}:
+            kind = str(item.get("kind") or "")
+            if resolution == "kept" and kind in {"suspect", "nonverbal", "ensemble"}:
                 ensured, added = _audit_ensure_item_cues(existing, item)
                 if added:
                     previous = existing
                     existing = ensured
                     cues_changed = True
-                    message = (
-                        f"✅ 已保留；核对台原先缺少这句，已自动补回 {added} 条字幕"
-                        "（可按 Cmd+Z 撤回）。"
-                    )
+                    if kind == "ensemble":
+                        message = (
+                            f"🧩 已采纳补漏；核对台新增 {added} 条字幕"
+                            "（可按 Cmd+Z 撤回）。"
+                        )
+                    else:
+                        message = (
+                            f"✅ 已保留；核对台原先缺少这句，已自动补回 {added} 条字幕"
+                            "（可按 Cmd+Z 撤回）。"
+                        )
+                elif kind == "ensemble":
+                    message = "🧩 这句已经在核对台里了，未重复插入。"
                 else:
                     message = "✅ 已保留；核对台已包含这句，表格已刷新对齐。"
                 force_table_sync = True
