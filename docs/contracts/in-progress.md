@@ -45,7 +45,10 @@
   两侧用不同 VAD（实测 Qwen 配 Silero、Whisper 配 WhisperSeg），中间强制
   `release()` + `mps.empty_cache()` 并过可用内存闸门；副稿经去重/置信度筛选后
   以 `ensemble` 进质检。设计见 [P2-双引擎顺序协同设计-2026-11-20.md](../P2-双引擎顺序协同设计-2026-11-20.md)；
-  第一步 `core/ensemble.py` 与 6 条单测已落地，后续按设计 §11 接线。
+  第一步 `core/ensemble.py` 已落地；第二步 `ensemble` 质检 kind + 空白项升级、
+  第三步 `start_dual` 两 pass / 内存预检 / B 取消保留主稿、第四步转写页角色选择
+  已实现并有单测/假 runner 覆盖；Test 二真机：主 Qwen 92 条 + 副 Whisper 105 条、
+  120.6s、2 条有效补漏（时间排重后），报告含【双引擎协同】。
 
 ## 转录引擎标定（四引擎均已完成一轮）
 
