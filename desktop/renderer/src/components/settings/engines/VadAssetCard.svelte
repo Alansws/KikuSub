@@ -193,9 +193,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .stage.error {
-    color: var(--danger);
-  }
   .pct {
     flex: 0 0 auto;
     font-variant-numeric: tabular-nums;
