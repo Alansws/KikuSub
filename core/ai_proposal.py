@@ -210,10 +210,19 @@ class ProposalCheck:
     effective: dict[int, str] = field(default_factory=dict)
 
 
-def _effective_after(after, source_text: str) -> tuple[str, str]:
-    """单条文本的兜底：空或离谱地长，就退回原文。返回 (文本, 警告)。"""
+def _effective_after(
+    after, source_text: str, *, allow_empty: bool = False
+) -> tuple[str, str]:
+    """单条文本的兜底：空或离谱地长，就退回原文。返回 (文本, 警告)。
+
+    ``allow_empty`` 只给**翻译**用：一条译文跨多句时，被合并覆盖的槽位与
+    「原句没匹配到译文」的槽位在语义上就是空，强行把日语原文填进译文轨会让
+    双语画面出现一整行日文。空值仍是合法槽位，只是不写入文本。
+    """
     text = after if isinstance(after, str) else ""
     if not text.strip():
+        if allow_empty:
+            return "", ""
         return source_text, "空文本已退回原文"
     src = str(source_text or "").strip()
     if src and len(text) > len(src) * MAX_TEXT_GROWTH:
@@ -287,7 +296,9 @@ def validate_proposal(
         if not isinstance(after, str):
             return fail(f"第 {idx} 条的 after 必须是字符串")
         source_text = texts[idx - first]
-        text, note = _effective_after(after, source_text)
+        text, note = _effective_after(
+            after, source_text, allow_empty=(kind == "translate")
+        )
         effective[idx] = text
         if note:
             warnings.append(f"第 {idx} 条：{note}")

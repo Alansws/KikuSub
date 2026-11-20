@@ -283,6 +283,33 @@ def test_manual_prompt_only_contains_scope(ctx):
     assert body["prompt"].count("本次只处理片段第 2–4 条") == 1
 
 
+def test_manual_batch_prompt_is_subrange_of_scope(ctx):
+    """处理范围之内再切批次：提示词只含这段，范围说明同时交代两层区间。"""
+    client = ctx
+    res = client.get(
+        "/api/ai/prompt",
+        headers=AUTH,
+        params={
+            "kind": "translate",
+            "lang": "zh-Hans",
+            "range_from": 2,
+            "range_to": 4,
+            "from_index": 3,
+            "to_index": 3,
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["count"] == 1
+    assert (body["from"], body["to"]) == (3, 3)
+    assert (body["range_from"], body["range_to"]) == (2, 4)
+    assert TEXTS[2] in body["prompt"]
+    for outside in (TEXTS[0], TEXTS[1], TEXTS[3], TEXTS[4]):
+        assert outside not in body["prompt"]
+    assert "本次只处理片段第 2–4 条" in body["prompt"]
+    assert "当前分段是其中第 3–3 条" in body["prompt"]
+
+
 def test_paste_back_scoped_proposal(ctx):
     client = ctx
     srt = "1\n00:00:00,000 --> 00:00:01,000\n晴れだ\n\n2\n00:00:01,000 --> 00:00:02,000\n行ってらっしゃい\n"

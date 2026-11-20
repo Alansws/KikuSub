@@ -544,8 +544,10 @@ class Session:
         锚点必须是索引而不是模型给的时间：分段重排时两段的交界由原稿的切法决定，
         模型的时间漂移不该把邻段吃掉。返回被替换条数、新条数与被丢弃的译文轨。
 
-        条数一旦变化，任何旧译文轨都无法逐条对齐，这里与 ``replace_review()``
-        同一口径：直接丢弃并回报，让界面提示「可 ⌘Z 退回」而不是留下一排错位的译文。
+        译文轨（2026-11-20 起）：条数变了也**不再整轨丢弃**。范围外的头部与尾部
+        字幕原样保留，它们的译文按 ``delta`` 一起平移；范围内部的新条目译文置空
+        （旧译文对不上新原文），若覆盖前后文本 1:1 相同则原译文保留。这样局部
+        重排不会让后半片的译文全部消失；``⌘Z`` 仍由统一历史一次退回。
         """
         start = max(1, int(from_index))
         end = int(to_index)
@@ -562,11 +564,16 @@ class Session:
             block = _copy(list(cues))
             merged = self.review_cues[: start - 1] + block + self.review_cues[end:]
             changed = _table_signature(merged) != _table_signature(self.review_cues)
+            shifted = (
+                self._shift_translations_for_range(self.review_cues, start, end, block)
+                if changed
+                else []
+            )
             self.review_cues = merged
             dropped = sorted(self.translations)
             self._drop_misaligned_translations()
             dropped = [lang for lang in dropped if lang not in self.translations]
-            if dropped:
+            if changed and (shifted or dropped):
                 self._drop_translation_undo()
             if record and changed:
                 self._record(label)
@@ -581,7 +588,52 @@ class Session:
                 "count_before": before,
                 "changed": changed,
                 "dropped_translations": dropped,
+                "shifted_translations": shifted,
             }
+
+    def _shift_translations_for_range(
+        self,
+        old_cues: list[SubtitleCue],
+        start: int,
+        end: int,
+        block: list[SubtitleCue],
+    ) -> list[str]:
+        """把范围外的译文按条目位移一起搬走，范围内新条目留空。
+
+        ``start`` / ``end`` 是覆盖**前**的原稿区间（1 基、含两端）。返回被平移的
+        语种列表。已经对不齐的旧轨不在这里处理，交给 ``_drop_misaligned_translations``。
+        """
+        total = len(old_cues)
+        replaced = end - start + 1
+        same_inside = len(block) == replaced and all(
+            block[offset].text == old_cues[start - 1 + offset].text
+            for offset in range(replaced)
+        )
+        shifted: list[str] = []
+        for lang, track in list(self.translations.items()):
+            if len(track.texts) != total:
+                continue
+            base = list(track.base[:total])
+            if len(base) < total:
+                base.extend([""] * (total - len(base)))
+            if same_inside:
+                mid_texts = list(track.texts[start - 1 : end])
+                mid_base = base[start - 1 : end]
+            else:
+                mid_texts = ["" for _ in block]
+                mid_base = [cue.text for cue in block]
+            texts = list(track.texts[: start - 1]) + mid_texts + list(track.texts[end:])
+            new_base = base[: start - 1] + mid_base + base[end:]
+            self.translations[lang] = TranslationTrack(
+                lang=lang,
+                texts=texts,
+                base=new_base,
+                created_at=track.created_at,
+                entry=track.entry,
+            )
+            self.translation_undo.pop(lang, None)
+            shifted.append(lang)
+        return shifted
 
     def _drop_misaligned_translations(self) -> None:
         """删掉条数已与字幕对不上的译文轨，绝不让错位的轨继续存在。"""

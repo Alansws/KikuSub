@@ -114,6 +114,9 @@ class PasteSrtRequest(BaseModel):
     # 处理范围：提案只覆盖这一段（source.range），items 的 i 仍是全片序号。
     range_from: int | None = None
     range_to: int | None = None
+    # 翻译：默认允许带时间轴的译文条数与原文不同（按时间轴区间交集对齐）；
+    # 打开后保持旧的「等条数强校验」行为。润色恒为严格模式，不受此开关影响。
+    strict_count: bool = True
 
 
 class ImportRequest(BaseModel):
@@ -721,6 +724,7 @@ def proposal_from_pasted_srt(
     if start > end:
         raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
     try:
+        alignment = None
         if kind == "polish":
             proposal, warnings = ai_polish.proposal_from_srt(
                 payload.text,
@@ -732,7 +736,7 @@ def proposal_from_pasted_srt(
                 range_to=last,
             )
         else:
-            proposal, warnings = ai_translate.proposal_from_srt(
+            proposal, warnings, alignment = ai_translate.proposal_from_srt_ex(
                 payload.text,
                 cues,
                 lang,
@@ -740,6 +744,7 @@ def proposal_from_pasted_srt(
                 to_index=end,
                 range_from=first,
                 range_to=last,
+                strict_count=payload.strict_count,
             )
     except ai_client.AiError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -753,6 +758,7 @@ def proposal_from_pasted_srt(
         "range_from": first,
         "range_to": last,
         "expected": end - start + 1,
+        "alignment": alignment,
     }
 
 

@@ -138,14 +138,37 @@ def test_replace_range_records_one_history_step() -> None:
     assert len(session.review_cues) == 1
 
 
-def test_replace_range_drops_translations_when_count_changes() -> None:
+def test_replace_range_keeps_tail_translations_aligned_when_count_changes() -> None:
+    """局部重排只换本段：范围外尾部译文必须跟着平移，不能整轨丢弃。"""
     session = _seeded_session()
     session.translations["zh-Hans"] = TranslationTrack(
-        lang="zh-Hans", texts=["a", "b", "c", "d", "e"], base=["a", "b", "c", "d", "e"]
+        lang="zh-Hans",
+        texts=["a", "b", "c", "d", "e"],
+        base=["S1", "S2", "S3", "S4", "S5"],
     )
-    result = session.replace_range(1, 5, [Cue(0.0, 1.0, "只剩一条")])
-    assert result["dropped_translations"] == ["zh-Hans"]
-    assert "zh-Hans" not in session.translations
+    result = session.replace_range(
+        2, 3, [Cue(1.0, 1.5, "新2"), Cue(1.5, 2.0, "新3"), Cue(2.0, 2.5, "新4")]
+    )
+    assert result["dropped_translations"] == []
+    assert result["shifted_translations"] == ["zh-Hans"]
+    track = session.translations["zh-Hans"]
+    # 头尾原样保留；范围内新条目译文置空、base 同步成新原文
+    assert track.texts == ["a", "", "", "", "d", "e"]
+    assert track.base == ["S1", "新2", "新3", "新4", "S4", "S5"]
+
+
+def test_replace_range_keeps_leading_translations_when_only_tail_changes() -> None:
+    """只覆盖后半段时，前段 #1–#291 的译文一个字节都不能动。"""
+    session = _seeded_session()
+    session.translations["zh-Hans"] = TranslationTrack(
+        lang="zh-Hans",
+        texts=["a", "b", "c", "d", "e"],
+        base=["S1", "S2", "S3", "S4", "S5"],
+    )
+    session.replace_range(5, 5, [Cue(4.0, 5.0, "全新5")])
+    track = session.translations["zh-Hans"]
+    assert track.texts == ["a", "b", "c", "d", ""]
+    assert track.base == ["S1", "S2", "S3", "S4", "全新5"]
 
 
 def test_replace_range_keeps_translation_when_count_matches() -> None:
@@ -301,6 +324,47 @@ def test_apply_rejects_stale_digest(client: TestClient) -> None:
     )
     assert res.status_code == 409
     assert "重新粘贴" in res.json()["detail"]
+
+
+def test_apply_keeps_tail_translation_aligned(client: TestClient) -> None:
+    """局部重排 4→3：范围外 #5/#6 的译文跟着索引平移，不会整轨消失。"""
+    session = client.app.state.sessions.peek(SID)
+    session.translations["zh-Hans"] = TranslationTrack(
+        lang="zh-Hans",
+        texts=["t1", "t2", "t3"],
+        base=[cue["text"] for cue in CUES],
+    )
+    session.record("准备译文轨")
+    changed = SRT.replace("おはよう", "おはよう！")
+    parsed = client.post(
+        "/api/ai/reshape/from-text",
+        headers=HEADERS,
+        json={"text": changed, "from_index": 1, "to_index": 2},
+    ).json()
+    res = client.post(
+        "/api/ai/reshape/apply",
+        headers=HEADERS,
+        json={
+            "cues": parsed["cues"],
+            "from_index": 1,
+            "to_index": 2,
+            "digest": parsed["digest"],
+        },
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["replace"]["shifted_translations"] == ["zh-Hans"]
+    assert data["replace"]["dropped_translations"] == []
+    track = session.translations["zh-Hans"]
+    assert len(track.texts) == data["count"]
+    # 前两槽是本次重排的新条目（旧译文对不上新原文，置空）；尾部 #3 原样平移
+    assert track.texts == ["", "", "t3"]
+
+    # 一步 ⌘Z：字幕与译文轨一起回到覆盖前（不是只退字幕）
+    undo = client.post("/api/cues/undo", headers=HEADERS)
+    assert undo.status_code == 200, undo.text
+    assert [cue["text"] for cue in undo.json()["cues"]] == [cue["text"] for cue in CUES]
+    assert session.translations["zh-Hans"].texts == ["t1", "t2", "t3"]
 
 
 def test_apply_only_touches_the_given_range(client: TestClient) -> None:
