@@ -25,7 +25,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 from core import ai_client  # noqa: E402
 from core import ai_polish  # noqa: E402
 from core import ai_proposal as ap  # noqa: E402
-from core import ai_translate  # noqa: E402
 from core.subtitles import SubtitleCue  # noqa: E402
 from server.app import create_app  # noqa: E402
 from server.config import ServerConfig  # noqa: E402

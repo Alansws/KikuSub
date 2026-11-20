@@ -23,7 +23,6 @@ from core import ai_proposal as ap  # noqa: E402
 from core import ai_translate as tr  # noqa: E402
 from core.proposal_srt import (  # noqa: E402
     TRANSLATION_DRIFT_TOLERANCE,
-    align_translation_cues,
     align_translation_srt,
 )
 from core.subtitles import SubtitleCue  # noqa: E402
