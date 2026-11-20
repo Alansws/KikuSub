@@ -75,6 +75,7 @@ class _Probe:
         self.released: list[str] = []
         self.separations: list[tuple[float, float]] = []
         self.engine_calls: list[dict] = []
+        self.empty_cache_calls = 0
         self._orig: list[tuple[object, str, object]] = []
 
     def install(self) -> None:
@@ -91,6 +92,19 @@ class _Probe:
             return orig_release(key, *args, **kwargs)
 
         pipeline_mod.release_engine = release
+
+        # Pass A 之后的空缓存也要有证据：只断言 release_engine 不够。
+        import torch
+
+        orig_empty = torch.mps.empty_cache
+        self._orig.append((torch.mps, "empty_cache", orig_empty))
+        probe = self
+
+        def empty_cache():
+            probe.empty_cache_calls += 1
+            return orig_empty()
+
+        torch.mps.empty_cache = empty_cache
 
         orig_sep = separate_mod.separate_to_wav
         self._orig.append((separate_mod, "separate_to_wav", orig_sep))
@@ -124,6 +138,7 @@ class _Probe:
         self.released.clear()
         self.separations.clear()
         self.engine_calls.clear()
+        self.empty_cache_calls = 0
 
     def restore(self) -> None:
         for target, attr, orig in reversed(self._orig):
@@ -204,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
                         "alt_count": len(alt),
                         "report_headline": (dual_section or {}).get("headline"),
                         "released": list(probe.released),
+                        "empty_cache_calls": probe.empty_cache_calls,
                         "engine_calls": list(probe.engine_calls),
                         "separations": list(probe.separations),
                     }
@@ -221,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
                         (result.get("primary_cues", 0) > 0, "主稿为空"),
                         (len(alt) > 0, "第二列没有副稿"),
                         (probe.released[:1] == ["whisper"], f"未释放主引擎：{probe.released}"),
+                        (probe.empty_cache_calls > 0, "Pass A 后没有清 MPS 缓存"),
                         (bool(dual_section), "报告缺【双引擎协同】"),
                     ]
                     failures.extend(f"full: {msg}" for ok, msg in checks if not ok)
@@ -292,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
                     "main_cues": len(main),
                     "main_inside": len(main_inside),
                     "released": list(probe.released),
+                    "empty_cache_calls": probe.empty_cache_calls,
                     "engine_calls": list(probe.engine_calls),
                 }
                 report["scenarios"]["range"] = scenario
@@ -307,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
                     (len(outside_after) > 0, "区间外旧条目丢失"),
                     (len(main_inside) == len(main), "主稿出现区间外字幕"),
                     (probe.released[:1] == ["whisper"], f"未释放主引擎：{probe.released}"),
+                    (probe.empty_cache_calls > 0, "Pass A 后没有清 MPS 缓存"),
                 ]
                 failures.extend(f"range: {msg}" for ok, msg in checks if not ok)
 
@@ -342,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
                     "status": snap.get("status"),
                     "summary": result.get("summary"),
                     "released": list(probe.released),
+                    "empty_cache_calls": probe.empty_cache_calls,
                     "engine_calls": calls,
                     "separations": list(probe.separations),
                 }
@@ -362,6 +382,7 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     (len(probe.separations) == 0, "人声分离缓存未复用（又跑了一次 Demucs）"),
                     ("whisper" in probe.released, "Pass A 后未释放 Whisper"),
+                    (probe.empty_cache_calls > 0, "切换模型时没有清 MPS 缓存"),
                 ]
                 failures.extend(f"separation: {msg}" for ok, msg in checks if not ok)
     finally:
