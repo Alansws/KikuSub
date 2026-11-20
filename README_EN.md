@@ -49,14 +49,20 @@ Everything except the optional AI features is local inference. AI endpoints can 
 - Two switchable Japanese engines (see below). The top capsule opens a list with each engine's purpose, readiness and size, so adding more engines later will not crowd the toolbar.
 - Transcribe the whole file, or a single range (`00:05:00` or `300`), optionally keeping the original absolute timeline.
 - Result handling depends on scope: a whole-file run offers *replace all / append*, a range run adds **replace selection** (default — rewrites that span only, every other cue stays). Picking *replace all* on a range asks for confirmation first.
+- **Run both engines in one job (sequential)** — the Transcribe page's dual-engine card offers **run the secondary engine after the primary**: one job transcribes with the primary first (main script → review desk), releases it, then runs the secondary on the same audio and writes a read-only second column. Lines the primary lacks pass a hard time-overlap filter plus local-similarity dedupe and land in the QA queue as **gap-fill** suggestions (up to 50, adopt each or not). A RAM gate runs between the passes; machines under 12 GB are refused before the job starts, and primary / secondary swap with one click.
 - **Vocal separation**: run it on the whole file or just a time range (most useful for songs and loud-BGM passages); with only one bound filled the other follows the start / end of the file, and long files are split automatically — no manual cutting required.
-- All VAD knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. **Each engine ships one calibrated, engine-bound preset** (Japanese ASMR ×2, Chinese short-form ×2); the picker only lists presets for the selected engine, and cross-engine loads are rejected. Presets can be saved and deleted.
+- VAD backend: **WhisperSeg (default, recommended)** or **Silero 20s** (fallback, no extra weights). WhisperSeg is nearly blind to BGM / ambience and needs a ~114 MB download, pre-downloadable from *Settings → Engines & models → segmenter weights*. All knobs are exposed: threshold, silence, minimum speech, merge gap, maximum segment. The threshold row shows the calibrated recommendation for the active backend (WhisperSeg 0.35 / Silero 0.25) with a one-click apply, and "onset pad" — which only compensates Silero — is greyed out and ignored for other backends. **Each engine ships one calibrated, engine-bound preset** (Japanese ASMR ×2, Chinese short-form ×2); the picker only lists presets for the selected engine, and cross-engine loads are rejected. Presets can be saved and deleted.
 - FFmpeg `dynaudnorm` is on by default (on quiet masters it is the difference between
   transcribing a line and dropping it); turn it off in the parameter panel if you prefer.
 - VAD runs in windows: one long pass drifts and silently misses clear lines.
 - Breath and laughter at cue edges ("んふふ", "えへへ") are stripped after decoding; cue
   interiors are left alone. The "strip edge vocalisation" switch turns this off for anime
   where a character's laugh is content.
+- **Automatic leading-silence trim**: for Anime Whisper, when a VAD segment starts with noise
+  floor / leading silence, the start is pulled right to the first credible voiced frame (the end
+  never moves), so cues no longer appear early and run long. Single/double-kana interjections,
+  "…"-prefixed long sighs, pure laughter and already-adjusted boundaries are skipped. The
+  parameter panel can disable it (off = a timeline byte-identical to older versions).
 - One-character lines ("え？", "ん…") are kept — only cues made purely of sokuon/long-vowel
   marks, or a single kana stretched over 2 s (a breath misread as speech), are dropped.
 - Cancel mid-run and keep what finished (`*.part_cancelled.srt`).
@@ -93,7 +99,7 @@ Everything except the optional AI features is local inference. AI endpoints can 
 
 **QA queue**
 
-- Appears bottom-right by default, docked left of the inspector (draggable by its header, double-click to reset), sorted by time: `missed` (speech with no text), `dropped` (text that was gated away), `suspect` (kept but short or sparse), `coverage` (gaps the main VAD never segmented).
+- Appears bottom-right by default, docked left of the inspector (draggable by its header, double-click to reset), sorted by time: `missed` (speech with no text), `dropped` (text that was gated away), `suspect` (kept but short or sparse), `coverage` (gaps the main VAD never segmented), `nonverbal` (a cue of pure breath / laughter / vocalisation that was stripped from the subtitles; on for Whisper, switchable for Qwen in the parameter panel) and `ensemble` (in a sequential dual-engine run, credible lines the secondary engine has and the primary lacks).
 - Every item can be located, auto-selected and re-transcribed; progress is written to `*.qa.json`.
 - The entry point is decoupled from "are there items": zero findings still shows "✅ QA complete".
 - Engine coverage is stated honestly — Qwen3 only covers `missed`, and the other two are labelled "not available for this engine".
@@ -140,6 +146,7 @@ Everything except the optional AI features is local inference. AI endpoints can 
 - Settings is split into four tabs: **Engines & models / Appearance & voice / AI & skills / Environment & diagnostics**.
 - **AI & skills** carries the global Base URL / model / key, plus a **separate set for single-sentence arbitration** (empty fields follow the global config; the key is encrypted separately), the local context tier 2048 / 4096 / 8192 with a **reload local model** button, and the **auto AI judge when the two versions differ** switch. Arbitration and the global settings each have their own "test connection".
 - Engine cards come from a registry: language, purpose, size, install state, enable toggle, one-click download. Anime Whisper / Qwen3 / OmniVoice share one progress track for **Verify / Fill gaps**: verification uses an indeterminate sweep, downloads use real percentages, and completion briefly turns green before collapsing.
+- Engines & models also carries a **segmenter weights** card: whether WhisperSeg is ready, its size and a one-click pre-download; leaving it alone downloads with progress on first use.
 - **Environment & diagnostics** lists **all** folders in one place (subtitle export, video export, models, proxies, logs…); changing the model folder restarts the sidecar and re-handshakes.
 - Logs and diagnostics: `kikusub.log` / `main.log`, 14-day / 64 MB retention; "clear old logs" or "clear all logs", and compact log/diagnostic copies that cannot freeze Notes.
 - Three themes: Clear Sky light / Clear Sky dark (one skin, two schemes) and Mincho Ink (paper white, ink black, a touch of vermilion, Mincho subtitles); switch by thumbnail under Settings → Appearance & voice. Waveform height is draggable from the review stage.
@@ -197,7 +204,7 @@ Japanese-particle DP respectively, so they do not need this step.
 - macOS 12 or newer, Apple Silicon (arm64)
 - `ffmpeg` and `ffprobe` (`brew install ffmpeg`; the app adds Homebrew paths to PATH)
 - Disk: ~6.6 GB for both Japanese transcription models plus ~1.4 GB for the two optional Chinese engines, proxy cache and output; 15 GB free is a safe number. Local voice cloning adds ~3.3 GB (OmniVoice, downloaded on demand from the review inspector)
-- RAM: 8 GB minimum (measured transcription peaks: Anime Whisper ~6.7 GB, Qwen3-ASR ~5.1 GB; 12 GB leaves the system comfortable). Weight size is not resident size: Anime Whisper keeps its fp32 weights in the process while Qwen loads straight to bf16, so the 3.8 GB model is actually the lighter one. The cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
+- RAM: 8 GB minimum (measured transcription peaks: Anime Whisper ~6.7 GB, Qwen3-ASR ~5.1 GB; 12 GB leaves the system comfortable). **Sequential dual-engine runs require ≥12 GB** and are refused before the job starts on 8 GB machines, never OOM halfway through. Weight size is not resident size: Anime Whisper keeps its fp32 weights in the process while Qwen loads straight to bf16, so the 3.8 GB model is actually the lighter one. The cloning model loads lazily and unloads after 5 idle minutes, so it never sits next to transcription
 
 ### Using the packaged .app
 
@@ -275,10 +282,12 @@ media file
    │
    ├─ ffmpeg → 16 kHz mono (optional dynaudnorm)
    │
-   ├─ Silero VAD → speech segments → merged / split by pause and max length
+   ├─ VAD (WhisperSeg / Silero) → speech segments → merged / split by pause and max length
    │
    ├─ Engine A: Anime Whisper          ─→ text → punctuation / length split → proportional timing
    └─ Engine B: Qwen3-ASR + CTC head   ─→ text → forced alignment → per-char frames → DP segmentation
+   │
+   ├─ (optional) sequential dual engine: primary → main script; release; secondary → read-only column → gap-fill into QA
    │
    ├─ subtitles written to the export folder and loaded into the review desk
    │
