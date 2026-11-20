@@ -288,6 +288,12 @@ export interface ParamSpec {
   step: number | null;
   help: string;
   is_config: boolean;
+  /** 只对某个兄弟枚举值生效（如句首提前仅 Silero）；空/缺省 = 都生效。 */
+  backend_only?: string | null;
+  /** 按兄弟枚举值给出的校准提示（如 WhisperSeg 推荐阈值 0.35）。 */
+  backend_notes?: Record<string, string> | null;
+  /** 按兄弟枚举值给出的推荐数值；用于一键「采用推荐值」。 */
+  backend_recommended?: Record<string, number> | null;
 }
 
 export interface Cue {
@@ -1124,6 +1130,7 @@ export const api = {
     apply?: 'replace' | 'append' | 'replace_range';
     alt_review?: boolean;
     separate_vocals?: boolean;
+    separate_mode?: 'vad_only' | 'to_asr';
     params?: Record<string, unknown>;
   }) =>
     req<JobSnapshot>('/api/jobs', {
@@ -1132,6 +1139,8 @@ export const api = {
         ...payload,
         // 全局勾选对整片与区间都生效：整片由服务端按 0..总时长分离。
         separate_vocals: payload.separate_vocals ?? (vocalSeparation.enabled || undefined),
+        // 默认只给 VAD 用分离人声；高级档才把分离人声送去识别。
+        separate_mode: payload.separate_mode ?? vocalSeparation.mode,
       }),
     }),
 

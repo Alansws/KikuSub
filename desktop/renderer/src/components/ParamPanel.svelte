@@ -8,6 +8,36 @@
   const entry = $derived(tuning.schema?.find((e) => e.key === engine) ?? null);
   const values = $derived(tuning.values[engine] ?? {});
 
+  /**
+   * 当前引擎的「兄弟枚举」值（现在是 VAD 切分器）。参数规格表可以声明
+   * `backend_only` / `backend_notes` / `backend_recommended`，都按这个值生效；
+   * 前端不另写一份「哪些参数只对 Silero 生效」。
+   */
+  const backendValue = $derived.by(() => {
+    const all = (entry?.groups ?? []).flatMap((group) => group.params ?? []);
+    const spec = all.find((item) => item.key === `${engine}.vad_backend`);
+    if (!spec) return '';
+    return String(values[spec.key] ?? spec.default ?? '');
+  });
+
+  function isScopedOut(spec: ParamSpec): boolean {
+    return Boolean(spec.backend_only) && backendValue !== spec.backend_only;
+  }
+
+  function scopeLabel(spec: ParamSpec): string {
+    const raw = String(spec.backend_only ?? '');
+    return raw === 'silero' ? 'Silero' : raw;
+  }
+
+  function noteFor(spec: ParamSpec): string {
+    return String(spec.backend_notes?.[backendValue] ?? '');
+  }
+
+  function recommendedFor(spec: ParamSpec): number | null {
+    const value = spec.backend_recommended?.[backendValue];
+    return typeof value === 'number' ? value : null;
+  }
+
   function display(spec: ParamSpec, value: number | boolean | string): string {
     if (spec.kind === 'bool') return value ? '开' : '关';
     if (spec.kind === 'enum') {
@@ -38,10 +68,18 @@
         <div class="grid">
           {#each group.params as spec (spec.key)}
             {@const value = values[spec.key] ?? spec.default}
+            {@const scopedOut = isScopedOut(spec)}
             {#if spec.kind === 'enum'}
-              <label class="select-row" title={spec.help}>
+              <label
+                class="select-row"
+                class:scoped-out={scopedOut}
+                title={scopedOut
+                  ? `${spec.help}（当前切分器下不生效）`
+                  : spec.help}
+              >
                 <span class="label">{spec.label}</span>
                 <select
+                  class="choice"
                   value={String(value)}
                   onchange={(e) => setParam(engine, spec.key, e.currentTarget.value)}
                 >
@@ -51,22 +89,37 @@
                 </select>
               </label>
             {:else if spec.kind === 'bool'}
-              <label class="switch-row" title={spec.help}>
-                <span class="label">{spec.label}</span>
+              <label class="switch-row" class:scoped-out={scopedOut} title={spec.help}>
+                <span class="label">
+                  {spec.label}
+                  {#if scopedOut}<em class="scope-tag">仅 {scopeLabel(spec)} 生效</em>{/if}
+                </span>
                 <button
                   class="switch"
                   class:on={Boolean(value)}
                   role="switch"
                   aria-checked={Boolean(value)}
+                  disabled={scopedOut}
                   onclick={() => setParam(engine, spec.key, !value)}
                 >
                   <span class="knob"></span>
                 </button>
               </label>
             {:else}
-              <div class="slider-row" title={spec.help}>
+              {@const recommended = recommendedFor(spec)}
+              {@const note = noteFor(spec)}
+              <div
+                class="slider-row"
+                class:scoped-out={scopedOut}
+                title={scopedOut
+                  ? `${spec.help}（当前切分器下不生效）`
+                  : spec.help}
+              >
                 <div class="slider-head">
-                  <span class="label">{spec.label}</span>
+                  <span class="label">
+                    {spec.label}
+                    {#if scopedOut}<em class="scope-tag">仅 {scopeLabel(spec)} 生效</em>{/if}
+                  </span>
                   <span class="value">{display(spec, value)}</span>
                 </div>
                 <input
@@ -75,9 +128,26 @@
                   max={spec.max ?? 1}
                   step={spec.step ?? 0.01}
                   value={Number(value)}
+                  disabled={scopedOut}
                   oninput={(e) =>
                     setParam(engine, spec.key, Number(e.currentTarget.value))}
                 />
+                {#if note}
+                  <div class="calib">
+                    <span>{note}</span>
+                    {#if recommended !== null && Math.abs(Number(value) - recommended) >= 0.001}
+                      <button
+                        class="btn tiny ghost"
+                        title={`把 ${spec.label} 设为 ${recommended}（当前切分器的标定推荐值）`}
+                        onclick={() => setParam(engine, spec.key, recommended)}
+                      >
+                        采用
+                      </button>
+                    {:else}
+                      <span class="calib-ok">已是推荐值</span>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
           {/each}
@@ -95,7 +165,11 @@
     min-height: 0;
     overflow-y: auto;
     padding-right: var(--sp-1);
+    /* 右栏被左栏挤窄时（1180 窗口 ≈ 370px），两列会把切分器下拉压到只剩
+       「WhisperSeg（推荐」；按容器宽度退回单列，选择器永远完整可读。 */
+    container-type: inline-size;
   }
+
 
   .head {
     display: flex;
@@ -134,6 +208,13 @@
     gap: var(--sp-2) 18px;
   }
 
+  /* 放在 .grid 之后：容器查询不提升优先级，写前面会被上面的两列定义盖掉。 */
+  @container (max-width: 520px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
   .select-row {
     display: flex;
     align-items: center;
@@ -141,7 +222,10 @@
     gap: 10px;
     height: 26px;
     padding: 0 2px;
+    min-width: 0;
   }
+  /* 「WhisperSeg（推荐）」约 130px：卡片右栏单格 ~360px，给 200px 上限既放得下
+     又不挤压左侧标签；旧值 110px 会把文案截成「WhisperSeg (:」。 */
   .select-row select {
     font: inherit;
     font-size: 12px;
@@ -150,7 +234,10 @@
     border: 0;
     border-radius: 5px;
     padding: 3px 6px;
-    max-width: 110px;
+    flex: 0 1 auto;
+    min-width: 128px;
+    max-width: 200px;
+    width: 200px;
   }
 
   .switch-row {
@@ -168,6 +255,48 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .scope-tag {
+    font-style: normal;
+    font-size: 10.5px;
+    color: var(--text-3);
+    margin-left: var(--sp-1);
+  }
+  .scoped-out .label {
+    color: var(--text-3);
+  }
+  .scoped-out .value {
+    color: var(--text-3);
+  }
+  .scoped-out select,
+  .scoped-out input,
+  .scoped-out .switch {
+    opacity: 0.45;
+  }
+  .scoped-out input {
+    pointer-events: none;
+  }
+
+  .calib {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-3);
+    margin-top: 1px;
+    text-wrap: pretty;
+  }
+  .calib-ok {
+    color: var(--success);
+  }
+  .calib .btn.tiny {
+    height: 18px;
+    padding: 0 6px;
+    font-size: 11px;
   }
 
   .switch {
@@ -202,6 +331,7 @@
     flex-direction: column;
     gap: 2px;
     padding: 2px 2px 0;
+    min-width: 0;
   }
   .slider-head {
     display: flex;
@@ -247,6 +377,9 @@
   input[type='range']:active::-webkit-slider-thumb {
     background: var(--accent);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  }
+  input[type='range']:disabled::-webkit-slider-thumb {
+    background: var(--text-3);
   }
 
   .empty {

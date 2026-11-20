@@ -115,7 +115,7 @@
     background: var(--success);
   }
   .desc {
-    margin: 4px 0 0;
+    margin: var(--sp-1) 0 0;
     font-size: var(--fs-label);
     color: var(--text-3);
     line-height: 1.5;
@@ -160,7 +160,7 @@
     color: var(--text-2);
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     height: 24px;
     padding: 0 6px;
     border-radius: var(--rad-control);

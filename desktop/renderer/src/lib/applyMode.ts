@@ -106,6 +106,24 @@ export function applyHint(mode: ApplyMode, ctx: ApplyContext): string {
     : `清空整张表，只留 ${span} 的结果；区间外字幕全部丢失`;
 }
 
+/**
+ * 双引擎协同下的档位：没有「追加」。
+ *
+ * 服务端 `_validate_dual` 明确拒绝 append（主稿与副稿无法按时间合并成一张表）。
+ * 与其让用户点下去拿 422，不如在界面上就不提供；主稿写哪里、副稿写哪里由
+ * 协同流程固定，只保留「整片覆盖 / 替换选区」两种范围语义。
+ */
+export function dualChoices(ctx: ApplyContext): ApplyChoice[] {
+  return applyChoices(ctx).filter((choice) => choice.key !== 'append');
+}
+
+/** 双引擎下用户上次选的档位是否仍合法；不合法按范围退回该范围的默认档。 */
+export function resolveDualApply(mode: ApplyMode, ctx: ApplyContext): ApplyMode {
+  const allowed = dualChoices(ctx).map((choice) => choice.key);
+  if (allowed.includes(mode)) return mode;
+  return ctx.fullCover ? 'replace' : 'replace_range';
+}
+
 /** 「覆盖整片」在区间任务里的二次确认文案（⌘Z 可撤销，写清楚）。 */
 export function confirmDestructiveText(ctx: ApplyContext): string {
   return `这会把整张表换成只含 ${rangeSpan(ctx.start, ctx.end)} 的结果，区间外的字幕会全部丢失（⌘Z 可撤销）。确定继续？`;
