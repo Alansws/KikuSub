@@ -285,6 +285,7 @@
     missed: '切片内为空',
     dropped: '误删待核',
     suspect: '短句待确认',
+    nonverbal: '纯发声待核',
   };
 
   /** 待核的排前面；同组按时间。 */
@@ -631,6 +632,15 @@
                   <button class="act primary-ghost" onclick={() => act(item, { action: 'restore' })}>
                     恢复原句
                   </button>
+                  <button
+                    class="act"
+                    onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'confirmed' })}
+                  >确认删除</button>
+                {:else if item.kind === 'nonverbal'}
+                  <button
+                    class="act primary-ghost"
+                    onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'kept' })}
+                  >保留</button>
                   <button
                     class="act"
                     onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'confirmed' })}
@@ -1158,6 +1168,10 @@
   .k-suspect {
     background: var(--accent-soft);
     color: var(--accent);
+  }
+  .k-nonverbal {
+    background: var(--fill);
+    color: var(--text-2);
   }
   .time {
     font-family: var(--font-mono);

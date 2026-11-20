@@ -795,6 +795,8 @@ export interface ReportData {
     hidden_missed: number;
     dropped: number;
     suspect: number;
+    /** 纯喘息/笑声/拟声：已从字幕移除，但进了质检队列（P0）。 */
+    nonverbal?: number;
     degraded: number;
     has_findings: boolean;
     qwen_limited: boolean;
