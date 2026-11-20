@@ -126,6 +126,20 @@ SPECS: tuple[ParamSpec, ...] = (
         "动画里角色的笑声算内容时，关掉即可原样保留。",
     ),
     ParamSpec(
+        "whisper.enable_start_repair", "句首静音自动拉回", WHISPER, "bool", True,
+        group="字幕", config_field="enable_start_repair",
+        help="保留字幕终点，只把句首的底噪/长静音按音频证据向右收；"
+        "单/双假名、「…」开头的短叹词、纯笑声与已挪过边界的句子会自动跳过；"
+        "三字以上的「…」句仍按音频证据拉回（省略号保留）。"
+        "关闭后时间轴与旧版逐字节一致，便于 A/B。",
+    ),
+    ParamSpec(
+        "whisper.nonverbal_qa", "纯拟声/喘息进质检", WHISPER, "bool", True,
+        group="字幕", config_field="nonverbal_qa",
+        help="整条只有喘息/笑声/拟声、已被字幕剔除的段，不再静默消失，"
+        "而是进质检队列（最多 20 条）让你保留或确认删除。只影响队列，不改字幕。",
+    ),
+    ParamSpec(
         "whisper.use_ctc_alignment", "CTC 逐字对齐（借 Qwen 对齐头）", WHISPER, "bool", False,
         group="字幕", config_field="use_ctc_alignment",
         help="Anime Whisper 自己的时间靠字符比例猜，起点误差 p90 约 1.2s。打开后借用 Qwen "
@@ -221,6 +235,14 @@ SPECS: tuple[ParamSpec, ...] = (
         config_field="cue_pad_end_s",
         help="最后一个字发声完再停留多久才消失。0.45s 与人工核验版一致；"
         "调小字幕切换更利落，调大留阅读余量（遇到下一条会截断）。",
+    ),
+    ParamSpec(
+        "qwen.nonverbal_qa", "纯拟声/喘息进质检", QWEN, "bool", False,
+        group="断句与字幕", config_field="nonverbal_qa",
+        help="整条只有喘息/笑声/拟声、已被字幕剔除的段，不再静默消失，"
+        "而是进质检队列（最多 20 条）让你保留或确认删除。只影响队列，不改字幕。"
+        "默认关闭：Qwen 对呼吸声很敏感，长片里容易一次多出二十条待核；"
+        "需要逐条筛拟声时再打开。",
     ),
     ParamSpec(
         "qwen.strip_nonverbal_edges", "剔除句首尾喘气/笑声", QWEN, "bool", True,

@@ -151,7 +151,7 @@ def apply_action(
             message = RESOLUTION_MESSAGES.get(resolution, "✅ 已标记为本条处理完成。")
             # 短句待确认点「保留」时，核对台可能因为「先设基线、后重转/删改」
             # 而缺少这句。这里幂等补齐，并强制刷新表格，避免状态与表格不同步。
-            if resolution == "kept" and str(item.get("kind") or "") == "suspect":
+            if resolution == "kept" and str(item.get("kind") or "") in {"suspect", "nonverbal"}:
                 ensured, added = _audit_ensure_item_cues(existing, item)
                 if added:
                     previous = existing

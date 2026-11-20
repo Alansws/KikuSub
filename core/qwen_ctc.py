@@ -653,6 +653,10 @@ class QwenCtcConfig:
     # 与 Whisper 侧同名同义：模型会如实转写「んふふ」「えへへ」这类非台词发声，
     # 人工整理版一律不留。Qwen 之前漏了这条，实测多出 19 条纯笑声字幕。
     strip_nonverbal_edges: bool = True
+    # P0：纯喘息/笑声/拟声不再静默删除，而是进质检队列（`nonverbal` kind）。
+    # 只影响队列可见性，不影响字幕文本。Qwen 对呼吸声尤其敏感，默认关闭，
+    # 由参数面板按需打开；Whisper 侧仍默认开启。
+    nonverbal_qa: bool = False
     cue_pad_start_s: float = 0.20
     cue_pad_end_s: float = 0.45
     max_new_tokens: int = 440
@@ -1173,6 +1177,7 @@ class QwenCtcEngine:
         truncated = 0
         capped_repeat = 0
         nonverbal_skips = 0
+        nonverbal_spans: list[dict] = []
         degraded: list[dict] = []
         total = len(segments)
         prev_text = ""
@@ -1196,6 +1201,9 @@ class QwenCtcEngine:
             text, audio_features = self._transcribe(
                 chunk, cfg, capture_audio=use_alignment
             )
+            # 保留剔除前的原文：纯发声待核需要展示「んふふ」这类真实文本，
+            # 而不是 strip 后的空串。
+            raw_text = text
             # 句首尾的非台词发声（笑声/喘气）一律先剔掉再对齐：对齐是在 text 上做的，
             # 剔在解码后等于让第一个真字的 CTC 时间当成字幕起点，边界自然收口，
             # 不需要 Whisper 那套「按段内停顿挪边界」的后处理。
@@ -1230,6 +1238,7 @@ class QwenCtcEngine:
                 text, audio_features = self._transcribe(
                     _retry_gain(chunk), cfg, capture_audio=use_alignment
                 )
+                raw_text = text
                 if cfg.strip_nonverbal_edges and not _is_blank(text):
                     cleaned = strip_edge_nonverbal_ex(text)[0]
                     stripped_to_empty = _is_blank(cleaned)
@@ -1246,8 +1255,24 @@ class QwenCtcEngine:
                     and is_nonverbal_only(text, seg_dur_s)
                 ):
                     # 纯笑声/喘气段：删掉端点发声后什么都不剩，本来就不是台词，
-                    # 不该占一条字幕，也不该进「可能漏句」清单。
+                    # 不该占一条字幕，也不该进「可能漏句」清单。现在改成进质检待核：
+                    # 字幕行为完全不变，只是用户能在队列里一键保留/确认删除。
                     nonverbal_skips += 1
+                    candidate = (raw_text if stripped_to_empty else text).strip()
+                    if (
+                        cfg.nonverbal_qa
+                        and len(candidate) >= 2
+                        and seg_dur_s >= 0.6
+                        and len(nonverbal_spans) < 50
+                    ):
+                        nonverbal_spans.append({
+                            "start": round(offset, 3),
+                            "end": round(offset + seg_dur_s, 3),
+                            "dur": round(seg_dur_s, 2),
+                            "text": candidate[:120],
+                            "rule": "sound-only",
+                            **chunk_level_stats(chunk),
+                        })
                     continue
 
                 self.last_missed_spans.append({
@@ -1317,6 +1342,9 @@ class QwenCtcEngine:
             "nonverbal_skips": nonverbal_skips,
             "spans": degraded[:50],
         }
+
+        self.last_segment_stats["nonverbal_spans"] = nonverbal_spans
+        self.last_segment_stats["nonverbal_skips"] = nonverbal_skips
 
         if progress_cb and not self.last_interrupted:
             # 文案由 `core.report.align_progress_note()` 统一生成：说清分母是

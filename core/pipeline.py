@@ -522,6 +522,8 @@ def run_transcription(
         "missed": len(_visible_missed_spans(missed_spans)),
         "hidden_missed": _missed_hidden_count(missed_spans),
         "coverage": len(coverage_spans),
+        # P0：纯发声待核（字幕行为不变，只是把原来静默删掉的条目摆到队列里）。
+        "nonverbal": len(segment_stats.get("nonverbal_spans") or []),
     }
     if family == "whisper":
         scanned["dropped"] = int(segment_stats.get("hallucination_drops", 0) or 0)

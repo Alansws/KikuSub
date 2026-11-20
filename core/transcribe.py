@@ -45,6 +45,7 @@ import torch
 from silero_vad import get_speech_timestamps, load_silero_vad
 
 from . import audio_cache
+from . import timing_repair
 from .coverage import find_coverage_spans
 from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
@@ -348,6 +349,12 @@ class WhisperVadConfig:
     onset_pad_ms: int = 0
     # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
     onset_gate: str = ONSET_GATE_NONE
+    # P0：音频感知的句首静音拉回（保留 end，只把段首静音拉掉）。
+    # 关闭时行为与旧版逐字节一致，供 A/B 与用户手动关。
+    enable_start_repair: bool = True
+    # P0：纯喘息/笑声/拟声不再静默删除，而是进质检队列（`nonverbal` kind）。
+    # 只影响队列可见性，不影响字幕文本。
+    nonverbal_qa: bool = True
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -1755,6 +1762,17 @@ class AnimeWhisperEngine:
             self.last_stats = VadStats(audio_s=len(audio) / SAMPLE_RATE)
             return []
 
+        # P0：句首静音拉回。底噪只在全片算一次（10ms RMS 的 20 分位），
+        # 每个 VAD 段再用段内 RMS 找首个可信发声帧；关闭时不做任何额外计算。
+        start_repair_stats = timing_repair.empty_stats(
+            enabled=bool(cfg.enable_start_repair)
+        )
+        noise_floor = (
+            timing_repair.estimate_noise_floor(audio, SAMPLE_RATE)
+            if cfg.enable_start_repair
+            else 0.0
+        )
+
         ngram_val = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
         penalty_val = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
 
@@ -1770,6 +1788,8 @@ class AnimeWhisperEngine:
         hallucination_drops = 0
         suspect_cues = 0
         nonverbal_skips = 0
+        # 纯发声待核：只留前 50 条（audit 还会再截到 20 条），避免长片刷爆 payload。
+        nonverbal_spans: list[dict] = []
         aligned_stats = {"segments": 0, "chars": 0, "degraded": 0}
         # 走对齐层时段落先排队，循环结束后统一处理（前后两遍不共用显存）
         pending: list[tuple[int, int, str, float, float]] = []
@@ -1828,14 +1848,29 @@ class AnimeWhisperEngine:
                 seg_end_s = (start / SAMPLE_RATE) + tail_off + time_offset
                 seg_dur_s = max(0.05, tail_off - head_off)
 
-            if (
-                cfg.strip_nonverbal_edges
-                and not _is_blank(text)
-                and is_nonverbal_only(text, seg_dur_s)
-            ):
+            # 纯喘气/笑声：不论「剔除句首尾发声」开关是否打开，都先判定一次。
+            # 开关关闭时它仍作为字幕保留（用户要笑声），但下面的句首拉回会跳过它，
+            # 避免把笑声的起音当成静音拉掉。
+            nonverbal_only = (not _is_blank(text)) and is_nonverbal_only(text, seg_dur_s)
+            if cfg.strip_nonverbal_edges and nonverbal_only:
                 # 纯喘气/笑声：删掉端点的发声后什么都不剩，不该占一条字幕，
-                # 也不该进漏句清单（它本来就不是台词）。
+                # 也不该进漏句清单（它本来就不是台词）。现在改成进质检待核：
+                # 字幕行为完全不变，只是用户能在队列里一键保留/确认删除。
                 nonverbal_skips += 1
+                if (
+                    cfg.nonverbal_qa
+                    and len(text.strip()) >= 2
+                    and seg_dur_s >= 0.6
+                    and len(nonverbal_spans) < 50
+                ):
+                    nonverbal_spans.append({
+                        "start": round(seg_start_s, 3),
+                        "end": round(seg_end_s, 3),
+                        "dur": round(seg_dur_s, 2),
+                        "text": text.strip()[:120],
+                        "rule": "sound-only",
+                        **chunk_level_stats(chunk),
+                    })
                 log.debug("跳过非台词发声段 | %.2fs | %r", seg_dur_s, text[:40])
                 continue
 
@@ -1884,6 +1919,26 @@ class AnimeWhisperEngine:
                 })
                 continue
             prev_text = text
+
+            # P0：保留 end，只把段首静音拉掉。CTC 对齐路径不做——
+            # 对齐层会自己给出逐字时间，改 offset 反而会破坏对齐。
+            if cfg.enable_start_repair and not cfg.use_ctc_alignment:
+                lead_s = timing_repair.leading_silence_seconds(
+                    chunk, SAMPLE_RATE, noise_floor=noise_floor
+                )
+                pull = timing_repair.plan_start_pull(
+                    start=seg_start_s,
+                    end=seg_end_s,
+                    lead_s=lead_s,
+                    text=text,
+                    prev_end=(cues[-1].end if cues else None),
+                    head_removed=bool(head_removed),
+                    nonverbal=bool(nonverbal_only),
+                )
+                timing_repair.record(start_repair_stats, pull)
+                if pull.pulled:
+                    seg_start_s = pull.start
+                    seg_dur_s = max(0.05, seg_end_s - seg_start_s)
 
             if cfg.use_ctc_alignment:
                 # 只排队，不对齐：对齐器要多占 5GB，必须等 Whisper 卸掉再加载，
@@ -1951,6 +2006,8 @@ class AnimeWhisperEngine:
             suspect_cues=suspect_cues,
         )
         self.last_segment_stats["nonverbal_skips"] = nonverbal_skips
+        self.last_segment_stats["nonverbal_spans"] = nonverbal_spans
+        self.last_segment_stats["start_repair"] = start_repair_stats
         self.last_segment_stats["hallucination_drops"] = hallucination_drops
         self.last_segment_stats["suspect_cues"] = suspect_cues
         self.last_segment_stats["hallucination_spans"] = hallucination_spans
