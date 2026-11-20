@@ -22,11 +22,30 @@ export const aiState = $state({
   keyLegacy: false,
   /** 输入框里的新 Key（空字符串 = 没在改）。 */
   keyInput: '',
+  /** 单句判定覆盖 Key 的独立输入与状态。 */
+  arbKeyInput: '',
+  arbHasKey: false,
+  arbKeyBroken: false,
+  arbKeyLegacy: false,
   saving: false,
   testing: false,
   testMsg: '',
+  arbTesting: false,
+  arbTestMsg: '',
   /** 高级参数展开时才有意义的“已保存”提示 */
   savedAt: 0,
+  /** 本机 LM Studio 探测 / 重载状态。 */
+  localModel: {
+    loading: false,
+    checked: false,
+    available: false,
+    loaded: false,
+    contextLength: null as number | null,
+    maxContext: null as number | null,
+    error: '',
+    loadingModel: false,
+    message: '',
+  },
 });
 
 export async function loadAiConfig() {
@@ -39,11 +58,12 @@ export async function loadAiConfig() {
     aiState.loading = false;
   }
   await refreshAiKey();
+  if (aiState.cfg?.arbitrate_loopback) void loadLocalModelStatus();
 }
 
 export async function refreshAiKey() {
   try {
-    const status = await window.kikusub?.aiKey?.status?.();
+    const status = await window.kikusub?.aiKey?.status?.('global');
     aiState.keyReady = status?.available !== false;
     aiState.hasKey = Boolean(status?.has);
     aiState.keyBroken = Boolean(status?.broken);
@@ -53,6 +73,16 @@ export async function refreshAiKey() {
     aiState.hasKey = false;
     aiState.keyBroken = false;
     aiState.keyLegacy = false;
+  }
+  try {
+    const status = await window.kikusub?.aiKey?.status?.('arbitrate');
+    aiState.arbHasKey = Boolean(status?.has);
+    aiState.arbKeyBroken = Boolean(status?.broken);
+    aiState.arbKeyLegacy = Boolean(status?.legacy);
+  } catch {
+    aiState.arbHasKey = false;
+    aiState.arbKeyBroken = false;
+    aiState.arbKeyLegacy = false;
   }
 }
 
@@ -85,9 +115,16 @@ export async function saveAiEndpoint(quiet = false): Promise<boolean> {
       chunk_cues: Number(aiState.cfg.chunk_cues) || 200,
       translate_chunk_cues: Number(aiState.cfg.translate_chunk_cues) || 120,
       context_cues: Number(aiState.cfg.context_cues) || 0,
+      arbitrate_base_url: aiState.cfg.arbitrate_base_url.trim(),
+      arbitrate_model: aiState.cfg.arbitrate_model.trim(),
+      local_context: aiState.cfg.local_context,
+      auto_arbitrate: aiState.cfg.auto_arbitrate,
     });
     if (ok) {
       aiState.savedAt = Date.now();
+      // 地址 / 模型可能刚切到本机 LM Studio：重新探测一次档位状态。
+      aiState.localModel.checked = false;
+      if (aiState.cfg?.arbitrate_loopback) void loadLocalModelStatus();
       // 输入框失焦时静默保存（macOS 设置面板的习惯），显式点「保存」才提示
       if (!quiet) toast('AI 配置已保存');
     }
@@ -127,22 +164,123 @@ export async function clearAiKey() {
   }
 }
 
-export async function testAiConnection() {
-  if (!aiState.cfg || aiState.testing) return;
-  aiState.testing = true;
-  aiState.testMsg = '';
+export async function testAiConnection(scope: 'global' | 'arbitrate' = 'global') {
+  if (!aiState.cfg) return;
+  const testing = scope === 'arbitrate' ? 'arbTesting' : 'testing';
+  const message = scope === 'arbitrate' ? 'arbTestMsg' : 'testMsg';
+  if (aiState[testing]) return;
+  aiState[testing] = true;
+  aiState[message] = '';
   try {
-    const key = await window.kikusub.aiKey.get();
-    if (!key) {
-      aiState.testMsg = '还没有保存 API Key';
+    const key = await window.kikusub.aiKey.get(scope);
+    const cfg = aiState.cfg;
+    const baseUrl =
+      scope === 'arbitrate' ? cfg.arbitrate_base_url || cfg.base_url : cfg.base_url;
+    const model = scope === 'arbitrate' ? cfg.arbitrate_model || cfg.model : cfg.model;
+    const res = await api.testAi({ base_url: baseUrl, model }, key || '');
+    aiState[message] = `连接正常 · ${res.latency_ms}ms · ${res.host}`;
+  } catch (err) {
+    aiState[message] = `连接失败：${(err as Error).message}`;
+  } finally {
+    aiState[testing] = false;
+  }
+}
+
+/** 保存单句判定覆盖 Key（与全局 Key 分开加密存放）。 */
+export async function saveArbKey() {
+  const text = aiState.arbKeyInput.trim();
+  if (!text) return;
+  try {
+    const res = await window.kikusub.aiKey.set(text, 'arbitrate');
+    if (!res?.ok) {
+      toast('保存失败：应用数据目录不可写', 'error');
       return;
     }
-    const res = await api.testAi({ base_url: aiState.cfg.base_url, model: aiState.cfg.model }, key);
-    aiState.testMsg = `连接正常 · ${res.latency_ms}ms · ${res.host}`;
+    aiState.arbKeyBroken = false;
+    aiState.arbKeyInput = '';
+    await refreshAiKey();
+    toast('单句判定 Key 已加密保存');
   } catch (err) {
-    aiState.testMsg = `连接失败：${(err as Error).message}`;
+    toast((err as Error).message, 'error');
+  }
+}
+
+export async function clearArbKey() {
+  try {
+    await window.kikusub.aiKey.clear('arbitrate');
+    await refreshAiKey();
+    aiState.arbKeyBroken = false;
+    aiState.arbTestMsg = '';
+    toast('已清除单句判定 Key');
+  } catch (err) {
+    toast((err as Error).message, 'error');
+  }
+}
+
+export async function loadLocalModelStatus(force = false): Promise<void> {
+  const cfg = aiState.cfg;
+  if (!cfg?.arbitrate_loopback) {
+    aiState.localModel = {
+      loading: false,
+      checked: true,
+      available: false,
+      loaded: false,
+      contextLength: null,
+      maxContext: null,
+      error: '',
+      loadingModel: false,
+      message: '',
+    };
+    return;
+  }
+  if (aiState.localModel.loading) return;
+  if (!force && aiState.localModel.checked) return;
+  aiState.localModel.loading = true;
+  try {
+    const status = await api.localModelStatus();
+    aiState.localModel.checked = true;
+    aiState.localModel.available = status.available;
+    aiState.localModel.loaded = Boolean(status.loaded);
+    aiState.localModel.contextLength = status.context_length ?? null;
+    aiState.localModel.maxContext = status.max_context_length ?? null;
+    aiState.localModel.error = status.error || '';
+  } catch (err) {
+    aiState.localModel.checked = true;
+    aiState.localModel.available = false;
+    aiState.localModel.error = (err as Error).message;
   } finally {
-    aiState.testing = false;
+    aiState.localModel.loading = false;
+  }
+}
+
+export async function setLocalContext(context: number) {
+  if (!aiState.cfg) return;
+  const ok = await patchAi({ local_context: context });
+  if (ok) aiState.localModel.message = '档位已保存；点「加载 / 重载本地模型」后生效';
+}
+
+export async function toggleAutoArbitrate() {
+  if (!aiState.cfg) return;
+  const next = !aiState.cfg.auto_arbitrate;
+  if (await patchAi({ auto_arbitrate: next })) {
+    toast(next ? '已开启：两版不一致时自动 AI 判定' : '已关闭自动 AI 判定');
+  }
+}
+
+export async function reloadLocalModel(): Promise<void> {
+  if (!aiState.cfg || aiState.localModel.loadingModel) return;
+  aiState.localModel.loadingModel = true;
+  aiState.localModel.message = '';
+  try {
+    const result = await api.loadLocalModel(aiState.cfg.local_context);
+    aiState.localModel.message = result.reloaded
+      ? `已重载到 ${result.context_length}（${result.load_time_seconds ?? '—'}s）`
+      : `已在该档位（${result.context_length}）`;
+    await loadLocalModelStatus(true);
+  } catch (err) {
+    aiState.localModel.message = `加载失败：${(err as Error).message}`;
+  } finally {
+    aiState.localModel.loadingModel = false;
   }
 }
 

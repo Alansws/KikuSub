@@ -26,11 +26,12 @@
   import {
     adoptAlternative,
     alternativeText,
-    availableEngineLabel,
     cueIndexForItem,
     dismissAlternative,
+    resultEngineLabel,
     runSecondOpinion,
     secondOpinion,
+    selectedReviewEngineLabel,
   } from '../lib/secondOpinion.svelte';
   import { jobBusy } from '../lib/jobState';
   import { tcShort } from '../lib/time';
@@ -653,7 +654,7 @@
                       ? '有任务在跑（同一时间只允许一个重任务）'
                       : secondOpinion.status === 'running'
                         ? '正在复核另一条…'
-                        : `把这一句送给 ${availableEngineLabel() || '另一个引擎'} 再听一遍（换引擎约 20–40 秒）`}
+                        : `把这一句送给 ${selectedReviewEngineLabel() || '另一个引擎'} 再听一遍（换引擎约 20–40 秒）`}
                   >
                     {#if secondOpinion.status === 'running' && secondOpinion.requested.includes(cueIndex)}
                       <span class="spin"></span>复核中
@@ -670,7 +671,7 @@
 
               {#if cueIndex >= 0 && alternativeText(cueIndex)}
                 <div class="alt">
-                  <div class="alt-label">{availableEngineLabel()}</div>
+                  <div class="alt-label">{resultEngineLabel() || selectedReviewEngineLabel()}</div>
                   <div class="alt-text">{alternativeText(cueIndex)}</div>
                   <div class="alt-acts">
                     <button class="act primary-ghost" onclick={() => adoptAlternative(cueIndex)}>

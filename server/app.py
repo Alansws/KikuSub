@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from core.paths import MODELS_DIR
+from core.paths import MODELS_DIR, ensure_usable_cwd
 from core.presets import PresetStore
 from core.procutil import reset_shutdown, terminate_all_processes
 from core.tts import TTSManager
@@ -28,6 +28,7 @@ from .jobs import JobManager
 from .media import MediaError, MediaStore
 from .routes_ai import router as ai_router
 from .routes_alt_review import router as alt_review_router
+from .routes_chapters import router as chapters_router
 from .routes_cues import router as cues_router
 from .routes_export import router as export_router
 from .routes_jobs import router as jobs_router
@@ -57,6 +58,10 @@ def _warmup(app: FastAPI) -> None:
     握手仍然在 0.5 秒内完成，所以窗口该多快就多快（规划 §5 指标 5）。
     """
     try:
+        # 预热线程没有请求上下文，得自己确认一次 cwd（见 _log_requests 里的同款
+        # 检查）：`import core.pipeline` 会懒加载 torch / transformers，而它们在
+        # import 期就会调 os.getcwd()。
+        ensure_usable_cwd()
         from core.transcribe import detect_device
 
         import core.pipeline  # noqa: F401  —— 真正把 torch 拉起来的就是这一行
@@ -136,6 +141,12 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         几毫秒、哪个会话」。`/media/*` 与波形轮询量太大，降为 DEBUG；写操作、
         错误、任务/质检/报告接口保留 INFO。token 永远不写进日志。
         """
+        # cwd 可能在应用运行期间被删掉（打包脚本原地重建 .app 就是这样）：之后任何
+        # 懒加载（torch / transformers / TTS）都会在 os.getcwd() 上抛
+        # "[Errno 2] No such file or directory"，一路传到界面只剩这一句。每个请求
+        # 开头确认一次，代价只有一次系统调用。
+        ensure_usable_cwd()
+
         req_id = uuid.uuid4().hex[:8]
         request.state.req_id = req_id
         started = time.perf_counter()
@@ -200,6 +211,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     app.include_router(media_router)
     app.include_router(cues_router)
+    app.include_router(chapters_router)
     app.include_router(export_router)
     app.include_router(presets_router)
     app.include_router(prompts_router)

@@ -55,6 +55,51 @@
   `SPAWN_LOCK` 保证关机开始后不会再出生新的 ffmpeg；`server/__main__.py` 还有
   父进程看门狗（Electron 崩溃/被强杀时 sidecar 在 2s 内自杀）。
   **禁止**把这些改回裸 `subprocess.run` 或只 `child.kill()`。
+- **章节 / 时刻点写入（2026-11-20 新增）**：
+  - 导出页开关「写入章节标记」走 `setExportChapters()`（红线 8：进统一历史），
+    有标记时默认开，徽标显示当前标记数；`ExportOptions.write_chapters` 是唯一开关，
+    `GET /api/chapters` 的 `chapters` 是**实际会写进容器的区间**。
+  - 后端 `core/chapters.py` 按 `start` 排序并处理衔接/防重叠：时刻点 = 下一个标记
+    起点或片尾；区间不超过下一个起点；首个标记晚于 0 时补「开场」——MP4 的章节
+    是文本轨，ffmpeg 会把首章拉回 0，不补的话真实起点会丢。
+  - 生成 `;FFMETADATA1` + 每章 `[CHAPTER] / TIMEBASE=1/1000 / START / END / title`，
+    值里的 `\ ; # =` 与换行按 ffmetadata 规则转义（换行 = 反斜杠 + 真实换行）；
+    临时文件写好后追加为**最后一个输入**，再用 `-map_chapters <输入序号>` 注入。
+  - 三种模式都支持：`burn`（字幕精灵输入在前，序号 = 1 + sprite 数）、
+    `soft` / `copy`（序号 = 2）。「仅封装」因此几秒就能出带章节的 MP4/MKV，
+    不重编码、画质无损。
+  - 回归：`tests/test_export_chapters.py` 用 `ffprobe -show_chapters` 读回容器，
+    逐条核对标题 / 起止 / 有序不重叠（IINA 等播放器能直接跳转）；`burn` 用例在没有
+    中文字体的机器上按 marker skip。
+- **片段导出（2026-11-20 新增）**：导出页「导出范围」（全片 / 区间章节 / 自定义）与
+  润色 / 翻译页共用 `store.exporter.clip`（走 `setExportClip()` 进统一历史）。
+  - 纯函数在 `core/clip_range.py`：`clip_window()`（归一化窗口）、
+    `select_cues_in_range()`（首尾重叠 <0.1s 的邻句不算命中）、
+    `shift_cues_to_clip()`（`t - start` 并夹进 `[0, duration]`）、
+    `shift_chapters_to_clip()`（保留相交的区间标记与内部时刻点，区间**不被时刻点拆开**；
+    例：`0:10 章节1` + `22:55 发射点` 裁成 `[10s, 1462s]` → `0:00` / `22:45`）、
+    `clip_tag()`（文件名安全标签）。
+  - `ExportOptions` 增加 `clip_start` / `clip_end` / `clip_label`（全片 = `0/0`）；
+    `plan_export()` 的 `duration`、码率估算、章节表都按**片段时长**计算，`plan.clip`
+    回传 `{start, end, duration, label}`；`copy` 模式额外给「仅封装按关键帧切片」的 warning。
+  - `run_export()`：字幕、译文、ffmetadata 章节先经上述纯函数搬到片段坐标，再执行
+    ffmpeg：`-ss <start>` 放在 `-i` **之前**（重编码 = 帧级精确，输出时间戳从 0 起）
+    + `-t <片段时长>`。`burn` / `soft` **不加** `-avoid_negative_ts make_zero`
+    （会因 AAC priming 把字幕轨整体推后 3ms）；只有 `copy` 加它，保证关键帧切片后能正常播。
+  - **章节必须二次 remux**：ffmpeg 9.0.2 在「mov_text 字幕 + MP4 章节文本轨」同一次封装时
+    会写坏章节头（标题重复成末章、首章 `END` 变成「片段时长 − 首章结束」），`ffprobe` /
+    播放器都会读到错的时间。所以 `soft` / `copy` 先出片（不带章节），成功后用
+    `-i 成片 -i ffmetadata -map 0 -map_chapters 1 -c copy` 再封装一次；`burn` 没有字幕流，
+    仍单次封装。二次 remux 是纯复制，不重编码。
+  - 文件名：`{stem}{suffix}.{clip_tag}.{分辨率}.{档位}{ext}`，随片 SRT 同标签
+    （`{stem}{suffix}.{clip_tag}.srt`），不会覆盖整片成片。
+  - 字幕单独导出：`POST /api/cues/export` 接受 `clip_start` / `clip_end` / `clip_label`，
+    先按同一规则选中这一段、把原文与译文一起平移，再走 `target_cues` / `bilingual_entries`；
+    文件名后缀带 `.章节1-00m10s-24m22s`。范围内没有字幕 → 409。
+  - UI：选择 `copy` + 片段时，导出卡片里出现明确说明「按关键帧切片，精切请用烧录/软字幕重编码」。
+  - 回归：`tests/test_clip_range.py`、`tests/test_export_clip.py`
+    （软字幕 / 仅封装 / 字幕单独导出，全部用 `ffprobe -show_chapters` 与
+    `ffmpeg -f srt` 读回真实产物核对时长、章节 8.5s、字幕归零）。
 - **字幕样式（2026-11 新增）**：`SubtitleStyle`（字体/字重/字号/描边/阴影/位置/颜色）
   只影响 `burn`；字体以「文件名 + TTC 内 family/style 名」解析（macOS 的 PingFang、
   兰亭黑等位于 AssetsV2 的 hash 目录，禁止写死路径）。内置预设见 `STYLE_PRESETS`；

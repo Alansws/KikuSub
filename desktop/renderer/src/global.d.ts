@@ -89,10 +89,10 @@ declare global {
         }>;
       };
       aiKey: {
-        set(text: string): Promise<{ ok: boolean; reason?: string }>;
-        get(): Promise<string>;
-        clear(): Promise<{ ok: boolean }>;
-        status(): Promise<{
+        set(text: string, scope?: 'global' | 'arbitrate'): Promise<{ ok: boolean; reason?: string }>;
+        get(scope?: 'global' | 'arbitrate'): Promise<string>;
+        clear(scope?: 'global' | 'arbitrate'): Promise<{ ok: boolean }>;
+        status(scope?: 'global' | 'arbitrate'): Promise<{
           ok: boolean;
           /** 本机加密永远可用；保留字段是为了未来兼容 */
           available: boolean;

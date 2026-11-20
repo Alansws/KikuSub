@@ -23,9 +23,21 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 # 2026-11-13 冻结值。只许下调；上调要在提交信息里说明为什么这次没法抽。
 # 2026-11-14：新增「断句重排」视图，`View` 联合类型必须多一行（没有可抽的纯逻辑）。
 # 2026-11-15：代理提示抽成 ProxyGate + videoFallback，导入不再自动压代理。
+# 2026-11-16：开发种子注入（applyDevSeed）抽到 `lib/devSeed.ts`，store 降到 3287。
+# 2026-11-17：波形绘制 / 时间轴视窗 / 切割校验抽到 lib，ReviewView 降到 3808；
+#              同轮专业剪辑操作（逐帧/磁吸/倍速）完成后再降到 3802。
+# 2026-11-20：工作现场持久化 + 章节标记落在新 lib / 新组件里，但接线仍需占行，
+#              所以先把能抽的两块抽走：画布画法 → lib/waveformCanvas.ts、
+#              查找命中计算 → lib/findMatches.ts、旧播放头持久化 → lib/reviewViewport.ts。
+#              抽完并接线后的实测值就是新预算（只许再降）。
+# 2026-11-20（片段范围）：局部处理 / 导出范围要给 store 加状态与请求字段，先把两块
+#              纯逻辑抽走：导出文案标签 → lib/exportLabels.ts、导出样式持久化 →
+#              lib/exportStorage.ts（store 先降到 3228），再用腾出的行数接线
+#              `exporter.clip` + `setExportClip()`（接线后 3258）。净预算仍是从
+#              3278 下调到 3258——这次没有为了加功能而放宽任何行数。
 BUDGET = {
-    "lib/store.svelte.ts": 3315,
-    "views/ReviewView.svelte": 3877,
+    "lib/store.svelte.ts": 3258,
+    "views/ReviewView.svelte": 3787,
 }
 
 

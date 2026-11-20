@@ -13,6 +13,8 @@
    * - 「只改几处」走 ops JSON，勾选后一次原子应用。
    */
   import Icon from '../components/Icon.svelte';
+  import ClipScopePicker from '../components/ClipScopePicker.svelte';
+  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
   import SourceSwitch from '../components/ai/SourceSwitch.svelte';
   import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
@@ -37,13 +39,19 @@
     promptCategory,
     removeDraftCue,
     replanReshapeSegments,
+    resetReshapeBatch,
     reshape,
+    reshapeBatchSpan,
+    reshapeScopeSpan,
     restoreReshapePlan,
     segmentKey,
     segmentState,
     setMode,
+    setReshapeBatch,
+    setReshapeBatchSize,
     setSegment,
     setSource,
+    stepReshapeBatch,
     syncReshapeMedia,
     updateDraftCue,
   } from '../lib/reshape.svelte';
@@ -71,7 +79,7 @@
     selectPromptTemplate,
     promptSelectedId,
   } from '../lib/promptStore.svelte';
-  import { app, loadTranslations, setView, toast } from '../lib/store.svelte';
+  import { app, exporter, loadTranslations, setView, toast } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
   import { loadAiProposal } from '../lib/aiWorkspace.svelte';
 
@@ -89,10 +97,19 @@
   const activeTemplate = $derived(promptSelectedId(promptCategory()));
   const isOps = $derived(reshape.mode === 'ops');
 
-  /** 当前段在当前表里的条目区间（长片按已覆盖段的条数差平移）。 */
+  /** 统一处理范围 + 本次批次（全片时批次默认也是全片）。 */
+  const scopeSpan = $derived(reshapeScopeSpan());
+  const batch = $derived(reshapeBatchSpan());
+  const localRange = $derived(
+    batch.count > 0 && (batch.from > 1 || batch.to < app.cues.length),
+  );
+
+  /** 当前段在当前表里的条目区间（长片按已覆盖段的条数差平移；局部范围直接用批次区间）。 */
   const range = $derived.by(() => {
     if (!segment) return { from: 1, to: 0 };
-    return reshape.longMode ? currentRangeFor(segment) : { from: 1, to: app.cues.length };
+    return reshape.longMode
+      ? currentRangeFor(segment)
+      : { from: segment.from, to: segment.to };
   });
   const segmentCues = $derived(
     range.to >= range.from ? app.cues.slice(range.from - 1, range.to) : [],
@@ -105,15 +122,16 @@
     };
   });
   const rangeLabel = $derived.by(() => {
-    if (!segment) return '全片';
-    if (!reshape.longMode) return `全片 ${segment.count} 条`;
-    return `第 ${range.from}–${range.to} 条`;
+    if (!segment) return '范围内没有字幕';
+    if (reshape.longMode) return `第 ${range.from}–${range.to} 条`;
+    if (localRange) return `第 ${range.from}–${range.to} 条 · 全片 ${app.cues.length} 条`;
+    return `全片 ${segment.count} 条`;
   });
   const segmentNo = $derived(String((reshape.longMode ? reshape.segmentIndex : 0) + 1).padStart(2, '0'));
 
-  /** 分段轨道：短片也显示一格「全片」，让左卡与右表始终有明确的当前对象。 */
+  /** 分段轨道：短片 / 局部范围也显示一格「本次处理」，让左卡与右表始终有明确的当前对象。 */
   const railSegments: AiSegment[] = $derived.by(() => {
-    if (isOps || !app.cues.length) return [];
+    if (isOps || !app.cues.length || !segment) return [];
     if (reshape.longMode && reshape.segments.length) {
       // 覆盖过一段之后，段轨显示的是这一段的**新条数**；后续段的计划条数不变。
       return reshape.segments.map((item) => {
@@ -121,9 +139,7 @@
         return delta ? { ...item, count: item.count + delta } : item;
       });
     }
-    const first = app.cues[0];
-    const last = app.cues[app.cues.length - 1];
-    return [{ from: 1, to: app.cues.length, start: first.start, end: last.end, count: app.cues.length }];
+    return [segment];
   });
 
   const step = $derived.by(() => {
@@ -190,6 +206,8 @@
   const previewRows = $derived(alignPreviewRows(segmentCues, draft?.cues ?? null));
   const bRefs = $derived(dual.exists ? bRefsFor(segmentCues, dual.cues) : []);
   const warnNotes = $derived(draft ? draft.notes.filter((note) => note.level === 'warn') : []);
+  /** 新稿里时间戳明显超出本段范围的条数：单独挂一条高亮横幅，不只藏在「体检 N」里。 */
+  const outOfRange = $derived(draft?.diagnostics.totals?.out_of_range ?? 0);
   const countBefore = $derived(draft?.diagnostics.count_before ?? 0);
   const countAfter = $derived(draft?.cues.length ?? 0);
   const countDelta = $derived(countAfter - countBefore);
@@ -218,6 +236,9 @@
       const current = currentRangeFor(segment);
       return `复制第 ${current.from}–${current.to} 条提示词`;
     }
+    if (localRange && segment) {
+      return `复制第 ${range.from}–${range.to} 条提示词`;
+    }
     return '复制整份提示词';
   });
 
@@ -241,7 +262,7 @@
     if (needsArm && isArmed) return `再点一次：覆盖 ${draft.cues.length} 条`;
     if (needsArm) return `确认覆盖 · ${draft.cues.length} 条`;
     if (draft.range.full) return `覆盖核对台 · ${draft.cues.length} 条`;
-    return `覆盖第 ${segmentNo} 段 · ${draft.cues.length} 条`;
+    return `覆盖第 ${draft.range.from}–${draft.range.to} 条 · ${draft.cues.length} 条`;
   });
 
   /**
@@ -275,6 +296,13 @@
     void dual.exists;
     void dual.createdAt;
     void reshape.mode;
+    // 处理范围 / 本次批次属于坐标系的一部分；变了就要重定或挂失效横幅。
+    void exporter.clip.start;
+    void exporter.clip.end;
+    void exporter.clip.label;
+    void reshape.batchManual;
+    void reshape.batchFrom;
+    void reshape.batchTo;
     if (!app.connected) return;
     untrack(() => ensureReshapePlan());
   });
@@ -288,6 +316,12 @@
     void reshape.source;
     void reshape.segmentIndex;
     void reshape.stale;
+    void exporter.clip.start;
+    void exporter.clip.end;
+    void exporter.clip.label;
+    void reshape.batchManual;
+    void reshape.batchFrom;
+    void reshape.batchTo;
     void prompts.selectedReshapeSingle;
     void prompts.selectedReshapeDual;
     if (app.connected) void ensurePromptInfo();
@@ -591,6 +625,23 @@
             title="断句重排提示词模板"
             onchange={(id) => void selectPromptTemplate(id, promptCategory())}
           />
+          <span class="aiw-divider" aria-hidden="true"></span>
+          <ClipScopePicker compact label="处理范围" disabled={reshape.applying} />
+          <BatchRangeBar
+            from={batch.from}
+            to={batch.to}
+            spanFrom={scopeSpan.from}
+            spanTo={scopeSpan.to}
+            count={batch.count}
+            total={app.cues.length}
+            size={reshape.batchSize}
+            manual={reshape.batchManual}
+            disabled={reshape.applying}
+            onApply={setReshapeBatch}
+            onStep={stepReshapeBatch}
+            onSize={setReshapeBatchSize}
+            onReset={resetReshapeBatch}
+          />
         {/if}
       </div>
 
@@ -648,6 +699,16 @@
   {#if reshape.errors.length}
     <div class="note err"><Icon name="warn" size={11} /><span>{reshape.errors[0]}</span></div>
   {/if}
+  {#if !isOps && draft && outOfRange > 0}
+    <div class="note warn range-warn" role="alert">
+      <Icon name="warn" size={11} />
+      <span>
+        粘贴的新稿里有 <b>{outOfRange}</b> 条时间戳明显超出本次处理范围
+        （第 {draft.range.from}–{draft.range.to} 条{#if segmentSpan} · {clock(segmentSpan.start)}–{clock(segmentSpan.end)}{/if}）：
+        请确认没有贴错段；覆盖仍只替换本段，范围外字幕不受影响。
+      </span>
+    </div>
+  {/if}
   {#if isOps && structure.errors.length}
     <div class="note err"><Icon name="warn" size={11} /><span>{structure.errors[0]}</span></div>
   {/if}
@@ -660,7 +721,9 @@
             <span class="aiw-card-title">结构建议</span>
             <span class="aiw-card-sub">{app.cues.length} 条 · 勾选后应用</span>
           {:else}
-            <span class="aiw-card-title">第 <b>{segmentNo}</b> 段</span>
+            <span class="aiw-card-title">
+              {#if localRange}本次批次{:else}第 <b>{segmentNo}</b> 段{/if}
+            </span>
             <span class="aiw-card-sub">{rangeLabel}</span>
           {/if}
         </div>

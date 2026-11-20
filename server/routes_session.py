@@ -64,6 +64,12 @@ def bind_media(payload: BindRequest, request: Request, session: Session = Depend
         media_path=session.media_path,
         output_dir=request.app.state.config.output_dir,
     )
+    # 章节标记同样按媒体身份落盘：换片时上面的 reset 已清空内存，这里从边车恢复。
+    session.sync_chapters(
+        media_path=session.media_path,
+        output_dir=request.app.state.config.output_dir,
+        duration=float(getattr(info, "duration", 0.0) or 0.0),
+    )
     return {
         "id": session.id,
         "media": info.to_dict(),

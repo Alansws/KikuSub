@@ -217,7 +217,11 @@ def test_compare_rejects_sherpa_engines(compare_client, tmp_path):
         },
     )
     assert resp.status_code == 422
-    assert "whisper" in resp.json()["detail"]
+    # 可选引擎列表来自注册表的 reviewable 位，不在路由里写死；中文引擎要被点名。
+    detail = resp.json()["detail"]
+    assert "whisper" in detail
+    assert "qwen" in detail
+    assert "SenseVoice" in detail
 
 
 def test_compare_shares_the_single_slot(compare_client, tmp_path):

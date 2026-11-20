@@ -11,12 +11,18 @@
    * `apply_polish()`，一次 ⌘Z 全退。
    */
   import Icon from '../components/Icon.svelte';
+  import ClipScopePicker from '../components/ClipScopePicker.svelte';
+  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
   import SourceSwitch from '../components/ai/SourceSwitch.svelte';
   import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
   import '../components/ai/ai-workbench.css';
+  import { untrack } from 'svelte';
   import {
     ai,
+    aiBatchActive,
+    aiBatchKey,
+    aiBatchSpan,
     applyAiAcceptedDiffs,
     applyAiAllDiffs,
     applyAiWholeColumn,
@@ -27,22 +33,27 @@
     loadAiProposal,
     parseAiPastedSrt,
     planAiSegments,
+    resetAiBatch,
     saveAiProposalAs,
+    setAiBatch,
+    setAiBatchSize,
     setAiEdit,
     setAiKind,
     setAiMode,
     setAllAiAccept,
     startAiPolish,
+    stepAiBatch,
+    syncAiBatchScope,
     toggleAiAccept,
     segmentKey,
   } from '../lib/aiWorkspace.svelte';
   import { altEngineLabel, dual, loadAltDiff, refreshAltReview } from '../lib/dualReview.svelte';
   import { api, type AiConfig } from '../lib/api';
+  import { clipSpan, formatRange } from '../lib/clipRange';
   import { bRefsFor } from '../lib/previewDiff';
   import { loadPrompts, promptItemsFor, prompts, selectPromptTemplate } from '../lib/promptStore.svelte';
-  import { rowsInSegment } from '../lib/aiSegments';
   import { recallScroll, rememberScroll } from '../lib/scrollMemory';
-  import { app, focusRange, jumpToCue, setView } from '../lib/store.svelte';
+  import { app, exporter, focusRange, jumpToCue, setExportClip, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -87,9 +98,33 @@
   /** A 的每一条对应哪段 B（只在时间真正重叠时取，不混入邻句）。 */
   const bRefs = $derived(dual.exists ? bRefsFor(app.cues, dual.cues) : []);
 
+  /** 处理范围 → 全片 1 基区间；全片时区间就是 1…n。 */
+  const scopeSpan = $derived(clipSpan(app.cues, exporter.clip));
+  const scoped = $derived(exporter.clip.end > 0);
+  const restricted = $derived(scoped || aiBatchActive());
+  /** 当前处理批次；默认等于整个处理范围（不碰批次控件时与旧行为一致）。 */
+  const batch = $derived(aiBatchSpan());
+  /**
+   * 表格、复制提示词、粘贴回填、应用都只作用于批次区间。批次永远夹在处理范围
+   * 之内，所以这里直接按实时 rows 切片——改前面某句的字不会让批次失效。
+   */
+  const scopedRows = $derived(
+    batch.count > 0 ? rows.slice(batch.from - 1, batch.to) : [],
+  );
+  const scopeTitle = $derived(
+    scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
+  );
+  /** 磁盘上的建议可能来自另一个范围：提示一句，应用时也只写回它自己的范围。 */
+  const proposalRange = $derived(ai.proposal?.source.range ?? null);
+  const rangeMismatch = $derived(
+    Boolean(proposalRange) &&
+      restricted &&
+      (proposalRange!.from !== batch.from || proposalRange!.to !== batch.to),
+  );
+
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
-  const changedCount = $derived(rows.filter((r) => r.changed).length);
-  const acceptedCount = $derived(rows.filter((r) => r.changed && r.accepted).length);
+  const changedCount = $derived(scopedRows.filter((r) => r.changed).length);
+  const acceptedCount = $derived(scopedRows.filter((r) => r.changed && r.accepted).length);
   const activeSegment = $derived(
     ai.longMode && ai.segments.length
       ? ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]
@@ -101,7 +136,11 @@
    * 没生效（用户报障）。断句重排页是同一口径。
    */
   const segmentRows = $derived(
-    ai.longMode && activeSegment ? rowsInSegment(rows, activeSegment) : rows,
+    ai.longMode && activeSegment
+      ? scopedRows.filter(
+          (r) => r.i >= (activeSegment?.from ?? 0) && r.i <= (activeSegment?.to ?? 0),
+        )
+      : scopedRows,
   );
   const visible = $derived(
     ai.proposal && ai.changedOnly ? segmentRows.filter((r) => r.changed) : segmentRows,
@@ -134,7 +173,9 @@
    * 点时间码去核对台再回来时（`{#key app.view}` 会重建页面）恢复到离开处。
    */
   const listKey = $derived(
-    `polish:${app.media?.id ?? ''}:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}`,
+    aiBatchKey(
+      `polish:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}`,
+    ),
   );
   let restoredKey = '';
 
@@ -181,6 +222,18 @@
     }
   });
 
+  /**
+   * 处理范围变了：批次回到「整段」并清空粘贴框。
+   * 用 `untrack` 包住，避免把批次状态本身读成依赖造成自触发。
+   */
+  $effect(() => {
+    void exporter.clip.start;
+    void exporter.clip.end;
+    void exporter.clip.label;
+    if (!app.connected) return;
+    untrack(() => syncAiBatchScope());
+  });
+
   async function loadAiStatus() {
     try {
       aiConfig = await api.getAiConfig();
@@ -189,7 +242,7 @@
     }
     try {
       const state = await window.kikusub?.aiKey?.status?.();
-      keyReady = state ? Boolean(state.has) : false;
+      keyReady = Boolean(state?.has) || Boolean(aiConfig?.key_optional);
     } catch {
       keyReady = false;
     }
@@ -201,6 +254,8 @@
     void dual.count;
     void app.cuesRevision;
     void ai.mode;
+    void exporter.clip.start;
+    void exporter.clip.end;
     if (app.connected && ai.kind === 'polish') {
       if (ai.mode === 'dual' && !dual.exists && dual.mediaId === (app.media?.id ?? '')) {
         setAiMode('single');
@@ -276,6 +331,7 @@
         onchange={(id) =>
           void selectPromptTemplate(id, ai.mode === 'dual' ? 'polish_dual' : 'polish_single')}
       />
+      <ClipScopePicker compact label="处理范围" disabled={ai.generating} />
       <div class="aiw-spacer"></div>
       <button class="btn ghost sm" onclick={() => setView('prompts')} title="打开提示词库">
         提示词库
@@ -321,14 +377,18 @@
           class="btn ghost"
           onclick={() => void copyAiPrompt()}
           disabled={!app.cues.length}
-          title={ai.longMode ? '复制当前分段的提示词' : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
-        >{ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
+          title={aiBatchActive()
+            ? '复制本批的提示词；只包含这一批的条目'
+            : ai.longMode
+              ? '复制当前分段的提示词'
+              : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
+        >{aiBatchActive() ? '复制本批提示词' : ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
         <span class="aiw-arrow" aria-hidden="true">→</span>
         <button
           class="btn ghost"
           onclick={togglePaste}
           disabled={!app.cues.length}
-          title={ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
+          title={aiBatchActive() || ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
         >{ai.pasteOpen ? '收起粘贴' : '粘贴回复'}</button>
         <span class="aiw-sep" aria-hidden="true">/</span>
         <button
@@ -382,6 +442,14 @@
       <Icon name="warn" size={11} />
       <span>源文本已变化：这份建议是针对另一版字幕生成的，应用会被拒绝。</span>
     </div>
+  {:else if rangeMismatch && proposalRange}
+    <div class="note warn">
+      <Icon name="warn" size={11} />
+      <span>
+        这份建议覆盖第 {proposalRange.from}–{proposalRange.to} 条，当前处理批次是第
+        {batch.from}–{batch.to} 条：应用只写回建议自己的范围，范围外不动。
+      </span>
+    </div>
   {/if}
 
   {#if ai.warnings.length}
@@ -398,7 +466,10 @@
   {#if ai.pasteOpen}
     <div class="paste">
       <div class="paste-head">
-        {#if ai.longMode && activeSegment}
+        {#if aiBatchActive()}
+          回填<b>本批第 {batch.from}–{batch.to} 条</b>
+          <span class="aiw-hint">复制出去几条就要粘回几条（润色不允许多少条）</span>
+        {:else if ai.longMode && activeSegment}
           回填<b>第 {activeSegment.from}–{activeSegment.to} 条</b>
           <span class="aiw-hint">序号可用全局或本段 1 起</span>
         {:else}
@@ -424,7 +495,13 @@
           class="btn primary"
           onclick={() => void parsePaste()}
           disabled={ai.parsing || !ai.pasteText.trim()}
-        >{ai.parsing ? '解析中…' : ai.longMode ? '解析并回填本段' : '解析成建议'}</button>
+        >{ai.parsing
+          ? '解析中…'
+          : aiBatchActive()
+            ? '解析并回填本批'
+            : ai.longMode
+              ? '解析并回填本段'
+              : '解析成建议'}</button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
         <div class="aiw-spacer"></div>
         <span class="aiw-hint">条数不符整段拒绝</span>
@@ -433,13 +510,40 @@
   {/if}
 
   <div class="aiw-subbar">
+    <BatchRangeBar
+      from={batch.from}
+      to={batch.to}
+      spanFrom={scopeSpan.from}
+      spanTo={scopeSpan.to}
+      count={batch.count}
+      total={app.cues.length}
+      size={ai.batchSize}
+      manual={aiBatchActive()}
+      disabled={ai.generating || ai.applying}
+      onApply={setAiBatch}
+      onStep={stepAiBatch}
+      onSize={setAiBatchSize}
+      onReset={resetAiBatch}
+    />
+    {#if scoped}
+      <span
+        class="aiw-chip accent"
+        title="表格、复制提示词、粘贴回填、写回都只作用于这个范围；范围外保持原样"
+      >
+        片段 · {scopeTitle} · <b>{scopeSpan.count}</b> / {app.cues.length} 条
+      </span>
+      <button
+        class="aiw-link"
+        onclick={() => setExportClip({ start: 0, end: 0, label: '' })}
+        title="回到全片处理"
+      >全片</button>
+    {:else}
+      <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
+    {/if}
     {#if activeSegment}
       <span class="aiw-chip accent" title="表格、复制提示词、粘贴回填都只作用于这一段">
         第 <b>{ai.segmentIndex + 1}</b>/<b>{ai.segments.length}</b> 段 · 第 <b>{activeSegment.from}–{activeSegment.to}</b> 条
       </span>
-      <span class="aiw-chip" title="全片条数">全片 <b>{app.cues.length}</b> 条</span>
-    {:else}
-      <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
     {/if}
     {#if ai.proposal}
       <span class="aiw-chip">改动 <b class:hot={changedCount > 0}>{changedCount}</b></span>

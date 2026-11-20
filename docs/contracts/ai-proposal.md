@@ -37,6 +37,8 @@
 | **A8** | API Key 不出现在任何日志、`settings.json`、WS 快照里 | 人工 grep 日志 + 代码审查 |
 | **A9** | 双源提案应用后 `(start, end)` 仍逐条浮点精确相等 | `tests/test_ai_dual.py` |
 | **A10** | 双源提案只改 B 的 digest → 409，字幕零变化 | `tests/test_ai_dual.py` |
+| **A11** | 手动分批时复制 / 回填只含本批；润色条数不符仍 422，翻译严格开关关闭时按时间轴对齐 | `tests/test_translation_align.py`、`desktop/test/cueBatch.test.mjs` |
+| **A12** | 断句重排局部替换只动本段，范围外尾部译文随条数平移；⌘Z 一次退回 | `tests/test_reshape.py` |
 
 ---
 
@@ -269,8 +271,9 @@
   带上；对不上（原稿在解析后被改过）→ 409「请重新粘贴一次」，绝不错位覆盖。**这份
   digest 是整表的，不是区间的**：所以任何「锁定某个区间稍后回填」的能力，都必须拿同一份
   整表 digest 做前置校验，否则会出现「允许锁定、提交必 409」的假可用状态。
-- **译文轨**：条数变化时旧轨无法逐条对齐，与 `replace_review()` 同口径——丢弃并在
-  响应里回报 `dropped_translations`，界面给一条轻提示；`⌘Z` 可整步退回。
+- **译文轨（2026-11-20 修订）**：条数变化时不再整轨丢弃。范围外头部 / 尾部译文按
+  `delta` 平移并保持索引对齐，范围内新条目译文置空；响应里 `shifted_translations`
+  说明哪些轨被平移，界面给一条轻提示。`⌘Z` 同口径整步退回。
 - **分段**：A+B 超过 600 条 / 6 万字才切（润色是 300 条），每段 150 条；短片一次跑完、
   一次覆盖。分段覆盖只动本段，其余段原样保留。
 - **提示词**：`prompt_store` 的 `reshape_single` / `reshape_dual` 两个分类（内置模板
@@ -282,3 +285,219 @@
   （冻结键 / 平移 / 段身份 / ⌘Z 认领 / 重新分段落位）在 `desktop/renderer/src/lib/reshapePlan.ts`
   （纯函数，`desktop/test/reshapePlan.test.mjs`），`reshape.svelte.ts` 只留状态壳。
   用例：`tests/test_reshape.py`、`desktop/test/reshapePlan.test.mjs`。
+
+#### 3.7.7 单句 AI 辅助（第三版，2026-11-20）
+
+> 触发：核对台里 A/B 两版引擎对同一句的转写不一致时，用户当前只能截图两版和上下文
+> 发给外部 AI，再手工改回来。这条车道把「问 AI → 看第三版 → 采用」收进检查器。
+> 2026-11-20 扩展：ASR 完全没识别、B 引擎返回空、手动新建空字幕块时，只要能提供
+> 听音线索 / 追问记录 / 上下文之一，也能让 AI 还原，不再被「必须 A/B 双版且不一致」拦住。
+
+- **不是提案**：没有 digest、没有提案文件、不经过 `apply_polish()`；它是检查器里的
+  第三张卡，采用时走既有 `updateCue()`（服务端一步历史，⌘Z 可退）。
+- **只发文本**：`POST /api/ai/arbitrate` 收
+  `{text_a, text_b, before[], after[], lang, hint?, history?}`。`hint` 是用户的听音
+  线索（空耳 / 罗马音 / 描述，≤400 字）；`history` 是最近的多轮追问
+  （`[{role: "user"|"assistant", text}]`）。前后文各最多 3 句、每句最多 200 字；
+  **绝不**包含时间轴、音频、截图或整片字幕。
+- **2048 context 预算**：`hint` ≤400 字、最多 6 轮追问、单条 ≤260 字；`core/ai_arbitrate.py`
+  先按 `MAX_USER_CHARS=1300` 从**最旧**的记录开始裁，再裁上下文，任何材料组合都不会
+  把 prompt 撑爆本地 2048 档位。
+- **422 放宽**：不再要求 A/B 都非空且不一致。只要 A/B 不一致、仅 A 或仅 B 非空、
+  有 `hint`、有 `history`、有上下文之一即可请求；只有 A、B、hint、上下文**全部为空**
+  才返回 422。两版一致但用户想复核也允许。
+- **提示词动态适配**：按实际材料走双版对照（dual）/ 两版一致复核（same）/ 单版纠偏
+  （single）/ 无识别纯靠上下文 + 听音线索还原（blind），并把 `hint`、`history` 作为
+  独立段落组织；输出仍是 `{"text": "...", "note": "..."}`，保留 `/no_think` 与本地
+  assistant 前缀。
+- **上下文口径**：前端按 `start` 排序后找到当前句的位置，**排除当前句索引**再取前后
+  各 3 句。不能用 `end <= cue.start` / `start >= cue.end` 过滤——转写选区的
+  `padStart/padEnd` 会让邻句轻微重叠，重叠条件会漏掉边缘邻句。
+- **分语种提示词**：`core/ai_arbitrate.build_prompt()` 按 `lang` 选日语 / 中文模板；
+  中文素材不得套日语助词/活用规则，日语素材也不按中文语序重写。未知语种走通用模板。
+  听音线索只用于定位发音，最终输出必须是素材同语言的文本。
+- **结果校验**：只收 `{text, note}`；`text` 为空、超长（>300 字）、含 `-->` 或时间码
+  → 重问一次（附 `STRICT_HINT`），仍失败返回 502，不产生半份结果。结果不落盘，
+  只存在当前会话内存；A/B 文本或时间变了就自动失效。
+- **界面常驻**：`components/ArbitrationCard.svelte` 挂在 `SecondOpinionCard` 内部、
+  **不在 `has` 分支里**；只要选中任意字幕行（含空字幕块、B 未跑或返回空）就用。
+  B 引擎返回空时明确提示「另一引擎未识别到内容，可补充听音线索直接让 AI 推断」。
+  A/B 一致不隐藏入口，按钮文案按材料自适应（让 AI 判定 / 辅助修正 / 根据线索推断）。
+- **听音线索输入**：AI 按钮上方是紧凑输入框（≤400 字，⌘↩ 快捷发送）；出结果后标签
+  变为「补充线索 / 追问」，并出现**独立的「发送追问」按钮**：只有输入框非空且用户明确
+  点它时，才把这条线索追加进 `history`。右侧边栏只展示**最新一轮**结果卡（含 TTS
+  朗读、复制与采用），不把长历史塞进窄边栏。
+- **重判与追问彻底分离（2026-11-20 用户报障）**：`arbitration.svelte.ts` 的 `runArbitration`
+  按 `mode` 分四路——`initial` / `followup` / `rejudge` / `auto`。`rejudge` 与 `auto`
+  **永远不发送 `history`**，请求体只带当前 A/B、前后文与（若输入框非空）本次新写的
+  `hint`；输入框为空时 `hint=""`。已有追问时主按钮文案变为「清空追问并重判」，绝不
+  再把上一轮追问或偏掉的 AI 回复喂回模型。`followup` 是唯一携带历史的路径。
+- **撤销 / 回退**：浮窗里每条用户追问右上角有「撤销这轮及之后」，底部还有
+  「↩ 撤回上一轮追问」。两者都在前端内存截断该轮及之后的 `messages`，并把右侧结果卡
+  同步回截断后最后一条 AI 回复；不重新请求模型。撤到只剩第 1 轮干净结果时，状态与
+  刚判完首轮完全一致。纯函数 `truncateFromUser()` / `lastUserPosition()` 在
+  `lib/arbitration.ts`，单测在 `desktop/test/arbitration.test.mjs`。
+- **多轮对话浮窗**：`components/ArbitrationDialog.svelte` 由卡片右上角「展开对话」
+  打开；可拖动 / 可缩放（参考质检浮窗，默认避开右侧「试听原声」）。浮窗内展示可折叠
+  上下文（前 3 / 后 3 句）与 A/B、完整历史、底部多行追问框；**每一条** AI 历史回复
+  都自带「朗读」「复制」与「采用」，采用同样走 `updateCue()`。
+- **只留一个对话入口**：右侧 AI 卡标题栏的「展开对话」是唯一入口；结果卡不再放
+  「查看对话 / 继续追问」这类重复按钮，窄边栏保持利落。
+- **可选中 / 可复制**：`SecondOpinionCard` 的 A/B 文本、`ArbitrationCard` 的 AI 文本
+  与理由、`ArbitrationDialog` 的上下文与每一轮台词/理由都显式 `user-select: text`，
+  允许划选局部假名或整句；A 卡、B 卡、AI 判定卡与浮窗每条 AI 回复的「朗读」旁都有
+  `CopyTextButton`，一键复制并短暂显示「已复制」。AI 结果与当前稿一致（按钮显示灰色
+  「当前稿」）时，复制入口仍保留。
+- **会话缓存**：对话按「媒体 + 起止时间」缓存在内存，切换句子不丢正在磨的对话；
+  该句时间 / A / B 被外部改写后线程判旧，界面提示「已失效」并要求重置，自动判定等
+  非 UI 路径也会从新快照重开，绝不把旧答案混进新请求。采用后同步线程快照，继续追问
+  不会立刻失效。
+- **模型覆盖**：`settings.json` 的 `ai_arbitrate_base_url` / `ai_arbitrate_model` 为空
+  时逐字段跟随全局 AI 配置；非空时用它们。覆盖 Key 与全局 Key **分开加密**：
+  `aikey` 的 `scope='arbitrate'` 存 `aiArbitrateKey`，请求头是
+  `X-AI-Arbitrate-Key`；覆盖地址是本机/局域网时允许空 Key，且**不**把全局 Key
+  转发给本机服务。
+- **本地兼容**：`core/ai_client.is_local_url()` 认定 loopback / RFC1918 / `.local` /
+  `host.docker.internal`；`AiConfig.allow_no_key=True` 时 `ensure_ready()` 允许空 Key，
+  `_post()` 连空 `Authorization` 都不发。
+- **稳健解析**：`json_from_text()` 先剥 `<think>…</think>`、`<|…|>` 特殊 token 与
+  Markdown 围栏，再兜底取 `{…}`；`_extract_content()` 在 content 为空时回退
+  `reasoning_content`。本地后端不支持 `response_format`（400/404/422）时去掉该字段
+  重发一次，不占重试次数。
+- **Qwen 推理模型**：模型名含 `qwen` / `think` 时，`build_prompt(no_think=True)` 会在
+  user 末尾追加 `/no_think`；否则 LM Studio 里的 Qwen3.8 常把答案全写进
+  `reasoning_content`、content 为空。本地模型还会带 assistant 前缀 `{"text": "`，
+  让模型直接续写 JSON（实测 Qwen3.8 27B 从「只出推理」变为稳定返回 JSON、约 2–5 秒）；
+  云端模型不带前缀。本地模型默认加载 2048 context：本功能最多几百到一千多字，2048
+  已足够，也最省内存。
+- **本地上下文档位**：`settings.json` 的 `ai_local_context` 只支持 2048 / 4096 / 8192，
+  默认 **2048**。设置页只在判定目标是 **本机 loopback LM Studio** 时显示档位与
+  「加载 / 重载本地模型」按钮；远程 API、局域网地址或非 LM Studio 服务不显示/不执行。
+  重载走 `POST /api/ai/local-model/load`：先 `POST /api/v1/models/unload` 卸掉该模型的
+  已加载实例，再 `POST /api/v1/models/load` 带 `context_length` 加载；按钮立即生效。
+  判定前只做一次轻量 status 探测，**只有模型未加载或档位不符才校准一次**；模型已在
+  目标档位时是纯 no-op，绝不每个请求重载 27B。实现集中在 `core/ai_local_model.py`，
+  不污染 `ai_client.py`。
+- **自动判定（P2-4）**：`settings.json` 的 `ai_auto_arbitrate` 默认 `false`。开启后，
+  **只**在 B 引擎复核完成且 A、B 均非空且文本不一致时自动触发一次；同一媒体 + 同一句
+  + 同一 B 文本只自动跑一次，避免选中/重渲染造成重复调用。空白字幕、手动输入线索、
+  单版或两版一致都不会自动触发。切换句子、改 A/B、卡片卸载或点取消都会通过
+  `AbortController` 中断在途请求。不做提示词库第六类，也不做 QaPanel 入口。
+- **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
+  结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
+- **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 动态模式 / 预算 /
+  结果校验）、`tests/test_ai_local_model.py`（loopback 限制 / 卸载后重载 / 同档位 no-op）、
+  `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、422 放宽、
+  hint/history 透传、字幕不变、文档位/自动开关）、
+  `desktop/test/arbitration.test.mjs`（上下文 / 分类 / 失效 / 线程键 / 追问裁剪 / 按钮文案 /
+  干净重判请求计划 / 撤销截断）、
+  `desktop/test/floatBox.test.mjs`（浮窗夹取）、
+  `tools/shots/verify_arbitration.mjs`（第三版真实界面）、
+  `tools/shots/verify_arbitration_dialog.mjs`（常驻区 / 空识别提示 / 草稿持久 / 浮窗
+  拖动缩放 / Esc / 发送追问与清空重判分离 / 请求体无旧 history / 撤销同步结果卡 /
+  复制反馈 / 文本可选中 / 单一对话入口）。
+
+#### 3.7.8 片段范围：局部润色 / 局部翻译（2026-11-20）
+
+长片常常只核对一段（例如第 291–581 条）。范围由用户在润色 / 翻译 / 导出页选（全片 /
+区间章节 / 自定义起止），三处共用同一份状态；本章只约束 AI 链路。
+
+- **提案的身份**：`source.range = {"from": 291, "to": 581, "count": 291}`。
+  - `items` 的 `i` **仍是全片 1 基序号**（291…581），界面直接用全局 `#i` 对行，
+    长片分段粘贴也不换坐标系；
+  - `source.digest` **只覆盖这一段**的原文（`source_digest(scope_texts)`）：模型看到多少
+    就绑定多少。范围外（例如第 1 条）改了字幕不会 409——那本来就不该让这段提案失效；
+    范围内改了才 409「源文本已变化」；
+  - 没有 `source.range` 的旧提案 = 整片，行为与之前完全一致。
+- **生成**：`POST /api/ai/jobs` 的 `from_index` / `to_index`（1 基、含两端）。
+  `server/jobs.py` 先切出这一段再交给 `ai_polish.run_polish()` / `ai_translate.run_translate()`，
+  两者用 `cue_span` 只调整 `items` 的序号基线与 `source.range`；**分块、结构重问、取消口径不变**。
+  双源润色的 `digest_b` 仍绑定**整片第二版**（B 只作参考），B 的时间窗取本段的绝对时间。
+- **手动提示词**：`GET /api/ai/prompt` 新增 `range_from` / `range_to`（作用范围）；原有的
+  `from_index` / `to_index` 是**当前分段**（长片分段 + 范围可以叠加）。润色与翻译都只把
+  这一段写成 SRT；`range_text` 明确「本次只处理片段第 X–Y 条（全片共 N 条）」。
+- **粘贴回填**：`POST /api/ai/from-srt` 的 `range_from` / `range_to` 决定提案覆盖哪一段，
+  `from_index` / `to_index` 决定这次实际回填的段内区间；段外条目保持原文（分段粘贴语义不变）。
+- **应用**：`POST /api/ai/apply` 用 `source.range` 调
+  `core.ai_proposal.apply_polish_range()`——它只把全局序号映射成段内序号后**调用
+  `apply_polish()`**，段外条目逐字节拼回。仍然是「整批一次历史」：`replace_review()` 一步，
+  ⌘Z 一次退回。
+- **译文局部合并**：`POST /api/translations` 带片段提案时，按原始索引把这一段译文合并进
+  **整片平行译文轨**：范围外已有的译文与空位原样保留，不重排、不清空；没有旧轨时建一条
+  整片长度、范围外为空的轨。`base` 只更新这一段（范围外是否过期照旧如实反映），
+  `set_translation()` 压一步统一历史。
+- **文件位置不变**：片段提案仍写在 `{stem}.ai-polish.json` / `{stem}.{lang}.ai-translate.json`，
+  最后一次生成 / 粘贴 / 导入的提案覆盖同名文件；`source.range` 说明它绑定的是哪一段，
+  应用 / 校验 / 译文合并都以提案自身的 range 为准（不跟界面当前选择走）。
+- **界面**：`components/ClipScopePicker.svelte`（全片 / 区间章节 / 自定义，显示命中条数
+  `291 / 899`）+ `lib/clipRange.ts`（与 `core/clip_range.py` 同一套 0.1s 蹭边阈值与章节选项
+  规则）。状态只有一份：`store.exporter.clip`，走 `setExportClip()` 进统一历史，
+  润色页 / 翻译页 / 断句重排页 / 导出页 / 章节面板「仅处理此片段」读写同一份
+  （断句重排的局部替换见 §3.7.11）。
+- **回归**：`tests/test_clip_scope.py`（片段 digest 只绑本段、范围外改动不 409、范围内
+  改动 409、局部译文合并保留范围外、提示词只含本段、任务链路真按范围生成）、
+  `tests/test_clip_range.py`（边界/夹紧/章节平移/文件名标签）、
+  `tools/shots/verify_clip_scope.mjs`（三页共用范围、表格只剩 4 行、一键带入）。
+
+
+#### 3.7.9 手动自由分批（条号子范围，2026-11-20）
+
+在「处理范围」（全片 / 区间章节 / 自定义时间，§3.7.8）之上，润色页 / 翻译页 / 断句重排页
+再叠一层**本次处理批次**：
+
+- **默认等于整个处理范围**（例如章节命中 `1 ~ 291`）；不碰批次控件时请求与旧行为一致。
+- 用户可以输入起始 / 结束条号，或用「每批 N 条」+「上一批 / 下一批」步进。批次永远夹在
+  处理范围内（`desktop/renderer/src/lib/cueBatch.ts` 纯函数，`desktop/test/cueBatch.test.mjs`）。
+- **复制提示词、粘贴回填、应用只作用于当前批次**：批次激活时提案的 `source.range` 就是这批，
+  `items` 的 `i` 仍是全片序号；范围外条目一个字节都不动。
+- **润色恒为严格 1:1**：复制出去几条，粘回来必须几条，否则整批 422。翻译页的宽严由下面的
+  开关决定，开关不作用于润色。
+- **批次基于实时索引切片**：表格直接按当前 `rows` 的 `[from-1, to)` 切片，批次指纹只含
+  媒体 / 范围 / 批次 / 总条数、不含文本。所以中途改前面某句的文字不会让批次失效或漂移；
+  处理范围变小时批次跟着夹紧。
+- **手动批次优先于自动智能分段**：一旦进入手动批次，`planAiSegments()` 不再切段、也不把
+  页面锁回 150 条一段；点「整段」回到自动分段。断句重排同理：局部范围 / 批次就是这一轮的
+  工作单元，不再叠加自动分段。
+- **界面**：`desktop/renderer/src/components/ai/BatchRangeBar.svelte` 三页共用；状态分别在
+  `desktop/renderer/src/lib/aiWorkspace.svelte.ts`（润色 / 翻译）与
+  `desktop/renderer/src/lib/reshape.svelte.ts`（断句重排）。
+
+#### 3.7.10 翻译的时间轴对齐（2026-11-20）
+
+翻译页「外部粘贴回填」默认**允许带时间轴的译文条数与原文不同**，只要求 SRT 带时间戳：
+
+- **严格条数开关默认关闭**：关闭时，条数相同仍按顺序对齐（旧行为）；条数不同则调用
+  `core.proposal_srt.align_translation_cues()`，按**时间戳区间交集**把每条译文映射到原句槽位。
+  打开开关后恢复旧的等条数强校验（422）。
+- **合并覆盖**：一条译文跨原句 #5、#6 时，译文写入 #5，#6 置空并标 `merged`；#6 的
+  `after` 是空串，校验层对 translate 允许空槽位（不把日文原文填进译文轨）。后续条目从
+  #7 起继续对齐（游标只前进，不回头补空位）。
+- **异常状态**：起止任一端与原文偏差 > 0.5s 标 `drift`；整条落在本批时间窗之外计入
+  `out_of_range` 且不写入；没有匹配到译文的原句标 `missing`。翻译页表格按行高亮并显示
+  状态标签，页头横幅给出计数。
+- **纯文本仍然拒绝**：没有时间轴就无法判断该写哪一句，条数不同时整批 422。
+- **对齐结果随提案保存**：`proposal.alignment = {from,to,pasted,rows,counts,warnings}`，
+  切页 / 重开仍能还原高亮；`items` 仍是契约里的 `{i, before, after, note}`，不新增时间字段。
+- **应用只合并本批**：提案的 `source.range` 是本批区间，`POST /api/translations` 按原始索引
+  把这一批译文写进平行轨，范围外译文 / 空位原样保留；一步统一历史，⌘Z 可退。
+- **回归**：`tests/test_translation_align.py`（合并 / 偏差 / 范围外 / 空缺 / 纯文本 /
+  严格开关 / 空槽位应用）、`tools/shots/verify_batch_and_align.mjs`（真实界面）。
+
+#### 3.7.11 断句重排的局部范围（2026-11-20）
+
+断句重排页接入与润色 / 翻译 / 导出**同一份** `ClipScopePicker`（`store.exporter.clip`），
+并可叠加条号子范围：
+
+- **应用锚点仍是原稿索引区间**：范围命中 `[from_index .. to_index]`，`Session.replace_range()`
+  只替换这一段；范围外的前后字幕原样保留。
+- **局部范围 / 手动批次优先于自动分段**：选定局部范围时不再自动切段；段轨只显示这一格
+  「本次处理」。未覆盖的粘稿在范围变化时作废并提示；已覆盖后改范围 → 失效横幅，必须
+  「重新定计划」，不静默重切。
+- **范围外译文保持索引对齐（2026-11-20 修复）**：`replace_range()` 在条数变化时不再整轨
+  丢弃译文，而是按 `delta` 平移范围外头部 / 尾部译文；范围内新条目译文置空（文本 1:1
+  相同的覆盖保留原译文），`base` 同步新原文。统一历史仍是一步 ⌘Z 全退。
+- **越界警告**：新稿时间戳明显超出本段时，`core.reshape.diagnose(range_start, range_end)`
+  的 `out_of_range` 会在页面上挂高亮横幅；体检不拦路，覆盖仍只替换本段。
+- **回归**：`tests/test_reshape.py`（尾部译文平移 / 只动本段）、
+  `tools/shots/verify_batch_and_align.mjs`（选择范围 → 越界警告 → 覆盖 → 条数 6→5、
+  尾部译文平移 toast）。

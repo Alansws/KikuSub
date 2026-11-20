@@ -29,7 +29,8 @@
 
 ### 静默取证（最容易被忽略的一条）
 
-`--screenshot` 走的是 `show:false` + `capturePage`，**不抢焦点**，所以可以在你干活的同时跑：
+`--screenshot` 走的是「透明窗口 + `capturePage`」，**桌面上什么都不出现**（2026-11-16 起连
+`showInactive` 的短暂亮相也去掉了），所以可以在你干活的同时跑：
 先 `KIKUSUB_DEV_SEED` 造出目标状态，再截图，最后用 PSNR 与基线比。改样式的验证标准不是
 "编译通过"，而是"三屏截图 PSNR 不掉"。
 

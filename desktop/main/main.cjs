@@ -29,6 +29,7 @@ const path = require('node:path');
 const aikey = require('./aikey.cjs');
 const launchguard = require('./launchguard.cjs');
 const skill = require('./skill.cjs');
+const windowmode = require('./windowmode.cjs');
 const {
   deleteCleanupCandidates,
   listCleanupCandidates,
@@ -48,6 +49,14 @@ const SHOT_PATH =
 const SHOT_DELAY_MS = Number(process.env.KIKUSUB_SHOT_DELAY || 5500);
 // 开发截图用：KIKUSUB_WIN_SIZE=1440x900 覆盖默认窗口尺寸，方便按设计稿视口核对。
 const WIN_SIZE = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.KIKUSUB_WIN_SIZE || '');
+
+// 无窗口铁律（AGENTS.md §0.5）：开发模式默认不弹窗，截图模式永不弹窗。
+// 判定本身是纯函数（desktop/main/windowmode.cjs），这里只负责按结果执行。
+const WINDOW_MODE = windowmode.resolveWindowMode({
+  isPackaged: app.isPackaged,
+  shotPath: SHOT_PATH,
+  env: process.env,
+});
 
 // 开发模式下固定 userData：Electron 的单实例锁跟着 userData 走，如果每次
 // 启动都带不同的 --user-data-dir，就会真的跑出第二个 Electron，Dock 里
@@ -157,7 +166,11 @@ function skillTargetDir() {
 // 分发、ad-hoc 签名，每次发版 cdhash 都变，用户升级后就读不回旧条目——每个版本
 // 都要重填一次 Key，且没有 Developer ID 就无从修复。改成 0600 主密钥文件后，
 // 重装/升级/换 Electron 版本都不影响。实现见 desktop/main/aikey.cjs。
-const AI_KEY_FIELD = 'aiKey';
+const AI_KEY_FIELDS = { global: 'aiKey', arbitrate: 'aiArbitrateKey' };
+
+function aiKeyField(scope) {
+  return AI_KEY_FIELDS[scope] || AI_KEY_FIELDS.global;
+}
 
 function aiKeyFile() {
   return path.join(dataDir(), '.ai-key');
@@ -172,8 +185,8 @@ function writePreferences(payload) {
 }
 
 /** 读密钥；返回 `backend` 与 `broken`，调用方据此区分「没配」与「配了但读不出来」。 */
-function getAiKeyState() {
-  const blob = loadPreferences()[AI_KEY_FIELD];
+function getAiKeyState(scope) {
+  const blob = loadPreferences()[aiKeyField(scope)];
   if (typeof blob !== 'string' || !blob) {
     return { key: '', backend: 'none', broken: false, legacy: false };
   }
@@ -188,12 +201,12 @@ function getAiKeyState() {
   return { key: '', backend: 'none', broken: true, legacy: true };
 }
 
-function setAiKey(raw) {
+function setAiKey(raw, scope) {
   const text = String(raw || '').trim();
-  if (!text) return clearAiKey();
+  if (!text) return clearAiKey(scope);
   try {
     const blob = aikey.encrypt(text, aikey.ensureKeyFile(aiKeyFile()));
-    savePreferences({ [AI_KEY_FIELD]: blob });
+    savePreferences({ [aiKeyField(scope)]: blob });
     return { ok: true, backend: 'local', persistent: true };
   } catch (err) {
     mainLog(`[ai-key] 加密保存失败：${err && err.message ? err.message : err}`);
@@ -201,14 +214,15 @@ function setAiKey(raw) {
   }
 }
 
-function getAiKey() {
-  return getAiKeyState().key;
+function getAiKey(scope) {
+  return getAiKeyState(scope).key;
 }
 
-function clearAiKey() {
+function clearAiKey(scope) {
   const prefs = loadPreferences();
-  if (AI_KEY_FIELD in prefs) {
-    delete prefs[AI_KEY_FIELD];
+  const field = aiKeyField(scope);
+  if (field in prefs) {
+    delete prefs[field];
     try {
       writePreferences(prefs);
     } catch (err) {
@@ -538,11 +552,18 @@ function startSidecar() {
 
   const exe = pythonPath();
   const args = IS_DEV ? ['-m', 'server', '--port', '0'] : ['--port', '0'];
-  const cwd = IS_DEV ? REPO_ROOT : path.join(process.resourcesPath, 'python');
 
   // 开发模式沿用仓库目录（与 sidecar、CLI 共用同一份 outputs/presets，
   // 三个入口看到的是同一套数据）；打包后才切到 Application Support。
   const base = IS_DEV ? REPO_ROOT : ensureDataDirs();
+
+  // cwd 绝不能指进 .app 里面。打包脚本是 `rm -rf KikuSub.app` 后重新装配，
+  // 而 sidecar 是 detached 的（父进程退出它不会跟着死）：装配那一刻它的 cwd
+  // 就变成一个已删除的 inode，之后每次 os.getcwd() 都是 ENOENT。
+  // torch 在 import 期就会调（torch/_dynamo/config.py: default_debug_dir_root），
+  // 于是任意一次 Whisper/Qwen 转写都会在 0.5 秒内失败，界面只剩一句
+  // "[Errno 2] No such file or directory"。数据目录不会被重装替换，用它才安全。
+  const cwd = IS_DEV ? REPO_ROOT : base;
   let models = modelsDir();
   try {
     models = ensureWritableDir(models);
@@ -821,9 +842,11 @@ function createWindow() {
   });
 
   win.once('ready-to-show', () => {
-    // 截图模式不弹窗：capturePage 对未显示的窗口同样能拿到已绘制的帧
+    // 无窗口铁律（AGENTS.md §0.5）：只有明确允许时才把窗口交给用户看。
+    // 截图模式走透明窗口取帧（见 captureAndQuit），其余隐藏模式连 Dock 图标都不留。
     if (SHOT_PATH) captureAndQuit();
-    else win.show();
+    else if (WINDOW_MODE.visible) win.show();
+    else mainLog(`[window] 无窗口模式（${WINDOW_MODE.reason}）：不显示界面`);
   });
 
   // 渲染进程就绪后把已有握手补发一次（避免 sidecar 比页面先好的竞态）
@@ -895,8 +918,16 @@ function sendToRenderer(channel, payload) {
 /** 自截图模式：不碰用户桌面，直接把窗口画面存成 PNG 后退出。 */
 async function captureAndQuit() {
   try {
-    // 隐藏窗口不会持续重绘，capturePage 会拿到首帧。先短暂显示（不抢焦点），
-    // 让合成器把当前状态真正画出来。
+    // 不能用 showInactive() 直接见人：那会在桌面上亮 4.5–5.5 秒，正是「改个功能就反复
+    // 弹窗」的来源。把窗口设成全透明 + 无阴影（仍然参与合成），capturePage() 拿到的帧
+    // 与可见时一致，桌面上却连一帧都不会出现。
+    try {
+      win.setHasShadow(false);
+      win.setOpacity(0);
+      win.setIgnoreMouseEvents(true);
+    } catch {
+      /* 平台不支持时忽略：截图仍可完成 */
+    }
     win.showInactive();
     await new Promise((r) => setTimeout(r, SHOT_DELAY_MS));
     // 开发用：KIKUSUB_DEV_EVAL 里的 JS 会在渲染进程里执行并打印结果
@@ -1279,9 +1310,9 @@ ipcMain.handle('dialog:pick-audio', (_e, defaultDir) => pickAudio(defaultDir));
 ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultDir));
 
 // ---- AI 密钥 ----
-ipcMain.handle('ai-key:set', (_e, text) => setAiKey(text));
-ipcMain.handle('ai-key:get', () => getAiKey());
-ipcMain.handle('ai-key:clear', () => clearAiKey());
+ipcMain.handle('ai-key:set', (_e, text, scope) => setAiKey(text, scope));
+ipcMain.handle('ai-key:get', (_e, scope) => getAiKey(scope));
+ipcMain.handle('ai-key:clear', (_e, scope) => clearAiKey(scope));
 ipcMain.handle('skill:status', () => {
   try {
     return { ok: true, ...skill.status({ sourceDir: skillSourceDir(), targetDir: skillTargetDir() }) };
@@ -1306,8 +1337,8 @@ ipcMain.handle('skill:install', (_event, paths) => {
   }
 });
 
-ipcMain.handle('ai-key:status', () => {
-  const state = getAiKeyState();
+ipcMain.handle('ai-key:status', (_e, scope) => {
+  const state = getAiKeyState(scope);
   return {
     ok: true,
     // 本机加密与签名身份无关，永远可用
@@ -1465,6 +1496,14 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // 无窗口闸门排在最前面：没有显式许可时，绝不在用户桌面上建窗口，
+    // 也不留下「跑着但看不见」的进程让下一个人去猜。`npx electron .` 会走到这里。
+    // 必须排在启动失败计数之前，否则反复被拒会被误判成「应用连续崩溃」。
+    if (WINDOW_MODE.reason === windowmode.REASON.DEV_GUARD) {
+      console.error(windowmode.NO_WINDOW_REFUSAL);
+      app.exit(2);
+      return;
+    }
     // 安全模式闸门必须排在建窗、起 sidecar、读日志之前：崩在这几步正是要兜底的情况。
     // 截图/取证模式（--screenshot）不参与：它 5.5s 就 app.exit()，绕过 before-quit，
     // 连跑几次取证会被误判成"连续打不开"。
@@ -1507,6 +1546,14 @@ if (!app.requestSingleInstanceLock()) {
         if (fs.existsSync(iconPath)) app.dock.setIcon(iconPath);
       } catch {
         /* 图标问题不能挡启动 */
+      }
+    }
+    // 不显示窗口时也别在 Dock 留图标：Dock 图标本身就是用户会看见的「弹出来」。
+    if (!WINDOW_MODE.visible && process.platform === 'darwin' && app.dock) {
+      try {
+        app.dock.hide();
+      } catch {
+        /* 没有 Dock 的环境忽略 */
       }
     }
     // sidecar 启动失败不能连累窗口：先建窗口，出问题也要能看见界面和日志

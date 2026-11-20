@@ -18,6 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.chapters import ChapterMark, load_marks, normalize_marks, save_marks
 from core.subtitles import SubtitleCue, join_cue_texts
 from core.textio import write_text_atomic
 
@@ -39,6 +40,14 @@ def _copy(cues: list[SubtitleCue]) -> list[SubtitleCue]:
 def _table_signature(cues: list[SubtitleCue]) -> tuple[tuple[float, float, str], ...]:
     """整表签名：判断一次替换到底有没有改动（毫秒级比较，避免浮点噪声）。"""
     return tuple((round(cue.start, 3), round(cue.end, 3), cue.text) for cue in cues)
+
+
+def _copy_chapters(marks: list[ChapterMark]) -> list[ChapterMark]:
+    """章节标记的浅拷贝：历史快照必须与当前列表脱钩（否则一条改名会改到旧快照上）。"""
+    return [
+        ChapterMark(id=mark.id, start=mark.start, end=mark.end, title=mark.title)
+        for mark in marks
+    ]
 
 
 def _copy_tracks(tracks: dict[str, "TranslationTrack"]) -> dict[str, "TranslationTrack"]:
@@ -213,6 +222,8 @@ class HistoryState:
     qa_payload: str = ""
     export_ui: dict = field(default_factory=dict)
     ai_draft: dict = field(default_factory=dict)
+    # 章节 / 时刻点标记：和字幕同一条时间线，⌘Z 一次退掉「新建/改名/改时间/删除」。
+    chapters: list[ChapterMark] = field(default_factory=list)
     coalesce: str = ""
 
 
@@ -253,6 +264,10 @@ class Session:
     export_ui: dict = field(default_factory=dict)
     # AI 优化台里人工改过的 diff 草稿；应用提案前也属于工作区状态。
     ai_draft: dict = field(default_factory=dict)
+    # 章节 / 时刻点标记。与字幕同一份历史快照，按媒体身份落盘（见 sync_chapters）。
+    chapters: list[ChapterMark] = field(default_factory=list)
+    # 章节边车的落盘目录（output_dir）。空串 = 还没绑定媒体，不写盘。
+    chapters_dir: str = ""
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     # -- 历史 ---------------------------------------------------------------
@@ -267,6 +282,7 @@ class Session:
             qa_payload=self.qa_payload,
             export_ui=copy.deepcopy(self.export_ui),
             ai_draft=copy.deepcopy(self.ai_draft),
+            chapters=_copy_chapters(self.chapters),
             coalesce=coalesce,
         )
 
@@ -332,6 +348,9 @@ class Session:
         self.qa_payload = state.qa_payload or ""
         self.export_ui = copy.deepcopy(state.export_ui)
         self.ai_draft = copy.deepcopy(state.ai_draft)
+        self.chapters = _copy_chapters(state.chapters)
+        # 撤销 / 重做也要把章节写回磁盘：否则重启后看到的是撤销前的那一版。
+        self._persist_chapters()
         if self.media_path and self.qa_payload != previous_qa:
             # 质检状态也属于工作区：撤销一次「删除此句」时，待核列表必须跟着回去。
             from core.audit import empty_audit_payload, write_audit_payload
@@ -525,8 +544,10 @@ class Session:
         锚点必须是索引而不是模型给的时间：分段重排时两段的交界由原稿的切法决定，
         模型的时间漂移不该把邻段吃掉。返回被替换条数、新条数与被丢弃的译文轨。
 
-        条数一旦变化，任何旧译文轨都无法逐条对齐，这里与 ``replace_review()``
-        同一口径：直接丢弃并回报，让界面提示「可 ⌘Z 退回」而不是留下一排错位的译文。
+        译文轨（2026-11-20 起）：条数变了也**不再整轨丢弃**。范围外的头部与尾部
+        字幕原样保留，它们的译文按 ``delta`` 一起平移；范围内部的新条目译文置空
+        （旧译文对不上新原文），若覆盖前后文本 1:1 相同则原译文保留。这样局部
+        重排不会让后半片的译文全部消失；``⌘Z`` 仍由统一历史一次退回。
         """
         start = max(1, int(from_index))
         end = int(to_index)
@@ -543,11 +564,16 @@ class Session:
             block = _copy(list(cues))
             merged = self.review_cues[: start - 1] + block + self.review_cues[end:]
             changed = _table_signature(merged) != _table_signature(self.review_cues)
+            shifted = (
+                self._shift_translations_for_range(self.review_cues, start, end, block)
+                if changed
+                else []
+            )
             self.review_cues = merged
             dropped = sorted(self.translations)
             self._drop_misaligned_translations()
             dropped = [lang for lang in dropped if lang not in self.translations]
-            if dropped:
+            if changed and (shifted or dropped):
                 self._drop_translation_undo()
             if record and changed:
                 self._record(label)
@@ -562,7 +588,52 @@ class Session:
                 "count_before": before,
                 "changed": changed,
                 "dropped_translations": dropped,
+                "shifted_translations": shifted,
             }
+
+    def _shift_translations_for_range(
+        self,
+        old_cues: list[SubtitleCue],
+        start: int,
+        end: int,
+        block: list[SubtitleCue],
+    ) -> list[str]:
+        """把范围外的译文按条目位移一起搬走，范围内新条目留空。
+
+        ``start`` / ``end`` 是覆盖**前**的原稿区间（1 基、含两端）。返回被平移的
+        语种列表。已经对不齐的旧轨不在这里处理，交给 ``_drop_misaligned_translations``。
+        """
+        total = len(old_cues)
+        replaced = end - start + 1
+        same_inside = len(block) == replaced and all(
+            block[offset].text == old_cues[start - 1 + offset].text
+            for offset in range(replaced)
+        )
+        shifted: list[str] = []
+        for lang, track in list(self.translations.items()):
+            if len(track.texts) != total:
+                continue
+            base = list(track.base[:total])
+            if len(base) < total:
+                base.extend([""] * (total - len(base)))
+            if same_inside:
+                mid_texts = list(track.texts[start - 1 : end])
+                mid_base = base[start - 1 : end]
+            else:
+                mid_texts = ["" for _ in block]
+                mid_base = [cue.text for cue in block]
+            texts = list(track.texts[: start - 1]) + mid_texts + list(track.texts[end:])
+            new_base = base[: start - 1] + mid_base + base[end:]
+            self.translations[lang] = TranslationTrack(
+                lang=lang,
+                texts=texts,
+                base=new_base,
+                created_at=track.created_at,
+                entry=track.entry,
+            )
+            self.translation_undo.pop(lang, None)
+            shifted.append(lang)
+        return shifted
 
     def _drop_misaligned_translations(self) -> None:
         """删掉条数已与字幕对不上的译文轨，绝不让错位的轨继续存在。"""
@@ -643,14 +714,27 @@ class Session:
         end: float,
         text: str,
         label: str = "",
+        translations: dict[str, dict[str, str]] | None = None,
     ) -> bool:
-        """插入一条：译文轨在同一位置插入空占位，后续条目不会错位。"""
+        """插入一条：译文轨在同一位置插入空占位，后续条目不会错位。
+
+        ``translations`` 是「复制 / 粘贴一条带译文的字幕」用的：只覆盖**当前
+        会话已存在**的语种；不存在的 lang 直接忽略，绝不凭空新建一条残缺的轨。
+        每个语种的 ``base`` 原样写回，过期状态不会被粘贴洗掉。
+        """
         with self.lock:
             if not 0 <= index <= len(self.review_cues):
                 return False
             self._ensure_baseline()
             self.review_cues.insert(index, SubtitleCue(start=start, end=end, text=text))
             self._insert_translation_at(index)
+            for lang, item in (translations or {}).items():
+                track = self.translations.get(lang)
+                if track is None or not 0 <= index < len(track.texts):
+                    continue
+                track.texts[index] = str(item.get("text", ""))
+                if 0 <= index < len(track.base):
+                    track.base[index] = str(item.get("base", track.texts[index]))
             self._drop_translation_undo()
             self._record(label or f"插入第 {index + 1} 条")
             return True
@@ -746,9 +830,78 @@ class Session:
             self.qa_payload = ""
             self.export_ui = {}
             self.ai_draft = {}
+            self.chapters = []
             self.history = []
             self.history_cursor = -1
             self.updated_at = time.time()
+
+    # -- 章节标记 -----------------------------------------------------------
+
+    def sync_chapters(
+        self,
+        *,
+        media_path: str,
+        output_dir: str | Path,
+        restore: bool = True,
+        duration: float = 0.0,
+    ) -> list[ChapterMark]:
+        """绑定媒体时同步章节：清内存后从边车恢复（与第二版稿同一套语义）。
+
+        `restore=False` 用于「换到一部新片」：新片没有边车，内存必须先清空，
+        否则会把上一部的章节带到新片上。
+        """
+        with self.lock:
+            self.chapters_dir = str(output_dir or "")
+            self.media_path = str(media_path or self.media_path)
+            marks = (
+                load_marks(output_dir, media_path)
+                if (restore and media_path and output_dir)
+                else []
+            )
+            self.chapters = normalize_marks(marks, duration)
+            self.updated_at = time.time()
+            return _copy_chapters(self.chapters)
+
+    def set_chapters(
+        self,
+        marks: list[dict] | list[ChapterMark],
+        *,
+        label: str,
+        duration: float = 0.0,
+    ) -> list[ChapterMark]:
+        """整表替换章节并记一步历史（新建 / 改名 / 改时间 / 删除都走这里）。
+
+        为什么接受整表：四个操作在前端都很容易表达成「新列表」，而逐个动作
+        接口会让「改名 + 微调时间」变成两步历史。整表 + 一个有意义的 label
+        才是「一次操作 = 一步 ⌘Z」。
+        """
+        with self.lock:
+            self.ensure_baseline()
+
+            def as_mark(item):
+                if isinstance(item, ChapterMark):
+                    return item
+                return ChapterMark.from_mapping(dict(item))
+
+            incoming = [as_mark(item) for item in marks]
+            self.chapters = normalize_marks(incoming, duration)
+            text = (label or "编辑章节标记").strip()[:120] or "编辑章节标记"
+            self._record(text)
+            self._persist_chapters()
+            return _copy_chapters(self.chapters)
+
+    def _persist_chapters(self) -> None:
+        """把当前章节写到边车文件；没有绑定媒体 / 目录时静默跳过。"""
+        if not (self.chapters_dir and self.media_path):
+            return
+        try:
+            save_marks(self.chapters_dir, self.media_path, self.chapters)
+        except OSError:
+            # 章节是可选增强：写不进去不能挡住字幕编辑 / 导出
+            pass
+
+    def chapter_count(self) -> int:
+        return len(self.chapters)
 
     # -- 第二版本（alt_review）---------------------------------------------
 

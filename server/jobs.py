@@ -253,6 +253,7 @@ class JobManager:
         cues,
         translation_texts: list[str] | None,
         out_dir: Path,
+        chapters: list | None = None,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
@@ -267,6 +268,7 @@ class JobManager:
             list(cues),
             list(translation_texts or []),
             Path(out_dir),
+            list(chapters or []),
         )
         return job
 
@@ -279,6 +281,7 @@ class JobManager:
         cues,
         translation_texts: list[str],
         out_dir: Path,
+        chapters: list | None = None,
     ) -> None:
         from core import video_export
 
@@ -311,6 +314,7 @@ class JobManager:
                 options,
                 out_dir,
                 translation_texts=translation_texts,
+                chapters=list(chapters or []),
                 on_progress=on_progress,
                 cancel_event=job.token,
             )
@@ -355,6 +359,7 @@ class JobManager:
         source_path: str,
         out_path: Path,
         dual: bool = False,
+        cue_span: tuple[int, int] | None = None,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
@@ -376,6 +381,7 @@ class JobManager:
                 "context_cues": context_cues,
                 "source_path": source_path,
                 "dual": bool(dual),
+                "cue_span": cue_span,
             },
             out_path,
         )
@@ -391,6 +397,7 @@ class JobManager:
         context_cues: int,
         source_path: str,
         out_path: Path,
+        cue_span: tuple[int, int] | None = None,
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> JobRecord:
@@ -407,6 +414,7 @@ class JobManager:
                 "chunk_cues": chunk_cues,
                 "context_cues": context_cues,
                 "source_path": source_path,
+                "cue_span": cue_span,
             },
             out_path,
         )
@@ -427,12 +435,27 @@ class JobManager:
         job.status = "running"
         job.started_at = time.time()
         self._emit(job, {"type": "start", "job": job.snapshot()})
-        texts = [cue.text for cue in getattr(session, "review_cues", []) or []]
+        all_cues = list(getattr(session, "review_cues", []) or [])
+        total_cues = len(all_cues)
+        span = params.get("cue_span")
+        if span and total_cues > 0:
+            first = max(1, min(int(span[0]), total_cues))
+            last = max(first, min(int(span[1]), total_cues))
+        else:
+            first, last = 1, total_cues
+        # 片段模式：这一段的文本就是提案的 source（digest 只绑这一段），
+        # items 的 i 仍是全片序号（界面 #i / 分段回填同一坐标系）。
+        cue_span = (first, last) if (first, last) != (1, total_cues) else None
+        cues = all_cues[first - 1 : last]
+        texts = [cue.text for cue in cues]
+
         def progress(ratio: float, stage: str) -> None:
             self._progress(job, ratio, stage)
 
         # 单槽必须占到最后一步（含写盘）才释放：中途放开会让新任务踩进同一个会话。
         try:
+            if not texts:
+                raise ai_client.AiError("当前没有可处理的字幕")
             if kind == "translate":
                 proposal, warnings, _glossary = ai_translate.run_translate(
                     texts,
@@ -441,6 +464,7 @@ class JobManager:
                     chunk_cues=int(params.get("chunk_cues") or 120),
                     context_cues=int(params.get("context_cues") or 0),
                     source_path=str(params.get("source_path") or ""),
+                    cue_span=cue_span,
                     cancel=job.token,
                     on_progress=progress,
                 )
@@ -459,8 +483,9 @@ class JobManager:
                     entry="in-app",
                     source_path=str(params.get("source_path") or ""),
                     texts_b=[cue.text for cue in alt.cues] if alt is not None else None,
-                    cues_a=list(getattr(session, "review_cues", []) or []),
+                    cues_a=cues,
                     cues_b=list(alt.cues) if alt is not None else None,
+                    cue_span=cue_span,
                     cancel=job.token,
                     on_progress=progress,
                 )
@@ -477,6 +502,7 @@ class JobManager:
                 "proposal_path": str(out_path),
                 "kind": kind,
                 "count": len(texts),
+                "range": {"from": first, "to": last, "count": len(texts)} if cue_span else None,
                 "changed": changed,
                 "chunks": int(proposal.get("chunks") or 1),
                 "warnings": list(warnings or [])[:5],

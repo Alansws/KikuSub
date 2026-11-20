@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from core import export_naming
 from core import settings as settings_store
 from core.audit import load_audit_payload
+from core.clip_range import clip_tag, clip_window, safe_label, select_cues_in_range, shift_cues_to_clip
 from core.i18n import bilingual_entries, target_cues
 from core.subtitles import (
     SubtitleCue,
@@ -57,11 +58,26 @@ class CuePatch(BaseModel):
     text: str | None = None
 
 
+class InsertTranslation(BaseModel):
+    """随插入字幕一起带上的某语种译文。
+
+    ``base`` 是生成译文时的原文快照。粘贴一句带译文的字幕时必须原样带过来，
+    否则原来过期的译文会在新位置上被误标成「已同步」。
+    """
+
+    text: str = ""
+    base: str = ""
+
+
 class InsertRequest(BaseModel):
     index: int
     start: float
     end: float
     text: str = ""
+    # 右键「添加字幕」不传 label，仍回落到「插入第 N 条」。
+    label: str = ""
+    # 只写当前会话已经存在的语种；不存在的 lang 由 Session 直接忽略。
+    translations: dict[str, InsertTranslation] = Field(default_factory=dict)
 
 
 class SplitRequest(BaseModel):
@@ -106,6 +122,10 @@ class ExportRequest(BaseModel):
     # source = 只导原文（默认，行为与历史一致）；target = 只导译文；both = 双语（一条两行）
     track: str = "source"
     lang: str = ""
+    # 片段范围（0 / 0 = 全片）：导出平移归零后的这一段字幕，文件名带范围标签。
+    clip_start: float = 0.0
+    clip_end: float = 0.0
+    clip_label: str = ""
 
 
 class ImportPathRequest(BaseModel):
@@ -583,7 +603,18 @@ def delete_cue(index: int, session: Session = Depends(get_session)) -> dict:
 def insert_cue(index: int, payload: InsertRequest, session: Session = Depends(get_session)) -> dict:
     _validate(payload.start, payload.end)
     target = payload.index if payload.index >= 0 else index
-    if not session.insert_cue(target, payload.start, payload.end, payload.text):
+    translations = {
+        lang: {"text": item.text, "base": item.base}
+        for lang, item in payload.translations.items()
+    }
+    if not session.insert_cue(
+        target,
+        payload.start,
+        payload.end,
+        payload.text,
+        label=payload.label,
+        translations=translations,
+    ):
         raise HTTPException(status_code=422, detail=f"插入位置 {payload.index} 越界")
     return {**_snapshot(session), "index": target}
 
@@ -641,22 +672,62 @@ def export_cues(
     suffix = ""
     skipped = 0
     lang = (payload.lang or "").strip()
+    transcriptions: list[str] | None = None
     if track != "source":
         if not lang:
             raise HTTPException(status_code=422, detail="导出译文时必须指定语种")
         translation = session.translations.get(lang)
         if translation is None:
             raise HTTPException(status_code=409, detail=f"还没有 {lang} 的译文可用")
+        transcriptions = list(translation.texts)
+
+    # 片段：先选中这一段，再把时间轴平移到 0 起（原文与译文一起搬，保持逐条对齐）。
+    duration = 0.0
+    if session.media_id:
+        try:
+            duration = float(request.app.state.media.get(session.media_id).duration or 0.0)
+        except Exception:  # noqa: BLE001 - 取不到片长就只按用户给的终点
+            duration = 0.0
+    try:
+        window = clip_window(payload.clip_start, payload.clip_end, duration)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    clip_label = ""
+    if window is not None:
+        selected = select_cues_in_range(cues, window.start, window.end)
+        if not selected.count:
+            raise HTTPException(status_code=409, detail="这个片段范围内没有字幕")
+        if transcriptions is None:
+            cues, shifted_texts = shift_cues_to_clip(
+                selected.cues, None, window.start, window.end
+            )
+        else:
+            picked_texts = [
+                transcriptions[index] if index < len(transcriptions) else ""
+                for index in selected.indices
+            ]
+            cues, shifted_texts = shift_cues_to_clip(
+                selected.cues, picked_texts, window.start, window.end
+            )
+            transcriptions = shifted_texts
+        clip_label = clip_tag(
+            window.start, window.end, safe_label(payload.clip_label)
+        )
+
+    if track != "source":
         if track == "target":
-            cues, skipped = target_cues(cues, translation.texts)
+            cues, skipped = target_cues(cues, transcriptions or [])
             suffix = f".{lang}"
         else:
             # 交付文件用「每语种一条 cue」，与官方双语 SRT 的写法一致：
             # 播放器里叠成两行，重新导入核对台也不会把两种语言挤成一行。
-            cues = bilingual_entries(cues, translation.texts)
+            cues = bilingual_entries(cues, transcriptions or [])
             suffix = ".bilingual"
         if not cues:
             raise HTTPException(status_code=409, detail="译文全是空的，没有可导出的内容")
+    if clip_label:
+        # 片段字幕必须与整片交付稿区分开，不能互相覆盖。
+        suffix = f".{clip_label}{suffix}"
 
     text = render(cues)
 
@@ -701,5 +772,6 @@ def export_cues(
         "count": len(cues),
         "track": track,
         "lang": lang,
+        "clip": clip_label or None,
         "skipped": skipped,
     }

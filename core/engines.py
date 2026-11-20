@@ -48,6 +48,10 @@ class EngineSpec:
     file_tag: str = ""
     # 历史标签：旧版本产物用过 .whisper / .qwen 等，导入与版本推断仍要认。
     legacy_tags: tuple[str, ...] = ()
+    # 能否做「另一引擎复核」：把一段字幕窗口直接送模型、只回文本
+    # （`transcribe_window`）。这是能力标记，不是引擎 key 白名单——复核接口与
+    # 前端下拉都只读这里，新增引擎时不许在别处再写一份 key 判断（红线 #12）。
+    reviewable: bool = False
 
     @property
     def approx_label(self) -> str:
@@ -75,6 +79,7 @@ ENGINES: tuple[EngineSpec, ...] = (
         required_files=("model.safetensors",),
         file_tag="AnimeWhisper",
         legacy_tags=("whisper", "anime-whisper"),
+        reviewable=True,
     ),
     EngineSpec(
         key="qwen",
@@ -96,6 +101,7 @@ ENGINES: tuple[EngineSpec, ...] = (
         required_files=("config.json", "ctc_aligner_jav_vocalisation_v3.pt"),
         file_tag="Qwen3-ASR",
         legacy_tags=("qwen", "qwen3", "qwen3-asr"),
+        reviewable=True,
     ),
     # ---- 中文（可选装）----
     # 两个引擎都走 sherpa-onnx（ONNX Runtime / CPU），不引入 torch 之外的新运行时；
@@ -254,6 +260,7 @@ def status(spec: EngineSpec, *, enabled: bool | None = None, include_size: bool 
         "notes": spec.notes,
         "downloadable": spec.downloadable,
         "family": spec.family,
+        "reviewable": spec.reviewable,
         "installed": installed,
         "size_bytes": size,
         "enabled": True if enabled is None else bool(enabled),

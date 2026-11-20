@@ -13,6 +13,20 @@
 
 ``apply_polish`` 只做三件事：按 ``accept`` 挑条、按 ``edits`` 覆盖、**保留原时间码**。
 它不重排、不过滤、不合并——那些都会让「时间轴不变」这条保证失效。
+
+## 片段范围（2026-11-20 新增）
+
+长片可以只处理一段（例如第 291–581 条）。这时提案的 ``source.range`` 记录
+``{"from": 291, "to": 581, "count": 291}``：
+
+- **digest 只覆盖这一段**（``source_digest(scope_texts)``）——模型看到多少、绑定多少，
+  段外的字幕改了也不会误拒绝（那本来就不该让这段提案失效）；
+- **``i`` 仍是全片的 1 基序号**（291…581），界面因此可以直接用全局 ``#i`` 对行，
+  粘贴回来的分段合并也不用换坐标系；
+- ``validate_proposal`` / ``apply_polish_range`` 用 ``span`` 把全局序号映射到这一段，
+  ``apply_polish`` 仍是唯一的写回实现（只换索引口径，不复制逻辑）。
+
+没有 ``source.range`` 的旧提案行为完全不变（``span = (1, n)``）。
 """
 
 from __future__ import annotations
@@ -65,6 +79,47 @@ def proposal_path(output_dir: Path | str, stem: str, kind: str, lang: str = "") 
     return root / f"{base}.ai-polish.json"
 
 
+# --------------------------------------------------------------------------- 片段范围
+
+
+def cue_range(data: dict) -> tuple[int, int] | None:
+    """提案声明的片段范围（1 基、含两端）；整片 / 旧提案返回 None。"""
+    if not isinstance(data, dict):
+        return None
+    raw = (data.get("source") or {}).get("range")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        first = int(raw.get("from"))
+        last = int(raw.get("to"))
+    except (TypeError, ValueError):
+        return None
+    if first < 1 or last < first:
+        return None
+    return first, last
+
+
+def source_span(data: dict, total: int) -> tuple[int, int]:
+    """提案实际作用的全片序号区间（1 基、含两端）。没有 range 时是整片。
+
+    非法范围抛 ``ValueError``，由路由转成 422：宁可拒绝，也不要拿一个错位的
+    span 去切片（那会把译文写进别的句子）。
+    """
+    size = max(0, int(total or 0))
+    span = cue_range(data)
+    if span is None:
+        return (1, size)
+    first, last = span
+    if size <= 0 or first > size:
+        raise ValueError(f"提案的片段范围越界：第 {first}–{last} 条（当前 {size} 条）")
+    last = min(last, size)
+    if last < first:
+        raise ValueError(f"提案的片段范围不合法：第 {first}–{last} 条（当前 {size} 条）")
+    return (first, last)
+
+
+
+
 # --------------------------------------------------------------------------- 构造 / 读写
 
 
@@ -82,11 +137,16 @@ def build_proposal(
     chunks: int = 1,
     source_path: str = "",
     created_at: float | None = None,
+    cue_span: tuple[int, int] | None = None,
 ) -> dict:
     """组装一份提案 dict。``items`` 由调用方按 ``{i, after}`` 准备。
 
     ``texts_b`` 只在双源润色时传入：``source`` 会额外落一份 ``digest_b``，
     应用前据此确认「第二版字幕没有在生成提案之后被换掉」。
+
+    ``cue_span`` 只在片段模式下传入：``source.range`` 记录这一段在全片的
+    1 基序号区间（``items`` 的 ``i`` 也用全片序号），``digest`` 仍是**这一段**
+    原文的指纹——模型看到多少就绑定多少。
     """
     import time
 
@@ -95,6 +155,9 @@ def build_proposal(
         "count": len(texts),
         "digest": source_digest(texts),
     }
+    if cue_span is not None:
+        first, last = int(cue_span[0]), int(cue_span[1])
+        source["range"] = {"from": first, "to": last, "count": len(texts)}
     if texts_b is not None:
         source["count_b"] = len(texts_b)
         source["digest_b"] = source_digest(texts_b)
@@ -147,10 +210,19 @@ class ProposalCheck:
     effective: dict[int, str] = field(default_factory=dict)
 
 
-def _effective_after(after, source_text: str) -> tuple[str, str]:
-    """单条文本的兜底：空或离谱地长，就退回原文。返回 (文本, 警告)。"""
+def _effective_after(
+    after, source_text: str, *, allow_empty: bool = False
+) -> tuple[str, str]:
+    """单条文本的兜底：空或离谱地长，就退回原文。返回 (文本, 警告)。
+
+    ``allow_empty`` 只给**翻译**用：一条译文跨多句时，被合并覆盖的槽位与
+    「原句没匹配到译文」的槽位在语义上就是空，强行把日语原文填进译文轨会让
+    双语画面出现一整行日文。空值仍是合法槽位，只是不写入文本。
+    """
     text = after if isinstance(after, str) else ""
     if not text.strip():
+        if allow_empty:
+            return "", ""
         return source_text, "空文本已退回原文"
     src = str(source_text or "").strip()
     if src and len(text) > len(src) * MAX_TEXT_GROWTH:
@@ -162,6 +234,7 @@ def validate_proposal(
     data: dict,
     texts: list[str],
     texts_b: list[str] | None = None,
+    span: tuple[int, int] | None = None,
 ) -> ProposalCheck:
     """结构校验 + 源指纹校验。**结构错误 422 优先于指纹错误 409。**
 
@@ -170,9 +243,15 @@ def validate_proposal(
     单源提案（没有 digest_b）即使当前存在第二版也照旧只校验 A，保持
     ``desktop/resources/skill/`` 与旧提案 100% 向后兼容。
 
+    ``texts`` 是这份提案**绑定**的原文：片段模式下已经被切到该段（与
+    ``source.digest`` 同一份），``span`` 是这段在全片的 1 基序号区间，
+    用来解释 ``items`` 里那些**全片序号**。``span=None`` = 整片（旧行为）。
+
     错误不抛异常，交给路由转成 HTTP 状态码，这样纯函数也能被单测直接断言。
     """
     n = len(texts)
+    first, last = (1, n) if span is None else (int(span[0]), int(span[1]))
+    scoped = span is not None
 
     def fail(message: str) -> ProposalCheck:
         return ProposalCheck(ok=False, status=422, errors=[message])
@@ -184,12 +263,15 @@ def validate_proposal(
     kind = data.get("kind")
     if kind not in KINDS:
         return fail(f"未知的提案类型：{kind!r}")
+    if scoped and (first < 1 or last < first or last - first + 1 != n):
+        return fail(f"片段范围与提案条数不符：第 {first}–{last} 条 vs {n} 条")
 
     items = data.get("items")
     if not isinstance(items, list):
         return fail("items 必须是数组")
     if len(items) != n:
-        return fail(f"条目数不符：提案 {len(items)} 条，当前字幕 {n} 条")
+        where = f"第 {first}–{last} 条" if scoped else "当前字幕"
+        return fail(f"条目数不符：提案 {len(items)} 条，{where} {n} 条")
 
     seen: set[int] = set()
     warnings: list[str] = []
@@ -205,24 +287,27 @@ def validate_proposal(
         idx = item.get("i")
         if not isinstance(idx, int) or isinstance(idx, bool):
             return fail(f"序号必须是整数：{idx!r}")
-        if not 1 <= idx <= n:
-            return fail(f"序号越界：{idx}（有效范围 1–{n}）")
+        if not first <= idx <= last:
+            return fail(f"序号越界：{idx}（有效范围 {first}–{last}）")
         if idx in seen:
             return fail(f"序号重复：{idx}")
         seen.add(idx)
         after = item.get("after")
         if not isinstance(after, str):
             return fail(f"第 {idx} 条的 after 必须是字符串")
-        text, note = _effective_after(after, texts[idx - 1])
+        source_text = texts[idx - first]
+        text, note = _effective_after(
+            after, source_text, allow_empty=(kind == "translate")
+        )
         effective[idx] = text
         if note:
             warnings.append(f"第 {idx} 条：{note}")
-        if text != texts[idx - 1]:
+        if text != source_text:
             changed += 1
             if need_note and not str(item.get("note") or "").strip():
                 warnings.append(f"第 {idx} 条改动了但没有写理由")
 
-    missing = sorted(set(range(1, n + 1)) - seen)
+    missing = sorted(set(range(first, last + 1)) - seen)
     if missing:
         return fail(f"缺少序号：{missing[:8]}{'…' if len(missing) > 8 else ''}")
 
@@ -311,3 +396,48 @@ def apply_polish(
         out.append(SubtitleCue(start=cue.start, end=cue.end, text=text))
 
     return out, changed
+
+
+def apply_polish_range(
+    source: list[SubtitleCue],
+    items: list[dict],
+    span: tuple[int, int] | None = None,
+    accept: set[int] | None = None,
+    edits: dict[int, str] | None = None,
+) -> tuple[list[SubtitleCue], int]:
+    """片段版 ``apply_polish``：只换索引口径，**写回仍调用 apply_polish**。
+
+    ``span`` 是提案作用的全片 1 基区间（``None`` = 整片）。``items`` / ``accept`` /
+    ``edits`` 都用全片序号，这里映射成这一段内部的序号后交给 ``apply_polish``；
+    段外条目原样拼回，一个字节都不动。返回 ``(整片新字幕, 改动条数)``。
+    """
+    total = len(source)
+    first, last = (1, total) if span is None else (int(span[0]), int(span[1]))
+    first = max(1, min(first, max(1, total)))
+    last = max(first, min(last, total))
+    scoped = source[first - 1 : last]
+    local_items: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("i"))
+        except (TypeError, ValueError):
+            continue
+        mapped = dict(item)
+        mapped["i"] = idx - first + 1
+        local_items.append(mapped)
+    local_accept = (
+        None
+        if accept is None
+        else {int(i) - first + 1 for i in accept if first <= int(i) <= last}
+    )
+    local_edits = {
+        int(k) - first + 1: str(v)
+        for k, v in (edits or {}).items()
+        if first <= int(k) <= last
+    }
+    new_slice, changed = apply_polish(
+        scoped, local_items, accept=local_accept, edits=local_edits
+    )
+    return [*source[: first - 1], *new_slice, *source[last:]], changed

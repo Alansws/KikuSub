@@ -199,3 +199,139 @@ def test_unrelated_400_still_tries_plain_once_then_reports(monkeypatch):
     assert seen == ["json", "plain"]
     assert info.value.status == 400
     assert "model not found" in info.value.detail
+
+
+def test_json_from_text_strips_think_and_fence():
+    text = '好的。\n<think>先想一下，不要输出这个。</think>\n```json\n{"text": "もっと"}\n```'
+    assert client.json_from_text(text) == {"text": "もっと"}
+
+
+def test_json_from_text_strips_special_tokens():
+    assert client.json_from_text('<|im_start|>{"ok": true}<|im_end|>') == {"ok": True}
+
+
+def test_ensure_ready_allows_no_key_for_local():
+    client.AiConfig(
+        base_url="http://127.0.0.1:1234/v1", model="local", api_key="", allow_no_key=True
+    ).ensure_ready()
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://127.0.0.1:1234/v1", True),
+        ("http://localhost:11434/v1", True),
+        ("http://[::1]:8080/v1", True),
+        ("http://192.168.1.20:1234/v1", True),
+        ("http://10.0.0.5:8000/v1", True),
+        ("http://my-mac.local:1234/v1", True),
+        ("http://host.docker.internal:1234/v1", True),
+        ("https://api.deepseek.com", False),
+        ("https://example.com/v1", False),
+        ("not a url", False),
+    ],
+)
+def test_is_local_url(url, expected):
+    assert client.is_local_url(url) is expected
+
+
+def test_post_omits_authorization_when_key_empty(monkeypatch):
+    seen = []
+
+    class Response:
+        status = 200
+
+        def read(self):
+            return b'{"ok": true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        seen.append(request)
+        return Response()
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    status, _ = client._post(
+        "http://127.0.0.1:1234/v1/chat/completions",
+        {"model": "local"},
+        client.AiConfig(base_url="http://127.0.0.1:1234/v1", model="local", allow_no_key=True),
+    )
+    assert status == 200
+    assert seen[0].get_header("Authorization") is None
+
+
+def test_post_sends_authorization_when_key_present(monkeypatch):
+    seen = []
+
+    class Response:
+        status = 200
+
+        def read(self):
+            return b'{"ok": true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", lambda request, timeout: (seen.append(request) or Response()))
+    client._post(
+        "https://api.example.com/v1/chat/completions",
+        {"model": "m"},
+        client.AiConfig(base_url="https://api.example.com/v1", model="m", api_key="sk-secret"),
+    )
+    assert seen[0].get_header("Authorization") == "Bearer sk-secret"
+
+
+def test_falls_back_on_422_response_format(monkeypatch):
+    seen = []
+
+    def fake(url, payload, conf):
+        seen.append("response_format" in payload)
+        if "response_format" in payload:
+            return 422, "unsupported field"
+        return 200, envelope({"ok": True})
+
+    monkeypatch.setattr(client, "_post", fake)
+    assert client.chat_json(cfg(), "s", "u") == {"ok": True}
+    assert seen == [True, False]
+
+
+def test_extract_content_falls_back_to_reasoning_content():
+    body = json.dumps(
+        {
+            "choices": [
+                {"message": {"content": "", "reasoning_content": '{"text": "ok"}'}}
+            ]
+        }
+    )
+    assert client._extract_content(body) == '{"text": "ok"}'
+    assert client.json_from_text(client._extract_content(body)) == {"text": "ok"}
+
+
+def test_chat_json_assistant_prefill_is_sent_and_joined(monkeypatch):
+    seen = []
+
+    def fake(url, payload, conf):
+        seen.append(payload)
+        body = json.dumps(
+            {
+                "choices": [
+                    {"message": {"content": 'もっと", "note": "理由"}'}}
+                ]
+            },
+            ensure_ascii=False,
+        )
+        return 200, body
+
+    monkeypatch.setattr(client, "_post", fake)
+    out = client.chat_json(
+        cfg(), "sys", "user", assistant_prefill='{"text": "'
+    )
+    assert out == {"text": "もっと", "note": "理由"}
+    assert seen[0]["messages"][-1] == {"role": "assistant", "content": '{"text": "'}

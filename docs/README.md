@@ -12,6 +12,7 @@
 | [contracts/engineering-practice.md](contracts/engineering-practice.md) | **方法论**：长期项目的五类失控与五道护栏在本仓库的落点、规则→测试的升级路径、多模型协作命令。新接手先读这份。 |
 | [contracts/params-and-presets.md](contracts/params-and-presets.md) | **参数与预设**：默认值唯一来源、预设必须绑定引擎、跨引擎载入 409、四套种子预设的素材条件与旧预设处理。改参数面板或 `presets.json` 前必读。 |
 | [contracts/](contracts/) | **分域契约正文**：`review-console.md`（核对台/内核边界/历史/主题）、`desktop-lifecycle.md`（启动/日志/退出清理）、`ai-proposal.md`（AI 提案 / 润色 / 翻译 / 结构建议 / 断句重排 / 技能，含冻结决定 D-1～D-6 与验收断言 A1–A10）、`export-and-prompt.md`（提示词/成片导出/代理）。改哪块先读哪份。 |
+| [contracts/in-progress.md](contracts/in-progress.md) | **进行中的专项**：转录引擎标定、日语引擎优化路线（P0–P3）做到哪一步、下一步是什么、止损线在哪里。接手跨会话任务先读这份。 |
 | [review.md](review.md) | **合入前自审清单**：Review 四件事的可执行版本、本仓库的硬检查、单模型下的三个补偿动作（隔一轮再读 / 给置信度 / 换入口找问题）。配合 PR 模板用。 |
 | [backlog.md](backlog.md) | **待办唯一入口**：P1/P2 与「明确不做」的清单。发现的问题写这里，别只写在会话里；完成时移到「已完成」并留 commit。 |
 | [日语引擎优化路线-2026-11.md](日语引擎优化路线-2026-11.md) | **日语引擎的现行优化路线**：逐条核实外部建议，给出 P0/P1/P2 排序（句首补回、置信度质检、第二引擎复核、ForcedAligner）、验收口径与止损线。 |

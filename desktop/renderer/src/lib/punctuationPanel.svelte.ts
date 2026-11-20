@@ -9,7 +9,7 @@
  * 规则本身在 `lib/punctuation.ts`（纯函数、有单测），这里不写任何字符串处理。
  */
 
-import { planClean, type CleanPlan, type PunctSpace } from './punctuation';
+import { planClean, type CleanPlan, type EllipsisMode, type MidStyle } from './punctuation';
 import { api } from './api';
 import {
   app,
@@ -20,17 +20,30 @@ import {
   toast,
 } from './store.svelte';
 
-const STORAGE_KEY = 'kikusub.punctClean';
+/**
+ * v2：口径变了（句中默认**删掉**、行尾省略号默认清），所以换一个键。
+ * 读旧键会让老用户的 `space: 'half'` 把这次修复整个抵消掉——他们点完会发现
+ * 「顿号还是变成空格」，以为没修。旧键就留在 localStorage 里不读也不删。
+ */
+const STORAGE_KEY = 'kikusub.punctClean.v2';
 
 interface PunctPrefs {
-  space?: PunctSpace;
-  stripEllipsis?: boolean;
+  mid?: MidStyle;
+  ellipsis?: EllipsisMode;
 }
 
 function readPrefs(): PunctPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as PunctPrefs) : {};
+    if (!raw) return {};
+    const p = JSON.parse(raw) as PunctPrefs;
+    const mid: MidStyle =
+      p.mid === 'half' || p.mid === 'full' || p.mid === 'delete' ? p.mid : 'delete';
+    const ellipsis: EllipsisMode =
+      p.ellipsis === 'all' || p.ellipsis === 'keep' || p.ellipsis === 'trailing'
+        ? p.ellipsis
+        : 'trailing';
+    return { mid, ellipsis };
   } catch {
     // 读坏了就当没存过：偏好不是关键数据，不能因为它把界面弄挂
     return {};
@@ -41,12 +54,13 @@ const prefs = readPrefs();
 
 /**
  * 面板状态。`open` 只表示浮层展开；选项是**记住**的，下次打开还是上次那套。
- * 默认半角空格：与真实稿上的手工效果一致，窄、不撑字幕行。
+ * 默认「句中直接删掉 + 只清行尾省略号」：日语字幕不靠空格断句，删掉才真干净；
+ * 句中省略号是语气，不该被顺手抹掉。
  */
 export const punctPanel = $state({
   open: false,
-  space: (prefs.space === 'full' ? 'full' : 'half') as PunctSpace,
-  stripEllipsis: prefs.stripEllipsis === true,
+  mid: (prefs.mid ?? 'delete') as MidStyle,
+  ellipsis: (prefs.ellipsis ?? 'trailing') as EllipsisMode,
   busy: false,
 });
 
@@ -54,21 +68,26 @@ function persist() {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ space: punctPanel.space, stripEllipsis: punctPanel.stripEllipsis }),
+      JSON.stringify({ mid: punctPanel.mid, ellipsis: punctPanel.ellipsis }),
     );
   } catch {
     // 隐私模式 / 配额满了：记住偏好是锦上添花，失败就失败
   }
 }
 
-export function setPunctSpace(space: PunctSpace) {
-  punctPanel.space = space;
+export function setPunctMid(mid: MidStyle) {
+  punctPanel.mid = mid;
   persist();
 }
 
-export function togglePunctEllipsis() {
-  punctPanel.stripEllipsis = !punctPanel.stripEllipsis;
+export function setPunctEllipsis(mode: EllipsisMode) {
+  punctPanel.ellipsis = mode;
   persist();
+}
+
+/** 面板当前选项。组件与预演读同一份，避免出现「面板说 A、结果按 B 算」。 */
+export function punctOptions() {
+  return { mid: punctPanel.mid, ellipsis: punctPanel.ellipsis };
 }
 
 /** 打开面板：不在核对台就先切过去（与 ⌘F 的行为一致）。 */
@@ -85,7 +104,7 @@ export function closePunctPanel() {
 export function currentPunctPlan(): CleanPlan {
   return planClean(
     app.cues.map((cue) => cue.text),
-    { space: punctPanel.space, stripEllipsis: punctPanel.stripEllipsis },
+    punctOptions(),
   );
 }
 

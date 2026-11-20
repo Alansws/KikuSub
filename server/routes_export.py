@@ -51,6 +51,13 @@ class ExportRequest(BaseModel):
     resolution: str = Field(default="1080p", pattern="^(source|2160p|1440p|1080p|720p|480p)$")
     preset: str = Field(default="balanced", pattern="^(small|balanced|high|ultra)$")
     export_srt: bool = True
+    # 有章节 / 时刻点标记时写入容器（ffmetadata + -map_chapters）。
+    write_chapters: bool = True
+    # 片段范围（0 / 0 = 全片）：只导出这一段，字幕与章节平移到 0 起。
+    clip_start: float = 0.0
+    clip_end: float = 0.0
+    # 文件名里的范围标签（章节标题）；留空时按时间范围生成。
+    clip_label: str = ""
     # 用户可在导出面板里临时换目录；空值跟随设置里的成片目录。
     out_dir: str = ""
     style: SubtitleStylePayload = Field(default_factory=SubtitleStylePayload)
@@ -128,6 +135,10 @@ def _options(payload: ExportRequest) -> video_export.ExportOptions:
         resolution=payload.resolution,
         preset=payload.preset,
         export_srt=payload.export_srt,
+        write_chapters=payload.write_chapters,
+        clip_start=payload.clip_start,
+        clip_end=payload.clip_end,
+        clip_label=payload.clip_label.strip(),
         style=_style(payload.style),
     )
 
@@ -166,12 +177,18 @@ def export_options() -> dict:
 
 
 @router.post("/api/export/plan")
-def export_plan(payload: PlanRequest, request: Request) -> dict:
+def export_plan(
+    payload: PlanRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
     info = _media_info(request, payload.media_id)
     source = _source(info)
     options = _options(payload)
     try:
-        plan = video_export.plan_export(source, options)
+        plan = video_export.plan_export(
+            source, options, session.chapters if payload.write_chapters else []
+        )
     except video_export.ExportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     out_dir = _out_dir(request, payload.out_dir)
@@ -371,7 +388,9 @@ async def create_export(
     source = _source(info)
     options = _options(payload)
     try:
-        video_export.plan_export(source, options)
+        plan = video_export.plan_export(
+            source, options, session.chapters if payload.write_chapters else []
+        )
     except video_export.ExportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     texts = _translation_texts(session, payload.track, payload.lang.strip())
@@ -385,12 +404,22 @@ async def create_export(
             options=options,
             cues=cues,
             translation_texts=texts,
+            chapters=list(session.chapters) if payload.write_chapters else [],
             out_dir=out_dir,
             session_id=session.id,
             loop=loop,
         )
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if plan.clip:
+        log.info(
+            "成片片段导出 | job=%s | %.3f–%.3f（%.1fs） | %s",
+            job.id,
+            plan.clip["start"],
+            plan.clip["end"],
+            plan.clip["duration"],
+            plan.clip["label"],
+        )
     log.info(
         "成片导出任务 | job=%s | media=%s | mode=%s | track=%s | %sp | %s | out=%s",
         job.id,
@@ -401,4 +430,6 @@ async def create_export(
         payload.preset,
         out_dir,
     )
+    if plan.chapters:
+        log.info("成片将写入 %s 个章节", len(plan.chapters))
     return job.snapshot()

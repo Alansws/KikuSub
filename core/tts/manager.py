@@ -26,6 +26,8 @@ from .base import (
     clean_text,
 )
 from .clone_engine import MAX_TEXT_CHARS, OmniVoiceEngine, default_model_dir
+from .loudness import CACHE_TAG as LOUDNESS_CACHE_TAG
+from .loudness import normalize_file
 from .mac_say import MacSayEngine
 from .model_store import ModelDownloader
 from .voice_manager import VoiceStore
@@ -206,7 +208,9 @@ class TTSManager:
             tag = f"{ref}|{voice.ref_text}"
         else:
             tag = voice.name
-        payload = f"{engine}\0{voice.id}\0{tag}\0{speed:.3f}\0{text}".encode("utf-8")
+        payload = (
+            f"{engine}\0{voice.id}\0{tag}\0{speed:.3f}\0{LOUDNESS_CACHE_TAG}\0{text}"
+        ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()[:24]
 
     def _prune(self) -> None:
@@ -263,6 +267,17 @@ class TTSManager:
             )
             try:
                 engine.synthesize(spoken, voice, speed, temp)
+                # 两个引擎的输出基准不同（say ≈ −25 LUFS，克隆跟着参考音频走，
+                # 可能低到 −40 LUFS）。缓存前统一到播放目标，换引擎/换音色
+                # 都保持同一音量，预览视频时不需要反复调系统音量。
+                try:
+                    normalize_file(temp)
+                except Exception:  # noqa: BLE001 —— 音量为增强项，失败也要能朗读
+                    log.warning(
+                        "TTS 响度归一化失败，保留引擎原始音量 | engine=%s",
+                        engine.key,
+                        exc_info=True,
+                    )
                 os.replace(temp, target)
             finally:
                 try:

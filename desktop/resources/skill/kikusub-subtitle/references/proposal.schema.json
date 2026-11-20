@@ -128,6 +128,42 @@
           }
         }
       }
+    },
+    "alignment": {
+      "type": "object",
+      "description": "翻译手动通道的时间轴对齐摘要（仅当严格条数开关关闭且条数不同时由软件写入；外部 agent 不需要填）",
+      "additionalProperties": true,
+      "properties": {
+        "from": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "to": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pasted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

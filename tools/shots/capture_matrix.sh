@@ -2,7 +2,7 @@
 # 静默截图矩阵：一次把关键界面按固定视口截下来，供人工/像素比对。
 #
 # 为什么需要：改样式、改布局时"编译通过"不等于没坏。用法见同目录 README.md。
-# 依赖主进程已有的 --screenshot（show:false + capturePage，不抢焦点，可后台跑）。
+# 依赖主进程已有的 --screenshot（透明窗口 + capturePage，桌面上不出现，可后台跑）。
 #
 #   bash tools/shots/capture_matrix.sh                    # 输出到 docs/images/shots/current
 #   bash tools/shots/capture_matrix.sh --out /tmp/x --size 1360x838

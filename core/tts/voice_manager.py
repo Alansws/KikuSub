@@ -32,6 +32,7 @@ from .base import (
     VoiceNotFound,
     clean_name,
 )
+from .loudness import normalize_reference
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +157,20 @@ def _normalize_audio(source: Path, target: Path, *, start: float | None, end: fl
     if proc.returncode != 0 or not target.exists() or target.stat().st_size <= 44:
         detail = tail(proc.stderr or proc.stdout) or "ffmpeg 没有输出音频"
         raise VoiceInvalid(f"提取参考音频失败：{detail}")
-    return _trim_silence(target)
+    duration = _trim_silence(target)
+    # 参考音频的幅度会直接带进 OmniVoice 的输出（实测输出 ≈ 参考 −1～2 dB）。
+    # 不先统一参考音量，从轻素材切出来的音色会天然小声 10–20 dB；这一步让
+    # 新建音色从一开始就在同一水平，合成侧的 normalize_file 只做最后收口。
+    try:
+        normalize_reference(target)
+        import soundfile as sf
+
+        info = sf.info(str(target))
+        if info.samplerate:
+            duration = float(info.frames) / float(info.samplerate)
+    except Exception:  # noqa: BLE001 —— 响度增强失败不能挡住建音色
+        log.warning("参考音频响度归一化失败，保留原始音量", exc_info=True)
+    return duration
 
 
 class VoiceStore:

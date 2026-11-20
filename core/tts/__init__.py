@@ -3,7 +3,8 @@
 - :class:`~core.tts.manager.TTSManager`：对服务层唯一的入口；
 - :class:`~core.tts.voice_manager.VoiceStore`：``outputs/voices/`` 的克隆音色管理；
 - :mod:`core.tts.mac_say`：零显存兜底；
-- :mod:`core.tts.clone_engine`：OmniVoice 零样本克隆（延迟导入 torch/omnivoice）。
+- :mod:`core.tts.clone_engine`：OmniVoice 零样本克隆（延迟导入 torch/omnivoice）；
+- :mod:`core.tts.loudness`：参考音频 / 合成输出的 EBU R128 响度统一。
 
 服务层只 import 本包，不直接碰 torch。``KIKUSUB_TTS_ENGINE=off`` 可以整体关掉
 （例如 CI 里不想加载任何 TTS 依赖）。

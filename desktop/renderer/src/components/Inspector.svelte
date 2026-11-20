@@ -1,20 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { jobBusy } from '../lib/jobState';
   import QaPanel from './QaPanel.svelte';
-  import {
-    adoptAlternative,
-    alternativeText,
-    availableEngine,
-    availableEngineLabel,
-    cancelSecondOpinion,
-    currentEngineLabel,
-    dismissAlternative,
-    hasAlternative,
-    retrySecondOpinion,
-    secondOpinion,
-    runSecondOpinion,
-  } from '../lib/secondOpinion.svelte';
+  import ChaptersPanel from './ChaptersPanel.svelte';
+  import SecondOpinionCard from './SecondOpinionCard.svelte';
   import {
     app,
     deleteCue,
@@ -60,8 +48,18 @@
     uploadTtsVoices,
     type TrackMode,
   } from '../lib/store.svelte';
+  import { chapterCount } from '../lib/chapters.svelte';
   import { tc } from '../lib/time';
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
+  import {
+    clearCueClip,
+    copySelectedCue,
+    cueClip,
+    pasteCueAtPlayhead,
+  } from '../lib/cueClipboard.svelte';
+  import { clipSummary } from '../lib/cueClip';
+  import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
+  import { registerCueDraftCommit } from '../lib/cueDraftCommit';
 
   const cue = $derived(app.cues[play.selected] ?? null);
   const qaPending = $derived(Number(qa.payload?.counts?.pending ?? 0));
@@ -131,8 +129,37 @@
       if (!tts.engine?.installed) return '克隆模型未就绪';
       return tts.engine.device === 'mps' ? 'OmniVoice · Apple GPU' : 'OmniVoice · CPU';
     }
-    return tts.engine ? '系统语音 · 零显存' : '读取中…';
+    return tts.engine ? '系统语音' : '读取中…';
   });
+  const engineTone = $derived(
+    selectedTts?.kind === 'clone'
+      ? tts.engine?.installed
+        ? 'ready'
+        : 'warn'
+      : tts.engine
+        ? 'system'
+        : 'idle',
+  );
+  const engineTitle = $derived.by(() => {
+    if (selectedTts?.kind === 'clone') {
+      if (!tts.engine?.installed) return '克隆模型还没下载：点下方「下载克隆模型」后即可使用参考音频克隆';
+      const device = tts.engine?.device === 'mps' ? 'Apple GPU' : 'CPU';
+      return `OmniVoice 零样本克隆 · ${device} · ${tts.engine?.loaded ? '权重已加载' : '首次合成时才加载权重'}`;
+    }
+    return 'macOS 系统日语语音：无需模型、零显存，秒出';
+  });
+  const selectedMeta = $derived.by(() => {
+    if (!selectedTts) return '音色读取中…';
+    if (selectedTts.kind === 'clone') {
+      const duration = selectedTts.duration
+        ? `${selectedTts.duration.toFixed(1)}s 参考`
+        : '参考音频';
+      return `${duration} · ${voiceSourceLabel(selectedTts.source)} · 音量已对齐`;
+    }
+    return 'macOS 内置 · 音量已对齐';
+  });
+  const playingThis = $derived(tts.playing && tts.index === play.selected);
+  const loadingThis = $derived(tts.loading && tts.index === play.selected);
 
   function openManage() {
     if (!selectedTts || selectedTts.kind !== 'clone') return;
@@ -168,6 +195,12 @@
     if (kind === 'cue') return '视频截取';
     if (kind === 'upload') return '上传';
     return '克隆';
+  }
+
+  /** ``say`` 的日语语音名常带「(日语（日本）)」后缀；下拉框里只留可读名。 */
+  function ttsDisplayName(voice: { name: string; kind: string }): string {
+    if (voice.kind !== 'system') return voice.name;
+    return voice.name.replace(/\s*[（(].*[）)]\s*$/, '').trim() || voice.name;
   }
 
   async function saveManage() {
@@ -459,6 +492,10 @@
     if (targetChanged) await updateTranslation(index, nextTarget);
   }
 
+  // 快捷键复制 / 粘贴前也要先提交文本框里的草稿；注册到共享桥，App.svelte
+  // 与检查器按钮走同一条等待逻辑。
+  onMount(() => registerCueDraftCommit(commit));
+
   function remove() {
     if (!cue) return;
     deleteCue(play.selected);
@@ -492,6 +529,17 @@
       质检待核
       {#if qaPending}<b>{qaPending}</b>{/if}
     </button>
+    <button
+      class="insp-tab"
+      class:on={app.inspectorTab === 'chapters'}
+      role="tab"
+      aria-selected={app.inspectorTab === 'chapters'}
+      onclick={() => setInspectorTab('chapters')}
+      title="章节与时刻点标记（会写入导出容器）"
+    >
+      章节
+      {#if chapterCount()}<b>{chapterCount()}</b>{/if}
+    </button>
     <div class="tabs-spacer"></div>
     {#if app.inspectorTab === 'cue'}
       <b class="tabs-index">{app.cues.length ? `#${play.selected + 1}` : '—'}</b>
@@ -505,7 +553,9 @@
       <Icon name="close" size={11} />
     </button>
   </div>
-  {#if app.inspectorTab === 'cue'}
+  {#if app.inspectorTab === 'chapters'}
+    <ChaptersPanel />
+  {:else if app.inspectorTab === 'cue'}
   <div class="ins-scroll">
   <div class="display-row">
     <div class="seg">
@@ -632,11 +682,24 @@
 
   {#if cue}
     <div class="actions">
-      <button class="btn" onclick={() => previewRange(cue.start, cue.end)}>
-        <Icon name="play" size={11} />试听
+      <button
+        class="btn"
+        onclick={() => previewRange(cue.start, cue.end)}
+        title="试听原片这一句的原声（在下方对照两个引擎的 TTS）"
+      >
+        <Icon name="play" size={11} />试听原声
       </button>
       <button class="btn ghost" onclick={() => focusRange(cue.start, cue.end)} title="在波形上聚焦放大这一句">
         <Icon name="search" size={11} />聚焦
+      </button>
+      <button
+        class="btn icon ghost"
+        data-copy-cue
+        onclick={() => copySelectedCue()}
+        title={`复制这句的字幕文本与时长（${formatCombo(comboOf('review.copyCue'))}）；再把播放头移到目标位置粘贴`}
+        aria-label="复制这句字幕"
+      >
+        <Icon name="copy" size={12} />
       </button>
       <button class="btn icon ghost danger" onclick={remove} title="删除此句">
         <Icon name="trash" size={12} />
@@ -653,178 +716,186 @@
     </div>
   {/if}
 
-  {#if cue}
-    <div class="second-opinion">
-      <div class="so-head">
-        <b>另一引擎复核</b>
-        <span>{currentEngineLabel()} → {availableEngineLabel() || '另一个引擎未启用'}</span>
-      </div>
-      {#if secondOpinion.status === 'running'}
-        <div class="so-progress" aria-hidden="true">
-          <i style="width:{Math.round(secondOpinion.ratio * 100)}%"></i>
-        </div>
-        <div class="so-stage">{secondOpinion.stage || '正在复核…'}</div>
-        <div class="so-actions">
-          <button class="btn mini ghost" onclick={() => cancelSecondOpinion()}>取消</button>
-        </div>
-      {:else if hasAlternative(play.selected)}
-        <div class="so-grid">
-          <div class="so-col">
-            <div class="so-label">{currentEngineLabel()}</div>
-            <div class="so-text">{cue.text || '∅'}</div>
-          </div>
-          <div class="so-col alt">
-            <div class="so-label">{availableEngineLabel()}</div>
-            <div class="so-text">{alternativeText(play.selected) || '∅'}</div>
-          </div>
-        </div>
-        <div class="so-actions">
-          <button class="btn mini primary" onclick={() => adoptAlternative(play.selected)}>采用这份</button>
-          <button class="btn mini ghost" onclick={() => retrySecondOpinion()}>再听一遍</button>
-          <button class="btn mini ghost" onclick={() => dismissAlternative()}>收起</button>
-        </div>
-      {:else}
-        <div class="so-tip" class:warn={secondOpinion.status === 'error'}>
-          {secondOpinion.status === 'error'
-            ? secondOpinion.error
-            : '把这一句的时间窗送给另一个引擎再听一遍；不会改动当前字幕，采用后才进历史。'}
-        </div>
-        <div class="so-actions">
-          <button
-            class="btn mini"
-            onclick={() => runSecondOpinion([play.selected])}
-            disabled={!availableEngine() || jobBusy()}
-            title={!availableEngine()
-              ? '另一个引擎已停用：到「设置 → 引擎与模型」里启用'
-              : jobBusy()
-                ? '有任务在跑（同一时间只允许一个重任务），结束后再复核'
-                : '换引擎要重新加载模型，约 20–40 秒'}
-          >
-            {secondOpinion.status === 'error' ? '重试' : '🎧 用另一引擎再听一遍'}
-          </button>
-        </div>
-      {/if}
+  {#if cueClip.value}
+    <div class="clip-strip" aria-label="字幕剪贴板">
+      <Icon name="paste" size={12} />
+      <span class="clip-text" title={cueClip.value.text}>{clipSummary(cueClip.value)}</span>
+      <button
+        class="link"
+        data-paste-cue
+        onclick={() => pasteCueAtPlayhead()}
+        title={`在播放头新建一条（${formatCombo(comboOf('review.pasteCue'))}）`}
+      >粘贴到播放头</button>
+      <button
+        class="btn icon ghost clip-clear"
+        onclick={clearCueClip}
+        title="清空字幕剪贴板"
+        aria-label="清空字幕剪贴板"
+      >
+        <Icon name="close" size={10} />
+      </button>
     </div>
+  {/if}
+
+  {#if cue}
+    <SecondOpinionCard index={play.selected} text={cue.text} />
   {/if}
 
   <div class="tts-block">
     <div class="tts-head">
       <b>TTS 对照</b>
-      <span title="选中克隆音色就按角色声线朗读；系统语音零显存兜底">
-        {engineLabel}
+      <span class="tts-engine {engineTone}" title={engineTitle}>
+        <i class="tts-status-dot" aria-hidden="true"></i>{engineLabel}
       </span>
     </div>
-    <div class="tts-controls">
+
+    <div class="tts-card">
       <button
-        class="btn mini"
-        class:on={tts.playing && tts.index === play.selected}
+        class="tts-play"
+        class:playing={playingThis}
         onclick={() => speakCue(play.selected)}
-        disabled={!cue || tts.loading}
+        disabled={!cue || tts.loading || (selectedTts?.kind === 'clone' && !cloneEngineReady())}
         title={!cue
           ? '先选中一条字幕'
           : selectedTts?.kind === 'clone' && !cloneEngineReady()
-            ? '克隆模型还没下载，只能先用系统语音'
-            : '朗读这句字幕；再点一次停止'}
+            ? '克隆模型还没下载，先下载模型或改用系统语音'
+            : playingThis
+              ? '再点一次停止'
+              : '朗读这句字幕'}
+        aria-label={playingThis ? '停止朗读' : '朗读当前句'}
       >
-        {#if tts.loading && tts.index === play.selected}
-          <span class="spin"></span>生成中
-        {:else if tts.playing && tts.index === play.selected}
-          <Icon name="stop" size={10} />停止
+        {#if loadingThis}
+          <span class="spin"></span><span>生成中</span>
+        {:else if playingThis}
+          <Icon name="stop" size={11} /><span>停止</span>
         {:else}
-          <Icon name="speaker" size={11} />朗读
+          <Icon name="play" size={11} /><span>朗读</span>
         {/if}
       </button>
-      <select
-        class="tts-sel voice"
-        value={tts.voiceId}
-        title="音色：系统语音零显存，克隆音色按角色声线朗读"
-        onchange={(e) => {
-          setTtsVoiceId(e.currentTarget.value);
-          ttsManage = false;
-        }}
-      >
-        {#if tts.custom.length}
-          <optgroup label="克隆音色">
-            {#each tts.custom as voice (voice.id)}
-              <option value={voice.id}>{voice.name}</option>
-            {/each}
-          </optgroup>
-        {/if}
-        <optgroup label="系统音色 · 零显存">
-          {#each tts.system as voice (voice.id)}
-            <option value={voice.id}>{voice.name}</option>
-          {/each}
-        </optgroup>
-        {#if !tts.system.length && !tts.custom.length}
-          <option value="">{tts.loaded ? '无可用语音' : '读取中…'}</option>
-        {/if}
-      </select>
-      <select
-        class="tts-sel rate"
-        value={tts.speed}
-        title="语速"
-        onchange={(e) => setTtsSpeed(Number(e.currentTarget.value))}
-      >
-        <option value={0.8}>0.8×</option>
-        <option value={1}>1.0×</option>
-        <option value={1.2}>1.2×</option>
-      </select>
+
+      <div class="tts-main">
+        <div class="tts-row">
+          <div
+            class="tts-select-wrap voice"
+            title={selectedTts
+              ? `音色：${selectedTts.name}（系统语音零显存，克隆音色按角色声线朗读）`
+              : '音色：系统语音零显存，克隆音色按角色声线朗读'}
+          >
+            <select
+              class="tts-select"
+              value={tts.voiceId}
+              aria-label="朗读音色"
+              onchange={(e) => {
+                setTtsVoiceId(e.currentTarget.value);
+                ttsManage = false;
+              }}
+            >
+              {#if tts.custom.length}
+                <optgroup label="克隆音色">
+                  {#each tts.custom as voice (voice.id)}
+                    <option value={voice.id}>{voice.name}</option>
+                  {/each}
+                </optgroup>
+              {/if}
+              <optgroup label="系统音色 · 零显存">
+                {#each tts.system as voice (voice.id)}
+                  <option value={voice.id}>{ttsDisplayName(voice)}</option>
+                {/each}
+              </optgroup>
+              {#if !tts.system.length && !tts.custom.length}
+                <option value="">{tts.loaded ? '无可用语音' : '读取中…'}</option>
+              {/if}
+            </select>
+            <Icon name="chevron-down" size={10} />
+          </div>
+          <div class="tts-select-wrap rate" title="语速">
+            <select
+              class="tts-select"
+              value={tts.speed}
+              aria-label="朗读语速"
+              onchange={(e) => setTtsSpeed(Number(e.currentTarget.value))}
+            >
+              <option value={0.8}>0.8×</option>
+              <option value={1}>1.0×</option>
+              <option value={1.2}>1.2×</option>
+            </select>
+            <Icon name="chevron-down" size={10} />
+          </div>
+        </div>
+        <div class="tts-meta" title={selectedMeta}>{selectedMeta}</div>
+      </div>
     </div>
 
-    <div class="tts-tools">
-      <button class="tts-link" onclick={chooseUpload} title="上传 3–10 秒参考音频；可一次选多段，每段建一个音色">
-        + 上传参考音频
-      </button>
-      <span class="tts-dot">·</span>
+    <div class="tts-actions">
       <button
-        class="tts-link"
+        class="tts-action"
+        onclick={chooseUpload}
+        title="上传 3–10 秒参考音频（单人、干声、无背景音乐）；可一次选多段，每段建一个音色"
+      >
+        <Icon name="export" size={12} /><span>上传</span>
+      </button>
+      <button
+        class="tts-action"
         onclick={openExtract}
         disabled={!cue || !app.media}
-        title={!app.media ? '先导入视频' : !cue ? '先选中一句字幕' : '用当前这句的原声建立克隆音色'}
+        title={!app.media
+          ? '先导入视频'
+          : !cue
+            ? '先选中一句字幕'
+            : '用当前这句的原声建立克隆音色；建议 3–10 秒、单人干声'}
       >
-        从当前句截取
+        <Icon name="mic" size={12} /><span>截取</span>
       </button>
-      {#if tts.custom.length}
-        <span class="tts-dot">·</span>
-        <button class="tts-link" onclick={openLibrary} title="保存过的克隆音色都在这里">
-          音色库 {tts.custom.length}
-        </button>
-      {/if}
+      <button
+        class="tts-action"
+        class:on={ttsLibrary}
+        onclick={openLibrary}
+        title="保存过的克隆音色都在这里"
+      >
+        <Icon name="folder" size={12} /><span>音色库</span>
+        {#if tts.custom.length}<b class="tts-count">{tts.custom.length}</b>{/if}
+      </button>
       {#if selectedTts?.kind === 'clone' && !ttsLibrary}
-        <span class="tts-dot">·</span>
-        <button class="tts-link" onclick={openManage} title="重命名 / 修改参考文本 / 删除">
-          管理「{selectedTts.name}」
-        </button>
-      {/if}
-      <span class="tts-spacer"></span>
-      {#if !cloneEngineReady()}
         <button
-          class="tts-link accent"
-          onclick={startModelDownload}
-          disabled={downloading}
-          title="下载 OmniVoice（约 3.3GB），之后可用参考音频克隆声线"
+          class="tts-action"
+          class:on={ttsManage}
+          onclick={openManage}
+          title="重命名 / 修改参考文本 / 删除"
         >
-          {downloading ? '下载中…' : '下载克隆模型'}
+          <Icon name="gear" size={12} /><span>管理</span>
         </button>
-      {:else}
-        <span class="tts-ready" title="克隆模型已就绪，首次合成时才加载权重">
-          {tts.engine?.loaded ? '已加载' : '按需加载'} · {tts.custom.length} 个音色
-        </span>
       {/if}
     </div>
-    <div class="tts-hint">参考音频 3–10 秒：单人、干声、无背景音乐；多选会各存为一个音色。</div>
 
     {#if downloading}
-      <div class="tts-progress" role="progressbar" aria-valuenow={tts.download?.percent ?? 0}>
-        <div style="width:{tts.download?.percent ?? 0}%"></div>
+      <div
+        class="tts-progress-card"
+        role="progressbar"
+        aria-label="OmniVoice 模型下载进度"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={tts.download?.percent ?? 0}
+      >
+        <div class="tts-progress-head">
+          <span>{tts.download?.stage || '正在下载…'}</span>
+          <b>{tts.download?.percent ?? 0}%</b>
+        </div>
+        <div class="tts-progress"><div style="width:{tts.download?.percent ?? 0}%"></div></div>
       </div>
-      <div class="tts-progress-label">
-        {tts.download?.stage || '正在下载…'} {tts.download?.percent ?? 0}%
-      </div>
+    {:else if !cloneEngineReady()}
+      <button
+        class="tts-download"
+        onclick={startModelDownload}
+        title="下载 OmniVoice 权重（约 3.3GB），之后可用参考音频克隆声线"
+      >
+        <Icon name="export" size={12} />
+        <span>下载克隆模型</span>
+        <em>约 3.3 GB</em>
+      </button>
     {/if}
 
     {#if batch}
-      <div class="tts-progress-label">
+      <div class="tts-batch">
         正在创建音色 {batch.done}/{batch.total}{batch.name ? ` · ${batch.name}` : ''}
       </div>
     {/if}
@@ -832,12 +903,14 @@
     {#if ttsLibrary}
       <div class="voice-panel">
         <div class="vp-head">
-          <span>音色库 · {tts.custom.length} 个</span>
-          <button class="tts-link" onclick={openVoicesDir}>在访达中打开</button>
+          <span>音色库</span>
+          <button class="vp-link" onclick={openVoicesDir} title="在访达中打开音色目录">
+            <Icon name="folder" size={11} />打开文件夹
+          </button>
         </div>
         {#if !tts.custom.length}
           <p class="vp-hint">
-            还没有保存的克隆音色。可以上传参考音频，或选中一句后点「从当前句截取」。
+            还没有保存的克隆音色。参考音频 3–10 秒、单人干声效果最好；可以上传，或选中一句后点「截取」。
           </p>
         {:else}
           <div class="voice-list">
@@ -855,28 +928,34 @@
                     )}
                   </span>
                 </button>
-                <button
-                  class="tts-link"
-                  onclick={() => previewLibraryVoice(voice.id)}
-                  disabled={tts.loading}
-                  title="试听"
-                >
-                  试听
-                </button>
-                <button
-                  class="tts-link"
-                  onclick={() => makeDefaultVoice(voice.id, voice.name)}
-                  title="以后启动默认用它"
-                >
-                  默认
-                </button>
-                <button
-                  class="tts-link"
-                  onclick={() => manageLibraryVoice(voice.id)}
-                  title="重命名 / 参考文本 / 删除"
-                >
-                  管理
-                </button>
+                <div class="voice-acts">
+                  <button
+                    class="voice-act"
+                    onclick={() => previewLibraryVoice(voice.id)}
+                    disabled={tts.loading}
+                    title="试听"
+                    aria-label={`试听「${voice.name}」`}
+                  >
+                    <Icon name="speaker" size={11} />
+                  </button>
+                  <button
+                    class="voice-act star"
+                    class:on={tts.defaultVoiceId === voice.id}
+                    onclick={() => makeDefaultVoice(voice.id, voice.name)}
+                    title={tts.defaultVoiceId === voice.id ? '已是默认音色' : '设为默认音色'}
+                    aria-label={`把「${voice.name}」设为默认`}
+                  >
+                    <Icon name="star" size={11} />
+                  </button>
+                  <button
+                    class="voice-act"
+                    onclick={() => manageLibraryVoice(voice.id)}
+                    title="重命名 / 参考文本 / 删除"
+                    aria-label={`管理「${voice.name}」`}
+                  >
+                    <Icon name="gear" size={11} />
+                  </button>
+                </div>
               </div>
             {/each}
           </div>
@@ -888,8 +967,8 @@
       <div class="voice-panel">
         <div class="vp-head">
           <span>{selectedTts.duration ? `${selectedTts.duration.toFixed(1)}s 参考音频` : '参考音频'}</span>
-          <button class="tts-link" onclick={previewTtsVoice} disabled={tts.loading}>
-            {tts.loading && tts.index === -1 ? '生成中…' : '试听'}
+          <button class="vp-link" onclick={previewTtsVoice} disabled={tts.loading}>
+            <Icon name="speaker" size={11} />{tts.loading && tts.index === -1 ? '生成中…' : '试听'}
           </button>
         </div>
         <label class="vp-field">
@@ -932,7 +1011,7 @@
             placeholder="这段参考音频的台词，用于对齐声线（可留空）"
           ></textarea>
         </label>
-        <p class="vp-hint">音频会自动去首尾静音；超过 10 秒只保留前 10 秒。</p>
+        <p class="vp-hint">单人干声效果最好；会自动去首尾静音并统一响度，超过 10 秒只保留前 10 秒。</p>
         <div class="vp-actions">
           <button class="btn mini ghost" onclick={() => (uploadDraft = null)}>取消</button>
           <span class="tts-spacer"></span>
@@ -963,7 +1042,7 @@
             placeholder="这段参考音频的台词，用于对齐声线（可留空）"
           ></textarea>
         </label>
-        <p class="vp-hint">从当前音轨精准切片，前后留 0.2 秒上下文。</p>
+        <p class="vp-hint">单人干声效果最好；从当前音轨精准切片，前后留 0.2 秒上下文，并统一参考响度。</p>
         <div class="vp-actions">
           <button class="btn mini ghost" onclick={() => (extractDraft = null)}>取消</button>
           <span class="tts-spacer"></span>
@@ -1363,84 +1442,40 @@
   .actions .btn.icon {
     flex: 0 0 28px;
   }
+  /* 字幕剪贴板：只在复制过之后出现；把「粘贴到播放头」放在一眼能看到的位置。 */
+  .clip-strip {
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--raise);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .clip-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .clip-clear {
+    flex: 0 0 22px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+  }
   .danger {
     color: var(--danger);
   }
 
-  .second-opinion {
-    margin-top: var(--sp-4);
-    padding: var(--sp-3) 0 0;
-    border-top: 1px solid var(--line-2);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-2);
-  }
-  .so-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--sp-2);
-    font-size: var(--fs-ui);
-  }
-  .so-head b {
-    font-weight: 600;
-  }
-  .so-head span {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-  }
-  .so-progress {
-    height: 3px;
-    border-radius: 2px;
-    background: var(--line-2);
-    overflow: hidden;
-  }
-  .so-progress i {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.12s linear;
-  }
-  .so-stage {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-  }
-  .so-tip {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-    line-height: 1.5;
-  }
-  .so-tip.warn {
-    color: var(--danger);
-  }
-  .so-grid {
-    display: grid;
-    gap: var(--sp-2);
-  }
-  .so-col {
-    padding: var(--sp-2) var(--sp-3);
-    border: 1px solid var(--line-2);
-    border-radius: var(--rad-card);
-    background: var(--fill);
-  }
-  .so-col.alt {
-    border-color: var(--accent);
-  }
-  .so-label {
-    color: var(--text-3);
-    font-size: var(--fs-label);
-    margin-bottom: var(--sp-1);
-  }
-  .so-text {
-    font-size: var(--fs-body);
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .so-actions {
-    display: flex;
-    gap: var(--sp-2);
-    align-items: center;
+  .mini {
+    height: 26px;
+    padding: 0 var(--sp-2);
+    font-size: 12px;
   }
   .tts-block {
     margin-top: var(--sp-4);
@@ -1452,129 +1487,337 @@
   }
   .tts-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: var(--sp-2);
     min-width: 0;
   }
   .tts-head b {
+    flex: 0 0 auto;
     font-size: 12px;
     line-height: 16px;
     font-weight: 600;
     color: var(--ink-2);
-    flex: 0 0 auto;
   }
-  .tts-head span {
-    font-size: 11px;
-    line-height: 15px;
+  .tts-engine {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--fill);
     color: var(--ink-3);
+    font-size: 10.5px;
+    line-height: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .tts-controls {
+  .tts-status-dot {
+    flex: none;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--ink-3);
+  }
+  .tts-engine.ready .tts-status-dot {
+    background: var(--success);
+  }
+  .tts-engine.system .tts-status-dot {
+    background: var(--accent);
+  }
+  .tts-engine.warn {
+    color: var(--warn);
+    background: var(--warn-soft);
+  }
+  .tts-engine.warn .tts-status-dot {
+    background: var(--warn);
+  }
+  .tts-card {
     display: flex;
     align-items: center;
-    gap: 6px;
-  }
-  .mini {
-    height: 26px;
-    padding: 0 var(--sp-2);
-    font-size: 12px;
-  }
-  .mini.on {
-    background: var(--accent-soft);
-    border-color: var(--accent-line);
-    color: var(--accent);
-  }
-  .tts-sel {
-    height: 26px;
-    min-width: 0;
-    border: 1px solid var(--line);
-    border-radius: 4px;
+    gap: 9px;
+    padding: 9px 9px var(--sp-2);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
     background: var(--raise);
-    color: var(--ink-2);
+    box-shadow: 0 1px 1px rgba(27, 39, 64, 0.03);
+  }
+  .tts-play {
+    position: relative;
+    flex: 0 0 auto;
+    min-width: 62px;
+    height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--btn-primary-bg);
+    color: var(--on-accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
     font: inherit;
     font-size: 12px;
-    padding: 0 var(--sp-1);
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: var(--shadow-btn);
+    transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
   }
-  .tts-sel.rate {
-    flex: 0 0 56px;
-    width: 56px;
+  .tts-play:hover:not(:disabled) {
+    background: var(--btn-primary-hover);
+    transform: translateY(-0.5px);
   }
-  .tts-sel.voice {
-    flex: 1 1 auto;
-    width: auto;
+  .tts-play:active:not(:disabled) {
+    transform: scale(0.97);
   }
-  .tts-tools {
+  .tts-play:disabled {
+    background: var(--fill-strong);
+    color: var(--text-3);
+    cursor: default;
+    box-shadow: none;
+  }
+  .tts-play:focus-visible,
+  .tts-action:focus-visible,
+  .tts-download:focus-visible,
+  .vp-link:focus-visible,
+  .voice-act:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 2px;
+  }
+  .tts-play .spin {
+    width: 11px;
+    height: 11px;
+    border-width: 1.6px;
+  }
+  .tts-play.playing::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 8px;
+    border: 1.5px solid var(--accent);
+    animation: tts-ping 1.6s var(--ease) infinite;
+    pointer-events: none;
+  }
+  @keyframes tts-ping {
+    0% {
+      transform: scale(0.94);
+      opacity: 0.45;
+    }
+    70%,
+    100% {
+      transform: scale(1.1);
+      opacity: 0;
+    }
+  }
+  .tts-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .tts-row {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+  }
+  .tts-select-wrap {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: var(--sp-1);
-    flex-wrap: wrap;
-    padding-bottom: 10px;
+    min-width: 0;
+    height: 26px;
+    border-radius: 6px;
+    background: var(--fill);
   }
-  .tts-link {
+  .tts-select-wrap.voice {
+    flex: 1 1 auto;
+  }
+  .tts-select-wrap.rate {
+    flex: 0 0 64px;
+  }
+  .tts-select {
     appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    padding: 0 18px 0 7px;
     border: 0;
+    border-radius: 6px;
     background: transparent;
-    color: var(--accent);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
     line-height: 16px;
-    padding: 2px 0;
     cursor: pointer;
-    text-align: left;
+    text-overflow: ellipsis;
   }
-  .tts-link:hover {
-    text-decoration: underline;
+  .tts-select:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
   }
-  .tts-link:disabled {
+  .tts-select-wrap > svg {
+    position: absolute;
+    right: 6px;
+    pointer-events: none;
+    color: var(--ink-3);
+  }
+  .tts-meta {
+    padding-left: 2px;
+    font-size: 10.5px;
+    line-height: 13px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tts-actions {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .tts-action {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    height: 24px;
+    padding: 0 var(--sp-2);
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 11.5px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+      background var(--dur-fast) var(--ease);
+  }
+  .tts-action:hover:not(:disabled) {
+    color: var(--accent-hover);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+  }
+  .tts-action.on {
+    color: var(--accent-hover);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+  }
+  .tts-action:disabled {
+    opacity: 0.55;
     color: var(--text-3);
     cursor: default;
-    text-decoration: none;
   }
-  .tts-link.accent {
+  .tts-count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 var(--sp-1);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-hover);
+    font-size: 10px;
     font-weight: 600;
+    line-height: 1;
   }
-  .tts-dot {
+  .tts-download {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--btn-primary-bg);
+    color: var(--on-accent);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: var(--shadow-btn);
+    transition: background var(--dur-fast) var(--ease);
+  }
+  .tts-download:hover {
+    background: var(--btn-primary-hover);
+  }
+  .tts-download em {
+    margin-left: auto;
+    font-style: normal;
+    font-size: 10.5px;
+    font-weight: 400;
+    color: color-mix(in srgb, var(--on-accent) 78%, transparent);
+  }
+  .tts-progress-card {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: var(--sp-2) 9px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--fill);
+  }
+  .tts-progress-head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    font-size: 10.5px;
+    line-height: 13px;
+    color: var(--text-3);
+  }
+  .tts-progress-head b {
+    color: var(--ink-2);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .tts-progress {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--line-2);
+    overflow: hidden;
+  }
+  .tts-progress > div {
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: width 240ms var(--ease);
+  }
+  .tts-batch {
+    font-size: 10.5px;
+    line-height: 14px;
     color: var(--text-3);
   }
   .tts-spacer {
     flex: 1;
   }
-  .tts-ready {
-    font-size: 11px;
-    line-height: 16px;
-    color: var(--text-3);
-    white-space: nowrap;
-  }
-  .tts-progress {
-    height: 3px;
-    margin: 0 0 3px;
-    border-radius: 2px;
-    background: var(--separator-soft);
-    overflow: hidden;
-  }
-  .tts-progress > div {
-    height: 100%;
-    background: var(--accent);
-    transition: width 240ms ease;
-  }
-  .tts-progress-label {
-    font-size: 11px;
-    line-height: 15px;
-    color: var(--text-3);
-    margin-bottom: var(--sp-2);
-  }
   .voice-panel {
-    margin: 2px 0 10px;
-    padding: var(--sp-2) 9px 9px;
-    border: 1px solid var(--separator);
-    border-radius: 6px;
-    background: var(--bg-inset, var(--raise));
+    margin: 2px 0 var(--sp-1);
+    padding: 9px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--fill);
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--sp-2);
+    animation: tts-panel-in 160ms var(--ease);
+  }
+  @keyframes tts-panel-in {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
   }
   .vp-head {
     display: flex;
@@ -1591,41 +1834,73 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .vp-link {
+    appearance: none;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: 1px 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent-hover);
+    font: inherit;
+    font-size: 11px;
+    line-height: 15px;
+    cursor: pointer;
+  }
+  .vp-link:hover:not(:disabled) {
+    text-decoration: underline;
+  }
+  .vp-link:disabled {
+    color: var(--text-3);
+    cursor: default;
+  }
   .vp-field {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    font-size: 11px;
-    line-height: 15px;
+    gap: var(--sp-1);
+    font-size: 10.5px;
+    line-height: 14px;
     color: var(--text-3);
   }
   .vp-field input,
   .vp-field textarea {
     width: 100%;
     box-sizing: border-box;
+    padding: var(--sp-1) 7px;
     border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--bg-content);
-    color: var(--ink-2);
+    border-radius: 6px;
+    background: var(--raise);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
-    padding: var(--sp-1) 6px;
+    line-height: 16px;
     resize: vertical;
+  }
+  .vp-field input {
+    height: 26px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .vp-field input:focus,
+  .vp-field textarea:focus {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 0;
+    border-color: var(--accent-line);
   }
   .vp-actions {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding-top: 1px;
   }
   .vp-actions .btn.danger {
     color: var(--danger);
   }
-  .tts-hint,
   .vp-hint {
     margin: 0;
-    font-size: 11px;
-    line-height: 15px;
+    font-size: 10.5px;
+    line-height: 14px;
     color: var(--text-3);
   }
   .voice-list {
@@ -1633,16 +1908,16 @@
     flex-direction: column;
     max-height: 208px;
     overflow-y: auto;
-    border: 1px solid var(--separator-soft);
-    border-radius: 5px;
-    background: var(--bg-content);
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: var(--raise);
   }
   .voice-row {
     display: flex;
     align-items: center;
-    gap: 2px;
-    padding: 3px var(--sp-1) 3px 7px;
-    border-bottom: 1px solid var(--separator-soft);
+    gap: 6px;
+    padding: 5px 6px 5px var(--sp-2);
+    border-bottom: 1px solid var(--line-2);
   }
   .voice-row:last-child {
     border-bottom: 0;
@@ -1650,40 +1925,77 @@
   .voice-row.active {
     background: var(--accent-soft);
   }
+  .voice-row:not(.active):hover {
+    background: var(--fill);
+  }
   .voice-pick {
     appearance: none;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 1px;
-    padding: 2px 0;
+    padding: 1px 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
     text-align: left;
     cursor: pointer;
   }
   .voice-name {
     max-width: 100%;
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--ink-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-2);
   }
   .voice-row.active .voice-name {
-    color: var(--accent);
+    color: var(--accent-hover);
     font-weight: 600;
   }
   .voice-meta {
-    font-size: 10.5px;
-    line-height: 14px;
+    font-size: 10px;
+    line-height: 13px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+  .voice-acts {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 1px;
+  }
+  .voice-act {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink-3);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .voice-act:hover:not(:disabled) {
+    background: var(--fill-strong);
+    color: var(--ink);
+  }
+  .voice-act.on {
+    color: var(--accent-hover);
+    background: var(--accent-soft);
+  }
+  .voice-act.star.on svg {
+    fill: currentColor;
+  }
+  .voice-act:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .meta-sec {

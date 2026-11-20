@@ -58,7 +58,13 @@
     swatch: '<circle cx="8" cy="8" r="6"/><path d="M8 2v12"/><path d="M8 8h6"/>',
     gauge: '<path d="M2.2 11.4a6 6 0 1 1 11.6 0"/><path d="M8 11.4 10.9 6.9"/><circle cx="8" cy="11.4" r="1.1" fill="currentColor" stroke="none"/>',
     mic: '<rect x="6" y="1.8" width="4" height="7.2" rx="2"/><path d="M3.6 7.4a4.4 4.4 0 0 0 8.8 0"/><path d="M8 11.8v2.4"/>',
+    star: '<path d="M8 1.9l1.75 3.72 4.05.52-2.98 2.83.76 4.02L8 10.98l-3.58 2.01.76-4.02L2.2 6.14l4.05-.52z"/>',
     copy: '<rect x="5.4" y="5.4" width="8" height="8" rx="1.4"/><path d="M10.6 5.4V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.6a1.4 1.4 0 0 0 1.4 1.4h1.8"/>',
+    flag: '<path d="M3.4 1.8v12.4"/><path d="M3.4 2.4h7.4l-1.7 2.9 1.7 2.9H3.4"/>',
+    pencil:
+      '<path d="M3.2 10.4 10.6 3l2.4 2.4-7.4 7.4-3 .6z"/><path d="M9.6 4l2.4 2.4"/>',
+    paste:
+      '<rect x="3.4" y="2.8" width="9.2" height="11.6" rx="1.4"/><path d="M6 2.8V1.5h4v1.3"/><path d="M5.7 7.1h4.6"/><path d="M5.7 9.9h3.1"/>',
   };
 
   const FILL: Record<string, string> = {

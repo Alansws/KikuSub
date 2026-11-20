@@ -24,7 +24,8 @@
 
 - [ ] 有一条**用户能走通**的路径被证明过：命令、测试名、或截图（三选一，写出来）。
 - [ ] 涉及界面的改动：`bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline`
-      跑过，或按 `AGENTS.md` 红线 10 手点过单击跳转 / 抖动单击 / 缩放 / 保存。
+      跑过，或用 `--screenshot` / `verify_reshape_flow.mjs` 静默断言过单击跳转 / 抖动单击 / 缩放 / 保存。
+      **不要为了「手点一遍」打开窗口**（AGENTS.md §0.5 无窗口铁律）。
 - [ ] 涉及 Python 的改动：`pytest -q` 绿，且**新行为有会红过的用例**（写出来是哪个）。
 
 ### ② 实现是否够优雅
@@ -51,8 +52,9 @@
 
 ## 2. 本仓库的四条硬检查
 
-- [ ] **红线**：`AGENTS.md` §4 的 10 条有没有踩（内核边界、提案唯一实现、单槽并发、
-      断句要数字、历史一条线、主题令牌、导出走 `setExport*`、改 Python 重打 sidecar）。
+- [ ] **红线**：`AGENTS.md` §4 的 13 条有没有踩（内核边界、提案唯一实现、单槽并发、
+      断句要数字、历史一条线、主题令牌、导出走 `setExport*`、改 Python 重打 sidecar、
+      不许弹窗）。
 - [ ] **验证顺序**：`pytest -q` → `python -m core.smoke` → `cd desktop && npm run check`
       → `npm run build` → `npm run test:main`（改界面再加截图比对）。
 - [ ] **文档同步**：改了什么行为 → `AGENTS.md` 索引 / `docs/contracts/` 对应那一份要不要改？

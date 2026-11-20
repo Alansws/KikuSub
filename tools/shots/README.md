@@ -2,8 +2,8 @@
 
 改样式/布局时的验收工具：一次截下关键界面，再和基线做像素比对。**编译通过 ≠ 没改坏。**
 
-底层用的是主进程自带的 `--screenshot`（`show:false` + `capturePage` + `app.exit`），
-不抢焦点、可以后台跑，也不参与启动失败计数（见 `desktop/main/launchguard.cjs`）。
+底层用的是主进程自带的 `--screenshot`（透明窗口 + `capturePage` + `app.exit`），
+**桌面上什么都不出现**、可以后台跑，也不参与启动失败计数（见 `desktop/main/launchguard.cjs`）。
 
 ## 用法
 
@@ -68,8 +68,106 @@ node tools/shots/verify_reshape_flow.mjs
 node tools/shots/verify_reshape_flow.mjs --scenario stale
 ```
 
-同样走 `--screenshot` 静默路径（`showInactive` + `capturePage` + `app.exit`，不抢焦点），
+同样走 `--screenshot` 静默路径（透明窗口 + `capturePage` + `app.exit`，桌面上不出现），
 断言失败退出码非 0。契约口径见 `docs/contracts/ai-proposal.md` §3.7.6。
+
+## 清理标点回归
+
+用户报障过的两类行（2026-11-17「句中顿号被换成空格」「行尾省略号点了不动」）有专门的
+行为回归：种子字幕里放上截图那几句 + 两个反例，在真实界面里打开「清理标点」浮层，断言
+统计、三条 before→after、标红字符、两组口径（句中 / 省略号）切换、v2 偏好键。
+
+```bash
+node tools/shots/verify_punct_clean.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_punct_clean.mjs
+```
+
+截图落在 `/tmp/kikusub-punct-verify/punct-clean.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.4。
+
+## 复制 / 粘贴字幕回归
+
+气声句（吸って / 入って）从「偶尔转对的一条」复制到两个播放头位置，是 2026-11-17 的新流程。
+脚本在真实界面里断言：检查器复制按钮与 `⌘⇧C` 都会先提交未失焦的草稿、粘贴后是 4 条 /
+再粘 5 条、一次撤回回到 4 条、播放头与缩放不变、新句被选中。
+
+```bash
+node tools/shots/verify_cue_clipboard.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_cue_clipboard.mjs
+```
+
+截图落在系统临时目录的 `kikusub-cue-clipboard/cue-clipboard.png`（macOS 通常是
+`$TMPDIR/kikusub-cue-clipboard/`）。契约口径见 `docs/contracts/review-console.md` §3.4.2。
+
+## 核对台专业剪辑回归
+
+`←/→` 逐帧、`⌘←/⌘→` 逐秒、`Q/E` 入出点、`W` 切割、`⇧Space` 试听、`N` 磁吸、
+`⇧Z` 全片切换、`1/2/3` 倍速，以及「高速连按以同步 `play.time` 为基准」和
+「方向键不触发 WebView 前进/后退」。脚本生成 24fps 测试片，断言真实界面里的时间码、
+字幕行、`video.playbackRate / preservesPitch` 与 URL/history。
+
+```bash
+node tools/shots/verify_review_transport.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_review_transport.mjs
+```
+
+截图落在系统临时目录的 `kikusub-review-transport/review-transport.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.6。
+
+## 点行选区与单句 AI 判定回归
+
+2026-11-20 新增两条用户报障/新流程的静默回归：
+
+```bash
+# 点表格行 / 点底部字幕块 → 选区工具条；Esc 只清选区、不丢当前行
+node tools/shots/verify_cue_selection.mjs
+
+# A/B + 第三版卡片：徽章、理由、朗读、采用按钮（dev seed，不加载模型）
+node tools/shots/verify_arbitration.mjs
+
+# 常驻 AI 区（B 返回空也能用）+ 听音线索草稿缓存 + 多轮对话浮窗拖动/缩放/Esc
+# 以及：发送追问 / 清空重判彻底分离（重判请求体无旧 history）、撤销追问后结果卡同步、
+# 复制按钮、文本可选中、右侧只保留一个对话入口
+node tools/shots/verify_arbitration_dialog.mjs
+```
+
+都走 `--screenshot` 静默路径；沙箱环境加
+`KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`。截图落在系统临时目录的
+`kikusub-cue-selection/`、`kikusub-arbitration/` 与 `kikusub-arbitration-dialog/`。
+
+## 片段范围（局部处理 / 导出）回归
+
+「只处理 / 只导出这一段」的三页联动（润色 / 翻译 / 导出）有专门回归：区间章节设为范围后，
+字幕条数变成 `4 / 5`、润色与翻译表格只剩 4 行、仅封装给出关键帧说明、字幕导出的 SRT
+已归零且只含这一段、成片 ffprobe 时长 = 12s 且「发射点」平移到 8.5s、章节面板
+「仅处理此片段」一键带入。
+
+```bash
+node tools/shots/verify_clip_scope.mjs
+# 截图停在润色页 / 翻译页
+KIKUSUB_FINAL_VIEW=polish node tools/shots/verify_clip_scope.mjs
+# 沙箱 / CI
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_clip_scope.mjs
+```
+
+截图落在系统临时目录的 `kikusub-clip-scope/clip-scope.png`。契约口径见
+[ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.8 与
+[export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
+
+## 手动分批 / 译文时间轴对齐 / 局部重排回归
+
+润色页手动批次（1–2 → 下一批 → 3–4，复制 / 粘回只含本批，润色仍严格等条数）、
+翻译页默认按时间轴对齐（4 条原文贴 3 条：合并覆盖 / 空缺 / 范围外高亮，严格开关
+打开后回到 422）、断句重排页接入处理范围（越界高亮、只替换本段、范围外尾部译文
+保持对齐，总条数 6 → 5）。
+
+```bash
+# 沙箱 / CI 环境
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_batch_and_align.mjs
+```
+
+截图落在系统临时目录的 `kikusub-batch-align/batch-align.png`。契约口径见
+[ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.9–§3.7.11。
 
 ## 设置页专用矩阵
 
@@ -110,3 +208,33 @@ node tools/shots/capture_ai_workbench.mjs --out docs/images/shots/baseline
 `settings` 页有少量运行时文本（模型目录、日志尾巴），PSNR 会落在 85–99dB 之间波动，
 不是回归。`transcribe` / `review` 在同样 seed 下是逐像素一致的（inf）。AI 三页的夹具时间戳固定，
 同一台机器上应接近逐像素一致；状态栏的加速设备（MPS / CPU）随机器不同，不作为跨机器基线。
+
+## 核对台工作现场持久化回归
+
+切去别的页面再回来，波形包络**不重新请求**、缩放 / 播放头 / 选区按原样恢复，快照按
+媒体路径写进 localStorage（最近 50 部）。脚本在真实界面里统计 `/peaks` 请求数并读回
+`localStorage['kikusub.reviewViewports']`。
+
+```bash
+node tools/shots/verify_review_viewport.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_review_viewport.mjs
+```
+
+截图落在系统临时目录的 `kikusub-review-viewport/review-viewport.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.7。
+
+## 章节 / 时刻点标记与成片写入回归
+
+检查器「章节」页签 + 波形顶部旗标：播放头插时刻点、选区设为章节（回车添加）、
+编辑标题、⌘Z 一次撤回、旗标单击跳转；随后用「仅封装」真实导出一次，再用
+`ffprobe -show_chapters` 读回容器里的章节（标题 / 起止 / 有序不重叠）。
+
+```bash
+node tools/shots/verify_chapters.mjs
+# 只截导出页（看「写入章节标记 N 个」开关）
+CHAPTERS_FINAL_VIEW=export node tools/shots/verify_chapters.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_chapters.mjs
+```
+
+截图落在 `kikusub-chapters/chapters-review.png` 与 `chapters-export.png`。
+契约口径见 `docs/contracts/review-console.md` §3.4.9 与 `export-and-prompt.md` §3.8.2。

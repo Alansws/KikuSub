@@ -1,7 +1,7 @@
 {
   "name": "kikusub-desktop",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "KikuSub macOS 原生外壳（Electron + Svelte）",
   "main": "main/main.cjs",
@@ -11,7 +11,7 @@
     "check": "tsc --noEmit",
     "check:svelte": "bash ../tools/check/svelte-check.sh",
     "test:main": "node --test test/*.test.cjs test/*.test.mjs",
-    "start": "vite build && electron .",
+    "start": "vite build && env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS KIKUSUB_ALLOW_WINDOW=1 electron .",
     "shot": "vite build && electron . --screenshot"
   },
   "devDependencies": {

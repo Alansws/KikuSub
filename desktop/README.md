@@ -10,14 +10,18 @@ cd desktop
 npm install                       # 首次
 npm run build                     # 构建渲染进程
 npm run test:main                 # 主进程单测（清理 / 密钥 / 技能）
-npx electron .                    # 启动
+npm start                         # 启动（会显示窗口——这是人的入口）
 ```
 
-**注意：本机 shell 里可能已有 `ELECTRON_RUN_AS_NODE=1`（某些 Electron 宿主会设），
-它会让任何 Electron 二进制退化成纯 Node。启动前必须清掉：**
+> **开发模式默认不弹窗**（AGENTS.md §0.5）：`npm start` 与 `desktop/run.sh` 会显式设置
+> `KIKUSUB_ALLOW_WINDOW=1`，所以窗口会出现；直接 `npx electron .` 会被主进程拒绝（退出码 2）。
+> 智能体/自动化验证一律用 `--screenshot`（透明窗口取帧）或 `tools/shots/` 里的静默脚本。
+
+`npm start` 已经清掉 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`（本机 shell 里可能有，
+它们会让 Electron 退化成纯 Node）。手工拼命令时才需要自己清：
 
 ```bash
-env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron .
+env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS KIKUSUB_ALLOW_WINDOW=1 npx electron .
 ```
 
 被沙箱拦住时再加 `--no-sandbox`（仅调试用，正常双击启动不需要）。
@@ -47,13 +51,14 @@ desktop/
         ├── app.css           设计令牌（与静态高保真稿同一套值）
         ├── lib/api.ts        服务层客户端（Bearer + X-Kikusub-Session）
         ├── lib/store.svelte.ts   状态与动作（runes）
-        ├── components/       Sidebar / Toolbar / Inspector / StatusBar / Icon /
-        │                     ParamPanel / QaPanel / FirstRun / QuitPrompt
+        ├── lib/devSeed.ts    开发种子注入（仅 KIKUSUB_DEV_SEED）
+        ├── components/       Sidebar / Toolbar / Inspector / SecondOpinionCard /
+        │                     StatusBar / Icon / ParamPanel / QaPanel / FirstRun / QuitPrompt
         └── views/            Import / Transcribe / Review / Dual / Polish /
                               Reshape / Translate / Prompt / Export / Report / Settings
 ```
 
-## 自截图（不打扰桌面）
+## 自截图（桌面上不出现任何东西）
 
 ```bash
 env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
@@ -63,6 +68,8 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
 
 `KIKUSUB_DEV_SEED` 指向 `{ "mediaPath": "...", "cues": [{ "start": 0, "end": 2, "text": "…" }] }`，
 渲染进程会把它灌进当前会话后直接进核对屏——联调与截图不必每次真跑转写。打包后这个入口恒为 `null`。
+可选字段 `secondOpinion: { engine, index, text }` 会灌一份假的复核结果，用于不加载模型时截
+「另一引擎复核」卡片（种子注入实现在 `lib/devSeed.ts`）。
 
 还需要切视图时用 `KIKUSUB_DEV_EVAL`：里面的 JS 会在截图前于渲染进程执行一次，可以点
 `.sb-item` 切侧栏、点侧栏「润色」进提案台，再 `await` 一会儿等数据到位。截图前会
@@ -80,7 +87,11 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS \
 - **核对**：视频 + 波形 + 字幕轨道 + 检查器；质检队列默认收进右侧「质检待核」页签（可弹出为可拖动/缩放/归位的浮窗，不再遮挡画面与侧栏）；单击跳转、拖动框选、逐帧擦洗、字幕块整体/两端拖动、
   三态显示、暂存与导出、⌘Z 整块回退；顶部 50 步统一历史（字幕/译文/质检/导出/AI 草稿共用一条时间线，点任意一步跳回）、⌘F 查找替换（逐处替换/跳过、当前命中跟随滚动、整批替换保留跳过项、快捷键可自定义，原文/译文/双语）、
   右栏本机 TTS 对照（系统 say 兜底 + OmniVoice 克隆；可上传多段参考音频、从当前句截取、
-  在音色库中试听/设为默认；右键任意一句也能「以此句音频新建音色…」）、音轨右键添加 0.8 秒空字幕、聚焦统一 69×。
+  在音色库中试听/设为默认；右键任意一句也能「以此句音频新建音色…」）、「另一引擎复核」可选复核引擎
+  （注册表 `reviewable` 能力位）并对两版做逐字差异高亮、两版各自可 TTS 朗读（与上方「试听原声」
+  三方对照）、音轨右键添加 0.8 秒空字幕、聚焦统一 69×；键盘精修：←/→ 逐帧、
+  ⌘←/⌘→ 逐秒、Q/E 入点/出点、W 切割、⇧Space 试听、N 磁吸、⇧Z 全片/还原、
+  1/2/3 倍速（⇧2 归 1×）。
 - **双引擎复核**：两列只读 diff（= / ~ / + / −）；B 版可以由另一引擎整片转写「放进双引擎复核」产生，
   也可以直接导入工作流里已经做好的 SRT / VTT。B 版按媒体身份自动恢复，整列覆盖进同一条 ⌘Z 历史。
 - **润色 / 翻译台**：润色页做双栏（单源）或三栏 A | B | AI 终稿（双源）diff，左原文只读、
@@ -142,12 +153,15 @@ cdhash 都变，keychain 条目会全部失效。改这块时守住三条：0600
 ## 打包成 .app
 
 ```bash
-bash tools/pack/rebuild.sh         # 日常：按需重打 sidecar → 构建渲染层 → 装配 → 打开
+bash tools/pack/rebuild.sh         # 日常：按需重打 sidecar → 构建渲染层 → 装配（不打开）
+bash tools/pack/rebuild.sh --open  # 装配完顺便打开——人的动作
 bash tools/pack/build_sidecar.sh   # 只重打 Python sidecar（PyInstaller，约 3–5 分钟）
 bash tools/pack/build_app.sh       # 只装配 + 自签，产出 build/pack/KikuSub.app
 ```
 
 `rebuild.sh` 会先让正在运行的旧实例走正常退出流程，否则单实例锁会让新构建打不开。
+**它默认不打开应用**：智能体会跑这个脚本验收，默认 `open` 会让用户桌面上反复弹窗
+（`--no-open` 仍接受，等价于默认）。
 
 > 改了 `core/` 或 `server/` 的 Python 代码后**必须**先重跑 `build_sidecar.sh`，
 > 否则 `.app` 里仍是旧接口，会出现「界面有按钮、点击报 Method Not Allowed / 404」。

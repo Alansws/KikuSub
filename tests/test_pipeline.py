@@ -361,3 +361,123 @@ def test_separate_vocals_full_film_without_duration_asks_for_range(
             output_dir=tmp_path,
             engine=_FakeEngine(),
         )
+
+
+# ---------------------------------------------------------------------------
+# 短选区轻声兜底：只作用于核对台 replace_range（人工短选区），整片不动
+# ---------------------------------------------------------------------------
+
+
+class _QuietSelectionEngine(_FakeEngine):
+    """默认阈值切不出语音；阈值降到 0.05 才「听得见」。"""
+
+    def __init__(self, *, whole_clip_text: str = "", hit_on_low: bool = True) -> None:
+        super().__init__()
+        self.whole_clip_text = whole_clip_text
+        self.hit_on_low = hit_on_low
+        self.configs: list = []
+
+    def transcribe_file(self, media_path, **kwargs):
+        self.media_path = media_path
+        self.received = kwargs
+        config = kwargs.get("config")
+        self.configs.append(getattr(config, "threshold", None))
+        if (
+            self.hit_on_low
+            and config is not None
+            and float(getattr(config, "threshold", 1.0)) <= 0.05
+        ):
+            return [SubtitleCue(10.0, 11.0, "轻声台词")]
+        return []
+
+    def transcribe_window(self, audio, **kwargs):
+        return self.whole_clip_text
+
+
+def test_short_clip_falls_back_to_low_threshold(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core.transcribe import WhisperVadConfig
+
+    engine = _QuietSelectionEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media,
+            start_s=10.0,
+            end_s=14.0,
+            short_clip_fallback=True,
+            whisper_config=WhisperVadConfig(),
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+    assert [cue.text for cue in result.cues] == ["轻声台词"]
+    # 第一次是用户当前参数（产品默认，不是兜底值），只有重试才降到 0.05
+    assert engine.configs[0] == WhisperVadConfig().threshold
+    assert 0.05 in engine.configs
+
+
+def test_whole_transcription_never_uses_short_clip_fallback(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core.transcribe import WhisperVadConfig
+
+    engine = _QuietSelectionEngine(whole_clip_text="整段送模不该发生")
+    with pytest.raises(RuntimeError, match="未检测到有效语音"):
+        pipeline.run_transcription(
+            pipeline.TranscribeRequest(
+                media_path=media,
+                start_s=10.0,
+                end_s=14.0,
+                # 默认 False：整片 / 追加任务的口径
+                whisper_config=WhisperVadConfig(),
+            ),
+            output_dir=tmp_path,
+            engine=engine,
+        )
+    # 只跑了一次原参数，没有降阈值重试
+    assert engine.configs == [WhisperVadConfig().threshold]
+
+
+def test_short_clip_whole_clip_fallback_returns_one_cue(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import short_clip
+    from core.transcribe import WhisperVadConfig
+
+    monkeypatch.setattr(
+        short_clip, "read_whole_clip", lambda *a, **k: "整段识别到的台词"
+    )
+    engine = _QuietSelectionEngine(hit_on_low=False)
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media,
+            start_s=20.0,
+            end_s=24.5,
+            short_clip_fallback=True,
+            whisper_config=WhisperVadConfig(),
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+    assert len(result.cues) == 1
+    assert result.cues[0].start == 20.0
+    assert result.cues[0].end == 24.5
+    assert result.cues[0].text == "整段识别到的台词"
+
+
+def test_short_clip_does_not_whole_clip_selection_longer_than_12s(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import short_clip
+    from core.transcribe import WhisperVadConfig
+
+    monkeypatch.setattr(short_clip, "read_whole_clip", lambda *a, **k: "不该发生")
+    with pytest.raises(RuntimeError, match="未检测到有效语音"):
+        pipeline.run_transcription(
+            pipeline.TranscribeRequest(
+                media_path=media,
+                start_s=0.0,
+                end_s=18.0,  # > 12s：只降阈值，不整段送模
+                short_clip_fallback=True,
+                whisper_config=WhisperVadConfig(),
+            ),
+            output_dir=tmp_path,
+            engine=_QuietSelectionEngine(whole_clip_text="整段送模不该发生", hit_on_low=False),
+        )

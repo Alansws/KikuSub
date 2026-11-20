@@ -80,6 +80,11 @@
   里的重复也要在该行标红。旧版 `view.ai=mod+4 / view.export=mod+5` 只在仍是旧默认值
   时迁移到 `⌘4..⌘7`（双引擎复核 / 润色 / 翻译 / 导出）；2026-11 加「断句重排」后再次顺延到
 `⌘4..⌘8`（… / 润色 / 断句重排 / 翻译 / 导出）。两次迁移都只在「仍是旧默认值」时改，用户自定义过的键不覆盖。
+- **按钮焦点与输入控件**：`allowOnControls` 只让传输键（←/→、↑/↓、⇧Space）在按钮 / 链接
+  焦点上生效；`textarea` / `input`（含 `type=range` 滑杆）/ `select` / `contenteditable`
+  永远让位。`onKey` 顶部先 `isComposing || keyCode===229` 早退，日语输入法组合中不抢键。
+- **方向键不触发网页 history**：核对台的 ←/→、⌘←/⌘→ 显式 `preventDefault()`；主进程菜单
+  没有 back/forward accelerator，但仍保留导航守卫。输入控件内的方向键保持原生行为。
 
 #### 退出前清理（⌘Q / 关窗）
 
@@ -105,6 +110,19 @@
   `*.autosave_draft.srt` / `*.reviewed.srt` / `*.clean.srt`：核对工作稿与成片不是临时碎片，
   不能因为媒体名里带区间标记就在退出时被默认删除。
 
+#### sidecar 的 cwd 与「原地重打包」（2026-11 修复）
+
+- **sidecar 的 cwd 绝不落在 `.app` 里面**：`tools/pack/build_app.sh` 是先 `rm -rf KikuSub.app`
+  再重新装配，而 sidecar 是 detached 的（父进程退出它也不跟着死）。装配那一刻它的 cwd 变成
+  一个已删除的 inode，之后每次 `os.getcwd()` 都抛 `ENOENT`——torch 在 import 期就会踩
+  （`torch/_dynamo/config.py: default_debug_dir_root`），一次 Whisper/Qwen 转写 1 秒内失败，
+  界面只剩一句 `[Errno 2] No such file or directory`，跟视频和模型都无关。打包态一律用数据目录
+  当 cwd（`startSidecar()` 里的 `cwd = base`）。
+- 两道兜底：`core/paths.ensure_usable_cwd()` 在 sidecar 启动、以及每次 `run_transcription()`
+  之前各查一次，cwd 坏了就 `chdir` 到 `outputs/`（回归 `tests/test_paths_cwd.py`）；
+  `build_app.sh` 在 `rm -rf "$APP"` 前先让同路径旧实例退出，退不掉就**报错退出**，
+  不许带着旧进程覆盖包体。
+
 #### 日志清理
 
 - `setup_logging()` 启动时调用 `prune_logs()`：只删 `*.log.N` 轮转备份，
@@ -113,3 +131,29 @@
   `pruneLogs()` 执行同一策略。
 - 设置页「清理旧日志」走 `POST /api/diagnostics/log/clean`，是同一份 `prune_logs()`；
   不要为了“清空”去 truncate 活动日志（会破坏 handler 的 inode/offset）。
+
+### 3.7 窗口可见性：验证一律无窗口（2026-11-16 用户红线）
+
+用户的原话是「每次改个功能都反复弹 Electron 窗口，干扰这台电脑上别的事，之后不许再弹」。
+这条契约把「不弹窗」做成**默认行为**，而不是让智能体记得别弹——记忆会失效，默认值不会。
+
+- **判定只有一处**：`desktop/main/windowmode.cjs` 的 `resolveWindowMode()`（纯函数，
+  `desktop/test/window-mode.test.cjs` 覆盖）。主进程只按结果执行，不许在别处再写一份
+  `show() / 不 show()` 的判断。
+
+  | 启动方式 | 结果 |
+  | --- | --- |
+  | `--screenshot` / `KIKUSUB_SHOT` | 不显示，透明窗口取帧后退出 |
+  | `KIKUSUB_NO_WINDOW=1`（CI / 自动化总开关） | 不显示，进程照常跑 |
+  | 未打包且无 `KIKUSUB_ALLOW_WINDOW=1` | **拒绝启动**：打印无窗口验证路径，退出码 2（不建窗口、不起 sidecar、不计启动失败） |
+  | `npm start` / `desktop/run.sh`（已带 `ALLOW_WINDOW=1`） | 显示 |
+  | 打包后的 `.app` 双击 / Dock / Finder | 显示（用户意图明确） |
+
+- **截图不再 `showInactive()`**：旧实现会让窗口在桌面上亮 4.5–5.5 秒——这正是「反复弹窗」的
+  主要来源。现在窗口 `setOpacity(0)` + `setHasShadow(false)` + `setIgnoreMouseEvents(true)`，
+  并隐藏 Dock 图标；窗口仍参与合成，`capturePage()` 的帧与可见时一致，桌面上什么都看不到。
+- **`tools/pack/rebuild.sh` 默认只构建装配，不打开**：`--open` 才是人的动作；`--no-open`
+  仍接受（等价于默认）。
+- **不许智能体代劳**：`npx electron .`、`npm start`、`desktop/run.sh`、
+  `open *.app`、`rebuild.sh --open` 都属于「人要看界面」的操作。要确认界面就截图落盘，
+  用 `read_image` 看 PNG。规则入口在 `AGENTS.md` §0.5 与红线 13。

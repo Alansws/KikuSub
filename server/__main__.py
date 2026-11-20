@@ -23,6 +23,7 @@ import shutil
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -30,7 +31,7 @@ from pathlib import Path
 import uvicorn
 
 from core.logging_setup import prune_logs, setup_logging
-from core.paths import MODELS_DIR, PRESETS_PATH
+from core.paths import MODELS_DIR, PRESETS_PATH, ensure_usable_cwd
 from core.procutil import begin_shutdown, terminate_all_processes
 
 from .app import API_VERSION, create_app
@@ -132,8 +133,24 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _pin_torch_debug_dir() -> None:
+    """给 torch 一个固定目录，别让它在 import 期去问 os.getcwd()。
+
+    `torch._dynamo.config` 在 import 时就把 `debug_dir_root` 算死；只要环境里有
+    `TORCH_COMPILE_DEBUG_DIR`，它走环境变量分支，根本不碰 getcwd。
+    """
+    os.environ.setdefault(
+        "TORCH_COMPILE_DEBUG_DIR",
+        str(Path(tempfile.gettempdir()) / "kikusub-torch-compile"),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+
+    # 必须在任何可能碰 cwd 的代码之前（日志落盘、torch 懒加载都在后面）。
+    _pin_torch_debug_dir()
+    repaired_cwd = ensure_usable_cwd()
 
     config = ServerConfig(
         host=args.host,
@@ -149,6 +166,11 @@ def main(argv: list[str] | None = None) -> int:
         force=True,
     )
     log = logging.getLogger("kikusub.server")
+    if repaired_cwd:
+        log.warning(
+            "进程工作目录已失效（多半是打包脚本覆盖了正在运行的 .app），已切换到 %s",
+            repaired_cwd,
+        )
     _start_log_maintenance(Path(config.output_dir) / "logs")
     log.info("=" * 68)
     log.info(

@@ -19,6 +19,8 @@ export interface MediaInfo {
   video_width: number;
   video_height: number;
   video_bitrate: number;
+  /** 源视频平均帧率；纯音频 / 未知时缺省或 0（前端按 30fps 兜底）。 */
+  video_fps?: number;
   has_video: boolean;
   needs_proxy: boolean;
   proxy_reason: string;
@@ -42,6 +44,8 @@ export interface EngineInfo {
   downloadable: boolean;
   /** 推理运行时族：whisper / qwen / sherpa（服务端注册表给出）。 */
   family?: string;
+  /** 能否做「另一引擎复核」（窗口直送模型，只回文本）。 */
+  reviewable?: boolean;
   installed: boolean;
   size_bytes: number;
   enabled: boolean;
@@ -120,6 +124,27 @@ export interface ExportSourceInfo {
   container: string;
 }
 
+/** 章节 / 时刻点标记：`end === null` 表示时刻点（结束于下一个标记或片尾）。 */
+export interface ChapterMark {
+  id: string;
+  start: number;
+  end: number | null;
+  title: string;
+}
+
+export interface ChaptersPayload {
+  marks: ChapterMark[];
+  /** 实际写进容器的区间（已排序、已衔接 / 防重叠）。 */
+  chapters: { start: number; end: number; start_ms: number; end_ms: number; title: string }[];
+  count: number;
+  duration: number;
+  media_path: string;
+  can_undo?: boolean;
+  can_redo?: boolean;
+  undo_label?: string;
+  redo_label?: string;
+}
+
 export interface ExportPlan {
   mode: 'burn' | 'soft' | 'copy';
   track: 'source' | 'target' | 'both';
@@ -136,6 +161,18 @@ export interface ExportPlan {
   warnings: string[];
   source: ExportSourceInfo;
   style?: SubtitleStylePayload;
+  /** 本次导出会写入容器的章节（`write_chapters` 关闭时为空）。 */
+  chapters?: { start: number; end: number; start_ms: number; end_ms: number; title: string }[];
+  /** 片段导出信息；全片时为空对象。 */
+  clip?: ClipInfo;
+}
+
+/** 片段范围（秒，原片时间）。`end <= 0` = 全片。 */
+export interface ClipInfo {
+  start: number;
+  end: number;
+  duration: number;
+  label: string;
 }
 
 /** 烧录硬字幕的样式（只对 mode='burn' 生效）。 */
@@ -189,6 +226,13 @@ export interface ExportJobPayload {
   resolution: 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
   preset: 'small' | 'balanced' | 'high' | 'ultra';
   export_srt?: boolean;
+  /** 把章节 / 时刻点标记写进容器（默认开启）。 */
+  write_chapters?: boolean;
+  /** 片段导出（0 / 0 = 全片）：只导出这一段，字幕与章节平移到 0 起。 */
+  clip_start?: number;
+  clip_end?: number;
+  /** 片段标签（章节标题）；空值由服务端按时间范围生成。 */
+  clip_label?: string;
   out_dir?: string;
   style?: SubtitleStylePayload;
 }
@@ -213,6 +257,8 @@ export interface ExportResult {
   subtitle_count: number;
   skipped: number;
   srt_path?: string;
+  /** 片段导出信息；全片时为空对象。 */
+  clip?: ClipInfo;
 }
 
 export interface ParamSpec {
@@ -383,6 +429,38 @@ export interface AiProposalItem {
   note?: string;
 }
 
+/** 翻译时间轴对齐的一行状态（`i` 是全片 1 基序号）。 */
+export interface AiAlignmentRow {
+  i: number;
+  /** ok = 正常对齐；merged = 合并覆盖；missing = 没匹配到译文。 */
+  state: 'ok' | 'merged' | 'missing';
+  text?: string;
+  /** 起止任一端与原文的最大偏差（秒）；> 0.5 高亮。 */
+  drift?: number;
+  label?: string;
+  /** 被并入哪一条（全片序号）；只有「被合并覆盖」的槽位有值。 */
+  merged_into?: number | null;
+  /** 这一条译文覆盖到哪一条（全片序号）；只有合并的主条目有值。 */
+  merged_to?: number | null;
+}
+
+/** 翻译提案的时间轴对齐摘要：界面高亮与计数都用它。 */
+export interface AiAlignment {
+  from: number;
+  to: number;
+  /** 粘贴内容实际解析到的条数（可与原批不同）。 */
+  pasted?: number;
+  rows: AiAlignmentRow[];
+  counts: {
+    ok: number;
+    merged: number;
+    missing: number;
+    drift: number;
+    out_of_range: number;
+  };
+  warnings: string[];
+}
+
 /** AI 提案（`proposal.json`）。in-app 与外部 skill 产出的是同一份结构。 */
 export interface AiProposal {
   version: number;
@@ -396,12 +474,16 @@ export interface AiProposal {
     /** 双源润色额外绑定第二版；单源提案没有这两个字段（向后兼容）。 */
     count_b?: number;
     digest_b?: string;
+    /** 片段提案：作用范围（全片 1 基、含两端），i 仍是全片序号。 */
+    range?: { from: number; to: number; count: number };
   };
   model?: string;
   entry?: string;
   created_at?: number;
   chunks?: number;
   glossary?: { src: string; dst: string }[];
+  /** 翻译手动通道的时间轴对齐结果（严格模式关闭且条数不同时才有）。 */
+  alignment?: AiAlignment;
   items: AiProposalItem[];
 }
 
@@ -431,8 +513,63 @@ export interface AiConfig {
   chunk_cues: number;
   translate_chunk_cues: number;
   context_cues: number;
+  /** 单句判定模型覆盖；空串 = 该字段跟随全局。 */
+  arbitrate_base_url: string;
+  arbitrate_model: string;
+  /** 本地 LM Studio 的上下文档位；只有点「加载 / 重载」时生效。 */
+  local_context: number;
+  /** 两版不一致时自动触发一次单句判定。 */
+  auto_arbitrate: boolean;
+  /** 当前地址是否本机/局域网：本地模型可以不带 Key。 */
+  key_optional: boolean;
+  arbitrate_key_optional: boolean;
+  /** 判定目标是否本机 loopback（设置页据此探测 LM Studio）。 */
+  arbitrate_loopback: boolean;
   /** 密钥不归服务层管；服务端只声明"由渲染进程持有" */
   key_held_by: string;
+}
+
+export interface LocalModelStatus {
+  available: boolean;
+  reason?: string;
+  error?: string;
+  loopback?: boolean;
+  model?: string;
+  loaded?: boolean;
+  context_length?: number | null;
+  max_context_length?: number | null;
+}
+
+export interface LocalModelLoadResult {
+  ok: boolean;
+  reloaded: boolean;
+  model: string;
+  context_length: number;
+  load_time_seconds?: number | null;
+}
+
+export interface AiArbitrationHistoryItem {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+export interface AiArbitrationRequest {
+  text_a: string;
+  text_b: string;
+  before: string[];
+  after: string[];
+  lang: string;
+  /** 听音线索（空耳 / 罗马音 / 描述）；不是时间轴，也不是音频。 */
+  hint?: string;
+  /** 最近几轮追问；core 会再按轮数与字符预算裁剪。 */
+  history?: AiArbitrationHistoryItem[];
+}
+
+export interface AiArbitrationResult {
+  text: string;
+  note: string;
+  model: string;
+  elapsed_ms: number;
 }
 
 /** 双引擎复核对齐后的一行。`kind` 对应 = / ~ / + / −。 */
@@ -486,6 +623,8 @@ export interface AiProposalPayload {
   digest_match: boolean;
   source_count: number;
   current_count: number;
+  total_count?: number;
+  range?: { from: number; to: number } | null;
 }
 
 /** 结构建议（Phase 1）：外部模型只给 ops，本地绑定 digest/revision。 */
@@ -574,6 +713,8 @@ export interface ReshapeReplaceInfo {
   count_before: number;
   changed: boolean;
   dropped_translations: string[];
+  /** 局部重排后跟着平移的译文轨（范围外头部 / 尾部保持对齐）。 */
+  shifted_translations?: string[];
 }
 
 export interface ReshapeApplyPayload extends CueSnapshot {
@@ -1021,6 +1162,15 @@ export const api = {
   // ---- 字幕 ----
   getCues: () => req<CueSnapshot>('/api/cues'),
 
+  getChapters: () => req<ChaptersPayload>('/api/chapters'),
+
+  /** 整表保存章节（一步历史）。label 决定历史面板里显示「做了什么」。 */
+  saveChapters: (body: { marks: ChapterMark[]; label: string }) =>
+    req<ChaptersPayload>('/api/chapters', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   /** 按路径导入 SRT / VTT，整表替换核对基线。 */
   importCues: (path: string) =>
     req<CueSnapshot & { source: string }>('/api/cues/import', {
@@ -1054,8 +1204,15 @@ export const api = {
       body: JSON.stringify({ indices }),
     }),
 
-  /** 在指定下标插入一条（右键「添加字幕」/空字幕补录）。 */
-  insertCue: (index: number, cue: Cue) =>
+  /** 在指定下标插入一条（右键「添加字幕」/空字幕补录 / 粘贴字幕）。 */
+  insertCue: (
+    index: number,
+    cue: Cue & {
+      label?: string;
+      /** lang -> 该语种译文与生成时的原文快照；只写当前会话已有的轨。 */
+      translations?: Record<string, { text: string; base: string }>;
+    },
+  ) =>
     req<CueSnapshot & { index: number }>(`/api/cues/${index}/insert`, {
       method: 'POST',
       body: JSON.stringify({ index, ...cue }),
@@ -1115,7 +1272,13 @@ export const api = {
 
   exportCues: (
     format: 'SRT' | 'VTT' | 'TXT',
-    opts: { track?: TrackMode; lang?: string } = {},
+    opts: {
+      track?: TrackMode;
+      lang?: string;
+      clipStart?: number;
+      clipEnd?: number;
+      clipLabel?: string;
+    } = {},
   ) =>
     req<{
       path: string;
@@ -1128,10 +1291,18 @@ export const api = {
       count: number;
       track: string;
       lang: string;
+      clip: string | null;
       skipped: number;
     }>('/api/cues/export', {
       method: 'POST',
-      body: JSON.stringify({ format, track: opts.track ?? 'source', lang: opts.lang ?? '' }),
+      body: JSON.stringify({
+        format,
+        track: opts.track ?? 'source',
+        lang: opts.lang ?? '',
+        clip_start: opts.clipStart ?? 0,
+        clip_end: opts.clipEnd ?? 0,
+        clip_label: opts.clipLabel ?? '',
+      }),
     }),
 
   /** 工作草稿：核对精修期间的全量暂存，不碰导出文件夹里的交付文件。 */
@@ -1311,13 +1482,21 @@ export const api = {
     kind: 'translate' | 'polish' = 'translate',
     lang = 'zh-Hans',
     templateId = '',
-    opts: { mode?: 'single' | 'dual'; from?: number; to?: number } = {},
+    opts: {
+      mode?: 'single' | 'dual';
+      from?: number;
+      to?: number;
+      rangeFrom?: number;
+      rangeTo?: number;
+    } = {},
   ) => {
     const q = new URLSearchParams({ kind, lang });
     if (templateId) q.set('template_id', templateId);
     if (opts.mode) q.set('mode', opts.mode);
     if (opts.from !== undefined) q.set('from_index', String(opts.from));
     if (opts.to !== undefined) q.set('to_index', String(opts.to));
+    if (opts.rangeFrom !== undefined) q.set('range_from', String(opts.rangeFrom));
+    if (opts.rangeTo !== undefined) q.set('range_to', String(opts.rangeTo));
     return req<{
       prompt: string;
       count: number;
@@ -1327,6 +1506,8 @@ export const api = {
       mode?: 'single' | 'dual';
       from?: number;
       to?: number;
+      range_from?: number;
+      range_to?: number;
       category?: string;
       template_id: string;
       template_name: string;
@@ -1387,7 +1568,11 @@ export const api = {
     text: string;
     from_index?: number;
     to_index?: number;
+    range_from?: number;
+    range_to?: number;
     mode?: 'single' | 'dual';
+    /** 翻译：false = 允许条数不同，按时间轴区间交集对齐（默认页面行为）。 */
+    strict_count?: boolean;
   }) =>
     req<{
       proposal: AiProposal;
@@ -1396,7 +1581,10 @@ export const api = {
       mode?: 'single' | 'dual';
       from?: number;
       to?: number;
+      range_from?: number;
+      range_to?: number;
       expected?: number;
+      alignment?: AiAlignment | null;
     }>('/api/ai/from-srt', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -1406,7 +1594,10 @@ export const api = {
   getTranslations: () => req<TranslationsPayload>('/api/translations'),
 
   applyTranslation: (body: { lang: string; texts?: string[]; proposal?: AiProposal }) =>
-    req<TranslationTrack>('/api/translations', { method: 'POST', body: JSON.stringify(body) }),
+    req<TranslationTrack & { partial?: boolean; applied?: number; range?: { from: number; to: number } }>(
+      '/api/translations',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 
   /** 按路径导入译文 SRT / VTT；按时间对齐到当前原文时间轴。 */
   importTranslation: (path: string, lang: string) =>
@@ -1491,7 +1682,38 @@ export const api = {
     chunk_cues: number;
     translate_chunk_cues: number;
     context_cues: number;
+    arbitrate_base_url: string;
+    arbitrate_model: string;
+    local_context: number;
+    auto_arbitrate: boolean;
   }>) => req<AiConfig>('/api/ai/config', { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  localModelStatus: () => req<LocalModelStatus>('/api/ai/local-model/status'),
+
+  loadLocalModel: (context: number) =>
+    req<LocalModelLoadResult>('/api/ai/local-model/load', {
+      method: 'POST',
+      body: JSON.stringify({ context }),
+    }),
+
+  arbitrateAi: (
+    payload: AiArbitrationRequest,
+    opts: {
+      globalKey: string;
+      arbitrateKey?: string;
+      useArbitrate: boolean;
+      signal?: AbortSignal;
+    },
+  ) =>
+    req<AiArbitrationResult>('/api/ai/arbitrate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: {
+        'X-AI-Key': opts.globalKey,
+        ...(opts.useArbitrate ? { 'X-AI-Arbitrate-Key': opts.arbitrateKey || '' } : {}),
+      },
+      signal: opts.signal,
+    }),
 
   testAi: (payload: { base_url: string; model: string }, key: string) =>
     req<{ ok: boolean; latency_ms: number; model: string; host: string }>('/api/ai/test', {
@@ -1511,6 +1733,9 @@ export const api = {
       lang: string;
       dst_lang?: string;
       mode?: 'single' | 'dual';
+      /** 处理范围（1 基、含两端）：只生成这一段的提案。 */
+      from_index?: number;
+      to_index?: number;
     },
     key: string,
   ) =>

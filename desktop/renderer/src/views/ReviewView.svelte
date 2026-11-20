@@ -21,6 +21,7 @@
   import Icon from '../components/Icon.svelte';
   import ProxyGate from '../components/ProxyGate.svelte';
   import SelectionBar from '../components/SelectionBar.svelte';
+  import ChapterTrack from '../components/ChapterTrack.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
   import {
@@ -39,7 +40,6 @@
     mergeCuesAt,
     play,
     previewRange,
-    rememberPlayhead,
     replaceAllInTracks,
     replaceInCue,
     replaceInTranslation,
@@ -52,9 +52,23 @@
     transcribeRange,
     tts,
   } from '../lib/store.svelte';
+  import { chapters, loadChapters, seekToMark } from '../lib/chapters.svelte';
   import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
+  import { isTypingTarget } from '../lib/typing';
+  import {
+    collectFindHits,
+    countSkippedHits,
+    escapeRe,
+    filterSkippedHits,
+    findHitKey,
+    ordinalOfHit,
+    skippedStartsByCueTrack,
+    type FindHit,
+    type FindSkipAnchor,
+    type FindTrack,
+  } from '../lib/findMatches';
   import {
     BLANK_FRAME_TIMEOUT_MS,
     hasDecodedFrame,
@@ -66,6 +80,7 @@
     cueBlockAtX,
     cueDragTimes,
     cueIndexAtTime,
+    cueRange,
     deleteTargets,
     indicesForLaneKeys,
     indicesInRange,
@@ -74,6 +89,31 @@
     rangeSelection,
     stepSelection,
   } from '../lib/selection';
+  import { canSplitAt } from '../lib/cueEdit';
+  import { collectSnapTargets, snapCueTimes, snapThreshold } from '../lib/cueSnap';
+  import { snapPrefs } from '../lib/snapPrefs.svelte';
+  import { attachVideo, detachVideo, resetRate, transport } from '../lib/transport.svelte';
+  import {
+    clampTimelineView,
+    focusTimelineSpan,
+    revealTimelineView,
+    sliderToSpan,
+    spanToSlider,
+    toggleFitView,
+    zoomTimelineView,
+  } from '../lib/timelineView';
+  import { roundRect } from '../lib/waveformDraw';
+  import { paintReviewCanvas } from '../lib/waveformCanvas';
+  import {
+    cachedPeaks,
+    peakCacheKey,
+    planViewportRestore,
+    readViewportForRestore,
+    rememberViewport,
+    resolveCueIndex,
+    storePeaks,
+    takeExplicitJump,
+  } from '../lib/reviewViewport';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -103,6 +143,19 @@
   const duration = $derived(app.media?.duration ?? 0);
   let viewStart = $state(0);
   let viewSpan = $state(60);
+  /**
+   * `<video>` 的元数据是否就绪。历史现场的播放头必须等到这一刻再 seek：
+   * 早于 loadedmetadata 写 currentTime 会被浏览器丢掉，用户看到的是「没恢复」。
+   */
+  let videoMetaReady = $state(false);
+  /** 已经为哪部影片恢复过现场（每次换片只恢复一次）。 */
+  let restoreDoneFor = '';
+  /** 当前核对台里实际挂载的影片路径，用于换片前把上一条现场落盘。 */
+  let openedPath = '';
+  /** 全片适应前记住的视窗；再次 ⇧Z 恢复。 */
+  let preFitView = $state<{ start: number; span: number } | null>(null);
+  /** 拖字幕块时命中的参考线；松开 / 取消即清空。 */
+  let snapGuide = $state<number | null>(null);
   /**
    * 跟随是「用户偏好」，不是临时状态：
    * 只由用户点按钮改变，并持久化。缩放/平移波形、单击跳转、点字幕行、
@@ -326,19 +379,12 @@
   const rangeBusy = $derived(busy && app.jobMeta?.scope === 'range');
 
   // ---------------- 视窗与坐标 ----------------
-  function clampView(start: number, span: number) {
-    const d = duration || span;
-    const s = Math.max(MIN_SPAN, Math.min(span, d || MIN_SPAN));
-    const a = Math.max(0, Math.min(start, Math.max(0, d - s)));
-    return { start: a, span: s };
-  }
-
   /**
    * 改视窗只负责缩放/平移；跟随是独立偏好，绝不在这里被顺手关掉。
    * 专业剪辑软件也不会因为缩放时间线就取消「跟随播放头」。
    */
   function setView(start: number, span: number) {
-    const next = clampView(start, span);
+    const next = clampTimelineView(start, span, duration, MIN_SPAN);
     viewStart = next.start;
     viewSpan = next.span;
   }
@@ -351,15 +397,8 @@
    * 现在跟随开启时，任何 seek 都会补一次平移，不要求先播放。
    */
   function revealPlayhead(t = play.time) {
-    if (!follow) return;
-    const span = viewSpan;
-    if (!(span > 0) || !(duration > 0)) return;
-    // 已经在视窗里就不动，避免每次点当前句都把波形甩一下
-    if (t >= viewStart && t <= viewStart + span) return;
-    // 从右侧出去就从左侧 15% 处回来，反之亦然；缩放比例保持不变
-    const anchor = t > viewStart + span ? 0.85 : 0.15;
-    const next = clampView(t - span * anchor, span);
-    viewStart = next.start;
+    const next = revealTimelineView({ start: viewStart, span: viewSpan }, t, duration, MIN_SPAN, follow);
+    if (next.start !== viewStart) viewStart = next.start;
   }
 
   function xOf(time: number) {
@@ -373,14 +412,52 @@
     return viewStart + ratio * viewSpan;
   }
 
-  // 媒体变化：视窗归零、清空选区与波形
+  /** 当前核对台状态 → 可持久化的现场快照。 */
+  function currentSnapshot() {
+    const cue = app.cues[play.selected];
+    return {
+      cueIndex: play.selected,
+      cueTime: cue?.start ?? 0,
+      playhead: play.time,
+      viewStart,
+      span: viewSpan,
+      selection: selection ? { start: selection.start, end: selection.end } : null,
+    };
+  }
+
+  /** 把某部影片的现场落盘（默认当前片）。切换影片前必须先调一次。 */
+  function persistViewport(path = app.media?.path ?? '') {
+    if (!path) return;
+    rememberViewport(path, currentSnapshot());
+  }
+
+  // 章节标记按媒体加载；检查器里的「将选区设为章节」需要当前时间选区。
+  $effect(() => {
+    const path = app.media?.path ?? '';
+    if (path) void loadChapters(true);
+  });
+  $effect(() => {
+    chapters.selection = selection ? { start: selection.start, end: selection.end } : null;
+  });
+
+  // 媒体变化：先把上一条的现场落盘，再视窗归零、清空选区与波形
   $effect(() => {
     void app.media?.id;
     void app.media?.duration;
+    const path = app.media?.path ?? '';
+    // 此刻还没执行下面的复位：viewStart / viewSpan / play.time 仍是上一条的值，
+    // 所以这里落盘拿到的才是用户离开时的现场（不是归零后的）。
+    if (openedPath && openedPath !== path) persistViewport(openedPath);
+    openedPath = path;
+    videoMetaReady = false;
+    restoreDoneFor = '';
     const d = app.media?.duration ?? 0;
     play.duration = d;
     viewStart = 0;
     viewSpan = d || 60;
+    preFitView = null;
+    snapGuide = null;
+    resetRate(false);
     selection = null;
     peaks = [];
     peaksFrom = 0;
@@ -395,18 +472,35 @@
   let peakSeq = 0;
   let peakTimer = 0;
 
+  /**
+   * 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，不会退化成一排
+   * 可数的柱子。服务端只读这一小段样本，成本可忽略。缓存键必须带上它。
+   */
+  function binsFor(width: number) {
+    return Math.max(512, Math.min(12000, Math.round(width * 3)));
+  }
+
   async function fetchPeaks(id: string, from: number, span: number, width: number) {
+    const bins = binsFor(width);
+    const key = peakCacheKey(id, from, span, bins);
+    const hit = cachedPeaks(key);
+    if (hit) {
+      // 进程内缓存命中：切回核对台时不再闪一帧空白，也不再发同一个请求
+      peaks = hit;
+      peaksFrom = from;
+      peaksSpan = span;
+      loadingPeaks = false;
+      return;
+    }
     const seq = ++peakSeq;
     loadingPeaks = true;
     try {
-      // 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，
-      // 不会退化成一排可数的柱子。服务端只读这一小段样本，成本可忽略。
-      const bins = Math.max(512, Math.min(12000, Math.round(width * 3)));
       const data = await api.peaks(id, { from, to: from + span, bins });
       if (seq !== peakSeq) return;
       peaks = data.peaks;
       peaksFrom = from;
       peaksSpan = span;
+      storePeaks(key, data.peaks);
     } catch {
       if (seq === peakSeq) peaks = [];
     } finally {
@@ -420,228 +514,44 @@
     const from = viewStart;
     const span = viewSpan;
     if (!id || width <= 0 || span <= 0) return;
+    const hit = cachedPeaks(peakCacheKey(id, from, span, binsFor(width)));
+    if (hit) {
+      // 同步命中：不等 70ms 防抖，也不重新请求——切页回来时波形立刻就在
+      peaks = hit;
+      peaksFrom = from;
+      peaksSpan = span;
+      loadingPeaks = false;
+      return;
+    }
     clearTimeout(peakTimer);
     peakTimer = window.setTimeout(() => void fetchPeaks(id, from, span, width), 70);
     return () => clearTimeout(peakTimer);
   });
 
   // ---------------- 画布 ----------------
-  function roundRect(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    r: number,
-  ) {
-    const rad = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(x, y, w, h, rad);
-      return;
-    }
-    ctx.moveTo(x + rad, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rad);
-    ctx.arcTo(x + w, y + h, x, y + h, rad);
-    ctx.arcTo(x, y + h, x, y, rad);
-    ctx.arcTo(x, y, x + w, y, rad);
-    ctx.closePath();
-  }
-
+  /** 画法整段在 lib/waveformCanvas.ts：组件只负责传当前状态。 */
   function draw() {
     if (!canvas || !waveWrap) return;
-    const w = waveWrap.clientWidth;
-    const h = waveWrap.clientHeight;
-    if (!w || !h) return;
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    // 播放时每帧都会重绘：只在尺寸真变了的时候重设画布，避免每帧重新分配位图。
-    const pw = Math.round(w * dpr);
-    const ph = Math.round(h * dpr);
-    if (canvas.width !== pw || canvas.height !== ph) {
-      canvas.width = pw;
-      canvas.height = ph;
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-
-    const css = getComputedStyle(document.documentElement);
-    const token = (name: string, fallback: string) =>
-      css.getPropertyValue(name).trim() || fallback;
-    const sep = token('--separator-soft', 'rgba(0,0,0,.06)');
-    const sepStrong = token('--separator', 'rgba(0,0,0,.1)');
-    const waveColor = token('--wave', '#7b8a99');
-    const accent = token('--accent', '#4f6bff');
-    const text3 = token('--text-3', '#98989d');
-    const cueLane = token('--cue-lane', 'rgba(0,0,0,.055)');
-    const cueWash = token('--cue-wash', 'rgba(0,122,255,.035)');
-    const cueBlock = token('--cue-block', 'rgba(0,122,255,.28)');
-    const cueBlockHover = token('--cue-block-hover', 'rgba(0,122,255,.46)');
-    const cueBlockActive = token('--cue-block-active', 'rgba(0,122,255,.82)');
-    const cueEdge = token('--cue-edge', 'rgba(0,122,255,.9)');
-
-    const laneTop = laneTopOf(h);
-    const mid = RULER_H + (laneTop - RULER_H) / 2;
-    const ampH = Math.max(8, (laneTop - RULER_H) * 0.94);
-
-    // 字幕覆盖区在波形背后垫一层极淡的蓝：不抢波形，但一眼能看出「这段有字幕」。
-    // 同区间的双语行只画一次，否则重叠区间会越叠越深。
-    const drawn = new Set<string>();
-    for (const cue of app.cues) {
-      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
-      const key = `${cue.start}:${cue.end}`;
-      if (drawn.has(key)) continue;
-      drawn.add(key);
-      const x0 = Math.max(0, xOf(cue.start));
-      const x1 = Math.min(w, xOf(cue.end));
-      if (x1 <= x0) continue;
-      ctx.fillStyle = cueWash;
-      ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
-    }
-
-    // 时间刻度
-    const step = pickStep(viewSpan);
-    ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
-    ctx.textBaseline = 'top';
-    const first = Math.ceil(viewStart / step) * step;
-    for (let t = first; t <= viewStart + viewSpan; t += step) {
-      const x = Math.round(xOf(t)) + 0.5;
-      const major = Math.abs(t / (step * 5) - Math.round(t / (step * 5))) < 1e-6;
-      ctx.fillStyle = major ? sepStrong : sep;
-      ctx.fillRect(x, 0, 1, major ? 7 : 4);
-      if (major || step >= 5) {
-        ctx.fillStyle = text3;
-        const label = rulerLabel(t, step);
-        const lw = ctx.measureText(label).width;
-        // 最右一格的标签别被画布裁掉：贴着右边界时向左放
-        ctx.fillText(label, x + 4 + lw > w ? Math.max(0, x - lw - 4) : x + 3, 1);
-      }
-    }
-    ctx.fillStyle = sep;
-    ctx.fillRect(0, RULER_H - 0.5, w, 1);
-
-    // 波形：逐像素取该像素覆盖的所有采样点的最大值。
-    // 之前是「一个采样点画一根柱子」，放大后柱子间距会被拉开；逐像素合并后
-    // 无论缩放到多深都是一条连续的包络，不会出现可数的柱形。
-    const n = peaks.length;
-    const paintBars = (color: string, alpha: number, right: number) => {
-      if (!n) return;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = alpha;
-      const span = peaksSpan || 1;
-      const perBin = span / n;
-      const limit = Math.max(0, Math.min(w, right));
-      for (let x = 0; x < limit; x += 1) {
-        const t0 = viewStart + (x / w) * viewSpan;
-        const t1 = viewStart + ((x + 1) / w) * viewSpan;
-        let i0 = Math.floor((t0 - peaksFrom) / perBin);
-        let i1 = Math.ceil((t1 - peaksFrom) / perBin);
-        if (i1 <= 0 || i0 >= n) continue;
-        i0 = Math.max(0, i0);
-        i1 = Math.min(n, Math.max(i0 + 1, i1));
-        let amp = 0;
-        for (let i = i0; i < i1; i += 1) {
-          if (peaks[i] > amp) amp = peaks[i];
-        }
-        // 全局峰值归一化会让对白显得很小；用轻微 gamma 把弱信号抬起来，
-        // 满幅配乐仍然封顶，不会糊成一片。
-        const shaped = Math.min(1, Math.pow(Math.max(0, amp), 0.72) * 1.08);
-        const bh = Math.max(1.2, shaped * ampH);
-        ctx.fillRect(x, mid - bh / 2, 1, bh);
-      }
-      ctx.globalAlpha = 1;
-    };
-    if (!n) {
-      ctx.fillStyle = sepStrong;
-      ctx.fillRect(0, Math.round(mid), w, 1);
-    } else {
-      paintBars(waveColor, 0.9, w);
-      // 已播放段用 accent 再画一遍：当前进度在波形上一眼可见（比未播放段更深）
-      const playedX = xOf(play.time);
-      if (playedX > 0.5) paintBars(accent, 0.9, playedX);
-    }
-
-    // 选中行的区间高亮（不是选区，只是当前条目）：中性墨，别再加一层蓝
-    if (play.selected >= 0 && app.cues[play.selected]) {
-      const sel = app.cues[play.selected];
-      const x0 = Math.max(0, xOf(sel.start));
-      const x1 = Math.min(w, xOf(sel.end));
-      if (x1 > x0) {
-        ctx.fillStyle = sepStrong;
-        ctx.globalAlpha = 0.5;
-        ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), laneTop - RULER_H);
-        ctx.globalAlpha = 1;
-      }
-    }
-
-    // ---------------- 底部字幕轨道 ----------------
-    // 底槽：明确区分「轨道」与「波形」，哪怕整片都没有字幕也能看出这里有东西。
-    ctx.fillStyle = cueLane;
-    ctx.fillRect(0, laneTop, w, LANE_H - 1);
-
-    const blockY = laneTop + 3;
-    const blockH = LANE_H - 6;
-    const selectedCue = play.selected >= 0 ? app.cues[play.selected] : null;
-    const selectedKey = selectedCue ? `${selectedCue.start}:${selectedCue.end}` : '';
-    const picked = new Set(laneSelection);
-    drawn.clear();
-    for (const cue of app.cues) {
-      if (cue.end < viewStart || cue.start > viewStart + viewSpan) continue;
-      const key = `${cue.start}:${cue.end}`;
-      if (drawn.has(key)) continue;
-      drawn.add(key);
-      const x0 = Math.max(0, xOf(cue.start));
-      const x1 = Math.min(w, xOf(cue.end));
-      if (x1 <= x0 + 0.5) continue;
-      const bw = Math.max(2, x1 - x0 - 0.5);
-      const active = key === activeKey;
-      const touched = key === hoverKey || key === dragKey;
-      const chosen = picked.has(key);
-      ctx.fillStyle = active || chosen ? cueBlockActive : touched ? cueBlockHover : cueBlock;
-      if (chosen && !active) ctx.globalAlpha = 0.66;
-      roundRect(ctx, x0, blockY, bw, blockH, 2.5);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      // 当前句/悬停/选中块描一圈边，哪怕底色很浅也能一眼分清边界
-      if (active || touched || key === selectedKey || chosen) {
-        ctx.strokeStyle = chosen ? accent : cueEdge;
-        ctx.globalAlpha = active || chosen ? 0.95 : 0.45;
-        ctx.lineWidth = chosen ? 1.6 : 1;
-        roundRect(ctx, x0 + 0.5, blockY + 0.5, Math.max(1, bw - 1), blockH - 1, 2.5);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
-      // 当前句/被拖动的块加两端抓手，告诉用户「这里可以左右拉」
-      if (active || touched) {
-        ctx.fillStyle = cueEdge;
-        ctx.fillRect(x0 + 2, blockY + 4, 1.5, blockH - 8);
-        ctx.fillRect(x0 + bw - 3.5, blockY + 4, 1.5, blockH - 8);
-      }
-    }
-  }
-
-  function pickStep(span: number) {
-    const candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
-    for (const c of candidates) {
-      if (span / c <= 12) return c;
-    }
-    return 900;
-  }
-
-  function rulerLabel(t: number, step: number) {
-    if (step < 1) {
-      // 按 0.1 秒取整再拆分，避免 99.999 → "1:39.10" 这种两位小数
-      const tenths = Math.round(Math.max(0, t) * 10);
-      const m = Math.floor(tenths / 600);
-      const s = Math.floor(tenths / 10) % 60;
-      return `${m}:${String(s).padStart(2, '0')}.${tenths % 10}`;
-    }
-    const total = Math.round(t);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    if (step < 60) return `${m}:${String(s).padStart(2, '0')}`;
-    return `${m}:00`;
+    paintReviewCanvas({
+      canvas,
+      waveWrap,
+      peaks,
+      peaksFrom,
+      peaksSpan,
+      viewStart,
+      viewSpan,
+      cues: app.cues,
+      selectedIndex: play.selected,
+      playTime: play.time,
+      activeKey,
+      hoverKey,
+      dragKey,
+      laneSelection,
+      snapGuide,
+      rulerH: RULER_H,
+      laneH: LANE_H,
+      resizeH: RESIZE_H,
+    });
   }
 
   $effect(() => {
@@ -656,6 +566,7 @@
     void laneSelection;
     void app.theme;
     void waveW;
+    void snapGuide;
     void play.time;
     requestAnimationFrame(draw);
   });
@@ -772,17 +683,19 @@
       viewSpan < duration * 0.96 &&
       (t > viewStart + viewSpan * 0.92 || t < viewStart + viewSpan * 0.02)
     ) {
-      const next = clampView(t - viewSpan * 0.15, viewSpan);
+      const next = clampTimelineView(t - viewSpan * 0.15, viewSpan, duration, MIN_SPAN);
       viewStart = next.start;
     }
   }
 
   function bindVideo(node: HTMLVideoElement) {
     video = node;
+    attachVideo(node);
     rafId = requestAnimationFrame(tick);
     return {
       destroy() {
         cancelAnimationFrame(rafId);
+        detachVideo(node);
         video = null;
       },
     };
@@ -845,6 +758,36 @@
     }
   });
 
+  /**
+   * 恢复这部影片上次的工作现场。
+   *
+   * 时机由 `videoMetaReady` 把关（`<video>` 的 loadedmetadata）：早于它 seek 会被
+   * 浏览器丢弃，缩放也没有 duration 可夹。显式跳转（双引擎复核 / 质检面板点
+   * 时间码）在 `focusRange()` 里记过一笔，这里消费掉并且**整次跳过历史恢复**，
+   * 保证「用户刚点的那一下」不会被旧位置覆盖。
+   */
+  $effect(() => {
+    const media = app.media;
+    const ready = videoMetaReady;
+    const d = duration;
+    if (!media || !ready || d <= 0 || restoreDoneFor === media.path) return;
+    restoreDoneFor = media.path;
+    const raw = readViewportForRestore(media.path);
+    const plan = planViewportRestore(raw, d, MIN_SPAN, {
+      explicit: takeExplicitJump(media.path),
+    });
+    if (!plan) return;
+    if (plan.span > 0) setView(plan.viewStart, plan.span);
+    if (plan.selection) selection = { start: plan.selection.start, end: plan.selection.end };
+    const index = resolveCueIndex(app.cues, raw);
+    if (index !== null) {
+      play.selected = index;
+      play.selectNonce += 1;
+    }
+    // metadata 已经就绪：这里的 seek 一定落得下去
+    if (plan.seekTo !== null) seekTo(plan.seekTo);
+  });
+
   // 质检 / 选区聚焦请求
   let seenFocus = 0;
   $effect(() => {
@@ -888,6 +831,9 @@
     anchorT: number;
     curStart: number | null;
     curEnd: number | null;
+    /** 本次拖动开始时冻结的吸附候选（含当时播放头）。 */
+    snapTargets: number[];
+    activeGuide: number | null;
   } | null = null;
 
   function xPlayhead() {
@@ -1026,6 +972,8 @@
       anchorT: timeAt(e.clientX),
       curStart: null,
       curEnd: null,
+      snapTargets: collectSnapTargets(app.cues, block.indices, play.time, duration),
+      activeGuide: null,
     };
     dragMode = edge === 'move' ? 'cue-move' : edge === 'start' ? 'cue-l' : 'cue-r';
     dragKey = block.key;
@@ -1040,7 +988,19 @@
     const drag = cueDrag;
     if (!drag) return;
     const max = duration > 0 ? duration : Math.max(drag.end, t0());
-    const { start, end } = cueDragTimes(drag, t, max);
+    const base = cueDragTimes(drag, t, max);
+    const snapped = snapCueTimes(
+      base,
+      drag.edge,
+      drag.snapTargets,
+      snapThreshold(waveW, viewSpan),
+      max,
+      drag.activeGuide,
+      snapPrefs.enabled,
+    );
+    const { start, end } = snapped;
+    drag.activeGuide = snapped.guide;
+    snapGuide = snapped.guide;
     if (drag.curStart === start && drag.curEnd === end) return;
     drag.curStart = start;
     drag.curEnd = end;
@@ -1065,6 +1025,7 @@
     dragMode = 'none';
     dragKey = '';
     cueTip = null;
+    snapGuide = null;
     waveCursor = 'crosshair';
     if (!drag) return;
     const moved =
@@ -1073,7 +1034,8 @@
       (Math.abs(drag.curStart - drag.start) > 1e-6 ||
         Math.abs(drag.curEnd - drag.end) > 1e-6);
     if (!moved) {
-      // 点了一下字幕块：和点表格行一样，直接把播放头放到这句开头
+      // 点了一下字幕块：和点表格行一样 seek，并把选区落到这一句。
+      selection = { start: drag.start, end: drag.end };
       seek(drag.start + 0.02);
       return;
     }
@@ -1241,15 +1203,21 @@
     selection = { start: Math.min(dragAnchor, t), end: Math.max(dragAnchor, t) };
   }
 
-  // 记住播放头：定时写 localStorage，重启后自动回到上次的位置。
+  // 工作现场定时落盘：播放头/视窗/选区一起存，重启或切页回来能接上。
   // 不在 $effect 里直接写：播放时 play.time 每帧变化，会变成每帧一次 localStorage。
   $effect(() => {
     const media = app.media;
     if (!media) return;
+    const path = media.path;
     const timer = setInterval(() => {
-      if (play.time > 0.2) rememberPlayhead(play.time);
-    }, 2500);
-    return () => clearInterval(timer);
+      // 换片后旧 effect 的清理可能晚一拍：只写仍然挂着的那部片
+      if (app.media?.path === path) persistViewport(path);
+    }, 1500);
+    return () => {
+      clearInterval(timer);
+      // 卸载（切去别的页面）时补一次；换片的情况由媒体变化 effect 负责
+      if (app.media?.path === path) persistViewport(path);
+    };
   });
 
   function t0() {
@@ -1316,8 +1284,7 @@
     const menu = contextMenu;
     if (!menu || menu.index < 0) return false;
     const cue = app.cues[menu.index];
-    if (!cue) return false;
-    return menu.t > cue.start + 0.05 && menu.t < cue.end - 0.05;
+    return Boolean(cue && canSplitAt(cue, menu.t));
   }
 
   function splitHere() {
@@ -1466,36 +1433,26 @@
   }
 
   function zoomAt(time: number, factor: number) {
-    const nextSpan = Math.max(MIN_SPAN, Math.min(duration || viewSpan, viewSpan * factor));
-    const ratio = (time - viewStart) / (viewSpan || 1);
-    setView(time - ratio * nextSpan, nextSpan);
+    const next = zoomTimelineView({ start: viewStart, span: viewSpan }, time, factor, duration, MIN_SPAN);
+    setView(next.start, next.span);
   }
 
   function zoomSliderInput(e: Event) {
     const v = Number((e.currentTarget as HTMLInputElement).value);
     // 0=全景，100=最深
-    const minSpan = Math.max(MIN_SPAN, Math.min(1.2, (duration || 60) / 400));
-    const span = (duration || 60) * Math.pow(minSpan / (duration || 60), v / 100);
+    const span = sliderToSpan(v, duration, MIN_SPAN);
     const center = play.time;
     setView(center - span / 2, span);
   }
 
-  const sliderValue = $derived.by(() => {
-    const d = duration || 60;
-    const minSpan = Math.max(MIN_SPAN, Math.min(1.2, d / 400));
-    const v = (Math.log(viewSpan / d) / Math.log(minSpan / d)) * 100;
-    return Math.max(0, Math.min(100, v));
-  });
+  const sliderValue = $derived(spanToSlider(viewSpan, duration, MIN_SPAN));
 
   function fit() {
     setView(0, duration || viewSpan);
   }
 
   /** 聚焦统一用同一个 span：duration / 69。媒体还没就绪时才退回 2–12 秒。 */
-  function focusSpan() {
-    if (duration > 0) return Math.max(MIN_SPAN, duration / FOCUS_ZOOM);
-    return Math.max(2, Math.min(12, viewSpan / 6 || 6));
-  }
+  const focusSpan = () => focusTimelineSpan(duration, viewSpan, MIN_SPAN, FOCUS_ZOOM);
 
   /** 一键聚焦：把播放头附近放大到固定 69×（不随当前缩放叠加）。 */
   function focusPlayhead() {
@@ -1521,12 +1478,15 @@
     if (follow) revealPlayhead(play.time);
   }
 
-  function selectCue(i: number, doSeek = true) {
+  function selectCue(i: number, doSeek = true, withRange = false) {
+    const cue = app.cues[i];
+    if (!cue) return;
     play.selected = i;
     rangeAnchor = i;
     // 普通单击 = 单选。集合必须同步成 {这一句}，否则之后 ⌘ 点第二句只能得到一条。
-    laneSelection = app.cues[i] ? [laneKey(app.cues[i])] : [];
-    if (doSeek) seek(app.cues[i].start + 0.02);
+    laneSelection = [laneKey(cue)];
+    if (withRange) selection = cueRange(cue);
+    if (doSeek) seek(cue.start + 0.02);
   }
 
   // ---------------- 查找与替换（⌘F，覆盖原文 / 译文 / 双语） ----------------
@@ -1534,26 +1494,6 @@
   /** 正在提交单处替换：挡住连点，避免两个 patch 请求把 pos 抢乱。 */
   let findBusy = $state(false);
 
-  type FindTrack = 'source' | 'target';
-  interface FindHit {
-    cue: number;
-    track: FindTrack;
-    start: number;
-    end: number;
-  }
-
-  /**
-   * 本轮查找里被「跳过」的命中点。
-   *
-   * 只认 (条 / 轨 / 起点)，不写字幕、不进历史。替换掉同一句里更靠前的命中时，
-   * `shiftFindAnchors()` 会把后面这些锚点一起平移，跳过标记不会因为字符前移而失效。
-   * 改查找词、切原文/译文模式或重开查找都会清空——「本轮」仅指这一次查找。
-   */
-  interface FindSkipAnchor {
-    cue: number;
-    track: FindTrack;
-    start: number;
-  }
   let findSkipped = $state<FindSkipAnchor[]>([]);
 
   /**
@@ -1565,70 +1505,25 @@
     app.track === 'target' ? ['target'] : app.track === 'both' ? ['source', 'target'] : ['source'],
   );
 
-  function escapeRe(text: string) {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
-  function findHitKey(hit: { cue: number; track: FindTrack; start: number }) {
-    return `${hit.cue}:${hit.track}:${hit.start}`;
-  }
-
   /** 所有命中（含已跳过）：记录属于第几条 / 哪条轨 / 在文本里的起止。 */
-  const rawFindMatches = $derived.by(() => {
-    const query = findState.query;
-    const hits: FindHit[] = [];
-    if (!query) return hits;
-    const flags = findState.caseSensitive ? 'g' : 'gi';
-    const source = escapeRe(query);
-    const tracks = findTracks;
-    app.cues.forEach((cue, index) => {
-      for (const track of tracks) {
-        const text = track === 'source' ? cue.text : translationTextAt(index);
-        if (!text) continue;
-        const re = new RegExp(source, flags);
-        let found: RegExpExecArray | null;
-        while ((found = re.exec(text)) !== null) {
-          hits.push({
-            cue: index,
-            track,
-            start: found.index,
-            end: found.index + found[0].length,
-          });
-          if (found[0].length === 0) re.lastIndex += 1;
-        }
-      }
-    });
-    return hits;
-  });
-
-  const skippedFindKeys = $derived(new Set(findSkipped.map((anchor) => findHitKey(anchor))));
-  /** 待处理命中：跳过的不再参与上一处/下一处/替换，本轮到它就直接略过。 */
-  const findMatches = $derived.by(() =>
-    rawFindMatches.filter((hit) => !skippedFindKeys.has(findHitKey(hit))),
+  const rawFindMatches = $derived(
+    collectFindHits(
+      app.cues,
+      findTracks,
+      findState.query,
+      findState.caseSensitive,
+      translationTextAt,
+    ),
   );
-  const skippedHitCount = $derived.by(() => {
-    if (!findSkipped.length) return 0;
-    let count = 0;
-    for (const hit of rawFindMatches) {
-      if (skippedFindKeys.has(findHitKey(hit))) count += 1;
-    }
-    return count;
-  });
 
+  const skippedFindKeys = $derived(new Set(findSkipped.map(findHitKey)));
+  /** 待处理命中：跳过的不再参与上一处/下一处/替换，本轮到它就直接略过。 */
+  const findMatches = $derived(filterSkippedHits(rawFindMatches, skippedFindKeys));
+  const skippedHitCount = $derived(
+    findSkipped.length ? countSkippedHits(rawFindMatches, skippedFindKeys) : 0,
+  );
   /** 某一轨里被跳过的起点，渲染删除线用；单行字幕与原文下标一致。 */
-  const skippedStarts = $derived.by(() => {
-    const map = new Map<string, Set<number>>();
-    for (const anchor of findSkipped) {
-      const key = `${anchor.cue}:${anchor.track}`;
-      let starts = map.get(key);
-      if (!starts) {
-        starts = new Set();
-        map.set(key, starts);
-      }
-      starts.add(anchor.start);
-    }
-    return map;
-  });
+  const skippedStarts = $derived(skippedStartsByCueTrack(findSkipped));
 
   const matchedCueSet = $derived(
     new Set((findState.open ? findMatches : []).map((hit) => hit.cue)),
@@ -1639,13 +1534,7 @@
     if (!findState.open) return null;
     const hit = findMatches[findState.pos];
     if (!hit) return null;
-    let ordinal = 0;
-    for (const raw of rawFindMatches) {
-      if (raw.cue !== hit.cue || raw.track !== hit.track) continue;
-      if (raw.start === hit.start) break;
-      ordinal += 1;
-    }
-    return { ...hit, ordinal };
+    return { ...hit, ordinal: ordinalOfHit(rawFindMatches, hit) };
   });
 
   const findPrevKey = $derived(formatCombo(comboOf('review.findPrev')));
@@ -2029,19 +1918,6 @@
     toast('已把时间选区同步到转写页，可直接开始局部转写');
   }
 
-  /** 用户正在输入框里打字时，不要自动改选中行，否则会把草稿换掉。 */
-  function isTyping() {
-    const el = document.activeElement as HTMLElement | null;
-    if (!el) return false;
-    if (el.tagName === 'TEXTAREA' || el.isContentEditable) return true;
-    if (el.tagName === 'INPUT') {
-      const type = (el as HTMLInputElement).type;
-      // 缩放滑块也是 input：它失焦后不该继续拦住自动同步
-      return !['range', 'checkbox', 'radio', 'button', 'submit', 'file'].includes(type);
-    }
-    return false;
-  }
-
   let revealRaf = 0;
 
   function revealRow(i: number) {
@@ -2069,7 +1945,7 @@
     const t0 = performance.now();
     const step = (now: number) => {
       const k = Math.min(1, (now - t0) / 120);
-      rowsEl!.scrollTop = from + dist * (1 - Math.pow(1 - k, 3));
+      if (rowsEl) rowsEl.scrollTop = from + dist * (1 - Math.pow(1 - k, 3)); // 导入新媒体时视图可能已卸载
       if (k < 1) revealRaf = requestAnimationFrame(step);
     };
     revealRaf = requestAnimationFrame(step);
@@ -2098,7 +1974,7 @@
     }
     if (first === lastRevealed) return;
     lastRevealed = first;
-    if (isTyping()) return;
+    if (isTypingTarget()) return;
     if (!selectedInBlock && play.selected !== first) play.selected = first;
     revealRow(selectedInBlock ? play.selected : first);
   });
@@ -2168,8 +2044,22 @@
     const next = Math.max(0, Math.min(app.cues.length - 1, play.selected + delta));
     if (app.cues[next]) selectCue(next);
   }
+
+  /** Esc：只清时间选区，不动当前行 / 多选集合。返回是否真的清掉了。 */
+  export function api_clearSelection(): boolean {
+    if (!selection) return false;
+    selection = null;
+    return true;
+  }
   export function api_focus() {
     focusPlayhead();
+  }
+
+  /** ⇧Z：全片适应 / 回到上一次缩放。 */
+  export function api_toggleFit() {
+    const next = toggleFitView({ start: viewStart, span: viewSpan }, preFitView, duration, MIN_SPAN);
+    preFitView = next.saved;
+    setView(next.view.start, next.view.span);
   }
 
   /** 供 App 的「查找：上一处 / 下一处」快捷键调用。 */
@@ -2202,6 +2092,8 @@
             play.duration = e.currentTarget.duration || duration;
             const t = play.time;
             if (t > 0.2) e.currentTarget.currentTime = t;
+            // 现场的恢复 effect 等这个开关：metadata 之前 seek 会被浏览器丢掉
+            videoMetaReady = true;
           }}
           onloadeddata={(e) => {
             // 首帧真正出来：兜底计时与提示都作废（慢盘误判最多闪一下）。
@@ -2245,7 +2137,10 @@
       >
         <Icon name={play.playing ? 'pause' : 'play'} size={11} />
       </button>
-      <span class="tp-time">{tc(play.time)}</span>
+      <span class="tp-time" title={app.media?.video_fps ? `${app.media.video_fps.toFixed(3)} fps` : '未探测到帧率，逐帧按 30fps 步进'}>{tc(play.time)}</span>
+      {#if transport.rate !== 1}
+        <button class="mini-text tp-rate" onclick={() => resetRate()} title="恢复 1×（⇧2）">{transport.rate}×</button>
+      {/if}
       <div
         class="tp-track"
         class:dragging={trackDrag}
@@ -2355,6 +2250,14 @@
       class:dragging={dragMode !== 'none'}
     >
       <canvas bind:this={canvas}></canvas>
+      <ChapterTrack
+        marks={chapters.marks}
+        {duration}
+        {viewStart}
+        {viewSpan}
+        rulerH={RULER_H}
+        onseek={(id) => seekToMark(id)}
+      />
 
       {#if cueTip}
         <div class="cue-tip" style="left:{cueTip.x}px">{cueTip.label}</div>
@@ -2573,7 +2476,7 @@
                 rangeSelectTo(i);
                 return;
               }
-              selectCue(i);
+              selectCue(i, true, true);
             }}
             oncontextmenu={(e) => onCueContextMenu(e, i)}
             ondblclick={() => previewRange(cue.start, cue.end)}
@@ -2927,6 +2830,13 @@
     font-family: var(--font-mono);
     min-width: 38px;
     text-align: right;
+  }
+  .tp-rate {
+    height: 18px;
+    padding: 0 var(--sp-1);
+    color: var(--accent);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
   .tp-track {
     flex: 1;

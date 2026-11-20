@@ -7,6 +7,7 @@
    */
   import { onMount } from 'svelte';
   import Icon from '../components/Icon.svelte';
+  import ClipScopePicker from '../components/ClipScopePicker.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import type { SubtitleStylePayload } from '../lib/api';
   import {
@@ -29,6 +30,7 @@
     setExportOutDir,
     setExportQuality,
     setExportResolution,
+    setExportChapters,
     setExportSrt,
     setExportTrack,
     setPreviewText,
@@ -38,7 +40,9 @@
     toast,
     updateExportStyle,
   } from '../lib/store.svelte';
-  import { formatBytes, formatDuration } from '../lib/time';
+  import { chapterCount } from '../lib/chapters.svelte';
+  import { clipSpan, clipLength, formatRange } from '../lib/clipRange';
+  import { formatBytes, formatDuration, tcShort } from '../lib/time';
 
   let subFormat = $state<'SRT' | 'VTT' | 'TXT'>('SRT');
   let subTrack = $state<'source' | 'target' | 'both'>('source');
@@ -111,6 +115,8 @@
     void exporter.track;
     void exporter.resolution;
     void exporter.preset;
+    void exporter.clip.start;
+    void exporter.clip.end;
     if (mounted && app.connected) scheduleExportPlan();
   });
 
@@ -152,6 +158,13 @@
     },
   );
   const burnMode = $derived(exporter.mode === 'burn');
+  /** 片段范围：字幕导出与成片导出共用同一份（store 的 exporter.clip）。 */
+  const scoped = $derived(exporter.clip.end > 0);
+  const scopeSpan = $derived(clipSpan(app.cues, exporter.clip));
+  const scopeLength = $derived(clipLength(exporter.clip, app.media?.duration || 0));
+  const scopeTitle = $derived(
+    scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
+  );
 
   function sameNumber(a: number, b: number): boolean {
     return Math.abs(a - b) < 0.005;
@@ -207,11 +220,18 @@
       toast('还没有译文轨；先在翻译页生成并应用译文', 'warn');
       return;
     }
+    if (scoped && !scopeSpan.count) {
+      toast('这个导出范围里没有字幕：换一个章节或时间点', 'warn');
+      return;
+    }
     subBusy = true;
     try {
       const res = await exportCues(subFormat, {
         track: subTrack,
         lang: subTrack === 'source' ? '' : subLang || app.trackLang,
+        clipStart: scoped ? exporter.clip.start : 0,
+        clipEnd: scoped ? exporter.clip.end : 0,
+        clipLabel: scoped ? exporter.clip.label : '',
       });
       if (res) lastSubtitle = res.path;
     } finally {
@@ -248,6 +268,18 @@
     </button>
   </PageHeader>
 
+  <div class="range-row">
+    <ClipScopePicker label="导出范围" disabled={exporter.running} />
+    <span class="range-hint">
+      {#if scoped}
+        只导出这一段：音视频按 {formatRange(exporter.clip)} 裁剪，字幕与章节平移到 0 起；
+        字幕文件与成片的名字都会带范围标签，不会覆盖整片成片。
+      {:else}
+        全片导出。选一段章节或自定义起止时间即可只导出这一段（字幕与章节自动归零）。
+      {/if}
+    </span>
+  </div>
+
   <!-- 字幕交付 -->
   <section class="sec subtitle-sec">
     <div class="sec-head">
@@ -258,7 +290,13 @@
           译文缺失的条目不会留空行。
         </div>
       </div>
-      <span class="cue-count">{app.cues.length} 条</span>
+      <span class="cue-count">
+        {#if scoped}
+          {scopeSpan.count} / {app.cues.length} 条
+        {:else}
+          {app.cues.length} 条
+        {/if}
+      </span>
     </div>
     <div class="sub-row">
       <div class="seg">
@@ -282,8 +320,12 @@
           {/each}
         </select>
       {/if}
-      <button class="btn" onclick={exportSubtitle} disabled={!app.cues.length || subBusy}>
-        <Icon name="export" size={11} />{subBusy ? '导出中…' : '导出字幕'}
+      <button
+        class="btn"
+        onclick={exportSubtitle}
+        disabled={!app.cues.length || subBusy || (scoped && !scopeSpan.count)}
+      >
+        <Icon name="export" size={11} />{subBusy ? '导出中…' : scoped ? '导出本段字幕' : '导出字幕'}
       </button>
       <div class="spacer"></div>
       {#if lastSubtitle}
@@ -336,6 +378,16 @@
           </div>
         </div>
 
+        {#if scoped && exporter.mode === 'copy'}
+          <div class="clip-copy-hint">
+            <Icon name="warn" size={11} />
+            <span>
+              仅封装按关键帧切片：起点会对齐到最近的关键帧，首尾可能多出或短路几秒。
+              要精确到帧（时长严格 = {formatDuration(scopeLength)}）请改用「烧录硬字幕」或「软字幕 MP4」。
+            </span>
+          </div>
+        {/if}
+
         <div class="row">
           <span class="row-label">字幕轨</span>
           <div class="seg">
@@ -373,6 +425,21 @@
             {/if}
           {/if}
           <div class="spacer"></div>
+          <label
+            class="chk"
+            title={chapterCount()
+              ? '按起点排序写入容器；时刻点自动衔接到下一个标记或片尾。IINA 等播放器可直接跳转。'
+              : '还没有章节标记：到核对台右侧「章节」页签添加'}
+          >
+            <input
+              type="checkbox"
+              checked={exporter.writeChapters && chapterCount() > 0}
+              disabled={!chapterCount() || exporter.running}
+              onchange={(e) => setExportChapters(e.currentTarget.checked)}
+            />
+            写入章节标记
+            <span class="chapter-count">{chapterCount() ? `${chapterCount()} 个` : '暂无'}</span>
+          </label>
           <label class="chk">
             <input
               type="checkbox"
@@ -624,6 +691,9 @@
           <div class="metrics">
             <span><b>{outLabel}</b></span>
             <span>预计 {estimated}</span>
+            {#if scoped}
+              <span>片段 {tcShort(exporter.clip.start)} → {tcShort(exporter.clip.end)} · {formatDuration(scopeLength)}</span>
+            {/if}
             {#if plan.container === 'mkv'}
               <span class="warn-text">MKV 输出</span>
             {/if}
@@ -697,7 +767,7 @@
           <button
             class="btn primary go"
             onclick={startExport}
-            disabled={exporter.running || !app.cues.length || (exporter.track !== 'source' && !selectedTranslation)}
+            disabled={exporter.running || !app.cues.length || (scoped && !scopeSpan.count) || (exporter.track !== 'source' && !selectedTranslation)}
           >
             <Icon name="export" size={12} />
             {exporter.running ? '导出中…' : exporter.result ? '再导一份' : '开始导出'}
@@ -718,6 +788,35 @@
     grid-template-columns: minmax(0, 1120px);
     justify-content: center;
     align-content: start;
+  }
+  .range-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    padding: 10px var(--sp-3);
+    border: 1px solid var(--separator-soft);
+    border-radius: 8px;
+    background: var(--bg-content);
+  }
+  .range-hint {
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-3);
+    min-width: 0;
+    flex: 1 1 320px;
+  }
+  .clip-copy-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: var(--sp-2) 0 0;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-size: 12px;
+    line-height: 1.55;
   }
   .sec {
     border-top: 1px solid var(--separator-soft);
@@ -973,6 +1072,13 @@
   .metrics.muted {
     color: var(--text-3);
   }
+  .chapter-count {
+    margin-left: var(--sp-1);
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
   .warn-text {
     color: var(--warn);
   }

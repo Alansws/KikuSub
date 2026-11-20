@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Callable
 
 from . import engines as engine_registry
+from . import short_clip
 from .audit import build_audit_items, make_audit_payload, write_audit_payload
 from .cues import cues_to_table
-from .paths import OUTPUT_DIR
+from .paths import OUTPUT_DIR, ensure_usable_cwd
 from .report import (
     _missed_hidden_count,
     _visible_missed_spans,
@@ -152,6 +153,10 @@ class TranscribeRequest:
     # 双引擎：本次整片结果写入第二版（不覆盖核对台）。服务层只在「核对台非空 +
     # 整片覆盖」时置 True；具体写内存/落盘由 server.jobs 负责。
     alt_review: bool = False
+    # 核对台人工短选区（转写选区 / 重转此句 / 质检补录）才置 True：空结果时
+    # 走 `core.short_clip` 的轻声兜底（0.05 阈值 → ≤12s 整段送模）。
+    # **整片转写必须保持 False**，否则 VAD 挡幻觉的那道防线会被绕过。
+    short_clip_fallback: bool = False
     # 本次任务的原始参数值（写进第二版边车，复核页展示「参数来源」）。
     param_values: dict = field(default_factory=dict)
 
@@ -281,6 +286,11 @@ def run_transcription(
     `engine` 可显式注入：调用方（旧界面 / 测试）可能自己持有引擎实例或替身，
     不传时按 `req.engine_key` 取进程内单例。
     """
+    # cwd 可能在应用运行期间被删掉（打包脚本原地重建 .app 就是这样）。等到引擎
+    # 懒加载 torch 时才炸，报错只有一句 "[Errno 2] No such file or directory"，
+    # 所以在动重活之前查一次；定位问题的那条 warning 由 helper 自己打。
+    ensure_usable_cwd()
+
     media_path = Path(req.media_path)
     engine = engine if engine is not None else resolve_engine(req.engine_key)
     family = engine_family(req.engine_key)
@@ -333,33 +343,32 @@ def run_transcription(
         audio_start, audio_end = None, None
         log.info("人声分离就绪 | %s | %.1fs-%.1fs", audio_path.name, sep_start, sep_end)
 
-    if is_sherpa:
-        cues = engine.transcribe_file(
+    def _run_engine(config_used):
+        """按引擎族调一次转写；`config_used` 允许短选区兜底时换一份阈值配置。"""
+        if is_sherpa:
+            return engine.transcribe_file(
+                audio_path,
+                progress_cb=cb,
+                config=config_used,
+                cancel_event=cancel_event,
+                start_time_s=audio_start,
+                end_time_s=audio_end,
+                time_offset=req.time_offset,
+            )
+        if is_qwen:
+            return engine.transcribe_file(
+                audio_path,
+                progress_cb=cb,
+                use_alignment=req.use_alignment,
+                config=config_used,
+                cancel_event=cancel_event,
+                start_time_s=audio_start,
+                end_time_s=audio_end,
+                time_offset=req.time_offset,
+            )
+        return engine.transcribe_file(
             audio_path,
-            progress_cb=cb,
-            config=req.sherpa_config,
-            cancel_event=cancel_event,
-            start_time_s=audio_start,
-            end_time_s=audio_end,
-            time_offset=req.time_offset,
-        )
-        stats_note = ""
-    elif is_qwen:
-        cues = engine.transcribe_file(
-            audio_path,
-            progress_cb=cb,
-            use_alignment=req.use_alignment,
-            config=req.qwen_config,
-            cancel_event=cancel_event,
-            start_time_s=audio_start,
-            end_time_s=audio_end,
-            time_offset=req.time_offset,
-        )
-        stats_note = ""
-    else:
-        cues = engine.transcribe_file(
-            audio_path,
-            config=req.whisper_config,
+            config=config_used,
             no_repeat_ngram_size=req.no_repeat_ngram_size,
             repetition_penalty=req.repetition_penalty,
             progress_cb=cb,
@@ -368,7 +377,58 @@ def run_transcription(
             end_time_s=audio_end,
             time_offset=req.time_offset,
         )
-        stats_note = f"\n\n`{engine.last_stats.describe()}`"
+
+    active_config = (
+        req.sherpa_config if is_sherpa else req.qwen_config if is_qwen else req.whisper_config
+    )
+    cues = _run_engine(active_config)
+    if not cues and req.short_clip_fallback:
+        # 核对台人工短选区专用：VAD 在轻声道白上切不出段时，按 short_clip 的
+        # 降级链静默重试。整片转写（short_clip_fallback=False）绝不走这里。
+        def _cancelled() -> bool:
+            return bool(engine.last_interrupted) or bool(
+                cancel_event is not None and cancel_event.is_set()
+            )
+
+        selection_s = short_clip.selection_seconds(
+            req.start_s, req.end_s, req.media_duration_s
+        )
+        clip_start = float(req.start_s or 0.0)
+        clip_end = (
+            float(req.end_s) if req.end_s is not None else clip_start + selection_s
+        )
+        cues = short_clip.run_fallbacks(
+            engine=engine,
+            family=family,
+            config=active_config,
+            media_path=audio_path,
+            # 字幕时间用原片时间轴；解码区间可能是分离后的整段 wav（无偏移）
+            start_s=clip_start,
+            end_s=clip_end,
+            duration=selection_s,
+            retry=_run_engine,
+            cancelled=_cancelled,
+            decode_start=audio_start,
+            decode_end=audio_end,
+            window_kwargs=(
+                {}
+                if (is_sherpa or is_qwen)
+                else {
+                    "no_repeat_ngram_size": req.no_repeat_ngram_size,
+                    "repetition_penalty": req.repetition_penalty,
+                }
+            ),
+        )
+        if cues:
+            log.info(
+                "短选区轻声兜底命中 | engine=%s | %.2fs-%.2fs | cues=%s",
+                req.engine_key,
+                req.start_s or 0.0,
+                req.end_s or 0.0,
+                len(cues),
+            )
+    # Whisper 的 VAD 统计要写进报告；Qwen / Sherpa 有自己的统计口径。
+    stats_note = "" if (is_qwen or is_sherpa) else f"\n\n`{engine.last_stats.describe()}`"
 
     elapsed = time.perf_counter() - started
     is_interrupted = bool(engine.last_interrupted) or bool(

@@ -18,6 +18,7 @@
     toggleTheme,
     undo,
   } from '../lib/store.svelte';
+  import { loadChapters } from '../lib/chapters.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
   import { closePunctPanel, openPunctPanel, punctPanel } from '../lib/punctuationPanel.svelte';
 
@@ -174,7 +175,7 @@
         data-punct-trigger
         aria-expanded={punctPanel.open}
         onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
-        title="清理整轨原文里多余的 、，。…（只动原文，条数与时间轴不变；⌘⇧L）"
+        title="清理整轨原文里多余的 、，。…（句中直接删掉、行尾省略号一并清；只动原文，条数与时间轴不变；⌘⇧L）"
         aria-label="清理标点"
       >
         <Icon name="punct" size={12} /><span class="act-label">清理标点</span>
@@ -344,7 +345,10 @@
               class="hist-item"
               class:current={row.item.state === 'current'}
               class:undone={row.item.state === 'undone'}
-              onclick={() => jumpCueHistory(row.item.id)}
+              onclick={() => {
+                void jumpCueHistory(row.item.id);
+                void loadChapters(true);
+              }}
               title={row.item.state === 'current'
                 ? '当前状态'
                 : row.item.state === 'undone'
