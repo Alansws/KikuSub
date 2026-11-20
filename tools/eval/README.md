@@ -15,6 +15,10 @@
 | `ab_onset.py` | 跑 P0-1 的 A0–A3 矩阵（起点提前 × 能量闸门），拼成一张对比表 | 是（whisper / qwen） |
 | `qwen_confidence_diag.py` | P0-3a：置信度特征 × 对/错句标签，打印每个特征的 AUC | 是（qwen） |
 | `probe_window.py` | 参考 SRT 的每条时间窗**绕开 VAD** 直送模型，分离「识别」与「分段」 | 是（qwen） |
+| `ab_vad.py` | 只看 VAD 切分：参考条覆盖率、低能量覆盖、负样本、耗时 | 否（只加载 VAD） |
+| `diag_missed.py` | 把 `missed_blocks` 逐条还原成 VAD 段/门控/最终文本 | 是（whisper） |
+| `run_cap_sweep.py` | `vad_max_segment_s` 扫描（绕开参数面板 5s 下限） | 是（whisper） |
+| `ten_backend.py` | 已否决的 TEN-VAD 对照，只服务评测，不进 `core/` | 是（需要 ten-vad） |
 | `scorecard.py` | 公共件：卡片形状、句首缺字判定、基线比对、fixtures 解析 | 否 |
 
 ## score_srt.py：两份 SRT 打分

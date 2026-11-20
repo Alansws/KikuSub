@@ -27,7 +27,7 @@ from tools.eval.score_srt import filter_language, parse_srt  # noqa: E402
 
 CONFIGS = [
     {"id": "v0_silero20", "backend": "silero", "threshold": 0.25, "window_s": 20.0},
-    {"id": "v1_silero10", "backend": "silero10", "threshold": 0.25, "window_s": 10.0},
+    {"id": "v1_silero10", "backend": "silero", "threshold": 0.25, "window_s": 10.0},
     {"id": "v2a_ten35", "backend": "ten", "threshold": 0.35, "window_s": 20.0},
     {"id": "v2b_ten45", "backend": "ten", "threshold": 0.45, "window_s": 20.0},
     {"id": "v2c_ten55", "backend": "ten", "threshold": 0.55, "window_s": 20.0},
@@ -85,19 +85,32 @@ def _longest_negative_window(cues, duration_s: float, window_s: float) -> tuple[
 
 def _score_config(audio, cues, backend, threshold, window_s, duration_s, negative):
     from core.transcribe import merge_vad_segments
-    from core.vad import detect_speech_stamps
 
     started = time.perf_counter()
-    stamps = detect_speech_stamps(
-        audio,
-        None,
-        threshold=threshold,
-        min_speech_ms=80,
-        min_silence_ms=200,
-        speech_pad_ms=250,
-        window_s=window_s,
-        backend=backend,
-    )
+    if backend == "ten":
+        # TEN 的适配只在评测台：core 不再保留失败实验分支。
+        from tools.eval.ten_backend import detect as ten_detect
+
+        stamps = ten_detect(
+            audio,
+            threshold=threshold,
+            min_speech_ms=80,
+            min_silence_ms=200,
+            speech_pad_ms=250,
+        )
+    else:
+        from core.vad import detect_speech_stamps
+
+        stamps = detect_speech_stamps(
+            audio,
+            None,
+            threshold=threshold,
+            min_speech_ms=80,
+            min_silence_ms=200,
+            speech_pad_ms=250,
+            window_s=window_s,
+            backend=backend,
+        )
     elapsed = time.perf_counter() - started
     segments = merge_vad_segments(
         stamps,

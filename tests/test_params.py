@@ -162,16 +162,21 @@ def test_bool_defaults_are_bool(engine):
 
 
 def test_vad_backend_enum_defaults_and_validation():
-    """VAD 后端是 enum：默认 auto，非法值回落到默认，不把界面打崩。"""
-    assert params.defaults_for("whisper")["whisper.vad_backend"] == "auto"
-    assert params.config_kwargs("whisper", {})["vad_backend"] == "auto"
+    """VAD 切分器只暴露两个验证过的选项；旧值 auto 回落到推荐默认。"""
+    assert params.defaults_for("whisper")["whisper.vad_backend"] == "whisperseg"
+    assert params.config_kwargs("whisper", {})["vad_backend"] == "whisperseg"
     assert params.config_kwargs(
-        "whisper", {"whisper.vad_backend": "whisperseg"}
-    )["vad_backend"] == "whisperseg"
-    # 非法值被 normalize 忽略，保留默认
-    assert params.normalize(
-        "whisper", {"whisper.vad_backend": "not-a-backend"}
-    )["whisper.vad_backend"] == "auto"
+        "whisper", {"whisper.vad_backend": "silero"}
+    )["vad_backend"] == "silero"
+    # 非法值（含已否决的 silero10 / 旧 auto）被 normalize 忽略，保留默认。
+    for legacy in ("not-a-backend", "silero10", "auto"):
+        assert params.normalize(
+            "whisper", {"whisper.vad_backend": legacy}
+        )["whisper.vad_backend"] == "whisperseg"
     spec = params.BY_KEY["whisper.vad_backend"]
-    assert spec.choices == ("auto", "silero20", "silero10", "whisperseg")
-    assert spec.to_dict()["choices"] == ["auto", "silero20", "silero10", "whisperseg"]
+    assert spec.choices == ("whisperseg", "silero")
+    assert spec.to_dict()["choices"] == ["whisperseg", "silero"]
+    assert spec.to_dict()["choice_labels"] == {
+        "whisperseg": "WhisperSeg（推荐）",
+        "silero": "Silero 20s（兼容）",
+    }

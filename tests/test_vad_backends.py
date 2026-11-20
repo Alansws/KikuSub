@@ -1,4 +1,4 @@
-"""VAD 后端抽象的纯逻辑回归：不加载真实模型。"""
+"""VAD 后端的纯逻辑回归：不加载真实模型。"""
 
 from __future__ import annotations
 
@@ -10,23 +10,30 @@ from core import vad
 
 def test_resolve_backend_defaults_and_aliases(monkeypatch):
     monkeypatch.delenv(vad.ENV_BACKEND, raising=False)
-    assert vad.resolve_backend() == "silero"
+    assert vad.resolve_backend() == "whisperseg"
+    assert vad.resolve_backend("silero") == "silero"
     assert vad.resolve_backend("silero20") == "silero"
-    assert vad.resolve_backend("ten-vad") == "ten"
     monkeypatch.setenv(vad.ENV_BACKEND, "whisper_seg")
     assert vad.resolve_backend() == "whisperseg"
 
 
-def test_resolve_backend_auto_follows_env(monkeypatch):
-    monkeypatch.setenv(vad.ENV_BACKEND, "silero10")
-    assert vad.resolve_backend("auto") == "silero10"
-    assert vad.resolve_backend() == "silero10"
+def test_resolve_backend_auto_is_alias_for_default(monkeypatch):
+    monkeypatch.delenv(vad.ENV_BACKEND, raising=False)
+    assert vad.resolve_backend("auto") == "whisperseg"
+    monkeypatch.setenv(vad.ENV_BACKEND, "silero")
+    assert vad.resolve_backend("auto") == "silero"
+    assert vad.resolve_backend() == "silero"
 
 
 def test_resolve_backend_rejects_unknown(monkeypatch):
     monkeypatch.setenv(vad.ENV_BACKEND, "nope")
     with pytest.raises(vad.VadBackendError):
         vad.resolve_backend()
+    # 被否决的实验后端不再能从核心选到。
+    with pytest.raises(vad.VadBackendError):
+        vad.resolve_backend("ten")
+    with pytest.raises(vad.VadBackendError):
+        vad.resolve_backend("silero10")
 
 
 def test_frames_to_stamps_short_noise_is_dropped():
@@ -68,21 +75,7 @@ def test_frames_to_stamps_does_not_overlap_neighbours():
     assert stamps[0]["end"] <= stamps[1]["start"]
 
 
-def test_flag_runs_merge_short_gaps_and_filter():
-    flags = np.zeros(100, dtype=bool)
-    flags[10:20] = True
-    flags[21:30] = True  # 1 帧静音，合并
-    flags[60:62] = True  # 太短，丢弃
-    stamps = vad._flag_runs_to_stamps(
-        flags, frame_samples=256, total_samples=25600,
-        min_speech_ms=80, min_silence_ms=100, speech_pad_ms=0,
-    )
-    assert len(stamps) == 1
-    assert stamps[0]["start"] == 10 * 256
-    assert stamps[0]["end"] == 30 * 256
-
-
-def test_detect_dispatches_silero10(monkeypatch):
+def test_detect_dispatches_silero_window(monkeypatch):
     calls = []
 
     def fake(audio, model, **kwargs):
@@ -93,9 +86,21 @@ def test_detect_dispatches_silero10(monkeypatch):
     vad.detect_speech_stamps(
         np.zeros(1600, dtype=np.float32), None, threshold=0.25,
         min_speech_ms=80, min_silence_ms=200, speech_pad_ms=250,
-        backend="silero10",
+        backend="silero", window_s=10.0,
     )
     assert calls and calls[0]["window_s"] == 10.0
+
+
+def test_whisperseg_asset_reports_missing_files(monkeypatch, tmp_path):
+    monkeypatch.setenv(vad.ENV_WHISPERSEG_DIR, str(tmp_path))
+    asset = vad.whisperseg_asset()
+    assert asset["key"] == "whisperseg"
+    assert asset["installed"] is False
+    assert asset["approx_bytes"] > 100 * 1024 * 1024
+    (tmp_path / "model.onnx").write_bytes(b"x")
+    assert vad.whisperseg_asset()["installed"] is False
+    (tmp_path / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+    assert vad.whisperseg_asset()["installed"] is True
 
 
 def test_whisperseg_missing_model_is_readable(monkeypatch, tmp_path):
@@ -103,3 +108,35 @@ def test_whisperseg_missing_model_is_readable(monkeypatch, tmp_path):
     monkeypatch.setattr(vad, "_download_whisperseg", lambda *a, **k: None)
     with pytest.raises(vad.VadBackendError, match="下载不完整"):
         vad._load_whisperseg()
+
+
+def test_ensure_whisperseg_downloads_via_model_fetch(monkeypatch, tmp_path):
+    """权重必须走 model_fetch（镜像回退/进度）并落到 models 目录。"""
+    from core import model_fetch
+
+    monkeypatch.setenv(vad.ENV_WHISPERSEG_DIR, str(tmp_path))
+    calls = []
+    progress = []
+
+    def fake_snapshot(**kwargs):
+        calls.append(("snapshot", kwargs["repo_id"], tuple(kwargs["allow_patterns"])))
+        (tmp_path / "model.onnx").write_bytes(b"x" * 32)
+
+    def fake_file(**kwargs):
+        calls.append(("file", kwargs["repo_id"], kwargs["filename"]))
+        (tmp_path / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(model_fetch, "snapshot_download_files", fake_snapshot)
+    monkeypatch.setattr(model_fetch, "hf_hub_download_file", fake_file)
+
+    asset = vad.ensure_whisperseg(progress_cb=lambda r, m: progress.append((r, m)))
+    assert asset["installed"] is True
+    assert calls == [
+        ("snapshot", vad.WHISPERSEG_REPO, ("model.onnx",)),
+        ("file", vad.WHISPERSEG_FEATURE_REPO, "preprocessor_config.json"),
+    ]
+    assert progress and progress[-1][0] == 1.0
+
+    # 已就绪时再调不重新下载。
+    vad.ensure_whisperseg()
+    assert len(calls) == 2

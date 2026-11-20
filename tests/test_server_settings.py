@@ -47,6 +47,19 @@ def test_settings_lists_engines_and_paths(client: TestClient, tmp_path: Path) ->
     assert data["paths"]["log_dir"].endswith("logs")
 
 
+def test_settings_exposes_whisperseg_asset_and_rejects_unknown(client: TestClient) -> None:
+    data = client.get("/api/settings", headers=AUTH).json()
+    assets = {item["key"]: item for item in data["vad_assets"]}
+    assert "whisperseg" in assets
+    asset = assets["whisperseg"]
+    assert asset["approx_bytes"] > 100 * 1024 * 1024
+    assert isinstance(asset["installed"], bool)
+    assert asset["model_dir"].endswith("whisperseg")
+
+    resp = client.post("/api/vad/assets/not-a-real-asset/download", headers=AUTH)
+    assert resp.status_code == 404
+
+
 def test_patch_settings_persists_and_reaches_config(client: TestClient, tmp_path: Path) -> None:
     resp = client.patch(
         "/api/settings", headers=AUTH, json={"enabled_engines": ["qwen"]}

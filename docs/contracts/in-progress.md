@@ -23,20 +23,28 @@
   （head_removed 2 / 句首省略短叹 3 / 无静音 35 / 静音不足 0.55s 50），
   说明当前 VAD 分段本身已经够紧；旧 112 条样本是不同分段/参数下的历史产物。
 
-## P1 VAD 后端 A/B（2026-11-20 已出结论）
+## P1 VAD 后端 A/B（2026-11-20 已收口）
 
-- `core/vad.py`：新增 silero / silero10 / ten / whisperseg 四个后端，
-  `KIKUSUB_VAD_BACKEND` 做实验开关；`whisper.vad_backend` 已在参数面板暴露
-  （auto / silero20 / silero10 / whisperseg）。
-- Test 二全片：WhisperSeg 0.35 CER 10.67%（Silero20 15.48%）、插入 64（90）、
-  耗时 57.1s（127.5s）、质检 10（76）、参考条覆盖 100%、负样本 0 误报；
-  但漏块仍 13、最长条 4.70s（3.82s）、>4.3s 6（0）。
-- TEN-VAD 拒绝：负样本 97.9% 判成语音，CER 61.01%、插入 505；
-  Silero 10s 拒绝：CER 17.89%、插入 125。
-- Qwen 交叉核对：WhisperSeg 0.35 CER 12.61%（Silero 11.47%）、漏块 11（10），
-  反而变差，因此设置项只对 Whisper 开放，Qwen 继续 Silero。
-- 决策：WhisperSeg 作为**可选**切分器，默认仍 Silero 20s；长条问题留待
-  「切分上限 × CER」标定。详见 [P1-VAD后端AB实验方案-2026-11-20.md](../P1-VAD后端AB实验方案-2026-11-20.md)。
+- `core/vad.py` 只保留两个经过验证的后端：`silero`（20s 窗，无额外权重）与
+  `whisperseg`（推荐）。TEN 的适配移到 `tools/eval/ten_backend.py`，不再进内核。
+- Test 二全片：WhisperSeg + 合并上限修复后 CER **10.67%**（Silero20 15.48%）、
+  插入 64（90）、耗时 60.0s（127.5s）、质检 10（76）、参考条覆盖 100%、
+  负样本 0 误报、>4.3s **0**（原 6）。
+- 13 条「漏块」已逐条还原：13/13 的参考文本都在最终字幕里，0 条被门控删除；
+  是 `score_srt.py` 的块准确率把跨边界整条字幕算进来造成的切分点误报，不是
+  ASR 漏识别，也不是 VAD 没切到（详见 P1 文档 §7.1）。
+- 超长条的真因是 `merge_fragmented_cues` 的 `+0.6s` 容差，不是 VAD 段过长：
+  只把容差收回 `max_cue_dur`，CER/插入/漏块不变，>4.3s 6→0；压短送模段
+  （4.0–4.3s）反而 CER +0.2–1.0pt、耗时 +30–60%。
+- 默认切分器已改为 **WhisperSeg**；Silero 20s 保留为兼容选项。Qwen 固定 Silero
+  （同一后端在 Qwen 上 CER +1.14pt），参数只对 Whisper 开放。
+- 权重走 `core/model_fetch.py`（hf-mirror 回退）落到 `models/whisperseg/`；
+  设置页「引擎与模型 → 切分器权重」可看就绪状态并预下载，首次转写也带进度下载。
+- 详见 [P1-VAD后端AB实验方案-2026-11-20.md](../P1-VAD后端AB实验方案-2026-11-20.md) §7。
+- **下一步 P2**：单槽双引擎顺序协同——主引擎写主稿，副引擎只读进第二列；
+  两侧用不同 VAD（实测 Qwen 配 Silero、Whisper 配 WhisperSeg），中间强制
+  `release()` + `mps.empty_cache()` 并过可用内存闸门；副稿经去重/置信度筛选后
+  以 `ensemble` 进质检。
 
 ## 转录引擎标定（四引擎均已完成一轮）
 
