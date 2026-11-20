@@ -24,6 +24,16 @@
 
 import { api, type ReshapePromptPayload } from './api';
 import { needsSegments, planSegments, type AiSegment, type SegmentOptions } from './aiSegments';
+import { clipSpan, isFullClip } from './clipRange';
+import {
+  DEFAULT_BATCH_SIZE,
+  clampRange,
+  nextBatch,
+  previousBatch,
+  rangeCount,
+  resizeBatch,
+  type CueSpan,
+} from './cueBatch';
 import { dual, refreshAltReview } from './dualReview.svelte';
 import { promptSelectedId } from './promptStore.svelte';
 import {
@@ -41,7 +51,14 @@ import {
   type ReshapeDraftState,
   type ReshapePlan,
 } from './reshapePlan';
-import { applyCueSnapshot, app, loadTranslations, scheduleDraftSave, toast } from './store.svelte';
+import {
+  applyCueSnapshot,
+  app,
+  exporter,
+  loadTranslations,
+  scheduleDraftSave,
+  toast,
+} from './store.svelte';
 
 export {
   segmentKey,
@@ -93,6 +110,11 @@ export const reshape = $state({
   parsing: false,
   applying: false,
   errors: [] as string[],
+  /** 本次处理批次（处理范围之内的条号子范围）；默认等于整个处理范围。 */
+  batchFrom: 1,
+  batchTo: 0,
+  batchManual: false,
+  batchSize: DEFAULT_BATCH_SIZE,
 });
 
 /** 计划版本号：只在 buildPlan 里自增，模块级、不进 $state。 */
@@ -103,6 +125,87 @@ let expectedRevision = 0;
 let reshapeMediaId: string | null = null;
 /** 提示词元信息缓存：刻意不放 $state，避免 effect 自读自写。 */
 let infoCache: { key: string; payload: ReshapePromptPayload } | null = null;
+/** 定计划时用的处理范围 / 批次身份；变化说明换了坐标系，不能静默沿用。 */
+let scopeKeyAtPlan = '';
+
+/** 处理范围命中的全片区间（与润色 / 翻译 / 导出共用 `exporter.clip`）。 */
+export function reshapeScopeSpan(): CueSpan {
+  return { ...clipSpan(app.cues, exporter.clip) };
+}
+
+/** 本次处理批次：默认等于处理范围；手动批次永远夹在范围内。 */
+export function reshapeBatchSpan(): CueSpan {
+  const span = reshapeScopeSpan();
+  if (span.count <= 0) return { from: 0, to: 0, count: 0 };
+  if (!reshape.batchManual) return { ...span };
+  const range = clampRange({ from: reshape.batchFrom, to: reshape.batchTo }, span);
+  return { ...range, count: rangeCount(range) };
+}
+
+/** 当前真正会替换的全片区间。 */
+export function reshapeRange(): CueSpan {
+  return reshapeBatchSpan();
+}
+
+/** 范围身份：只含时间范围与手动批次，不含条数（条数变化是覆盖的结果）。 */
+function planScopeKey(): string {
+  const scope = exporter.clip;
+  const clip = isFullClip(scope)
+    ? 'full'
+    : `${scope.start.toFixed(2)}-${scope.end.toFixed(2)}-${scope.label}`;
+  const batch = reshape.batchManual
+    ? `${reshape.batchFrom}-${reshape.batchTo}`
+    : 'auto';
+  return `${clip}|${batch}`;
+}
+
+/** 设置手动批次（夹进处理范围）；换批时清空粘贴框。 */
+export function setReshapeBatch(from: number, to: number) {
+  const span = reshapeScopeSpan();
+  if (span.count <= 0) return;
+  const range = clampRange({ from, to }, span);
+  reshape.batchManual = true;
+  reshape.batchFrom = range.from;
+  reshape.batchTo = range.to;
+  reshape.text = '';
+  reshape.pasteOpen = false;
+  reshape.errors = [];
+}
+
+/** 上一批 / 下一批（按每批 N 条）。 */
+export function stepReshapeBatch(direction: 1 | -1) {
+  const span = reshapeScopeSpan();
+  if (span.count <= 0) return;
+  const current = reshapeBatchSpan();
+  const next = direction > 0
+    ? nextBatch(current, span, reshape.batchSize)
+    : previousBatch(current, span, reshape.batchSize);
+  setReshapeBatch(next.from, next.to);
+}
+
+/** 「每批 N 条」预设：从当前批次起点重切。 */
+export function setReshapeBatchSize(size: number) {
+  reshape.batchSize = Math.max(1, Math.min(5000, Math.floor(size) || DEFAULT_BATCH_SIZE));
+  const span = reshapeScopeSpan();
+  if (span.count <= 0) return;
+  const current = reshapeBatchSpan();
+  const resized = resizeBatch(
+    { from: reshape.batchManual ? current.from : span.from, to: current.to },
+    span,
+    reshape.batchSize,
+  );
+  setReshapeBatch(resized.from, resized.to);
+}
+
+/** 回到整个处理范围。 */
+export function resetReshapeBatch() {
+  const span = reshapeScopeSpan();
+  reshape.batchManual = false;
+  reshape.batchFrom = span.from;
+  reshape.batchTo = span.to;
+  reshape.text = '';
+  reshape.pasteOpen = false;
+}
 
 /** 当前的冻结键：媒体身份 | 做法 | 第二版身份 | 有没有稿。 */
 export function planKey(): string {
@@ -129,7 +232,11 @@ export function resetReshape() {
   reshape.longMode = false;
   reshape.segments = [];
   reshape.segmentIndex = 0;
+  reshape.batchManual = false;
+  reshape.batchFrom = 1;
+  reshape.batchTo = 0;
   infoCache = null;
+  scopeKeyAtPlan = '';
   expectedRevision = app.cuesRevision;
 }
 
@@ -156,9 +263,11 @@ export function currentSegment(): AiSegment | null {
     const index = clampIndex(reshape.segmentIndex, reshape.segments.length);
     return reshape.segments[index] ?? null;
   }
-  const first = app.cues[0];
-  const last = app.cues[app.cues.length - 1];
-  return { from: 1, to: app.cues.length, start: first.start, end: last.end, count: app.cues.length };
+  const range = reshapeRange();
+  if (range.count <= 0 || range.to > app.cues.length) return null;
+  const first = app.cues[range.from - 1];
+  const last = app.cues[range.to - 1];
+  return { from: range.from, to: range.to, start: first.start, end: last.end, count: range.count };
 }
 
 export function activeKey(): string {
@@ -186,7 +295,11 @@ function clearPlan() {
  * （人工、二次确认后）。
  */
 function buildPlan(reason: string) {
-  const canSegment = dual.exists;
+  // 手动选定局部范围 / 批次时，它就是这一轮的工作单元：不再叠加自动智能分段
+  // （否则段轨会把用户刚选的 1–151 又锁回 150 条一段，和页面 1 同一条红线）。
+  const scope = reshapeRange();
+  const local = scope.count > 0 && (scope.from > 1 || scope.to < app.cues.length);
+  const canSegment = dual.exists && !local;
   const longMode = canSegment && needsSegments(app.cues, dual.cues, SEGMENT_OPTIONS);
   const segments = longMode ? planSegments(app.cues, dual.cues, SEGMENT_OPTIONS) : [];
   const plan: ReshapePlan = {
@@ -194,6 +307,7 @@ function buildPlan(reason: string) {
     key: planKey(),
     longMode,
     segments,
+    singleKey: String(scope.count > 0 ? scope.from : 1),
     baseTotal: app.cues.length,
     baseRevision: app.cuesRevision,
     reason,
@@ -208,6 +322,7 @@ function buildPlan(reason: string) {
   reshape.applied = {};
   reshape.drafts = {};
   infoCache = null;
+  scopeKeyAtPlan = planScopeKey();
   expectedRevision = app.cuesRevision;
 }
 
@@ -320,6 +435,24 @@ export function ensureReshapePlan() {
   const key = planKey();
   const plan = reshape.plan;
   if (plan && plan.key === key) {
+    if (planScopeKey() !== scopeKeyAtPlan) {
+      // 处理范围 / 手动批次变了：坐标系的含义变了。没覆盖过就按新范围重定；
+      // 已覆盖过则挂失效横幅（绝不拿旧区间继续覆盖）。
+      // 范围一变，旧计划的快照也失去意义（恢复了也套不到新范围上）。
+      reshape.plans = [];
+      if (countApplied(reshape.applied, plan) > 0) {
+        reshape.stale = true;
+        reshape.staleReason =
+          '处理范围或本次批次变了：原先的分段区间对应的是旧范围，不能再沿用';
+        return;
+      }
+      const hadDrafts = Object.keys(reshape.drafts).length > 0;
+      buildPlan('处理范围变了，按当前范围重新定计划');
+      if (hadDrafts) {
+        toast('处理范围变了：未覆盖的新稿已作废，需要按新范围重新粘贴', 'warn');
+      }
+      return;
+    }
     void detectDrift();
     return;
   }
@@ -370,6 +503,7 @@ export function restoreReshapePlan(at: number): boolean {
   reshape.stale = false;
   reshape.staleReason = '';
   infoCache = null;
+  scopeKeyAtPlan = planScopeKey();
   expectedRevision = app.cuesRevision;
   toast('已恢复上一版分段：之前复制出去的提示词可以粘回原来的段');
   return true;
@@ -450,7 +584,9 @@ export async function ensurePromptInfo(force = false): Promise<ReshapePromptPayl
   }
   const segment = currentSegment();
   if (!segment) return null;
-  const range = reshape.longMode ? currentRangeFor(segment) : { from: 1, to: app.cues.length };
+  const range = reshape.longMode
+    ? currentRangeFor(segment)
+    : { from: segment.from, to: segment.to };
   const key = `${reshape.plan?.id ?? 0}|${promptCategory()}|${range.from}-${range.to}|${activeTemplateId()}|${app.cuesRevision}`;
   if (!force && infoCache?.key === key) return infoCache.payload;
   reshape.loadingPrompt = true;
@@ -524,7 +660,9 @@ export async function parseReshapeText(text?: string): Promise<boolean> {
   }
   const segment = currentSegment();
   if (!segment) return false;
-  const range = reshape.longMode ? currentRangeFor(segment) : { from: 1, to: app.cues.length };
+  const range = reshape.longMode
+    ? currentRangeFor(segment)
+    : { from: segment.from, to: segment.to };
   reshape.parsing = true;
   try {
     const draft = await api.parseReshape(raw, range.from, range.to);
@@ -618,11 +756,15 @@ export async function applyReshapeDraft(): Promise<boolean> {
     reshape.drafts = nextDrafts;
     expectedRevision = app.cuesRevision;
     scheduleDraftSave();
-    // 条数变了译文轨会被服务端丢弃；第二版的对齐也会变，两处都跟界面同步一次。
+    // 条数变了：范围外译文会跟着平移（服务端保证），第二版对齐也要刷新。
     void loadTranslations();
     void refreshAltReview();
+    const shifted = replace.shifted_translations ?? [];
+    const aligned = shifted.length
+      ? `；${shifted.join(' / ')} 译文轨已保持对齐（范围外头部 / 尾部随条数平移）`
+      : '';
     toast(
-      `已覆盖第 ${replace.from}–${replace.to} 条：${replace.replaced} 条 → ${replace.inserted} 条（⌘Z 可整批撤回）`,
+      `已覆盖第 ${replace.from}–${replace.to} 条：${replace.replaced} 条 → ${replace.inserted} 条（⌘Z 可整批撤回）${aligned}`,
     );
     if (replace.dropped_translations.length) {
       toast(

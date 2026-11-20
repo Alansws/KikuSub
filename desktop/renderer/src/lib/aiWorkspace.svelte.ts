@@ -15,6 +15,16 @@ import { api, type AiProposal } from './api';
 import { aiBridge } from './aiBridge';
 import { needsSegments, planSegments, type AiSegment } from './aiSegments';
 import { clipSpan, formatRange, isFullClip } from './clipRange';
+import {
+  DEFAULT_BATCH_SIZE,
+  batchKey,
+  clampRange,
+  nextBatch,
+  previousBatch,
+  rangeCount,
+  resizeBatch,
+  type CueSpan,
+} from './cueBatch';
 import { dual } from './dualReview.svelte';
 import {
   applyCueSnapshot,
@@ -75,6 +85,16 @@ export const ai = $state({
   /** 分段是否已回填：key = "from-to"。 */
   filled: {} as Record<string, boolean>,
   longMode: false,
+  /**
+   * 手动批次（条号子范围）：处理范围之内的「本次处理」小段。
+   * `batchManual=false` 时批次就等于整个处理范围（默认涵盖全部条目）。
+   */
+  batchFrom: 1,
+  batchTo: 0,
+  batchManual: false,
+  batchSize: DEFAULT_BATCH_SIZE,
+  /** 翻译页：严格要求粘贴条数与复制出去的一致；默认关闭（按时间轴对齐）。 */
+  strictCount: false,
 });
 
 function aiContextKey(): string {
@@ -136,8 +156,116 @@ export function aiScopeLabel(): string {
   return aiScoped() ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '';
 }
 
+/**
+ * 本次处理批次 → 全片 1 基区间。
+ *
+ * 默认（`batchManual=false`）就是整个处理范围：界面显示的 `1 ~ 291` 与真实请求
+ * 完全一致，用户不碰批次控件时行为与上一版没有区别。手动批次永远夹在范围里，
+ * 所以换章节 / 改时间只会让批次跟着缩，不会留下越界区间。
+ */
+export function aiBatchSpan(): CueSpan {
+  const span = aiScopeSpan();
+  if (span.count <= 0) return { from: 0, to: 0, count: 0 };
+  if (!ai.batchManual) return { ...span };
+  const range = clampRange({ from: ai.batchFrom, to: ai.batchTo }, span);
+  return { ...range, count: rangeCount(range) };
+}
+
+/** 复制 / 回填 / 应用真正绑定的区间：手动批次优先，否则是处理范围本身。 */
+export function aiRangeSpan(): CueSpan {
+  return aiBatchSpan();
+}
+
+export function aiBatchActive(): boolean {
+  return ai.batchManual;
+}
+
+/** 批次指纹（滚动位置记忆 / 判断是否同一批）；不含文本，改字不会换指纹。 */
+export function aiBatchKey(extra = ''): string {
+  return batchKey(app.media?.id ?? '', aiScopeSpan(), aiBatchSpan(), app.cues.length, extra);
+}
+
+/**
+ * 处理范围变化时同步批次：手动批次切回「整段」，并清掉粘贴框（上一段回复
+ * 不该贴到新范围）。只在范围身份真的变化时动作，所以不影响改文字 / 应用结果。
+ */
+let lastBatchScope = '';
+export function syncAiBatchScope(): boolean {
+  const key = `${exporter.clip.start.toFixed(2)}|${exporter.clip.end.toFixed(2)}|${exporter.clip.label}`;
+  if (key === lastBatchScope) return false;
+  lastBatchScope = key;
+  const span = aiScopeSpan();
+  ai.batchManual = false;
+  ai.batchFrom = span.from;
+  ai.batchTo = span.to;
+  ai.pasteText = '';
+  ai.pasteOpen = false;
+  planAiSegments();
+  return true;
+}
+
+/** 设置手动批次。`from/to` 会被夹进处理范围；非法输入不会抛错。 */
+export function setAiBatch(from: number, to: number) {
+  const span = aiScopeSpan();
+  if (span.count <= 0) return;
+  const range = clampRange({ from, to }, span);
+  ai.batchManual = true;
+  ai.batchFrom = range.from;
+  ai.batchTo = range.to;
+  // 手动批次是「换一段看」，不是自动智能分段。清掉分段状态，避免表格被
+  // 两套区间同时过滤（用户报障：点了批次但表格纹丝不动）。
+  ai.longMode = false;
+  ai.segments = [];
+  ai.segmentIndex = 0;
+  ai.pasteText = '';
+  ai.pasteOpen = false;
+}
+
+/** 上一批 / 下一批：按「每批 N 条」步进。 */
+export function stepAiBatch(direction: 1 | -1) {
+  const span = aiScopeSpan();
+  if (span.count <= 0) return;
+  const current = aiBatchSpan();
+  const next = direction > 0
+    ? nextBatch(current, span, ai.batchSize)
+    : previousBatch(current, span, ai.batchSize);
+  setAiBatch(next.from, next.to);
+}
+
+/** 「每批 N 条」预设：以当前批次起点重切一批。 */
+export function setAiBatchSize(size: number) {
+  ai.batchSize = Math.max(1, Math.min(5000, Math.floor(size) || DEFAULT_BATCH_SIZE));
+  const span = aiScopeSpan();
+  if (span.count <= 0) return;
+  const current = aiBatchSpan();
+  const resized = resizeBatch(
+    { from: ai.batchManual ? current.from : span.from, to: current.to },
+    span,
+    ai.batchSize,
+  );
+  setAiBatch(resized.from, resized.to);
+}
+
+/** 回到整个处理范围（关闭手动批次）。 */
+export function resetAiBatch() {
+  const span = aiScopeSpan();
+  ai.batchManual = false;
+  ai.batchFrom = span.from;
+  ai.batchTo = span.to;
+  ai.pasteText = '';
+  ai.pasteOpen = false;
+  planAiSegments();
+}
+
 /** 重算长片分段（进入双源模式 / 换片 / 第二版 / 处理范围变化后调用）。 */
 export function planAiSegments() {
+  // 手动批次是用户显式选定的工作单元：自动智能分段不得把它强行锁回 150 条一段。
+  if (ai.batchManual) {
+    ai.segments = [];
+    ai.longMode = false;
+    ai.segmentIndex = 0;
+    return;
+  }
   if (ai.kind !== 'polish' || ai.mode !== 'dual' || !dual.exists) {
     ai.segments = [];
     ai.longMode = false;
@@ -166,13 +294,15 @@ export function planAiSegments() {
   ai.segmentIndex = Math.min(ai.segmentIndex, Math.max(0, segments.length - 1));
 }
 
-/** 当前内容段（长片分段的当前段或整段处理范围）：`from`/`to` 为全片序号。 */
+/** 当前内容段（手动批次 / 长片分段的当前段 / 整段处理范围）：`from`/`to` 为全片序号。 */
 function aiContentSpan(): { from: number; to: number } {
-  const span = aiScopeSpan();
+  const batch = aiBatchSpan();
+  if (ai.batchManual) return { from: batch.from, to: batch.to };
   if (ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length) {
     const segment = ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)];
     return { from: segment.from, to: segment.to };
   }
+  const span = aiScopeSpan();
   return { from: span.from || 1, to: span.to || Math.max(1, app.cues.length) };
 }
 
@@ -190,6 +320,9 @@ export function resetAi() {
   ai.segmentIndex = 0;
   ai.filled = {};
   ai.longMode = false;
+  ai.batchManual = false;
+  ai.batchFrom = 1;
+  ai.batchTo = 0;
 }
 
 let aiLoadPromise: Promise<void> | null = null;
@@ -388,12 +521,13 @@ function changedIndexes(): number[] {
   return out;
 }
 
-/** 当前处理范围里的全片序号；全片时返回 null（不额外过滤）。 */
+/** 当前处理批次里的全片序号；整片且未切批次时返回 null（不额外过滤）。 */
 function scopeIndexes(): Set<number> | null {
-  if (!aiScoped()) return null;
-  const span = aiScopeSpan();
+  const span = aiRangeSpan();
+  if (!ai.batchManual && !aiScoped()) return null;
+  if (span.count <= 0) return new Set<number>();
   const set = new Set<number>();
-  for (let i = span.from; i <= span.to && span.count > 0; i += 1) set.add(i);
+  for (let i = span.from; i <= span.to; i += 1) set.add(i);
   return set;
 }
 
@@ -478,16 +612,28 @@ export async function copyAiPrompt() {
   }
   planAiSegments();
   const templateId = ai.kind === 'translate' ? promptSelectedId('translate') : '';
-  const span = aiScopeSpan();
-  const scoped = aiScoped();
+  const span = aiRangeSpan();
+  const scoped = ai.batchManual || aiScoped();
   if (scoped && !span.count) {
-    toast('这个处理范围里没有字幕：换一个章节或时间点', 'warn');
+    toast(
+      ai.batchManual
+        ? '这个批次里没有字幕：调整起始 / 结束条号'
+        : '这个处理范围里没有字幕：换一个章节或时间点',
+      'warn',
+    );
     return false;
   }
   const content = aiContentSpan();
   const segmented =
+    !ai.batchManual &&
     ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length > 0;
-  const segmentLabel = segmented ? ` · 第 ${content.from}–${content.to} 段` : scoped ? ` · ${aiScopeLabel()}` : '';
+  const where = ai.batchManual
+    ? ` · 本批第 ${content.from}–${content.to} 条`
+    : segmented
+      ? ` · 第 ${content.from}–${content.to} 段`
+      : scoped
+        ? ` · ${aiScopeLabel()}`
+        : '';
   try {
     const res = await api.getAiPrompt(ai.kind, ai.lang, templateId, {
       mode: ai.kind === 'polish' ? ai.mode : 'single',
@@ -502,7 +648,7 @@ export async function copyAiPrompt() {
       await navigator.clipboard.writeText(res.prompt);
     }
     toast(
-      `已复制「${res.template_name}」${segmentLabel}：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`,
+      `已复制「${res.template_name}」${where}：${res.count} 条字幕，${(res.chars / 1000).toFixed(1)}k 字符`,
     );
     ai.pasteOpen = true;
     ai.pasteText = '';
@@ -560,13 +706,19 @@ export async function parseAiPastedSrt() {
   }
   ai.parsing = true;
   try {
-    const span = aiScopeSpan();
-    const scoped = aiScoped();
+    const span = aiRangeSpan();
+    const scoped = ai.batchManual || aiScoped();
     if (scoped && !span.count) {
-      toast('这个处理范围里没有字幕：换一个章节或时间点', 'warn');
+      toast(
+        ai.batchManual
+          ? '这个批次里没有字幕：调整起始 / 结束条号'
+          : '这个处理范围里没有字幕：换一个章节或时间点',
+        'warn',
+      );
       return;
     }
     const segmented =
+      !ai.batchManual &&
       ai.kind === 'polish' && ai.mode === 'dual' && ai.longMode && ai.segments.length > 0;
     const segment = segmented
       ? ai.segments[Math.min(ai.segmentIndex, ai.segments.length - 1)]
@@ -581,6 +733,8 @@ export async function parseAiPastedSrt() {
       range_from: scoped ? span.from : undefined,
       range_to: scoped ? span.to : undefined,
       mode: ai.kind === 'polish' ? ai.mode : 'single',
+      // 润色恒为严格 1:1；翻译才允许按时间轴对齐（默认关闭严格模式）。
+      strict_count: ai.kind === 'translate' ? ai.strictCount : true,
     });
     let proposal = res.proposal;
     if (segment && ai.proposal && ai.proposal.items.length === proposal.items.length) {
@@ -640,11 +794,30 @@ export async function parseAiPastedSrt() {
     } else {
       ai.pasteOpen = false;
       ai.pasteText = '';
-      toast(
-        ai.kind === 'translate'
-          ? `已解析 ${res.count} 条译文，右侧就是待应用的建议`
-          : `已解析 ${res.count} 条修改，右侧就是待应用的建议`,
-      );
+      const where = ai.batchManual ? `第 ${span.from}–${span.to} 条这批` : '';
+      if (ai.kind === 'translate') {
+        const counts = res.alignment?.counts;
+        const pasted = res.alignment?.pasted ?? 0;
+        const merged = counts?.merged ?? 0;
+        const missing = counts?.missing ?? 0;
+        const outOfRange = counts?.out_of_range ?? 0;
+        const notes = [
+          merged ? `${merged} 个槽位合并覆盖` : '',
+          missing ? `${missing} 条原句空缺` : '',
+          outOfRange ? `${outOfRange} 条落在范围外` : '',
+        ].filter(Boolean);
+        const how = [
+          pasted && pasted !== res.count ? `粘贴 ${pasted} 条，按时间轴对齐` : '',
+          ...notes,
+        ].filter(Boolean).join('，');
+        toast(
+          `${where ? `${where}` : ''}已解析 ${res.count} 条译文${how ? `（${how}）` : ''}，右侧就是待应用的建议`,
+        );
+      } else {
+        toast(
+          `${where ? `${where}` : ''}已解析 ${res.count} 条修改，右侧就是待应用的建议`,
+        );
+      }
     }
     // 标记成"已加载"，避免 $effect 又去拉磁盘上的旧提案把它顶掉
     ai.loadedFor = aiContextKey();
@@ -797,14 +970,20 @@ async function startAiGeneration(kind: 'polish' | 'translate') {
     return;
   }
 
-  const span = aiScopeSpan();
-  if (aiScoped() && !span.count) {
-    toast('这个处理范围里没有字幕：换一个章节或时间点', 'warn');
+  const span = aiRangeSpan();
+  const scoped = ai.batchManual || aiScoped();
+  if (scoped && !span.count) {
+    toast(
+      ai.batchManual
+        ? '这个批次里没有字幕：调整起始 / 结束条号'
+        : '这个处理范围里没有字幕：换一个章节或时间点',
+      'warn',
+    );
     return;
   }
   ai.generating = true;
   ai.progress = 0;
-  ai.stage = aiScoped() ? `正在提交（${aiScopeLabel()}）…` : '正在提交…';
+  ai.stage = scoped ? `正在提交（第 ${span.from}–${span.to} 条）…` : '正在提交…';
   try {
     const job = await api.createAiJob(
       {
@@ -816,8 +995,8 @@ async function startAiGeneration(kind: 'polish' | 'translate') {
         lang: 'ja',
         dst_lang: kind === 'translate' ? ai.lang : '',
         mode: kind === 'polish' ? ai.mode : 'single',
-        from_index: aiScoped() ? span.from : undefined,
-        to_index: aiScoped() ? span.to : undefined,
+        from_index: scoped ? span.from : undefined,
+        to_index: scoped ? span.to : undefined,
       },
       key,
     );

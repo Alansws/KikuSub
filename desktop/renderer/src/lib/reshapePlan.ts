@@ -56,8 +56,10 @@ export interface ReshapePlan {
   /** 冻结键：媒体身份 | 做法 | 第二版身份 | 有没有稿（见 `planKey()`）。 */
   key: string;
   longMode: boolean;
-  /** 原稿坐标的分段；`longMode` 为 false 时是空数组（整片即一段）。 */
+  /** 原稿坐标的分段；`longMode` 为 false 时是空数组（整片 / 局部范围即一段）。 */
   segments: AiSegment[];
+  /** 不分段时的段 key（原稿起条号）：整片是 "1"，局部范围是范围起点。 */
+  singleKey?: string;
   /** 定计划时原稿的条数。 */
   baseTotal: number;
   /** 定计划时的 `app.cuesRevision`，外部改动侦测的基准。 */
@@ -144,7 +146,7 @@ export function appliedCount(
 ): number {
   if (!plan) return 0;
   // 短片（整片即一段）的段 key 恒为 "1"：覆盖后条数会变，起条号不会。
-  if (!plan.longMode) return applied['1'] ? 1 : 0;
+  if (!plan.longMode) return applied[plan.singleKey ?? '1'] ? 1 : 0;
   return plan.segments.filter((item) => Boolean(applied[segmentKey(item)])).length;
 }
 

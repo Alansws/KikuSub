@@ -429,6 +429,38 @@ export interface AiProposalItem {
   note?: string;
 }
 
+/** 翻译时间轴对齐的一行状态（`i` 是全片 1 基序号）。 */
+export interface AiAlignmentRow {
+  i: number;
+  /** ok = 正常对齐；merged = 合并覆盖；missing = 没匹配到译文。 */
+  state: 'ok' | 'merged' | 'missing';
+  text?: string;
+  /** 起止任一端与原文的最大偏差（秒）；> 0.5 高亮。 */
+  drift?: number;
+  label?: string;
+  /** 被并入哪一条（全片序号）；只有「被合并覆盖」的槽位有值。 */
+  merged_into?: number | null;
+  /** 这一条译文覆盖到哪一条（全片序号）；只有合并的主条目有值。 */
+  merged_to?: number | null;
+}
+
+/** 翻译提案的时间轴对齐摘要：界面高亮与计数都用它。 */
+export interface AiAlignment {
+  from: number;
+  to: number;
+  /** 粘贴内容实际解析到的条数（可与原批不同）。 */
+  pasted?: number;
+  rows: AiAlignmentRow[];
+  counts: {
+    ok: number;
+    merged: number;
+    missing: number;
+    drift: number;
+    out_of_range: number;
+  };
+  warnings: string[];
+}
+
 /** AI 提案（`proposal.json`）。in-app 与外部 skill 产出的是同一份结构。 */
 export interface AiProposal {
   version: number;
@@ -450,6 +482,8 @@ export interface AiProposal {
   created_at?: number;
   chunks?: number;
   glossary?: { src: string; dst: string }[];
+  /** 翻译手动通道的时间轴对齐结果（严格模式关闭且条数不同时才有）。 */
+  alignment?: AiAlignment;
   items: AiProposalItem[];
 }
 
@@ -679,6 +713,8 @@ export interface ReshapeReplaceInfo {
   count_before: number;
   changed: boolean;
   dropped_translations: string[];
+  /** 局部重排后跟着平移的译文轨（范围外头部 / 尾部保持对齐）。 */
+  shifted_translations?: string[];
 }
 
 export interface ReshapeApplyPayload extends CueSnapshot {
@@ -1535,6 +1571,8 @@ export const api = {
     range_from?: number;
     range_to?: number;
     mode?: 'single' | 'dual';
+    /** 翻译：false = 允许条数不同，按时间轴区间交集对齐（默认页面行为）。 */
+    strict_count?: boolean;
   }) =>
     req<{
       proposal: AiProposal;
@@ -1546,6 +1584,7 @@ export const api = {
       range_from?: number;
       range_to?: number;
       expected?: number;
+      alignment?: AiAlignment | null;
     }>('/api/ai/from-srt', {
       method: 'POST',
       body: JSON.stringify(body),

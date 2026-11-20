@@ -94,6 +94,15 @@ test('整片（不分段）模式的段 key 恒为 "1"：覆盖后条数变了�
   assert.equal(appliedCount({ '1-501': markFor({ from: 1, to: 501, replaced: 501, inserted: 400 }, 1) }, p), 0);
 });
 
+test('局部范围（不分段）的段 key 是范围起点，不是写死的 "1"', () => {
+  const p = plan([], 501);
+  p.longMode = false;
+  p.singleKey = '292';
+  const mark = markFor({ from: 292, to: 486, replaced: 195, inserted: 190 }, 1);
+  assert.equal(appliedCount({ '292': mark }, p), 1);
+  assert.equal(appliedCount({ '1': mark }, p), 0);
+});
+
 test('expectedTotal = 原稿条数 + 各段 delta', () => {
   const p = plan(SEGMENTS, 501);
   const applied = {

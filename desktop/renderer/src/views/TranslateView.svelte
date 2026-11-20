@@ -7,8 +7,12 @@
    */
   import Icon from '../components/Icon.svelte';
   import ClipScopePicker from '../components/ClipScopePicker.svelte';
+  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
+  import { untrack } from 'svelte';
   import {
     ai,
+    aiBatchActive,
+    aiBatchSpan,
     applyAiProposal,
     cancelAiPolish,
     copyAiPrompt,
@@ -16,12 +20,17 @@
     importAiProposal,
     loadAiProposal,
     parseAiPastedSrt,
+    resetAiBatch,
     saveAiProposalAs,
+    setAiBatch,
+    setAiBatchSize,
     setAiEdit,
     setAiKind,
     setAiLang,
     setAllAiAccept,
     startAiTranslate,
+    stepAiBatch,
+    syncAiBatchScope,
     toggleAiAccept,
   } from '../lib/aiWorkspace.svelte';
   import {
@@ -38,6 +47,11 @@
   let editing = $state(0);
   let draft = $state('');
 
+  /** 时间轴对齐结果：行号 → 状态（合并覆盖 / 空缺 / 时间戳偏差）。 */
+  const alignmentRows = $derived(
+    new Map((ai.proposal?.alignment?.rows ?? []).map((row) => [row.i, row])),
+  );
+
   const rows = $derived.by(() => {
     const map = new Map((ai.proposal?.items ?? []).map((it) => [it.i, it]));
     return app.cues.map((cue, idx) => {
@@ -53,25 +67,29 @@
         note: item?.note ?? '',
         changed: after !== cue.text,
         accepted: ai.accept[i] !== false,
+        align: alignmentRows.get(i) ?? null,
       };
     });
   });
 
-  /** 处理范围 → 全片 1 基区间；表格、复制提示词、粘贴回填、应用都只作用于它。 */
+  /** 处理范围 → 全片 1 基区间；批次默认就是整个范围。 */
   const scopeSpan = $derived(clipSpan(app.cues, exporter.clip));
   const scoped = $derived(exporter.clip.end > 0);
+  const restricted = $derived(scoped || aiBatchActive());
+  const batch = $derived(aiBatchSpan());
   const scopeTitle = $derived(
     scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
   );
+  /** 表格 / 复制 / 回填只作用于当前批次（实时索引切片，改文字不会让批次失效）。 */
   const scopedRows = $derived(
-    scoped ? rows.filter((r) => r.i >= scopeSpan.from && r.i <= scopeSpan.to) : rows,
+    batch.count > 0 ? rows.slice(batch.from - 1, batch.to) : [],
   );
   /** 磁盘上的译文建议可能来自另一个范围：提示一句，避免以为是当前这一段。 */
   const proposalRange = $derived(ai.proposal?.source.range ?? null);
   const rangeMismatch = $derived(
     Boolean(proposalRange) &&
-      scoped &&
-      (proposalRange!.from !== scopeSpan.from || proposalRange!.to !== scopeSpan.to),
+      restricted &&
+      (proposalRange!.from !== batch.from || proposalRange!.to !== batch.to),
   );
 
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
@@ -80,6 +98,18 @@
   const visible = $derived(ai.changedOnly ? scopedRows.filter((r) => r.changed) : scopedRows);
   const hasNotes = $derived(scopedRows.some((r) => r.note.trim().length > 0));
   const translateTemplates = $derived(promptItemsFor('translate'));
+  const alignment = $derived(ai.proposal?.alignment ?? null);
+  const alignmentNote = $derived.by(() => {
+    if (!alignment) return '';
+    const counts = alignment.counts;
+    const parts = [
+      counts.merged ? `合并覆盖 ${counts.merged} 个槽位` : '',
+      counts.missing ? `空缺 ${counts.missing} 条` : '',
+      counts.out_of_range ? `范围外 ${counts.out_of_range} 条` : '',
+      counts.drift ? `时间戳偏差 ${counts.drift} 条` : '',
+    ].filter(Boolean);
+    return parts.join(' · ');
+  });
 
   $effect(() => {
     void app.connected;
@@ -90,6 +120,15 @@
       void loadAiProposal();
       void loadPrompts();
     }
+  });
+
+  /** 处理范围变化 → 批次回到整段（避免把上一范围的批次带到新范围）。 */
+  $effect(() => {
+    void exporter.clip.start;
+    void exporter.clip.end;
+    void exporter.clip.label;
+    if (!app.connected) return;
+    untrack(() => syncAiBatchScope());
   });
 
   function goto(row: { i: number; start: number; end: number }) {
@@ -146,6 +185,21 @@
       <option value="en">English</option>
     </select>
     <ClipScopePicker compact label="处理范围" disabled={ai.generating} />
+    <BatchRangeBar
+      from={batch.from}
+      to={batch.to}
+      spanFrom={scopeSpan.from}
+      spanTo={scopeSpan.to}
+      count={batch.count}
+      total={app.cues.length}
+      size={ai.batchSize}
+      manual={aiBatchActive()}
+      disabled={ai.generating || ai.applying}
+      onApply={setAiBatch}
+      onStep={stepAiBatch}
+      onSize={setAiBatchSize}
+      onReset={resetAiBatch}
+    />
     {#if translateTemplates.length}
       <select
         class="lang"
@@ -230,7 +284,13 @@
 
   {#if ai.proposal}
     <div class="bar">
-      {#if scoped}
+      {#if aiBatchActive()}
+        <span class="scope-chip" title="只写回这一批；范围外与批次外译文原样保留">
+          本批 · 第 <b>{batch.from}–{batch.to}</b> 条 · {batch.count} / {app.cues.length} 条
+        </span>
+        <button class="link" onclick={resetAiBatch}>整段</button>
+        <span class="sep"></span>
+      {:else if scoped}
         <span class="scope-chip" title="只处理这一段；范围外译文原样保留">
           片段 · {scopeTitle} · <b>{scopeSpan.count}</b> / {app.cues.length} 条
         </span>
@@ -269,8 +329,17 @@
     <div class="note warn">
       <Icon name="warn" size={11} />
       <span>
-        这份译文建议覆盖第 {proposalRange.from}–{proposalRange.to} 条，当前处理范围是第
-        {scopeSpan.from}–{scopeSpan.to} 条：应用会按建议自己的范围写回。
+        这份译文建议覆盖第 {proposalRange.from}–{proposalRange.to} 条，当前处理批次是第
+        {batch.from}–{batch.to} 条：应用会按建议自己的范围写回。
+      </span>
+    </div>
+  {/if}
+
+  {#if alignment && alignmentNote}
+    <div class="note warn" class:align-out={alignment.counts.out_of_range > 0}>
+      <Icon name="warn" size={11} />
+      <span>
+        时间轴对齐：{alignmentNote}。合并覆盖的槽位保持空位，不重复写入；时间轴仍用原文。
       </span>
     </div>
   {/if}
@@ -287,7 +356,12 @@
   {#if ai.pasteOpen}
     <div class="paste">
       <div class="paste-head">
-        把模型返回的 SRT 整段粘在下面。<b>序号和时间戳会被忽略</b>，只按顺序取文本，时间轴仍用你自己的。
+        把模型返回的 SRT 粘在下面。<b>序号不参与对齐，时间轴仍用你自己的</b>。
+        {#if ai.strictCount}
+          条数必须与本批复制出去的一致，否则整批拒绝。
+        {:else}
+          条数可以不同：带时间轴的译文按时间戳区间交集挂回原句槽位，合并/空缺会高亮。
+        {/if}
       </div>
       <textarea
         class="paste-box"
@@ -297,10 +371,18 @@
       ></textarea>
       <div class="paste-actions">
         <button class="btn primary" onclick={parseAiPastedSrt} disabled={ai.parsing || !ai.pasteText.trim()}>
-          {ai.parsing ? '解析中…' : '解析成建议'}
+          {ai.parsing ? '解析中…' : aiBatchActive() ? '解析并回填本批' : '解析成建议'}
         </button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
-        <span class="paste-hint">条数必须与当前字幕一致，否则整批拒绝</span>
+        <label class="chk" title="开启后回到旧的等条数强校验：条数不符整批拒绝">
+          <input type="checkbox" bind:checked={ai.strictCount} />
+          严格要求条数一致
+        </label>
+        <span class="paste-hint">
+          {ai.strictCount
+            ? '等条数强校验'
+            : '默认关闭 · 带时间轴可少条 / 合并'}
+        </span>
       </div>
     </div>
   {/if}
@@ -347,10 +429,28 @@
     </div>
     <div class="list">
       {#each visible as row (row.i)}
-        <div class="row" class:no-notes={!hasNotes} class:changed={row.changed} class:off={!row.accepted}>
+        {@const align = row.align}
+        <div
+          class="row"
+          class:no-notes={!hasNotes}
+          class:changed={row.changed}
+          class:off={!row.accepted}
+          class:align-drift={Boolean(align && (align.drift ?? 0) > 0.5)}
+          class:align-merged={align?.state === 'merged'}
+          class:align-missing={align?.state === 'missing'}
+        >
           <div class="c-time">
             <button class="tc" onclick={() => goto(row)} title="回到核对台定位这一句">{tcShort(row.start)}</button>
             <span class="idx">#{row.i}</span>
+            {#if align && (align.state !== 'ok' || (align.drift ?? 0) > 0.5)}
+              <span
+                class="align-tag"
+                class:merged={align.state === 'merged'}
+                class:missing={align.state === 'missing'}
+                class:drift={(align.drift ?? 0) > 0.5}
+                title={align.label}
+              >{align.state === 'merged' ? '合并覆盖' : align.state === 'missing' ? '空缺' : '时间轴'}</span>
+            {/if}
           </div>
           <div class="c-side left">{row.before}</div>
           <div class="c-side right" ondblclick={() => startEdit(row.i, row.after)}>
@@ -362,9 +462,15 @@
                 onblur={() => commitEdit(row.i)}
                 spellcheck="false"
               ></textarea>
-            {:else}
+            {:else if row.after}
               <span class="txt">{row.after}</span>
               {#if ai.edits[row.i] !== undefined}<span class="tag">已手改</span>{/if}
+            {:else if align}
+              <span class="align-empty" title={align.label}>
+                {align.state === 'merged' ? '（合并覆盖，槽位置空）' : '（没有匹配到译文）'}
+              </span>
+            {:else}
+              <span class="align-empty">（空位）</span>
             {/if}
           </div>
           {#if hasNotes}<div class="c-note">{row.note}</div>{/if}
@@ -652,6 +758,46 @@
   .c-note {
     font-size: 12px;
     color: var(--text-3);
+  }
+  /* 时间轴对齐异常：行级底色 + 左侧状态标签，一眼能看出哪几行需要复核 */
+  .row.align-drift {
+    background: var(--warn-soft);
+  }
+  .row.align-merged {
+    background: var(--accent-soft);
+  }
+  .row.align-missing {
+    background: var(--danger-soft);
+  }
+  .align-tag {
+    margin-top: 2px;
+    align-self: flex-start;
+    font-size: 10.5px;
+    line-height: 15px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--fill-strong);
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .align-tag.merged {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .align-tag.missing {
+    background: var(--danger);
+    color: var(--on-accent, #fff);
+  }
+  .align-tag.drift {
+    background: var(--warn);
+    color: var(--on-accent, #fff);
+  }
+  .align-empty {
+    color: var(--text-3);
+    font-style: italic;
+  }
+  .note.align-out {
+    border-left: 3px solid var(--danger);
   }
   .pin {
     width: 22px;

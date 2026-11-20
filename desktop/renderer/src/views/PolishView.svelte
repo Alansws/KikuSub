@@ -12,12 +12,17 @@
    */
   import Icon from '../components/Icon.svelte';
   import ClipScopePicker from '../components/ClipScopePicker.svelte';
+  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
   import SourceSwitch from '../components/ai/SourceSwitch.svelte';
   import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
   import '../components/ai/ai-workbench.css';
+  import { untrack } from 'svelte';
   import {
     ai,
+    aiBatchActive,
+    aiBatchKey,
+    aiBatchSpan,
     applyAiAcceptedDiffs,
     applyAiAllDiffs,
     applyAiWholeColumn,
@@ -28,12 +33,17 @@
     loadAiProposal,
     parseAiPastedSrt,
     planAiSegments,
+    resetAiBatch,
     saveAiProposalAs,
+    setAiBatch,
+    setAiBatchSize,
     setAiEdit,
     setAiKind,
     setAiMode,
     setAllAiAccept,
     startAiPolish,
+    stepAiBatch,
+    syncAiBatchScope,
     toggleAiAccept,
     segmentKey,
   } from '../lib/aiWorkspace.svelte';
@@ -91,9 +101,15 @@
   /** 处理范围 → 全片 1 基区间；全片时区间就是 1…n。 */
   const scopeSpan = $derived(clipSpan(app.cues, exporter.clip));
   const scoped = $derived(exporter.clip.end > 0);
-  /** 范围外的行不参与表格、计数与应用（范围外的建议本来也不会被写回）。 */
+  const restricted = $derived(scoped || aiBatchActive());
+  /** 当前处理批次；默认等于整个处理范围（不碰批次控件时与旧行为一致）。 */
+  const batch = $derived(aiBatchSpan());
+  /**
+   * 表格、复制提示词、粘贴回填、应用都只作用于批次区间。批次永远夹在处理范围
+   * 之内，所以这里直接按实时 rows 切片——改前面某句的字不会让批次失效。
+   */
   const scopedRows = $derived(
-    scoped ? rows.filter((r) => r.i >= scopeSpan.from && r.i <= scopeSpan.to) : rows,
+    batch.count > 0 ? rows.slice(batch.from - 1, batch.to) : [],
   );
   const scopeTitle = $derived(
     scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
@@ -102,8 +118,8 @@
   const proposalRange = $derived(ai.proposal?.source.range ?? null);
   const rangeMismatch = $derived(
     Boolean(proposalRange) &&
-      scoped &&
-      (proposalRange!.from !== scopeSpan.from || proposalRange!.to !== scopeSpan.to),
+      restricted &&
+      (proposalRange!.from !== batch.from || proposalRange!.to !== batch.to),
   );
 
   const visibleErrors = $derived(ai.errors.filter((e) => !/还没有提案/.test(e)));
@@ -157,7 +173,9 @@
    * 点时间码去核对台再回来时（`{#key app.view}` 会重建页面）恢复到离开处。
    */
   const listKey = $derived(
-    `polish:${app.media?.id ?? ''}:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}:${scoped ? `${scopeSpan.from}-${scopeSpan.to}` : 'full'}`,
+    aiBatchKey(
+      `polish:${ai.mode}:${activeSegment ? segmentKey(activeSegment) : 'all'}`,
+    ),
   );
   let restoredKey = '';
 
@@ -202,6 +220,18 @@
       void refreshAltReview();
       void loadAiStatus();
     }
+  });
+
+  /**
+   * 处理范围变了：批次回到「整段」并清空粘贴框。
+   * 用 `untrack` 包住，避免把批次状态本身读成依赖造成自触发。
+   */
+  $effect(() => {
+    void exporter.clip.start;
+    void exporter.clip.end;
+    void exporter.clip.label;
+    if (!app.connected) return;
+    untrack(() => syncAiBatchScope());
   });
 
   async function loadAiStatus() {
@@ -347,14 +377,18 @@
           class="btn ghost"
           onclick={() => void copyAiPrompt()}
           disabled={!app.cues.length}
-          title={ai.longMode ? '复制当前分段的提示词' : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
-        >{ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
+          title={aiBatchActive()
+            ? '复制本批的提示词；只包含这一批的条目'
+            : ai.longMode
+              ? '复制当前分段的提示词'
+              : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
+        >{aiBatchActive() ? '复制本批提示词' : ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
         <span class="aiw-arrow" aria-hidden="true">→</span>
         <button
           class="btn ghost"
           onclick={togglePaste}
           disabled={!app.cues.length}
-          title={ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
+          title={aiBatchActive() || ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
         >{ai.pasteOpen ? '收起粘贴' : '粘贴回复'}</button>
         <span class="aiw-sep" aria-hidden="true">/</span>
         <button
@@ -412,8 +446,8 @@
     <div class="note warn">
       <Icon name="warn" size={11} />
       <span>
-        这份建议覆盖第 {proposalRange.from}–{proposalRange.to} 条，当前处理范围是第
-        {scopeSpan.from}–{scopeSpan.to} 条：应用只写回建议自己的范围，范围外不动。
+        这份建议覆盖第 {proposalRange.from}–{proposalRange.to} 条，当前处理批次是第
+        {batch.from}–{batch.to} 条：应用只写回建议自己的范围，范围外不动。
       </span>
     </div>
   {/if}
@@ -432,7 +466,10 @@
   {#if ai.pasteOpen}
     <div class="paste">
       <div class="paste-head">
-        {#if ai.longMode && activeSegment}
+        {#if aiBatchActive()}
+          回填<b>本批第 {batch.from}–{batch.to} 条</b>
+          <span class="aiw-hint">复制出去几条就要粘回几条（润色不允许多少条）</span>
+        {:else if ai.longMode && activeSegment}
           回填<b>第 {activeSegment.from}–{activeSegment.to} 条</b>
           <span class="aiw-hint">序号可用全局或本段 1 起</span>
         {:else}
@@ -458,7 +495,13 @@
           class="btn primary"
           onclick={() => void parsePaste()}
           disabled={ai.parsing || !ai.pasteText.trim()}
-        >{ai.parsing ? '解析中…' : ai.longMode ? '解析并回填本段' : '解析成建议'}</button>
+        >{ai.parsing
+          ? '解析中…'
+          : aiBatchActive()
+            ? '解析并回填本批'
+            : ai.longMode
+              ? '解析并回填本段'
+              : '解析成建议'}</button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
         <div class="aiw-spacer"></div>
         <span class="aiw-hint">条数不符整段拒绝</span>
@@ -467,6 +510,21 @@
   {/if}
 
   <div class="aiw-subbar">
+    <BatchRangeBar
+      from={batch.from}
+      to={batch.to}
+      spanFrom={scopeSpan.from}
+      spanTo={scopeSpan.to}
+      count={batch.count}
+      total={app.cues.length}
+      size={ai.batchSize}
+      manual={aiBatchActive()}
+      disabled={ai.generating || ai.applying}
+      onApply={setAiBatch}
+      onStep={stepAiBatch}
+      onSize={setAiBatchSize}
+      onReset={resetAiBatch}
+    />
     {#if scoped}
       <span
         class="aiw-chip accent"
