@@ -34,6 +34,10 @@ import {
 } from './api';
 import { aiBridge } from './aiBridge';
 import {
+  dualSelectionError,
+  type TranscribeOptions,
+} from './transcribeOptions';
+import {
   beginDownload,
   failedDownload,
   reduceDownload,
@@ -2442,17 +2446,6 @@ export async function exportCues(
 // 转写
 // ---------------------------------------------------------------------------
 
-export interface TranscribeOptions {
-  engine: string;
-  outputFormat: string;
-  startText: string;
-  endText: string;
-  absoluteTimeline: boolean;
-  /** 结果如何进入核对台；档位与文案见 `lib/applyMode.ts`。区间默认 `replace_range`。 */
-  apply?: 'replace' | 'append' | 'replace_range';
-  /** 整片且核对台非空时：true = 写进双引擎复核第二列，不覆盖核对台。 */
-  altReview?: boolean;
-}
 
 function engineEnabled(key: string): boolean {
   const fromSettings = app.settings?.enabled_engines;
@@ -2470,6 +2463,12 @@ export async function startTranscribe(
   }
   if (!engineEnabled(opts.engine)) {
     toast('这个引擎已停用：到「设置 → 引擎与模型」里重新启用', 'warn');
+    return;
+  }
+  const dualEngine = String(opts.dualEngine || '').trim();
+  const dualError = dualSelectionError(opts.engine, dualEngine, engineEnabled);
+  if (dualError) {
+    toast(dualError, 'warn');
     return;
   }
   const start = parseTime(opts.startText);
@@ -2510,13 +2509,16 @@ export async function startTranscribe(
   try {
     const job = await api.createTranscribeJob({
       media_id: app.media.id,
+      kind: dualEngine ? 'dual' : 'transcribe',
       engine: opts.engine,
+      secondary_engine: dualEngine || undefined,
+      secondary_params: dualEngine ? (tuning.values[dualEngine] ?? {}) : undefined,
       output_format: opts.outputFormat,
       start,
       end,
       keep_absolute_timeline: opts.absoluteTimeline,
       apply,
-      alt_review: !isRange && Boolean(opts.altReview),
+      alt_review: !dualEngine && !isRange && Boolean(opts.altReview),
       // 参数键就是 core.params 的规格键，服务端负责补默认 / 夹区间
       params: tuning.values[opts.engine] ?? {},
     });
@@ -2712,6 +2714,14 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
   await refreshQa();
   // 整片/区间转写都会改写核对表：写一份最新草稿，防丢
   scheduleDraftSave(0);
+
+  if (job.result?.dual) {
+    const { refreshAltReview: refreshAlt } = await import('./dualReview.svelte');
+    await refreshAlt();
+    app.report = await api.getReport(job.id).catch(() => null);
+    toast(String(job.result?.summary || '双引擎完成'));
+    return;
+  }
 
   if (meta?.scope === 'range') {
     // 局部转写：停在核对屏原处，把播放头放到**这次新转出的第一句**上。

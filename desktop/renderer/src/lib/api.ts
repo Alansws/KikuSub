@@ -1112,7 +1112,10 @@ export const api = {
   // ---- 任务 ----
   createTranscribeJob: (payload: {
     media_id: string;
+    kind?: 'transcribe' | 'dual';
     engine: string;
+    secondary_engine?: string;
+    secondary_params?: Record<string, unknown>;
     output_format?: string;
     save_beside?: boolean;
     start?: number | null;

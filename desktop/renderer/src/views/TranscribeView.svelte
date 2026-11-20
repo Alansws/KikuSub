@@ -47,6 +47,9 @@
   /** 核对台非空时的整片结果去向：覆盖第一版 / 放进第二列。 */
   let destination = $state<'cover' | 'alt'>('cover');
   let lastDestKey = '';
+  /** 双引擎顺序协同：第三方目的地；与「结果去向」互斥。 */
+  let dualMode = $state(false);
+  let secondaryEngine = $state('');
 
   const transcribeSub = $derived(
     app.media
@@ -86,6 +89,29 @@
   const absoluteLocked = $derived(needsAbsoluteTimeline(effectiveApply));
   const effectiveAbsolute = $derived(absoluteLocked ? true : absolute);
   const canChooseDest = $derived(app.cues.length > 0 && fullCover && effectiveApply !== 'append');
+  /** 可配对的副引擎：另一个已启用的日语 Whisper/Qwen。 */
+  const dualCandidates = $derived(
+    (app.config?.engines ?? []).filter(
+      (item) =>
+        item.enabled &&
+        item.key !== engine &&
+        (item.family === 'whisper' || item.family === 'qwen'),
+    ),
+  );
+  const defaultSecondary = $derived.by(() => {
+    const preferred = engine === 'qwen' ? 'whisper' : 'qwen';
+    return (
+      dualCandidates.find((item) => item.key === preferred)?.key ??
+      dualCandidates[0]?.key ??
+      ''
+    );
+  });
+  $effect(() => {
+    if (!dualMode) return;
+    if (!dualCandidates.some((item) => item.key === secondaryEngine)) {
+      secondaryEngine = defaultSecondary;
+    }
+  });
   /**
    * 人声分离对整片 / 区间都生效：知道总时长（有媒体）或填了完整区间就能勾。
    * 整片由服务端按 0..总时长分离；长片会自动分段，不再拦截。
@@ -158,6 +184,10 @@
     if (destructive && app.cues.length > 0) {
       if (!window.confirm(confirmDestructiveText(applyCtx))) return;
     }
+    if (dualMode && !secondaryEngine) {
+      toast('请选择副引擎', 'warn');
+      return;
+    }
     startTranscribe(
       {
         engine,
@@ -168,7 +198,8 @@
         // 的字幕从 0 秒起编号，结果是选区旧句被删、新句子插到片头。
         absoluteTimeline: effectiveAbsolute,
         apply: effectiveApply,
-        altReview: destination === 'alt' && fullCover,
+        altReview: !dualMode && destination === 'alt' && fullCover,
+        dualEngine: dualMode ? secondaryEngine : undefined,
       },
       parseTimeInput,
     );
@@ -352,7 +383,39 @@
           <span class="hint" class:warn-hint={destructive}>{applyHintText}</span>
         </div>
 
-        {#if canChooseDest}
+        {#if dualCandidates.length}
+          <label>双引擎协同</label>
+          <div class="apply-row">
+            <div class="seg">
+              <button class:on={!dualMode} onclick={() => (dualMode = false)}>
+                单引擎
+              </button>
+              <button
+                class:on={dualMode}
+                onclick={() => {
+                  destination = 'cover';
+                  dualMode = true;
+                }}
+              >
+                顺序跑副引擎
+              </button>
+            </div>
+            {#if dualMode}
+              <select bind:value={secondaryEngine} aria-label="副引擎">
+                {#each dualCandidates as item (item.key)}
+                  <option value={item.key}>{item.label}</option>
+                {/each}
+              </select>
+            {/if}
+            <span class="hint">
+              {dualMode
+                ? '主稿进核对台，副稿只进第二列；需 12GB 以上内存，两遍顺序执行'
+                : '只跑当前引擎'}
+            </span>
+          </div>
+        {/if}
+
+        {#if canChooseDest && !dualMode}
           <label>结果去向</label>
           <div class="dest">
             <div class="seg">
@@ -470,7 +533,19 @@
               {/if}
             </div>
           {/if}
-          {#if app.job.status === 'done' && app.job.result?.alt_review}
+          {#if app.job.status === 'done' && app.job.result?.dual}
+            <div class="alt-done">
+              <span class="saved-ok"><Icon name="check" size={10} />双引擎完成</span>
+              <span class="saved-path">
+                {app.job.result?.summary || '主稿已保留'}
+                {#if app.job.result?.secondary_error}
+                  · {app.job.result.secondary_error}
+                {/if}
+              </span>
+              <button class="btn tiny" onclick={() => setView('dual')}>查看第二列</button>
+              <button class="btn tiny ghost" onclick={() => setView('review')}>质检补漏</button>
+            </div>
+          {:else if app.job.status === 'done' && app.job.result?.alt_review}
             <div class="alt-done">
               <span class="saved-ok"><Icon name="check" size={10} />已放进双引擎复核</span>
               <span class="saved-path">
