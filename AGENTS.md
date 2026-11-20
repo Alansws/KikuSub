@@ -61,44 +61,48 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 | 路径 | 职责 |
 | --- | --- |
-| `desktop/` | **桌面端（当前主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首次启动向导、退出清理、AI 密钥加密（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 只依赖 fs，可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 八视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/dualReview.svelte.ts` 第二版、`lib/api.ts` 客户端。 |
-| `desktop/resources/skill/` | 随包的 Agent 技能，构建时复制进 app，由设置页「一键配置」装到 `~/.agents/skills/`。 |
-| `desktop/main/windowmode.cjs` | **窗口可见性判定（纯函数）**：截图 / `KIKUSUB_NO_WINDOW` / 开发模式默认拒绝 / 显式允许 / 打包版，五种角色的唯一实现；单测在 `desktop/test/window-mode.test.cjs`。智能体不许弹窗的代码兜底在这里。 |
-| `core/` | **算法内核包**（无任何 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 自检内核与 UI 解耦，`tests/test_core_boundary.py` 看守这条边界。**禁止在 `core/` 内 import gradio / fastapi。** |
-| `server/` | **服务层（FastAPI）**。`python -m server` 启动。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`（`<video src>` 发不了自定义头）。**禁止在 server/ 内 import UI 代码。** |
-| `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import；结构建议在 `routes_structure.py`。 |
-| `server/routes_alt_review.py` / `core/dual_review.py` | 第二版接口（GET / 导入 / DELETE / 整列覆盖）与实时对齐 diff；导入稿同构 |
+| `desktop/` | **桌面端（主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首启向导、退出清理、AI 密钥（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 八视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/api.ts` 客户端。 |
+| `desktop/resources/skill/` | 随包 Agent 技能，构建时复制进 app，设置页「一键配置」装到 `~/.agents/skills/`。 |
+| `desktop/main/windowmode.cjs` | **窗口可见性判定（纯函数）**：截图 / `KIKUSUB_NO_WINDOW` / 开发模式默认拒绝 / 显式允许 / 打包版；单测在 `desktop/test/window-mode.test.cjs`。 |
+| `core/` | **算法内核包**（无 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 与 `tests/test_core_boundary.py` 看守边界。**禁止在 `core/` 内 import gradio / fastapi。** |
+| `server/` | **服务层（FastAPI）**。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`。**禁止在 server/ 内 import UI 代码。** |
+| `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import；单句判定 `/api/ai/arbitrate`、本地档位 `/api/ai/local-model/*`；结构建议在 `routes_structure.py`。 |
+| `core/ai_arbitrate.py` / `core/ai_local_model.py` | 单句 AI 判定（第三版）：dual / same / single / blind 提示词、2048 预算、`{text, note}` 校验；本地 LM Studio 档位 2048 / 4096 / 8192 自动校准。 |
+| `server/routes_alt_review.py` / `core/dual_review.py` | 第二版接口（GET / 导入 / DELETE / 整列覆盖）与实时对齐 diff。 |
 | `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
-| `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 零样本克隆、音色仓库、懒加载/空闲卸载、权重下载。**不 import fastapi / gradio**；torch 只在 `load()` 延迟导入。 |
-| `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、从视频切片建音色、上传/重命名/删除、模型下载、`/media/tts/*` 音频流。 |
+| `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 克隆、音色仓库、懒加载 / 空闲卸载、权重下载。**不 import fastapi / gradio**；torch 只在 `load()` 延迟导入。 |
+| `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、切片建音色、增删改、模型下载、`/media/tts/*`。 |
 | `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`；结构建议在 `ai_structure.py`。 |
 | `core/ai_client.py` | OpenAI 兼容 urllib 客户端；本地空 Key；判定/重载在 `ai_arbitrate.py` / `ai_local_model.py`。 |
-| `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间。 |
-| `core/i18n.py` | 双语排版的唯一构造：`bilingual_cues()`（一条两行，烧录/叠加层）与 `bilingual_entries()`（每语种一条，字幕交付文件）。 |
-| `core/transcribe.py` | 共用字幕数据结构/格式、时间解析、FFmpeg 音频抽取、Anime Whisper、Silero VAD 和启发式分句。 |
-| `core/qwen_ctc.py` | Qwen3-ASR 模型推理、CTC 对齐头、日语断句动态规划（含 P1-1 词边界成本）、字幕劈词修复、编码特征复用。 |
-| `core/audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台波形共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。partial 文件名带 pid + 随机后缀，支持取消。 |
-| `core/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同一时间只允许一个重任务，取消只能由发起它的会话发出。AI 润色/翻译也走这里，与转写共用单槽。 |
-| `core/procutil.py` | 可取消、带超时的子进程执行器（Popen + 读线程 + terminate/kill），ffmpeg/ffprobe 统一走这里。 |
-| `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理与后台线程 excepthook。 |
+| `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间；支持 `from_index` / `to_index` 片段范围与手动批次。 |
+| `core/i18n.py` | 双语排版唯一构造：`bilingual_cues()`（一条两行）与 `bilingual_entries()`（每语种一条）。 |
+| `core/transcribe.py` | 字幕结构 / 格式、时间解析、FFmpeg 抽取、Anime Whisper、Silero VAD 与启发式分句。 |
+| `core/qwen_ctc.py` | Qwen3-ASR 模型推理、CTC 对齐头、日语断句动态规划、字幕劈词修复、编码特征复用。 |
+| `core/short_clip.py` | 核对台短选区「轻声兜底」：降阈值重试 → 整段送引擎（只服务人工框选 / 单句重转）。 |
+| `core/audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。 |
+| `core/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同时只允许一个重任务，取消只能由发起会话发出。 |
+| `core/procutil.py` | 可取消、带超时的子进程执行器（Popen + 读线程 + terminate/kill）；ffmpeg/ffprobe 统一走这里。 |
+| `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理、后台 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
-| `tools/eval/` | 评测台：`score_srt.py` 纯标准库打分（CER/块准确率/劈词计数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 数字基线。改断句或 VAD 参数前后必须跑同一区间；素材用 `--fixtures` 指（不随仓库）。 |
-| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（一条命令：按需重打 sidecar → 构建渲染层 → 装配；**默认不打开**，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
-| `core/presets.py` | `presets.json` 的校验、向后兼容读取和原子写入。 |
-| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、必需文件、安装检测、`family`（whisper / qwen / sherpa）、`reviewable`（能否做窗口复核）与 `file_tag` / `legacy_tags`（产物文件名标签）。设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象并提供 `ensure_model(progress_cb)`。 |
-| `core/sherpa_asr.py` | 两个中文引擎的推理外壳（SenseVoice-Small / FireRedASR2-AED，sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
-| `core/text_cues_zh.py` | 中文分句的唯一实现（纯函数，无 torch）：token→字符时间轴、标点/停顿/字数切条。改中文断句口径先改这里的测试。 |
-| `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补；按字符偏移插回原文（不改英文大小写）。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
-| `core/model_fetch.py` | 可选权重的 HF 下载入口（直连失败才走镜像）；SenseVoice / FireRed / FireRedPunc 共用，别再写第二份重试逻辑。 |
-| `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 把界面键映射成引擎 dataclass 字段。新增引擎参数只改这里，前端不用动。 |
-| `core/settings.py` | 应用级设置（启用的引擎、AI 的 base_url / model / 分块参数），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
-| `server/routes_settings.py` | 设置/引擎/诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics`、`/api/diagnostics/log/clear`。 |
-| `core/prompts.py` | 提示词模板库：五分类、`{{SRT_A}}` / `{{SRT_B}}` 等占位符、原子读写。 |
-| `server/routes_prompts.py` | 提示词模板接口：`/api/prompts`（读取/新建/改/选中/删除/恢复内置）。 |
-| `core/video_export.py` | 成片导出：探测、分辨率/码率规划、Pillow 字幕精灵 + ffmpeg crop/overlay 硬字幕、软字幕/仅封装。 |
+| `tools/eval/` | 评测台：`score_srt.py` 打分（CER / 块准确率 / 劈词数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 基线。改断句 / VAD 前后必须跑同一区间；素材用 `--fixtures`。 |
+| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
+| `core/presets.py` | `presets.json` 的校验、兼容读取与原子写入。 |
+| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、安装检测、`family`、`reviewable`、`file_tag` / `legacy_tags`；设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象。 |
+| `core/sherpa_asr.py` | 两个中文引擎推理外壳（sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
+| `core/text_cues_zh.py` | 中文分句唯一实现（纯函数）：token→字符时间轴、标点 / 停顿 / 字数切条；改口径先改这里。 |
+| `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补，按字符偏移插回原文。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
+| `core/model_fetch.py` | 可选权重 HF 下载入口（直连失败才走镜像）；SenseVoice / FireRed / FireRedPunc 共用。 |
+| `core/params.py` | 可调参数规格表（`whisper.*` / `qwen.*` / `sensevoice.*` / `firered.*`）；`config_kwargs()` 映射界面键到引擎字段。新增参数只改这里。 |
+| `core/settings.py` | 应用级设置（引擎、AI base_url / model / 分块；判定覆盖 / 档位 / 自动判定），原子写 `settings.json`（`KIKUSUB_SETTINGS_PATH` 可覆盖）。**AI Key 不在其中**。 |
+| `server/routes_settings.py` | 设置 / 引擎 / 诊断接口：`/api/settings`、`/api/engines/*`、`/api/log`、`/api/diagnostics*`。 |
+| `core/prompts.py` | 提示词模板库：五分类、`{{SRT_A}}` 占位符、原子读写。 |
+| `server/routes_prompts.py` | 提示词模板接口：`/api/prompts`（增删改 / 恢复内置）。 |
+| `core/video_export.py` | 成片导出：探测、分辨率 / 码率规划、Pillow 精灵 + ffmpeg 硬字幕、软字幕 / 仅封装；片段导出按 `clip_range` 归零。 |
+| `core/clip_range.py` | 片段范围纯函数（`clip_window` / `select_cues_in_range` / `shift_*` / `clip_tag`），润色 / 翻译 / 导出共用。 |
+| `core/chapters.py` / `server/routes_chapters.py` | 章节 / 时刻点：衔接防重叠、按媒体指纹落盘、`ffmetadata_text`；`/api/chapters` 整表保存 = 一步历史。 |
 | `server/routes_export.py` | 成片导出接口：`/api/export/options`、`/api/export/plan`、`/api/export`。 |
-| `presets.json` | 用户持久化的命名调参预设；属于运行数据，修改其 schema 时要兼容旧内容。 |
-| `models/` | 模型缓存。`anime-whisper/` 与 `qwen3-asr-ja-anime/` 均可能很大，不应作为普通源码改动。 |
+| `presets.json` | 命名调参预设；运行数据，改 schema 要兼容旧内容。 |
+| `models/` | 模型缓存；`anime-whisper/` 与 `qwen3-asr-ja-anime/` 很大，不作普通源码改动。 |
 | `outputs/` | 生成的字幕样例和运行产物。 |
 | `README.md` / `README_EN.md` / `CONTRIBUTING.md` | 面向用户与贡献者的说明；改变用户可见行为时同步更新。 |
 
