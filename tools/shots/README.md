@@ -154,6 +154,21 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_clip_scope.mjs
 [ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.8 与
 [export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
 
+## 手动分批 / 译文时间轴对齐 / 局部重排回归
+
+润色页手动批次（1–2 → 下一批 → 3–4，复制 / 粘回只含本批，润色仍严格等条数）、
+翻译页默认按时间轴对齐（4 条原文贴 3 条：合并覆盖 / 空缺 / 范围外高亮，严格开关
+打开后回到 422）、断句重排页接入处理范围（越界高亮、只替换本段、范围外尾部译文
+保持对齐，总条数 6 → 5）。
+
+```bash
+# 沙箱 / CI 环境
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_batch_and_align.mjs
+```
+
+截图落在系统临时目录的 `kikusub-batch-align/batch-align.png`。契约口径见
+[ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.9–§3.7.11。
+
 ## 设置页专用矩阵
 
 设置页的取证要「先切主题、再切页签」（主题卡只在外观页里），所以单独一个脚本：
