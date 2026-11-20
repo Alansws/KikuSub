@@ -26,11 +26,53 @@ MIN_DURATION_S = 0.35
 MAX_SUGGESTIONS = 50
 #: 副稿文本在主稿里已有高度相似句时，视为断句差异而非漏句。
 DUPLICATE_SIMILARITY = 0.85
+#: 只在候选句前后这个邻域里比对主稿相似句：长片里「はい」这类短句会重复出现，
+#: 全片比对会把后面真正的新漏句误杀。
+LOCAL_DEDUPE_S = 5.0
+#: 与主稿任何字幕的时间交集达到「候选时长的 20%」或「0.15s」就绝不作为补漏：
+#: 否则采纳后会在核对台产生重叠双字幕，应该留在 DualView 里当断句差异看。
+PRIMARY_OVERLAP_RATIO = 0.20
+PRIMARY_OVERLAP_MIN_S = 0.15
+#: 纯发声碎片（喘息/笑声/拟声）不进补漏队列：它们属于 nonverbal 质检，
+#: 作为台词插回核对台只会制造噪声。保守地只识别「ん/ふ/っ/ー/…」这类无实义音。
+_VOCALIZATION_CHARS = set("んふっッー〜~…、。！？!? 　")
+#: 动漫/ASMR 里常见的拟声词标记；只有全假名（无汉字）时才据此判纯发声。
+_NONVERBAL_MARKERS = (
+    "ぺろ",
+    "はむ",
+    "んふ",
+    "んっ",
+    "ふぅ",
+    "はぁ",
+    "すぅ",
+    "ちゅ",
+    "ぱく",
+    "ごく",
+    "くちゅ",
+    "ずぷ",
+    "ぷちゅ",
+    "ぬちゅ",
+)
 
 
 def _content_chars(text: str) -> int:
     """只数字母/数字/假名/汉字；标点、省略号、空白不算「有台词」。"""
     return sum(1 for ch in str(text or "") if unicodedata.category(ch)[0] in {"L", "N"})
+
+
+def _has_kanji(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _is_vocalization_only(text: str) -> bool:
+    compact = "".join(ch for ch in str(text or "") if not ch.isspace())
+    if not compact:
+        return True
+    if len(compact) <= 4 and all(ch in _VOCALIZATION_CHARS for ch in compact):
+        return True
+    # 「ぺろっ」「はむぅ…」「んっ…んんっ…」这类全假名拟声不是台词；
+    # 一旦带汉字（「必要だね」）就交回正常文本判断，避免误杀。
+    return not _has_kanji(compact) and any(mark in compact for mark in _NONVERBAL_MARKERS)
 
 
 def _nearest_text(cue: SubtitleCue, cues: list[SubtitleCue]) -> str:
@@ -45,13 +87,42 @@ def _nearest_text(cue: SubtitleCue, cues: list[SubtitleCue]) -> str:
     return nearest.text
 
 
-def _already_in_primary(text: str, cues: list[SubtitleCue]) -> bool:
-    """副稿这句是否只是主稿某句的断句/时间差异。"""
+def _overlaps_primary(cue: SubtitleCue, primary: list[SubtitleCue]) -> bool:
+    """候选是否与主稿字幕有明显时间交集。
+
+    这类候选多半只是两边断句点不同；一旦作为补漏插回，就会和主稿那条叠在一起。
+    """
+    duration = max(0.0, float(cue.end) - float(cue.start))
+    if duration <= 0:
+        return False
+    for other in primary:
+        overlap = min(float(cue.end), float(other.end)) - max(
+            float(cue.start), float(other.start)
+        )
+        if overlap <= 0:
+            continue
+        if overlap / duration >= PRIMARY_OVERLAP_RATIO or overlap >= PRIMARY_OVERLAP_MIN_S:
+            return True
+    return False
+
+
+def _similar_nearby_in_primary(
+    text: str,
+    cue: SubtitleCue,
+    primary: list[SubtitleCue],
+    *,
+    window_s: float = LOCAL_DEDUPE_S,
+) -> bool:
+    """只在候选句 ±window_s 内找主稿相似句，避免全片比对误杀重复短句。"""
     target = normalize_text(text)
     if not target:
         return True
-    for cue in cues:
-        if text_similarity(target, cue.text) >= DUPLICATE_SIMILARITY:
+    for other in primary:
+        if float(other.end) < float(cue.start) - window_s:
+            continue
+        if float(other.start) > float(cue.end) + window_s:
+            continue
+        if text_similarity(target, other.text) >= DUPLICATE_SIMILARITY:
             return True
     return False
 
@@ -75,7 +146,7 @@ def build_ensemble_suggestions(
 
     review = build_review(primary, secondary)
     out: list[dict] = []
-    seen: set[str] = set()
+    recent: list[tuple[float, str]] = []
     for row in review["rows"]:
         if row["kind"] != "only_b":
             continue
@@ -86,11 +157,23 @@ def build_ensemble_suggestions(
         text = str(cue.text or "").strip()
         normalized = normalize_text(text)
         duration = max(0.0, float(cue.end) - float(cue.start))
-        if _content_chars(text) < MIN_TEXT_CHARS or duration < MIN_DURATION_S:
+        if (
+            _content_chars(text) < MIN_TEXT_CHARS
+            or duration < MIN_DURATION_S
+            or _is_vocalization_only(text)
+        ):
             continue
-        if normalized in seen or _already_in_primary(text, primary):
+        if _overlaps_primary(cue, primary):
             continue
-        seen.add(normalized)
+        if _similar_nearby_in_primary(text, cue, primary):
+            continue
+        # 副稿自身只在 ±LOCAL_DEDUPE_S 内去重：远距离同文重复是正常台词。
+        if any(
+            abs(float(cue.start) - start) <= LOCAL_DEDUPE_S and normalized == seen_text
+            for start, seen_text in recent
+        ):
+            continue
+        recent.append((float(cue.start), normalized))
         out.append({
             "start": round(float(cue.start), 3),
             "end": round(float(cue.end), 3),
