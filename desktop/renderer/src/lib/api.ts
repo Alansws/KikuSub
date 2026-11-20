@@ -265,8 +265,9 @@ export interface ParamSpec {
   key: string;
   label: string;
   engine: string;
-  kind: 'bool' | 'float' | 'int';
-  default: number | boolean;
+  kind: 'bool' | 'float' | 'int' | 'enum';
+  default: number | boolean | string;
+  choices?: string[] | null;
   group: string;
   min: number | null;
   max: number | null;
@@ -1051,7 +1052,7 @@ export const api = {
       engines: {
         key: string;
         groups: { group: string; params: ParamSpec[] }[];
-        defaults: Record<string, number | boolean>;
+        defaults: Record<string, number | boolean | string>;
       }[];
     }>('/api/params'),
 
@@ -1064,7 +1065,7 @@ export const api = {
   },
 
   getPreset: (name: string, engine: string) =>
-    req<{ name: string; engine: string | null; values: Record<string, number | boolean> }>(
+    req<{ name: string; engine: string | null; values: Record<string, number | boolean | string> }>(
       `/api/presets/${encodeURIComponent(name)}?engine=${encodeURIComponent(engine)}`,
     ),
 

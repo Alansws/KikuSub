@@ -8,8 +8,9 @@
   const entry = $derived(tuning.schema?.find((e) => e.key === engine) ?? null);
   const values = $derived(tuning.values[engine] ?? {});
 
-  function display(spec: ParamSpec, value: number | boolean): string {
+  function display(spec: ParamSpec, value: number | boolean | string): string {
     if (spec.kind === 'bool') return value ? '开' : '关';
+    if (spec.kind === 'enum') return String(value);
     const num = Number(value);
     if (spec.step && spec.step < 0.1) return num.toFixed(2);
     if (spec.step && spec.step < 1) return num.toFixed(2);
@@ -34,7 +35,19 @@
         <div class="grid">
           {#each group.params as spec (spec.key)}
             {@const value = values[spec.key] ?? spec.default}
-            {#if spec.kind === 'bool'}
+            {#if spec.kind === 'enum'}
+              <label class="select-row" title={spec.help}>
+                <span class="label">{spec.label}</span>
+                <select
+                  value={String(value)}
+                  onchange={(e) => setParam(engine, spec.key, e.currentTarget.value)}
+                >
+                  {#each spec.choices ?? [] as choice (choice)}
+                    <option value={choice}>{choice}</option>
+                  {/each}
+                </select>
+              </label>
+            {:else if spec.kind === 'bool'}
               <label class="switch-row" title={spec.help}>
                 <span class="label">{spec.label}</span>
                 <button
@@ -116,6 +129,25 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--sp-2) 18px;
+  }
+
+  .select-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    height: 26px;
+    padding: 0 2px;
+  }
+  .select-row select {
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--fill-strong);
+    border: 0;
+    border-radius: 5px;
+    padding: 3px 6px;
+    max-width: 110px;
   }
 
   .switch-row {

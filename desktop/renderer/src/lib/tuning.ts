@@ -8,7 +8,7 @@
  * 于是内置默认值一改，老用户界面上永远是旧默认（2026-11-13 踩到）。
  */
 
-export type ParamValues = Record<string, number | boolean>;
+export type ParamValues = Record<string, number | boolean | string>;
 
 export type EngineParamSchema = { key: string; defaults: ParamValues };
 

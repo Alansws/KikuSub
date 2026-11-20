@@ -912,8 +912,8 @@ export async function deleteTtsVoice(voiceId: string) {
 
 /** 调参状态：schema 来自 /api/params，values 按引擎分开存并落 localStorage。 */
 export const tuning = $state({
-  schema: null as { key: string; groups: { group: string; params: ParamSpec[] }[]; defaults: Record<string, number | boolean> }[] | null,
-  values: {} as Record<string, Record<string, number | boolean>>,
+  schema: null as { key: string; groups: { group: string; params: ParamSpec[] }[]; defaults: Record<string, number | boolean | string> }[] | null,
+  values: {} as Record<string, Record<string, number | boolean | string>>,
   presets: [] as { name: string; engine: string | null }[],
   activePreset: '',
   activePresetEngine: '', // 属于哪个引擎；切引擎时清掉，避免拿 A 的预设删 B
@@ -2808,7 +2808,7 @@ export async function loadTuning() {
   }
 }
 
-export function setParam(engine: string, key: string, value: number | boolean) {
+export function setParam(engine: string, key: string, value: number | boolean | string) {
   if (!tuning.values[engine]) tuning.values[engine] = {};
   tuning.values[engine][key] = value;
   tuning.activePreset = tuning.activePresetEngine = ''; // 手改之后就不再算「某个预设」了
