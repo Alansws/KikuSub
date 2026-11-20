@@ -46,7 +46,11 @@ from silero_vad import load_silero_vad
 
 from . import audio_cache
 from . import timing_repair
-from .vad import detect_speech_stamps, vad_neg_threshold  # noqa: F401 - re-export for sherpa_asr
+from .vad import (  # noqa: F401 - re-export for sherpa_asr
+    detect_speech_stamps,
+    resolve_backend,
+    vad_neg_threshold,
+)
 from .coverage import find_coverage_spans
 from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
@@ -345,10 +349,10 @@ class WhisperVadConfig:
     # 借用 Qwen 的 CTC 对齐头拿逐字时间（core/align_layer.py）。
     # 默认关：要多常驻一份 Qwen 权重（MPS 4.3 GB），而且要先装 Qwen 引擎。
     use_ctc_alignment: bool = False
-    # VAD 后端：auto = 跟随 KIKUSUB_VAD_BACKEND（A/B）/ 默认 Silero 20s；
-    # silero20 / silero10 / whisperseg 为显式选择。TEN 仅 A/B 环境变量可用，
-    # 不进参数面板（负样本误报过高）。
-    vad_backend: str = "auto"
+    # VAD 切分器：silero（20s 窗，无额外权重）/ whisperseg（推荐，114MB）。
+    # 默认用 WhisperSeg：同区间 A/B 中 CER 更低、插入更少、端到端更快，
+    # 且对 BGM/环境音几乎不误检。缺权重时会在 VAD 阶段下载并报进度。
+    vad_backend: str = "whisperseg"
     # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
     # 见 `extend_segment_onsets()` 与路线文档 P0-1。
     onset_pad_ms: int = 0
@@ -1355,7 +1359,9 @@ def merge_fragmented_cues(
                 and tail
                 and tail[-1] not in _TERMINAL_PUNCT
                 and len(combined) <= max_cue_chars
-                and cue.end - prev.start <= max_cue_dur + 0.6
+                # 合并后的上限必须就是 max_cue_dur：旧的 +0.6 容差会让
+                # split_text_into_cues 刚切到 4.2s 的两段又并成 4.4–4.8s 超长条。
+                and cue.end - prev.start <= max_cue_dur
             ):
                 merged[-1] = SubtitleCue(start=prev.start, end=cue.end, text=combined)
                 continue
@@ -1656,6 +1662,7 @@ class AnimeWhisperEngine:
         self.last_missed_spans = []
         self.last_coverage_spans = []
         self.last_segment_stats = {}
+        backend = resolve_backend(getattr(cfg, "vad_backend", None))
         stamps = detect_speech_stamps(
             audio,
             self._vad,
@@ -1663,8 +1670,14 @@ class AnimeWhisperEngine:
             min_speech_ms=int(cfg.min_speech_ms),
             min_silence_ms=int(cfg.min_silence_ms),
             speech_pad_ms=int(cfg.speech_pad_ms),
-            backend=str(getattr(cfg, "vad_backend", "auto") or "auto"),
+            backend=backend,
+            progress_cb=(
+                (lambda ratio, message: progress_cb(0.02 + 0.06 * ratio, message))
+                if progress_cb
+                else None
+            ),
         )
+        self.last_segment_stats["vad_backend"] = backend
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(
             stamps,

@@ -1,21 +1,23 @@
-"""VAD 后端抽象：Silero（现状）/ TEN-VAD / WhisperSeg。
+"""VAD 后端：Silero（20s 分窗，零额外权重）/ WhisperSeg（ONNX，30s 分窗）。
 
-A/B 阶段只通过 ``KIKUSUB_VAD_BACKEND`` 切换，不写进参数表、不进设置页：
+只保留经过同区间 A/B 验证的两个后端：
 
-- ``silero``（默认，20s 窗）
-- ``silero10``（同一模型，10s 窗；零依赖的召回上限对照）
-- ``ten``（ten-vad，1.2MB wheel + 745KB dylib）
-- ``whisperseg``（WhisperSeg JA-ASMR ONNX，30s 窗 + 20ms 帧）
+- ``silero``：旧默认。Silero 官方模型 + 20s 分窗，无需额外权重；
+- ``whisperseg``：WhisperSeg JA-ASMR ONNX。负样本（BGM/环境音）误检 0%，
+  同一区间 CER 更低、插入更少、端到端更快；首次使用要下 114MB 权重。
 
-所有后端只负责产出 KikuSub 统一的 ``[{"start": 样本下标, "end": 样本下标}]``；
-之后的 ``merge_vad_segments`` / ``extend_segment_onsets`` 完全同源，这样 A/B
-比较的是 VAD 本身，而不是后处理。
+TEN-VAD 与 Silero 10s 窗的对照实现留在 ``tools/eval/``，不再进核心内核：
+TEN 在 BGM 上把 85–98% 的非人声判成语音，Silero 10s 则用 +2.4pt CER 换召回，
+两者都不该成为用户能选到的产品选项。
+
+所有后端只产出 KikuSub 统一的 ``[{"start": 样本下标, "end": 样本下标}]``；
+之后的 ``merge_vad_segments`` / ``extend_segment_onsets`` 完全同源。
 
 设计约束：
-- 不在 import 期加载任何模型；TEN/WhisperSeg 只在真正被选中时加载。
-- 默认后端与旧实现逐字节一致（Silero 分窗循环原样保留）。
-- 任何缺失依赖/权重都抛 ``VadBackendError``，由上层转成可读错误，不能静默回退
-  ——静默回退会让 A/B 数字归错因。
+- 不在 import 期加载任何模型；WhisperSeg 只在真正被选中时加载。
+- Silero 路径与旧实现逐字节一致（分窗循环原样保留），只作为可选兼容。
+- 缺失依赖/权重抛 ``VadBackendError``，由上层转成可读错误；下载失败不会静默
+  改用另一个后端——那会让用户以为切分器已生效，也会让 A/B 数字归错因。
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import model_fetch
 from .paths import MODELS_DIR
 
 log = logging.getLogger(__name__)
@@ -37,16 +40,23 @@ VAD_WINDOW_OVERLAP_S = 1.0
 # 与 Silero 默认迟滞一致：退出阈值 = 进入阈值 - 0.15，且不低于 0.02。
 VAD_NEG_THRESHOLD_FLOOR = 0.02
 
-BACKENDS = ("silero", "silero10", "ten", "whisperseg")
-DEFAULT_BACKEND = "silero"
+BACKENDS = ("silero", "whisperseg")
+DEFAULT_BACKEND = "whisperseg"
 ENV_BACKEND = "KIKUSUB_VAD_BACKEND"
 ENV_WHISPERSEG_DIR = "KIKUSUB_WHISPERSEG_DIR"
 
+WHISPERSEG_KEY = "whisperseg"
+WHISPERSEG_LABEL = "WhisperSeg 切分器"
+WHISPERSEG_REPO = "TransWithAI/Whisper-Vad-EncDec-ASMR-onnx"
+WHISPERSEG_FEATURE_REPO = "openai/whisper-base"
+WHISPERSEG_FILES = ("model.onnx", "preprocessor_config.json")
+WHISPERSEG_APPROX_BYTES = 114 * 1024 * 1024
+
 _WHISPERSEG_CHUNK_S = 30.0
 _WHISPERSEG_FRAME_SAMPLES = 320  # 20ms @16k
-_TEN_HOP = 256  # 16ms @16k
 
 _lock = threading.Lock()
+_download_lock = threading.Lock()
 _silero_model = None
 _whisperseg_bundle = None
 
@@ -61,17 +71,20 @@ def vad_neg_threshold(threshold: float) -> float:
 
 
 def resolve_backend(name: str | None = None) -> str:
-    """解析后端名；显式参数优先于环境变量，非法值直接报错。"""
+    """解析后端名；显式参数优先于环境变量，非法值直接报错。
+
+    ``auto`` 只为旧预设/旧环境变量保留：它等价于默认后端，不再是用户可选值。
+    """
     raw = (name if name is not None else os.environ.get(ENV_BACKEND, "")).strip().lower()
     if not raw or raw == "auto":
         raw = (os.environ.get(ENV_BACKEND, "") or "").strip().lower()
         if not raw or raw == "auto":
             return DEFAULT_BACKEND
-    aliases = {"silero20": "silero", "whisper_seg": "whisperseg", "ten-vad": "ten"}
+    aliases = {"silero20": "silero", "whisper_seg": "whisperseg"}
     raw = aliases.get(raw, raw)
     if raw not in BACKENDS:
         raise VadBackendError(
-            f"未知 VAD 后端 {raw!r}；可选 {', '.join(BACKENDS)}（环境变量 {ENV_BACKEND}）"
+            f"未知 VAD 后端 {raw!r}；可选 {', '.join(BACKENDS)}"
         )
     return raw
 
@@ -215,149 +228,135 @@ def _frames_to_stamps(
     return out
 
 
-
-def _flag_runs_to_stamps(
-    flags: np.ndarray,
-    *,
-    frame_samples: int,
-    total_samples: int,
-    min_speech_ms: int,
-    min_silence_ms: int,
-    speech_pad_ms: int,
-) -> list[dict]:
-    """把逐帧 0/1 判决转成 stamps。
-
-    TEN-VAD 自己已经在 C 层做了迟滞，输出 flag 就是最终判决；再套一层
-    「prob < threshold-0.15 才关闭」会把长段音乐/底噪连成整片——实测 0.35 阈值
-    下语音占比会从 40% 虚涨到 94%。这里只做最短语音、最短静音与留白。
-    """
-    flags = np.asarray(flags, dtype=bool).reshape(-1)
-    if flags.size == 0:
-        return []
-    frame_ms = frame_samples * 1000.0 / SAMPLE_RATE
-    min_speech_frames = max(1, int(round(min_speech_ms / frame_ms)))
-    min_silence_frames = max(1, int(round(min_silence_ms / frame_ms)))
-
-    runs: list[list[int]] = []
-    start = None
-    for i, on in enumerate(flags):
-        if on and start is None:
-            start = i
-        elif not on and start is not None:
-            runs.append([start, i])
-            start = None
-    if start is not None:
-        runs.append([start, len(flags)])
-
-    merged: list[list[int]] = []
-    for run in runs:
-        if merged and run[0] - merged[-1][1] < min_silence_frames:
-            merged[-1][1] = run[1]
-        else:
-            merged.append(run)
-    merged = [r for r in merged if r[1] - r[0] >= min_speech_frames]
-
-    pad = max(0, int(round(speech_pad_ms / frame_ms)))
-    starts = [max(0, s - pad) for s, _ in merged]
-    ends = [min(len(flags), e + pad) for _, e in merged]
-    for i in range(1, len(starts)):
-        starts[i] = max(starts[i], ends[i - 1])
-    for i in range(len(ends) - 1):
-        ends[i] = min(ends[i], starts[i + 1])
-
-    out: list[dict] = []
-    for s, e in zip(starts, ends):
-        a = max(0, min(total_samples, s * frame_samples))
-        b = max(0, min(total_samples, e * frame_samples))
-        if b > a:
-            out.append({"start": int(a), "end": int(b)})
-    return out
-
-def _ten_detect(
-    audio: np.ndarray,
-    *,
-    threshold: float,
-    min_speech_ms: int,
-    min_silence_ms: int,
-    speech_pad_ms: int,
-) -> list[dict]:
-    try:
-        import importlib
-
-        TenVad = importlib.import_module("ten_vad").TenVad
-    except Exception as exc:  # pragma: no cover - 依赖缺失
-        raise VadBackendError(
-            "TEN-VAD 不可用：需要 ten-vad（uv pip install ten-vad），"
-            "打包时还要 collect-data 并签名 dylib"
-        ) from exc
-
-    audio = np.asarray(audio, dtype=np.float32)
-    if audio.size == 0:
-        return []
-    pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
-    n = (len(pcm) // _TEN_HOP) * _TEN_HOP
-    if n <= 0:
-        return []
-    vad = TenVad(hop_size=_TEN_HOP, threshold=float(threshold))
-    flags = np.empty(n // _TEN_HOP, dtype=bool)
-    for idx, i in enumerate(range(0, n, _TEN_HOP)):
-        _prob, flag = vad.process(pcm[i : i + _TEN_HOP])
-        flags[idx] = bool(flag)
-    return _flag_runs_to_stamps(
-        flags,
-        frame_samples=_TEN_HOP,
-        total_samples=len(audio),
-        min_speech_ms=min_speech_ms,
-        min_silence_ms=min_silence_ms,
-        speech_pad_ms=speech_pad_ms,
-    )
+# --------------------------------------------------------------------------- WhisperSeg 权重
 
 
-def _whisperseg_dir() -> Path:
+def whisperseg_dir() -> Path:
     raw = (os.environ.get(ENV_WHISPERSEG_DIR) or "").strip()
-    return Path(raw).expanduser() if raw else Path(MODELS_DIR) / "whisperseg"
+    return Path(raw).expanduser() if raw else Path(MODELS_DIR) / WHISPERSEG_KEY
 
 
-def _download_whisperseg(model_dir: Path, *, need_model: bool, need_feature: bool) -> None:
-    """首次选择 WhisperSeg 时按需下载；失败转成可读错误，不静默回退。"""
-    model_dir.mkdir(parents=True, exist_ok=True)
+def _dir_bytes(directory: Path) -> int:
+    total = 0
     try:
-        from huggingface_hub import hf_hub_download, snapshot_download
+        for item in directory.rglob("*"):
+            if item.is_file():
+                try:
+                    total += item.stat().st_size
+                except OSError:
+                    continue
+    except OSError:
+        return total
+    return total
 
-        if need_model:
-            log.info("正在下载 WhisperSeg 权重（约 114MB）到 %s", model_dir)
-            snapshot_download(
-                repo_id="TransWithAI/Whisper-Vad-EncDec-ASMR-onnx",
-                local_dir=str(model_dir),
+
+def whisperseg_ready(directory: Path | None = None) -> bool:
+    target = Path(directory) if directory is not None else whisperseg_dir()
+    return all((target / name).is_file() for name in WHISPERSEG_FILES)
+
+
+def whisperseg_asset() -> dict:
+    """设置页「引擎与模型」用的只读状态；不加载模型、不联网。"""
+    directory = whisperseg_dir()
+    ready = whisperseg_ready(directory)
+    size = _dir_bytes(directory)
+    return {
+        "key": WHISPERSEG_KEY,
+        "label": WHISPERSEG_LABEL,
+        "description": "VAD 切分器：对 BGM/环境音几乎不误检，同一区间 CER 更低、转写更快。",
+        "installed": ready,
+        "model_dir": str(directory),
+        "required_files": list(WHISPERSEG_FILES),
+        "approx_bytes": WHISPERSEG_APPROX_BYTES,
+        "size_bytes": size,
+    }
+
+
+def _report_progress(progress_cb, ratio: float, message: str) -> None:
+    if progress_cb is None:
+        return
+    try:
+        progress_cb(max(0.0, min(1.0, float(ratio))), message)
+    except Exception:  # noqa: BLE001 - 进度回调失败不该打断下载
+        log.debug("WhisperSeg 进度回调失败", exc_info=True)
+
+
+def _download_whisperseg(progress_cb=None) -> None:
+    """下载缺失的 WhisperSeg 权重；直连失败走 hf-mirror（由 model_fetch 统一）。"""
+    directory = whisperseg_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    missing_model = not (directory / "model.onnx").is_file()
+    missing_feature = not (directory / "preprocessor_config.json").is_file()
+    _report_progress(progress_cb, 0.01, "正在准备 WhisperSeg 切分器权重（约 114MB）…")
+    stop = threading.Event()
+
+    def monitor() -> None:
+        # HuggingFace 下载器不回调字节进度；靠目录增长估算，只报单调值。
+        while not stop.wait(0.5):
+            ratio = min(0.96, 0.02 + _dir_bytes(directory) / WHISPERSEG_APPROX_BYTES * 0.94)
+            _report_progress(
+                progress_cb,
+                ratio,
+                f"正在下载 WhisperSeg 切分器 {_dir_bytes(directory) / 1024**2:.0f} / "
+                f"{WHISPERSEG_APPROX_BYTES / 1024**2:.0f} MB…",
+            )
+
+    watcher = threading.Thread(target=monitor, daemon=True, name="kikusub-whisperseg-dl")
+    watcher.start()
+    try:
+        if missing_model:
+            model_fetch.snapshot_download_files(
+                repo_id=WHISPERSEG_REPO,
+                dest=directory,
                 allow_patterns=["model.onnx"],
-                max_workers=2,
+                progress_cb=progress_cb,
+                label="WhisperSeg 切分器",
             )
-        if need_feature:
-            hf_hub_download(
-                repo_id="openai/whisper-base",
+        if missing_feature:
+            model_fetch.hf_hub_download_file(
+                repo_id=WHISPERSEG_FEATURE_REPO,
                 filename="preprocessor_config.json",
-                local_dir=str(model_dir),
+                dest=directory,
+                progress_cb=progress_cb,
+                label="WhisperSeg 特征配置",
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
         raise VadBackendError(
-            f"WhisperSeg 权重下载失败：{exc}；"
-            "请检查网络/代理，或手动把 model.onnx 与 preprocessor_config.json "
-            f"放到 {model_dir}（也可用 KIKUSUB_WHISPERSEG_DIR 指向已有目录）"
+            f"WhisperSeg 权重下载失败：{exc}；请在「设置 → 引擎与模型」预下载，"
+            f"或检查网络/代理。也可以把 model.onnx 与 preprocessor_config.json 手动放到 "
+            f"{directory}，或用 KIKUSUB_WHISPERSEG_DIR 指向已有目录；"
+            "在参数面板把切分器切回 Silero 20s 可先继续转写。"
         ) from exc
+    finally:
+        stop.set()
+        watcher.join(timeout=1.0)
+    if not whisperseg_ready(directory):
+        raise VadBackendError(
+            f"WhisperSeg 权重下载不完整：{directory}；"
+            "需要 model.onnx 与 preprocessor_config.json"
+        )
+    _report_progress(progress_cb, 1.0, "WhisperSeg 切分器已就绪")
 
 
-def _load_whisperseg():
+def ensure_whisperseg(progress_cb=None) -> dict:
+    """确保权重就绪（供设置页预下载）；已就绪时立即返回，不联网。"""
+    with _download_lock:
+        if not whisperseg_ready():
+            _download_whisperseg(progress_cb=progress_cb)
+    return whisperseg_asset()
+
+
+def _load_whisperseg(progress_cb=None):
     global _whisperseg_bundle
     with _lock:
         if _whisperseg_bundle is not None:
             return _whisperseg_bundle
-        model_dir = _whisperseg_dir()
-        model_path = model_dir / "model.onnx"
-        feature_path = model_dir / "preprocessor_config.json"
-        if not model_path.is_file() or not feature_path.is_file():
-            _download_whisperseg(model_dir, need_model=not model_path.is_file(),
-                                 need_feature=not feature_path.is_file())
-        if not model_path.is_file() or not feature_path.is_file():
+        if not whisperseg_ready():
+            with _download_lock:
+                if not whisperseg_ready():
+                    _download_whisperseg(progress_cb=progress_cb)
+        model_dir = whisperseg_dir()
+        if not whisperseg_ready(model_dir):
             raise VadBackendError(
                 f"WhisperSeg 权重下载不完整：{model_dir}；"
                 "需要 model.onnx 与 preprocessor_config.json"
@@ -373,7 +372,9 @@ def _load_whisperseg():
         opts.inter_op_num_threads = 1
         opts.intra_op_num_threads = 1
         session = ort.InferenceSession(
-            str(model_path), providers=["CPUExecutionProvider"], sess_options=opts
+            str(model_dir / "model.onnx"),
+            providers=["CPUExecutionProvider"],
+            sess_options=opts,
         )
         _whisperseg_bundle = (session, feature_extractor)
         return _whisperseg_bundle
@@ -386,8 +387,9 @@ def _whisperseg_detect(
     min_speech_ms: int,
     min_silence_ms: int,
     speech_pad_ms: int,
+    progress_cb=None,
 ) -> list[dict]:
-    session, feature_extractor = _load_whisperseg()
+    session, feature_extractor = _load_whisperseg(progress_cb=progress_cb)
     audio = np.asarray(audio, dtype=np.float32)
     if audio.size == 0:
         return []
@@ -426,20 +428,10 @@ def detect_speech_stamps(
     window_s: float = VAD_WINDOW_S,
     overlap_s: float = VAD_WINDOW_OVERLAP_S,
     backend: str | None = None,
+    progress_cb=None,
 ) -> list[dict]:
     """按后端产出统一 stamps；默认路径与旧 Silero 实现完全一致。"""
     name = resolve_backend(backend)
-    if name == "silero10":
-        return _silero_detect(
-            audio,
-            vad,
-            threshold=threshold,
-            min_speech_ms=min_speech_ms,
-            min_silence_ms=min_silence_ms,
-            speech_pad_ms=speech_pad_ms,
-            window_s=10.0,
-            overlap_s=overlap_s,
-        )
     if name == "silero":
         return _silero_detect(
             audio,
@@ -451,18 +443,11 @@ def detect_speech_stamps(
             window_s=window_s,
             overlap_s=overlap_s,
         )
-    if name == "ten":
-        return _ten_detect(
-            audio,
-            threshold=threshold,
-            min_speech_ms=min_speech_ms,
-            min_silence_ms=min_silence_ms,
-            speech_pad_ms=speech_pad_ms,
-        )
     return _whisperseg_detect(
         audio,
         threshold=threshold,
         min_speech_ms=min_speech_ms,
         min_silence_ms=min_silence_ms,
         speech_pad_ms=speech_pad_ms,
+        progress_cb=progress_cb,
     )

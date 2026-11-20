@@ -30,6 +30,8 @@ class ParamSpec:
     kind: str  # bool | float | int | enum
     default: bool | float | int | str
     choices: tuple[str, ...] | None = None
+    # 枚举值的友好文案；键必须覆盖 choices。前端渲染下拉时优先用它。
+    choice_labels: dict[str, str] | None = None
     group: str = "基础"
     minimum: float | None = None
     maximum: float | None = None
@@ -46,6 +48,7 @@ class ParamSpec:
             "kind": self.kind,
             "default": self.default,
             "choices": list(self.choices) if self.choices else None,
+            "choice_labels": dict(self.choice_labels) if self.choice_labels else None,
             "group": self.group,
             "min": self.minimum,
             "max": self.maximum,
@@ -69,12 +72,16 @@ SPECS: tuple[ParamSpec, ...] = (
         "空段；实测开着能同时降低错字与漏句。",
     ),
     ParamSpec(
-        "whisper.vad_backend", "VAD 切分器", WHISPER, "enum", "auto",
+        "whisper.vad_backend", "VAD 切分器", WHISPER, "enum", "whisperseg",
         group="VAD", config_field="vad_backend",
-        choices=("auto", "silero20", "silero10", "whisperseg"),
-        help="auto = 跟随 KIKUSUB_VAD_BACKEND（评测）或默认 Silero 20s。"
-        "silero10 更灵敏但误报更多；whisperseg 首次选择会自动下载约 114MB 权重，"
-        "对轻声/耳语召回最好，但长句可能变长。改用后请重跑同一区间评测。",
+        choices=("whisperseg", "silero"),
+        choice_labels={
+            "whisperseg": "WhisperSeg（推荐）",
+            "silero": "Silero 20s（兼容）",
+        },
+        help="WhisperSeg 对 BGM/环境音几乎零误检，实测 CER 更低、插入更少、转写更快；"
+        "首次使用需下载约 114MB 权重，可在「设置 → 引擎与模型」预下载。"
+        "Silero 20s 不需要额外权重，适合离线或想保持旧行为的场景。",
     ),
     ParamSpec(
         "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.25,
