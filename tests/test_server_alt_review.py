@@ -19,6 +19,7 @@ from core.subtitles import SubtitleCue  # noqa: E402
 from server.app import create_app  # noqa: E402
 from server.config import ServerConfig  # noqa: E402
 from server.jobs import JobManager  # noqa: E402
+from server.sessions import Session  # noqa: E402
 
 TOKEN = "alt-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -554,3 +555,25 @@ def test_import_alt_review_rejections(make_client, tmp_path):
         client.post("/api/alt-review/import", headers=AUTH, json={"path": str(txt)}).status_code
         == 422
     )
+
+
+def test_alt_review_range_only_replaces_inside_window(tmp_path):
+    session = Session(id="alt-range")
+    session.set_alt_review(
+        engine="whisper",
+        cues=[SubtitleCue(0.0, 1.0, "前"), SubtitleCue(10.0, 11.0, "後")],
+        media_path="",
+        output_dir=tmp_path,
+    )
+    session.set_alt_review(
+        engine="whisper",
+        cues=[SubtitleCue(5.0, 6.0, "区间内新稿")],
+        media_path="",
+        output_dir=tmp_path,
+        replace_range=(4.0, 7.0),
+    )
+    assert [(cue.start, cue.text) for cue in session.alt_review.cues] == [
+        (0.0, "前"),
+        (5.0, "区间内新稿"),
+        (10.0, "後"),
+    ]
