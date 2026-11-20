@@ -159,3 +159,19 @@ def test_bool_defaults_are_bool(engine):
     for spec in params.specs_for(engine):
         if spec.kind == "bool":
             assert isinstance(spec.default, bool), spec.key
+
+
+def test_vad_backend_enum_defaults_and_validation():
+    """VAD 后端是 enum：默认 auto，非法值回落到默认，不把界面打崩。"""
+    assert params.defaults_for("whisper")["whisper.vad_backend"] == "auto"
+    assert params.config_kwargs("whisper", {})["vad_backend"] == "auto"
+    assert params.config_kwargs(
+        "whisper", {"whisper.vad_backend": "whisperseg"}
+    )["vad_backend"] == "whisperseg"
+    # 非法值被 normalize 忽略，保留默认
+    assert params.normalize(
+        "whisper", {"whisper.vad_backend": "not-a-backend"}
+    )["whisper.vad_backend"] == "auto"
+    spec = params.BY_KEY["whisper.vad_backend"]
+    assert spec.choices == ("auto", "silero20", "silero10", "whisperseg")
+    assert spec.to_dict()["choices"] == ["auto", "silero20", "silero10", "whisperseg"]

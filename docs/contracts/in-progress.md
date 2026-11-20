@@ -23,6 +23,21 @@
   （head_removed 2 / 句首省略短叹 3 / 无静音 35 / 静音不足 0.55s 50），
   说明当前 VAD 分段本身已经够紧；旧 112 条样本是不同分段/参数下的历史产物。
 
+## P1 VAD 后端 A/B（2026-11-20 已出结论）
+
+- `core/vad.py`：新增 silero / silero10 / ten / whisperseg 四个后端，
+  `KIKUSUB_VAD_BACKEND` 做实验开关；`whisper.vad_backend` 已在参数面板暴露
+  （auto / silero20 / silero10 / whisperseg）。
+- Test 二全片：WhisperSeg 0.35 CER 10.67%（Silero20 15.48%）、插入 64（90）、
+  耗时 57.1s（127.5s）、质检 10（76）、参考条覆盖 100%、负样本 0 误报；
+  但漏块仍 13、最长条 4.70s（3.82s）、>4.3s 6（0）。
+- TEN-VAD 拒绝：负样本 97.9% 判成语音，CER 61.01%、插入 505；
+  Silero 10s 拒绝：CER 17.89%、插入 125。
+- Qwen 交叉核对：WhisperSeg 0.35 CER 12.61%（Silero 11.47%）、漏块 11（10），
+  反而变差，因此设置项只对 Whisper 开放，Qwen 继续 Silero。
+- 决策：WhisperSeg 作为**可选**切分器，默认仍 Silero 20s；长条问题留待
+  「切分上限 × CER」标定。详见 [P1-VAD后端AB实验方案-2026-11-20.md](../P1-VAD后端AB实验方案-2026-11-20.md)。
+
 ## 转录引擎标定（四引擎均已完成一轮）
 
 - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](../转录标定-AnimeWhisper-2026-11.md)

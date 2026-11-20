@@ -158,6 +158,7 @@ PY
 
 | 键 | 默认 | 作用 |
 | --- | --- | --- |
+| `whisper.vad_backend` | auto | 切分器：auto（默认 Silero 20s）/ silero20 / silero10 / whisperseg；whisperseg 首次使用自动下载约 114MB 权重，长条会变长，默认不切换 |
 | `whisper.enable_start_repair` | true | 保留 end，只把 Anime Whisper 段首的底噪/长静音按音频证据向右收；关闭 = 旧时间轴逐字节一致 |
 | `whisper.nonverbal_qa` | true | 纯喘息/笑声/拟声被字幕剔除后进质检队列（最多 20 条），不静默消失 |
 | `qwen.nonverbal_qa` | false | 同上；Qwen 对呼吸声敏感，默认关闭避免长片一次多出二十条待核，需要时手动打开；CTC 时间轴不变 |
