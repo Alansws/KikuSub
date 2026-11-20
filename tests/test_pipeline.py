@@ -215,6 +215,41 @@ def test_coverage_spans_reach_audit_payload_and_report(media, tmp_path, monkeypa
     assert result.coverage_spans
 
 
+def test_nonverbal_spans_reach_audit_payload_and_report(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+
+    class _NonverbalEngine(_FakeEngine):
+        def transcribe_file(self, media_path, **kwargs):
+            cues = super().transcribe_file(media_path, **kwargs)
+            self.last_segment_stats = {
+                "nonverbal_spans": [{
+                    "start": 4.0, "end": 5.2, "dur": 1.2,
+                    "text": "ふふっ", "rule": "sound-only", "peak": 0.2, "rms": 0.02,
+                }],
+                "nonverbal_skips": 1,
+                "start_repair": {
+                    "enabled": True, "considered": 2, "pulled": 1,
+                    "total_pull_s": 0.8, "max_pull_s": 0.8,
+                },
+            }
+            return cues
+
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(media_path=media),
+        output_dir=tmp_path,
+        engine=_NonverbalEngine(),
+    )
+    payload = json.loads(result.audit_payload)
+    assert payload["scanned"]["nonverbal"] == 1
+    nonverbal = [item for item in payload["items"] if item["kind"] == "nonverbal"]
+    assert len(nonverbal) == 1
+    assert nonverbal[0]["text"] == "ふふっ"
+    assert result.report_data["quality"]["nonverbal"] == 1
+    section_ids = [section["id"] for section in result.report_data["sections"]]
+    assert "nonverbal" in section_ids
+    assert "start_repair" in section_ids
+
+
 def test_sensevoice_uses_sherpa_dispatch_and_own_suffix(media, tmp_path, monkeypatch):
     """中文引擎走 sherpa 分支：只拿 config，不拿 qwen 的 use_alignment。"""
     _patch_dirs(monkeypatch, tmp_path)
@@ -260,7 +295,7 @@ def test_engine_family_comes_from_registry(media, tmp_path, monkeypatch):
 
 
 def test_separate_vocals_routes_engine_to_cached_vocals(media, tmp_path, monkeypatch):
-    """勾选人声分离：引擎拿到的是区间 vocals，时间轴仍按原片绝对时间。"""
+    """高级档（to_asr）：引擎拿到的是区间 vocals，时间轴仍按原片绝对时间。"""
     _patch_dirs(monkeypatch, tmp_path)
     from core import audio_cache, separate
 
@@ -284,6 +319,7 @@ def test_separate_vocals_routes_engine_to_cached_vocals(media, tmp_path, monkeyp
             start_s=10.0,
             end_s=20.0,
             separate_vocals=True,
+            separate_mode="to_asr",
         ),
         output_dir=tmp_path,
         engine=engine,
@@ -295,6 +331,88 @@ def test_separate_vocals_routes_engine_to_cached_vocals(media, tmp_path, monkeyp
     assert engine.received["end_time_s"] is None
     assert engine.received["time_offset"] == 10.0
     assert result.out_filename.startswith("episode_00m10s-00m20s")
+
+
+def test_separate_vocals_vad_only_keeps_original_audio(media, tmp_path, monkeypatch):
+    """默认档（vad_only）：ASR 仍读原声与原区间，只有 VAD 拿分离人声。"""
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import audio_cache, separate
+
+    vocals = tmp_path / "vocals.wav"
+    vocals.write_bytes(b"RIFF" + b"x" * 100)
+    seen: dict = {}
+
+    def fake_ensure(media_path, *, start, end, separator, cancel_event=None, progress_cb=None):
+        seen.update(start=start, end=end)
+        return vocals
+
+    monkeypatch.setattr(audio_cache, "ensure_vocals_wav", fake_ensure)
+    monkeypatch.setattr(separate, "available", lambda: True)
+
+    engine = _FakeEngine()
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(
+            media_path=media,
+            start_s=10.0,
+            end_s=20.0,
+            separate_vocals=True,
+        ),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+
+    assert seen == {"start": 10.0, "end": 20.0}
+    # 识别音频 = 原片 + 原区间（与未开分离逐字节同一条解码路径）。
+    assert engine.media_path == media
+    assert engine.received["start_time_s"] == 10.0
+    assert engine.received["end_time_s"] == 20.0
+    # 干净人声只作为 VAD 参考传进去。
+    assert engine.received["vad_audio_path"] == vocals
+    assert engine.received["vad_audio_path"] != engine.media_path
+    assert engine.received["time_offset"] == 10.0
+    assert result.out_filename.startswith("episode_00m10s-00m20s")
+
+
+def test_separate_mode_defaults_to_vad_only():
+    from core.pipeline import SEPARATE_MODE_VAD_ONLY, TranscribeRequest
+
+    assert TranscribeRequest(media_path=Path("x.mkv")).separate_mode == SEPARATE_MODE_VAD_ONLY
+
+
+def test_separate_mode_rejects_unknown_value(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+    from core import audio_cache, separate
+
+    monkeypatch.setattr(separate, "available", lambda: True)
+    monkeypatch.setattr(
+        audio_cache,
+        "ensure_vocals_wav",
+        lambda *a, **k: tmp_path / "vocals.wav",
+    )
+    with pytest.raises(ValueError, match="未知的人声分离用途"):
+        pipeline.run_transcription(
+            pipeline.TranscribeRequest(
+                media_path=media,
+                start_s=1.0,
+                end_s=2.0,
+                separate_vocals=True,
+                separate_mode="both",
+            ),
+            output_dir=tmp_path,
+            engine=_FakeEngine(),
+        )
+
+
+def test_plain_transcribe_never_passes_vad_audio(media, tmp_path, monkeypatch):
+    """未开分离时不多传参数：外部引擎替身/旧调用方签名不受影响。"""
+    _patch_dirs(monkeypatch, tmp_path)
+    engine = _FakeEngine()
+    pipeline.run_transcription(
+        pipeline.TranscribeRequest(media_path=media),
+        output_dir=tmp_path,
+        engine=engine,
+    )
+    assert "vad_audio_path" not in engine.received
 
 
 def test_separate_vocals_full_film_uses_whole_duration(media, tmp_path, monkeypatch):
@@ -315,7 +433,10 @@ def test_separate_vocals_full_film_uses_whole_duration(media, tmp_path, monkeypa
     engine = _FakeEngine()
     result = pipeline.run_transcription(
         pipeline.TranscribeRequest(
-            media_path=media, media_duration_s=123.5, separate_vocals=True
+            media_path=media,
+            media_duration_s=123.5,
+            separate_vocals=True,
+            separate_mode="to_asr",
         ),
         output_dir=tmp_path,
         engine=engine,

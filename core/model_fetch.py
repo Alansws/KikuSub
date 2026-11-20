@@ -1,11 +1,15 @@
 """HuggingFace 权重下载的共用入口。
 
-背景：三个可选模型（SenseVoice / FireRedASR2 / FireRedPunc）都在运行时按需下载，
-之前 `core/sherpa_asr.py` 里已经有一份「直连失败 → 换镜像重试」的逻辑。标点模型是
-第二个调用方，所以抽到这里，避免两份下载逻辑慢慢分叉。
+背景：可选模型（SenseVoice / FireRedASR2 / FireRedPunc / WhisperSeg 切分器）都在
+运行时按需下载。下载口径只留这一份：**直连失败 → 换镜像重试一次**，不要在调用方
+各自再写一份，否则重试条件、镜像开关会慢慢分叉。
 
 **只在没有显式设置 `HF_ENDPOINT` 时才回退到镜像**：用户或 CI 自己指定了镜像/代理时，
 尊重他们的选择，不要悄悄改回默认值。
+
+两个入口：
+- `snapshot_download_files()`：按 allow_patterns 下整个目录（模型权重）；
+- `hf_hub_download_file()`：只下单个文件（例如 Whisper 的 preprocessor_config.json）。
 """
 
 from __future__ import annotations
@@ -17,6 +21,21 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 MIRROR_ENDPOINT = "https://hf-mirror.com"
+
+
+def _retry_with_mirror(repo_id: str, call) -> None:
+    """执行 ``call()``；直连失败且用户没指定 endpoint 时切镜像重试一次。"""
+    try:
+        call()
+    except Exception:
+        if os.environ.get("HF_ENDPOINT"):
+            raise
+        log.warning("HuggingFace 直连失败，改用镜像重试 | repo=%s", repo_id, exc_info=True)
+        os.environ["HF_ENDPOINT"] = MIRROR_ENDPOINT
+        import huggingface_hub.constants as hub_constants
+
+        hub_constants.HF_ENDPOINT = MIRROR_ENDPOINT
+        call()
 
 
 def snapshot_download_files(
@@ -44,14 +63,29 @@ def snapshot_download_files(
         "allow_patterns": list(allow_patterns),
         "max_workers": 2,
     }
-    try:
-        snapshot_download(**kwargs)
-    except Exception:
-        if os.environ.get("HF_ENDPOINT"):
-            raise
-        log.warning("HuggingFace 直连失败，改用镜像重试 | repo=%s", repo_id, exc_info=True)
-        os.environ["HF_ENDPOINT"] = MIRROR_ENDPOINT
-        import huggingface_hub.constants as hub_constants
+    _retry_with_mirror(repo_id, lambda: snapshot_download(**kwargs))
 
-        hub_constants.HF_ENDPOINT = MIRROR_ENDPOINT
-        snapshot_download(**kwargs)
+
+def hf_hub_download_file(
+    *,
+    repo_id: str,
+    filename: str,
+    dest: Path,
+    progress_cb=None,
+    label: str = "",
+) -> Path:
+    """下载 repo 里的单个文件到 ``dest``；直连失败时用镜像重试一次。"""
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    if progress_cb:
+        progress_cb(0.01, f"正在下载 {label or filename}…")
+
+    from huggingface_hub import hf_hub_download
+
+    kwargs = {
+        "repo_id": repo_id,
+        "filename": filename,
+        "local_dir": str(dest),
+    }
+    _retry_with_mirror(repo_id, lambda: hf_hub_download(**kwargs))
+    return dest / filename

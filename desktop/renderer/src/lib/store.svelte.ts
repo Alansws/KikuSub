@@ -33,6 +33,16 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import {
+  dualSelectionError,
+  type TranscribeOptions,
+} from './transcribeOptions';
+import {
+  beginDownload,
+  failedDownload,
+  reduceDownload,
+  type DownloadProgress,
+} from './downloadState';
 import { clipCaption, isFullClip, normalizeClip, type ClipScope } from './clipRange';
 import {
   exportModeLabel,
@@ -912,8 +922,8 @@ export async function deleteTtsVoice(voiceId: string) {
 
 /** 调参状态：schema 来自 /api/params，values 按引擎分开存并落 localStorage。 */
 export const tuning = $state({
-  schema: null as { key: string; groups: { group: string; params: ParamSpec[] }[]; defaults: Record<string, number | boolean> }[] | null,
-  values: {} as Record<string, Record<string, number | boolean>>,
+  schema: null as { key: string; groups: { group: string; params: ParamSpec[] }[]; defaults: Record<string, number | boolean | string> }[] | null,
+  values: {} as Record<string, Record<string, number | boolean | string>>,
   presets: [] as { name: string; engine: string | null }[],
   activePreset: '',
   activePresetEngine: '', // 属于哪个引擎；切引擎时清掉，避免拿 A 的预设删 B
@@ -925,13 +935,7 @@ export const settings = $state({
   data: null as SettingsPayload | null,
   loading: false,
   error: '',
-  download: null as null | {
-    key: string;
-    label: string;
-    percent: number;
-    stage: string;
-    status: 'running' | 'done' | 'error';
-  },
+  download: null as DownloadProgress | null,
 });
 
 /** 烧录样式：字段与 core/video_export.py 的 SubtitleStyle 一一对应。 */
@@ -2442,17 +2446,6 @@ export async function exportCues(
 // 转写
 // ---------------------------------------------------------------------------
 
-export interface TranscribeOptions {
-  engine: string;
-  outputFormat: string;
-  startText: string;
-  endText: string;
-  absoluteTimeline: boolean;
-  /** 结果如何进入核对台；档位与文案见 `lib/applyMode.ts`。区间默认 `replace_range`。 */
-  apply?: 'replace' | 'append' | 'replace_range';
-  /** 整片且核对台非空时：true = 写进双引擎复核第二列，不覆盖核对台。 */
-  altReview?: boolean;
-}
 
 function engineEnabled(key: string): boolean {
   const fromSettings = app.settings?.enabled_engines;
@@ -2470,6 +2463,12 @@ export async function startTranscribe(
   }
   if (!engineEnabled(opts.engine)) {
     toast('这个引擎已停用：到「设置 → 引擎与模型」里重新启用', 'warn');
+    return;
+  }
+  const dualEngine = String(opts.dualEngine || '').trim();
+  const dualError = dualSelectionError(opts.engine, dualEngine, engineEnabled);
+  if (dualError) {
+    toast(dualError, 'warn');
     return;
   }
   const start = parseTime(opts.startText);
@@ -2510,13 +2509,16 @@ export async function startTranscribe(
   try {
     const job = await api.createTranscribeJob({
       media_id: app.media.id,
+      kind: dualEngine ? 'dual' : 'transcribe',
       engine: opts.engine,
+      secondary_engine: dualEngine || undefined,
+      secondary_params: dualEngine ? (tuning.values[dualEngine] ?? {}) : undefined,
       output_format: opts.outputFormat,
       start,
       end,
       keep_absolute_timeline: opts.absoluteTimeline,
       apply,
-      alt_review: !isRange && Boolean(opts.altReview),
+      alt_review: !dualEngine && !isRange && Boolean(opts.altReview),
       // 参数键就是 core.params 的规格键，服务端负责补默认 / 夹区间
       params: tuning.values[opts.engine] ?? {},
     });
@@ -2713,6 +2715,14 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
   // 整片/区间转写都会改写核对表：写一份最新草稿，防丢
   scheduleDraftSave(0);
 
+  if (job.result?.dual) {
+    const { refreshAltReview: refreshAlt } = await import('./dualReview.svelte');
+    await refreshAlt();
+    app.report = await api.getReport(job.id).catch(() => null);
+    toast(String(job.result?.summary || '双引擎完成'));
+    return;
+  }
+
   if (meta?.scope === 'range') {
     // 局部转写：停在核对屏原处，把播放头放到**这次新转出的第一句**上。
     //
@@ -2808,7 +2818,7 @@ export async function loadTuning() {
   }
 }
 
-export function setParam(engine: string, key: string, value: number | boolean) {
+export function setParam(engine: string, key: string, value: number | boolean | string) {
   if (!tuning.values[engine]) tuning.values[engine] = {};
   tuning.values[engine][key] = value;
   tuning.activePreset = tuning.activePresetEngine = ''; // 手改之后就不再算「某个预设」了
@@ -3197,62 +3207,49 @@ export async function toggleEngine(key: string, enabled: boolean) {
   }
 }
 
-export async function downloadEngine(key: string) {
+async function runDownload(
+  key: string,
+  label: string,
+  start: () => Promise<{ id: string }>,
+) {
   if (settings.download?.status === 'running') {
     toast('已有模型正在下载，请等它完成', 'warn');
     return;
   }
-  const info = settings.data?.engines.find((e) => e.key === key);
-  settings.download = {
-    key,
-    label: info?.label ?? key,
-    percent: 0,
-    stage: '准备下载…',
-    status: 'running',
-  };
+  settings.download = beginDownload(key, label);
   logEvent('info', 'engine-download-start', key);
   try {
-    const job = await api.downloadEngine(key);
+    const job = await start();
     api.streamJob(job.id, (ev) => {
-      if (!settings.download || settings.download.key !== key) return;
-      if (ev.job) {
-        settings.download.percent = Math.max(settings.download.percent, ev.job.percent ?? 0);
-        if (ev.job.stage) settings.download.stage = ev.job.stage;
-      }
-      if (ev.type === 'progress') {
-        settings.download.percent = Math.max(
-          settings.download.percent,
-          ev.percent ?? ev.job_percent ?? 0,
-        );
-        if (ev.stage) settings.download.stage = ev.stage;
-      }
+      const next = reduceDownload(settings.download, key, ev);
+      if (!next) return;
+      settings.download = next;
       if (ev.type === 'done') {
-        settings.download = { ...settings.download, percent: 100, stage: '下载完成', status: 'done' };
-        toast(`${settings.download.label} 模型已就绪`);
+        toast(`${label} 已就绪`);
         logEvent('info', 'engine-download-done', key);
         void loadSettings(true);
         void refreshConfig();
       }
       if (ev.type === 'error') {
-        settings.download = {
-          ...settings.download,
-          stage: ev.message || '下载失败',
-          status: 'error',
-        };
-        toast(`模型下载失败：${ev.message || ''}`, 'error');
+        toast(`下载失败：${next.stage}`, 'error');
         logEvent('error', 'engine-download-failed', key, ev.message);
       }
     });
   } catch (err) {
-    settings.download = {
-      key,
-      label: info?.label ?? key,
-      percent: 0,
-      stage: (err as Error).message,
-      status: 'error',
-    };
+    settings.download = failedDownload(key, label, (err as Error).message);
     toast((err as Error).message, 'error');
     logEvent('error', 'engine-download-start', key, String(err));
   }
+}
+
+export async function downloadEngine(key: string) {
+  const info = settings.data?.engines.find((e) => e.key === key);
+  await runDownload(key, info?.label ?? key, () => api.downloadEngine(key));
+}
+
+/** 可选 VAD 切分器（WhisperSeg）预下载：与引擎下载共用同一条进度通道。 */
+export async function downloadVadAsset(key: string) {
+  const info = settings.data?.vad_assets?.find((a) => a.key === key);
+  await runDownload(key, info?.label ?? key, () => api.downloadVadAsset(key));
 }
 

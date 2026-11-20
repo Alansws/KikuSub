@@ -121,6 +121,11 @@ def _onset_summary(stats: dict | None) -> str:
     （`extend_segment_onsets` 写进 segment_stats），不能写成产品宣传语。
     """
     stats = stats or {}
+    ignored = str(stats.get("onset_pad_ignored_backend") or "")
+    if ignored:
+        # 用户在 WhisperSeg 下填了句首提前：显式说明它不生效，别让报告显示成
+        # 「未启用」而让用户以为自己没保存。
+        return f"当前切分器 {ignored} 不使用句首补回（仅 Silero 生效）"
     pad = int(stats.get("onset_pad_ms", 0) or 0)
     if pad <= 0:
         return "未启用（句首提前 = 0 ms）"
@@ -133,6 +138,84 @@ def _onset_summary(stats: dict | None) -> str:
     if gated:
         text += f"（{gated} 段被能量闸门拦回）"
     return text
+
+
+def _start_repair_summary(stats: dict | None) -> str:
+    """【句首静音拉回】一行：拉了几段、平均/最大多少、跳过了多少段。"""
+    data = (stats or {}).get("start_repair") or {}
+    if not data:
+        return "未启用"
+    if not data.get("enabled", True):
+        return "未启用"
+    considered = int(data.get("considered", 0) or 0)
+    pulled = int(data.get("pulled", 0) or 0)
+    if not pulled:
+        return f"未触发（检查 {considered} 段）"
+    avg = float(data.get("total_pull_s", 0.0) or 0.0) / max(1, pulled)
+    skipped = (
+        int(data.get("head_removed", 0) or 0)
+        + int(data.get("nonverbal", 0) or 0)
+        + int(data.get("pause_prefix", 0) or 0)
+        + int(data.get("short_lead", 0) or 0)
+        + int(data.get("short_duration", 0) or 0)
+        + int(data.get("not_slow", 0) or 0)
+        + int(data.get("no_lead", 0) or 0)
+        + int(data.get("too_small", 0) or 0)
+    )
+    return (
+        f"拉回 {pulled}/{considered} 段 ｜ 平均 {avg * 1000:.0f}ms"
+        f" ｜ 最大 {float(data.get('max_pull_s', 0.0) or 0.0) * 1000:.0f}ms"
+        f" ｜ 跳过 {skipped} 段"
+    )
+
+
+def _vad_backend_summary(stats: dict | None) -> str:
+    """【VAD 切分器】一行：本次实际用了哪个、是否因权重不可用回退。"""
+    meta = (stats or {}).get("vad_backend")
+    if isinstance(meta, dict):
+        if meta.get("fallback"):
+            reason = str(meta.get("reason") or "WhisperSeg 权重不可用").strip()
+            if len(reason) > 120:
+                reason = reason[:117] + "…"
+            return f"⚠️ WhisperSeg 不可用，本次回退 Silero 20s（{reason}）"
+        used = str(meta.get("used") or "whisperseg")
+        return "WhisperSeg（推荐）" if used == "whisperseg" else "Silero 20s（兼容）"
+    if isinstance(meta, str) and meta:
+        return "WhisperSeg（推荐）" if meta == "whisperseg" else "Silero 20s（兼容）"
+    return "Silero 20s（本引擎固定）"
+
+
+def _nonverbal_section(segment_stats: dict | None) -> dict:
+    """纯发声待核的 JSON section（文本报告只给摘要，明细在质检面板）。"""
+    spans = list((segment_stats or {}).get("nonverbal_spans") or [])
+    rows = spans[:20]
+    count = len(spans)
+    return {
+        "id": "nonverbal",
+        "title": "纯发声待核",
+        "headline": f"{count} 处" if count else "未触发",
+        "note": (
+            "整条只有喘息/笑声/拟声，已从字幕移除；在右下角质检里保留或确认删除"
+            if count
+            else ""
+        ),
+        "items": [
+            {
+                "start": float(span.get("start", 0.0) or 0.0),
+                "end": float(span.get("end", 0.0) or 0.0),
+                "dur": float(span.get("dur", 0.0) or 0.0),
+                "time_text": (
+                    f"{_fmt_report_time(span.get('start', 0.0))} → "
+                    f"{_fmt_report_time(span.get('end', 0.0))}"
+                ),
+                "text": " ".join(str(span.get("text", "")).split()),
+                "rule": str(span.get("rule", "") or ""),
+                "rule_text": "纯发声 / 拟声",
+                "peak": _span_peak(span) if "peak" in span else None,
+            }
+            for span in rows
+        ],
+    }
 
 
 def _align_stats_headline(stats: dict | None, family: str = "whisper") -> str:
@@ -365,6 +448,7 @@ def param_pairs(
             ("CTC 逐字发声帧对齐 (use_alignment)", "启用" if use_alignment else "停用"),
             ("动态响度归一化 (enable_loudnorm)", "启用" if getattr(config, "enable_loudnorm", True) else "停用"),
             *_onset_param_pair(config, "vad_onset_pad_ms"),
+            ("纯发声待核 (nonverbal_qa)", "启用" if getattr(config, "nonverbal_qa", False) else "停用"),
         ]
     return [
         ("识别方案", "Anime Whisper (litagin/anime-whisper)"),
@@ -381,6 +465,8 @@ def param_pairs(
         ("重复抑制 n-gram (no_repeat_ngram_size)", str(ngram)),
         ("重复惩罚因子 (repetition_penalty)", str(penalty)),
         *_onset_param_pair(config, "onset_pad_ms"),
+        ("句首静音拉回 (enable_start_repair)", "启用" if getattr(config, "enable_start_repair", True) else "停用"),
+        ("纯发声待核 (nonverbal_qa)", "启用" if getattr(config, "nonverbal_qa", True) else "停用"),
     ]
 
 
@@ -446,21 +532,27 @@ def build_transcription_report(
     hallucination_drops = int((segment_stats or {}).get("hallucination_drops", 0) or 0)
     suspect_cues = int((segment_stats or {}).get("suspect_cues", 0) or 0)
     hallucination_spans = list((segment_stats or {}).get("hallucination_spans") or [])
+    nonverbal_spans = list((segment_stats or {}).get("nonverbal_spans") or [])
+    nonverbal = len(nonverbal_spans)
     low_confidence = len(visible_missed) + (
         0 if not is_whisper else hallucination_drops + suspect_cues
     )
+    if family != "sherpa":
+        low_confidence += nonverbal
 
     # 对用户只保留两个组：漏检（主 VAD 没切到）和低置信（切片内异常）。
-    quality_parts = [
-        f"📭 未覆盖空白 {len(coverage)} 处",
-        f"🔎 切片内异常 {low_confidence} 处",
-    ]
+    # 纯发声是低置信组里的一个 kind，单独列出「其中」而不是再加一档计数，
+    # 这样 Inspector / 质检面板 / 报告三处的「低置信」是同一个数。
+    low_part = f"🔎 切片内异常 {low_confidence} 处"
+    if family != "sherpa" and nonverbal:
+        low_part += f"（其中纯发声 {nonverbal}）"
+    quality_parts = [f"📭 未覆盖空白 {len(coverage)} 处", low_part]
     lines.append("【质检速览】" + " ｜ ".join(quality_parts))
     lines.append(
         "• 两组口径：漏检 = 字幕空白里还有像语音的声音，主 VAD 没切到；"
-        "低置信 = 已切片内的空结果 / 短句 / 误删，默认折叠。"
+        "低置信 = 已切片内的空结果 / 短句 / 误删 / 纯发声，默认折叠。"
     )
-    if coverage or low_confidence:
+    if coverage or low_confidence or nonverbal:
         lines.append(
             "• 已生成可交互队列：右下角「🔎 质检待核」可逐条试听、定位、补录、确认；"
             "本报告保留为归档与一键复制用。"
@@ -517,6 +609,7 @@ def build_transcription_report(
         )
     lines.append("【切分点吸附】" + _cut_snap_summary(segment_stats))
     lines.append("【句首补回】" + _onset_summary(segment_stats))
+    lines.append("【句首静音拉回】" + _start_repair_summary(segment_stats))
     dropped_rows = _hallucination_rows(hallucination_spans, "dropped")
     suspect_rows = _hallucination_rows(hallucination_spans, "suspect")
     if not is_whisper:
@@ -633,14 +726,17 @@ def build_report_data(
     dropped = int(stats.get("hallucination_drops", 0) or 0)
     suspect = int(stats.get("suspect_cues", 0) or 0)
     hallucination_spans = list(stats.get("hallucination_spans") or [])
+    nonverbal = len(list(stats.get("nonverbal_spans") or []))
     degraded = list((align_stats or {}).get("spans") or [])
     total_degraded = int((align_stats or {}).get("degraded", 0) or 0)
 
     low_confidence = len(visible_missed) + (0 if not is_whisper else dropped + suspect)
-    quality_parts = [
-        f"📭 未覆盖空白 {len(coverage)} 处",
-        f"🔎 切片内异常 {low_confidence} 处",
-    ]
+    if family != "sherpa":
+        low_confidence += nonverbal
+    low_part = f"🔎 切片内异常 {low_confidence} 处"
+    if family != "sherpa" and nonverbal:
+        low_part += f"（其中纯发声 {nonverbal}）"
+    quality_parts = [f"📭 未覆盖空白 {len(coverage)} 处", low_part]
     coverage_total = sum(float(span.get("dur", 0.0) or 0.0) for span in coverage)
 
     sections: list[dict] = [
@@ -717,6 +813,25 @@ def build_report_data(
             "headline": _onset_summary(segment_stats),
             "items": [],
         },
+        {
+            "id": "start_repair",
+            "title": "句首静音拉回",
+            "headline": _start_repair_summary(segment_stats),
+            "items": [],
+        },
+        {
+            "id": "vad_backend",
+            "title": "VAD 切分器",
+            "headline": _vad_backend_summary(segment_stats),
+            "note": (
+                "WhisperSeg 权重缺失或下载失败时会回退 Silero 20s；"
+                "回退只影响本次任务，可在「设置 → 引擎与模型」预下载后重试。"
+                if isinstance((segment_stats or {}).get("vad_backend"), dict)
+                and (segment_stats or {}).get("vad_backend", {}).get("fallback")
+                else ""
+            ),
+            "items": [],
+        },
     ]
 
     if not is_whisper:
@@ -777,6 +892,9 @@ def build_report_data(
                     ],
                 }
             )
+
+    if family != "sherpa" or nonverbal:
+        sections.append(_nonverbal_section(stats))
 
     align_headline = _align_stats_headline(align_stats, family)
     if is_interrupted and not is_whisper and align_stats:
@@ -850,8 +968,11 @@ def build_report_data(
             "hidden_missed": hidden,
             "dropped": dropped,
             "suspect": suspect,
+            "nonverbal": nonverbal,
             "degraded": total_degraded,
-            "has_findings": bool(coverage or len(visible_missed) or dropped or suspect),
+            "has_findings": bool(
+                coverage or len(visible_missed) or dropped or suspect or nonverbal
+            ),
             # 该引擎没有「误删 / 短句」两个时间戳复核桶（Qwen 与中文引擎都是）。
             "qwen_limited": bool(not is_whisper),
             "engine_family": family,

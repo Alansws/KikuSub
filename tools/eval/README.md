@@ -15,6 +15,12 @@
 | `ab_onset.py` | 跑 P0-1 的 A0–A3 矩阵（起点提前 × 能量闸门），拼成一张对比表 | 是（whisper / qwen） |
 | `qwen_confidence_diag.py` | P0-3a：置信度特征 × 对/错句标签，打印每个特征的 AUC | 是（qwen） |
 | `probe_window.py` | 参考 SRT 的每条时间窗**绕开 VAD** 直送模型，分离「识别」与「分段」 | 是（qwen） |
+| `ab_vad.py` | 只看 VAD 切分：参考条覆盖率、低能量覆盖、负样本、耗时 | 否（只加载 VAD） |
+| `diag_missed.py` | 把 `missed_blocks` 逐条还原成 VAD 段/门控/最终文本 | 是（whisper） |
+| `run_cap_sweep.py` | `vad_max_segment_s` 扫描（绕开参数面板 5s 下限） | 是（whisper） |
+| `ten_backend.py` | 已否决的 TEN-VAD 对照，只服务评测，不进 `core/` | 是（需要 ten-vad） |
+| `sep_ab.py` | P3：人声分离 `vad_only` / `to_asr` / 不分离三组对照 + ASR wav sha256 + VAD 边界 | 是（whisper + demucs） |
+| `dual_regression.py` | P2 真机回归：整片双向配对、区间第二列保护、`vad_only` 分离双引擎 | 是（whisper + qwen） |
 | `scorecard.py` | 公共件：卡片形状、句首缺字判定、基线比对、fixtures 解析 | 否 |
 
 ## score_srt.py：两份 SRT 打分
@@ -75,6 +81,34 @@ python tools/eval/run_clip.py --engine qwen --media Jap_test.mp4 \
   同一支片的第二组参数不用重新解码。
 - 卡片里的 `params` 存**该引擎的完整取值**（含默认值）：只存覆写的话，代码里的默认值改了
   也发现不了。比对时参数不同会报 `params_differ`，提示这组数字不可比。
+
+## sep_ab.py：人声分离的 P3 对照
+
+```bash
+# 歌曲段：plain / vad_only / to_asr 三组，并核对 ASR wav 逐字节一致
+../.venv/bin/python tools/eval/sep_ab.py \
+    --media ../测试用_言叶之庭.mkv --ref ../测试用_言叶之庭_中日双语.srt \
+    --from 2410 --to 2470 --out outputs/eval/p3
+```
+
+它先跑三组完整转写，把每组的 ASR 16k 缓存 wav 做 sha256（plain 与 vad_only 必须相同），
+再在原声 / 分离人声上各跑一次 VAD，输出段数、语音占比与 ±100ms 内同边界数。
+每组会另存一份 `p3_<mode>.srt`（三个档位的默认文件名相同，不另存会互相覆盖）。
+退出码：ASR 音频不一致时为 1。
+
+## dual_regression.py：P2 双引擎真机回归
+
+```bash
+../.venv/bin/python tools/eval/dual_regression.py \
+    --full-media ../Jap_test_2.mp4 \
+    --range-media ../测试用_言叶之庭.mkv --range 2410 2470 \
+    --out outputs/eval/p2_full
+```
+
+走完整的 HTTP 栈（`create_app` + `TestClient`），不是替身 runner：整片双向配对、
+区间 `replace_range`（先导入跨区间旧第二列，断言范围外逐字不变）、区间 + `vad_only`
+（断言两个 pass 都带 `vad_audio_path`、Demucs 缓存复用、释放顺序）。结果写
+`p2_dual_regression.json`，任一断言失败退出码 1。
 
 ## ab_onset.py：句首补回的 A/B 矩阵
 

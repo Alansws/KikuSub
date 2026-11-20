@@ -153,3 +153,34 @@ PY
 | `tests/test_presets.py::test_cannot_overwrite_another_engines_preset` | 同名跨引擎覆盖被拒 |
 | `tests/test_server_api.py::test_preset_roundtrip` | HTTP 层 404 / 409 / 422 与过滤 |
 | `core/smoke.py` 第 4 段 | 内核在干净解释器里仍能完成 CRUD 与引擎校验 |
+
+## 8. P0 新增参数（2026-11-20）
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `whisper.vad_backend` | whisperseg | 切分器：`whisperseg`（推荐，首次使用下载约 114MB）/ `silero`（Silero 20s，无需权重）。旧值 `auto`/`silero20`/`silero10` 会回落到默认；已否决的 TEN 不再可选 |
+| `whisper.enable_start_repair` | true | 保留 end，只把 Anime Whisper 段首的底噪/长静音按音频证据向右收；关闭 = 旧时间轴逐字节一致 |
+| `whisper.nonverbal_qa` | true | 纯喘息/笑声/拟声被字幕剔除后进质检队列（最多 20 条），不静默消失 |
+| `qwen.nonverbal_qa` | false | 同上；Qwen 对呼吸声敏感，默认关闭避免长片一次多出二十条待核，需要时手动打开；CTC 时间轴不变 |
+
+老预设没有这三个键时，`params.normalize()` 补当前默认值；保存时写完整快照。
+它们都不改变引擎绑定、不新增引擎 key，因此不触发跨引擎 409 规则。
+
+## 9. 后端限定参数与标定推荐（2026-11-20）
+
+VAD 切分器有两个后端，参数面板里有一部分微调只对其中一个有意义。这类关系写在
+`ParamSpec` 上，**前端不另写一份白名单**：
+
+| 字段 | 含义 | 现在的用法 |
+| --- | --- | --- |
+| `backend_only` | 只对某个兄弟枚举值生效（值是那个枚举的 value） | `whisper.vad_onset_pad_ms` → `silero`：它补偿的是 Silero 的起点系统性偏晚；WhisperSeg 的帧级概率已贴合句首，`core/transcribe.py` 按**实际使用的后端**把它置 0，并在 `segment_stats["onset_pad_ignored_backend"]` 留痕（报告显示「仅 Silero 生效」） |
+| `backend_notes` | 按兄弟枚举值给出的校准文案 | `whisper.vad_threshold`：WhisperSeg 0.35 / Silero 0.25 |
+| `backend_recommended` | 按兄弟枚举值给出的推荐数值，前端提供「用 0.35」一击校准 | 同上 |
+
+约束：
+
+- 这些字段只影响展示与「是否生效」，**不改变 `normalize()` 的默认值**；
+  `presets.json` 的默认快照仍是全后端通用的一套值。
+- 后端判定取同一个引擎里 `*.vad_backend` 的当前值；缺这个键的引擎（中文两个）不显示限定。
+- 新增「只对某后端生效」的参数时，必须同时在代码路径上真的门控它，并加一条测试；
+  只改 UI 置灰、后端仍生效属于欺骗。

@@ -10,10 +10,12 @@
   import SettingsSection from '../../components/settings/SettingsSection.svelte';
   import EngineOverviewBoard from '../../components/settings/engines/EngineOverviewBoard.svelte';
   import EngineCard from '../../components/settings/engines/EngineCard.svelte';
+  import VadAssetCard from '../../components/settings/engines/VadAssetCard.svelte';
   import VoiceClonePanel from '../../components/settings/engines/VoiceClonePanel.svelte';
   import {
     app,
     downloadEngine,
+    downloadVadAsset,
     loadSettings,
     loadTtsVoices,
     settings,
@@ -33,6 +35,7 @@
 
   const engines = $derived(settings.data?.engines ?? []);
   const jaEngines = $derived(engines.filter((engine) => engineGroupOf(engine.key) === 'ja'));
+  const vadAssets = $derived(settings.data?.vad_assets ?? []);
   const zhEngines = $derived(engines.filter((engine) => engineGroupOf(engine.key) === 'zh'));
   const enabledCount = $derived(engines.filter((engine) => engine.enabled).length);
 
@@ -111,6 +114,23 @@
       />
     {/each}
   </SettingsSection>
+
+  {#if vadAssets.length}
+    <SettingsSection
+      title="切分器权重"
+      caption="Whisper 的可选 VAD 切分器。WhisperSeg 对 BGM/环境音更稳、转写更快；Silero 20s 随包、无需下载。"
+    >
+      {#each vadAssets as asset (asset.key)}
+        <VadAssetCard
+          {asset}
+          download={downloadOf(asset.key)}
+          {busy}
+          onDownload={() => downloadVadAsset(asset.key)}
+          onOpenDir={() => openPath(asset.model_dir)}
+        />
+      {/each}
+    </SettingsSection>
+  {/if}
 
   <SettingsSection
     title="中文可选引擎"

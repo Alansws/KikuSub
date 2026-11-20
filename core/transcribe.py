@@ -42,9 +42,15 @@ logging.getLogger("transformers").addFilter(_TransformersLogFilter())
 import numpy as np
 import soundfile as sf
 import torch
-from silero_vad import get_speech_timestamps, load_silero_vad
+from silero_vad import load_silero_vad
 
 from . import audio_cache
+from . import timing_repair
+from .vad import (  # noqa: F401 - re-export for sherpa_asr
+    detect_speech_stamps,
+    resolve_backend,
+    vad_neg_threshold,
+)
 from .coverage import find_coverage_spans
 from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
@@ -343,11 +349,21 @@ class WhisperVadConfig:
     # 借用 Qwen 的 CTC 对齐头拿逐字时间（core/align_layer.py）。
     # 默认关：要多常驻一份 Qwen 权重（MPS 4.3 GB），而且要先装 Qwen 引擎。
     use_ctc_alignment: bool = False
+    # VAD 切分器：silero（20s 窗，无额外权重）/ whisperseg（推荐，114MB）。
+    # 默认用 WhisperSeg：同区间 A/B 中 CER 更低、插入更少、端到端更快，
+    # 且对 BGM/环境音几乎不误检。缺权重时会在 VAD 阶段下载并报进度。
+    vad_backend: str = "whisperseg"
     # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
     # 见 `extend_segment_onsets()` 与路线文档 P0-1。
     onset_pad_ms: int = 0
     # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
     onset_gate: str = ONSET_GATE_NONE
+    # P0：音频感知的句首静音拉回（保留 end，只把段首静音拉掉）。
+    # 关闭时行为与旧版逐字节一致，供 A/B 与用户手动关。
+    enable_start_repair: bool = True
+    # P0：纯喘息/笑声/拟声不再静默删除，而是进质检队列（`nonverbal` kind）。
+    # 只影响队列可见性，不影响字幕文本。
+    nonverbal_qa: bool = True
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -607,6 +623,24 @@ def load_audio_for_transcription(
         return load_wav_mono(wav_path)
 
 
+def clamp_stamps_to_audio(stamps: list[dict], total_samples: int) -> list[dict]:
+    """把 VAD 参考音频上的 stamps 夹到实际送模音频长度。
+
+    ``vad_only`` 人声分离时，VAD 跑在分离人声上、识别跑在原声上：两者是同一段
+    时间窗，长度应相同；但 44.1k → 16k 重采样、容器帧对齐可能差几个样本。
+    stamps 是样本下标，同一时间点在两份音频里是**同一个下标**（都是 16k），
+    所以不缩放、只夹紧，避免最后一段越界把尾句丢掉。
+    """
+    limit = max(0, int(total_samples))
+    out: list[dict] = []
+    for stamp in stamps or []:
+        start = max(0, min(limit, int(stamp.get("start", 0) or 0)))
+        end = max(0, min(limit, int(stamp.get("end", 0) or 0)))
+        if end > start:
+            out.append({"start": start, "end": end})
+    return out
+
+
 def load_wav_mono(path: str | Path) -> np.ndarray:
     audio, sr = sf.read(str(path), always_2d=False)
     if audio.ndim > 1:
@@ -784,80 +818,6 @@ def chunk_level_stats(chunk: np.ndarray | None) -> dict:
         "peak": round(float(np.max(np.abs(data))), 4),
         "rms": round(float(np.sqrt(np.mean(data ** 2))), 5),
     }
-
-
-def vad_neg_threshold(threshold: float) -> float:
-    """VAD 退出阈值：与 Silero 默认迟滞（threshold - 0.15）一致，但不低于下限。"""
-    return max(float(threshold) - 0.15, VAD_NEG_THRESHOLD_FLOOR)
-
-
-def detect_speech_stamps(
-    audio: np.ndarray,
-    vad,
-    *,
-    threshold: float,
-    min_speech_ms: int,
-    min_silence_ms: int,
-    speech_pad_ms: int,
-    window_s: float = VAD_WINDOW_S,
-    overlap_s: float = VAD_WINDOW_OVERLAP_S,
-) -> list[dict]:
-    """分窗跑 Silero VAD，返回按样本计的语音段（已消掉重叠窗的重复段）。
-
-    为什么要分窗：Silero 是带隐状态的流式模型，`get_speech_timestamps` 对整段
-    音频一次跑完时，越往后隐状态漂移越明显。830s 耳语素材上实测：整段一次跑，
-    461.8–463.8s 那段概率稳定在 0.4–0.9 的台词被判成静音（阈值降到 0.08 也检不出）；
-    把同一段放进 30s 窗内重跑则稳定命中。分窗后每窗 `reset_states()`，
-    结果不再依赖「前面播了多少」。
-
-    `audio` 是 float32 的一维数组；返回的 start/end 是**整段音频内的样本下标**。
-    """
-    audio = np.asarray(audio)
-    total = len(audio)
-    if total == 0:
-        return []
-
-    kwargs = dict(
-        sampling_rate=SAMPLE_RATE,
-        threshold=float(threshold),
-        min_speech_duration_ms=int(min_speech_ms),
-        min_silence_duration_ms=int(min_silence_ms),
-        speech_pad_ms=int(speech_pad_ms),
-        neg_threshold=vad_neg_threshold(threshold),
-    )
-
-    window = max(1.0, float(window_s))
-    hop = max(0.1, window - max(0.0, float(overlap_s)))
-    total_s = total / SAMPLE_RATE
-    if total_s <= window:
-        return list(get_speech_timestamps(torch.from_numpy(audio), vad, **kwargs))
-
-    stamps: list[dict] = []
-    start_s = 0.0
-    while start_s < total_s:
-        end_s = min(total_s, start_s + window)
-        a = int(round(start_s * SAMPLE_RATE))
-        b = int(round(end_s * SAMPLE_RATE))
-        chunk = audio[a:b]
-        if chunk.size:
-            offset = a
-            for stamp in get_speech_timestamps(torch.from_numpy(chunk), vad, **kwargs):
-                stamps.append(
-                    {"start": int(stamp["start"]) + offset, "end": int(stamp["end"]) + offset}
-                )
-        if end_s >= total_s:
-            break
-        start_s += hop
-
-    # 相邻窗口重叠 1s，同一段语音可能被检出两次：排序后做区间并集。
-    stamps.sort(key=lambda s: s["start"])
-    merged: list[dict] = []
-    for stamp in stamps:
-        if merged and stamp["start"] <= merged[-1]["end"]:
-            merged[-1]["end"] = max(merged[-1]["end"], stamp["end"])
-        else:
-            merged.append(dict(stamp))
-    return merged
 
 
 def _frame_rms(audio: np.ndarray) -> np.ndarray:
@@ -1417,7 +1377,9 @@ def merge_fragmented_cues(
                 and tail
                 and tail[-1] not in _TERMINAL_PUNCT
                 and len(combined) <= max_cue_chars
-                and cue.end - prev.start <= max_cue_dur + 0.6
+                # 合并后的上限必须就是 max_cue_dur：旧的 +0.6 容差会让
+                # split_text_into_cues 刚切到 4.2s 的两段又并成 4.4–4.8s 超长条。
+                and cue.end - prev.start <= max_cue_dur
             ):
                 merged[-1] = SubtitleCue(start=prev.start, end=cue.end, text=combined)
                 continue
@@ -1666,6 +1628,7 @@ class AnimeWhisperEngine:
         start_time_s: float | None = None,
         end_time_s: float | None = None,
         time_offset: float = 0.0,
+        vad_audio_path: str | Path | None = None,
     ) -> list[SubtitleCue]:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
@@ -1690,6 +1653,24 @@ class AnimeWhisperEngine:
             if progress_cb:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
+        vad_audio = None
+        if vad_audio_path is not None:
+            # 只解码给人声分离的 VAD 用；ASR 的 audio 已经按完全相同的参数读过，
+            # 两者各自走 audio_cache，未开分离的那条路径不会多一次解码。
+            if progress_cb:
+                progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
+            try:
+                vad_audio = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=cfg.enable_loudnorm,
+                    tmp_prefix="kikusub-vad-only-",
+                    cancel_event=cancel_event,
+                )
+            except CommandCancelled:
+                self.last_interrupted = True
+                if progress_cb:
+                    progress_cb(0.99, "🛑 已取消音频解码…")
+                return []
         return self._transcribe_array(
             audio,
             config=cfg,
@@ -1698,6 +1679,7 @@ class AnimeWhisperEngine:
             progress_cb=progress_cb,
             cancel_event=cancel_event,
             time_offset=time_offset,
+            vad_audio=vad_audio,
         )
 
     def _transcribe_array(
@@ -1710,21 +1692,51 @@ class AnimeWhisperEngine:
         progress_cb=None,
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
+        vad_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         if progress_cb:
-            progress_cb(0.08, "正在使用 Silero VAD 精确切分语音段落…")
+            progress_cb(0.08, "正在用 VAD 精确定位语音边界…")
 
         cfg = config or self.config
         self.last_missed_spans = []
         self.last_coverage_spans = []
         self.last_segment_stats = {}
+        backend = resolve_backend(getattr(cfg, "vad_backend", None))
+        vad_meta: dict = {}
+        # vad_only 人声分离：切分看干净人声，吐字听原声。两份音频是同一段时间，
+        # 样本下标可直接复用（只夹紧越界）；不传时与原实现逐字节一致。
+        vad_ref = audio
+        if vad_audio is not None:
+            candidate = np.asarray(vad_audio, dtype=np.float32)
+            if candidate.size:
+                vad_ref = candidate
         stamps = detect_speech_stamps(
-            audio,
+            vad_ref,
             self._vad,
             threshold=float(cfg.threshold),
             min_speech_ms=int(cfg.min_speech_ms),
             min_silence_ms=int(cfg.min_silence_ms),
             speech_pad_ms=int(cfg.speech_pad_ms),
+            backend=backend,
+            fallback_backend="silero",
+            backend_stats=vad_meta,
+            progress_cb=(
+                (lambda ratio, message: progress_cb(0.02 + 0.06 * ratio, message))
+                if progress_cb
+                else None
+            ),
+        )
+        self.last_segment_stats["vad_backend"] = vad_meta
+        if vad_ref is not audio:
+            stamps = clamp_stamps_to_audio(stamps, len(audio))
+            mismatch = abs(len(vad_ref) - len(audio)) / SAMPLE_RATE
+            if mismatch > 0.5:
+                log.warning(
+                    "VAD 参考音频与识别音频长度不一致（%.2fs），已按识别音频夹紧边界",
+                    mismatch,
+                )
+        self.last_segment_stats["vad_audio"] = (
+            "vocals" if vad_ref is not audio else "original"
         )
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(
@@ -1737,10 +1749,17 @@ class AnimeWhisperEngine:
         )
         # 句首补回在合并之后：先扩再合并会把 0.3–0.5s 的句间空隙填掉，
         # 两句话被并成一个送模块。`0` 时原样返回，不改变任何旧行为。
+        # 它补偿的是 Silero 的起点系统性偏晚（P0-1 标定）；WhisperSeg 的帧级
+        # 概率已贴合真实发声，对它有值也不会生效——参数面板按同一口径置灰。
+        onset_pad_ms = int(cfg.onset_pad_ms)
+        used_backend = str(vad_meta.get("used") or backend)
+        if onset_pad_ms and used_backend != "silero":
+            self.last_segment_stats["onset_pad_ignored_backend"] = used_backend
+            onset_pad_ms = 0
         segments = extend_segment_onsets(
             segments,
             audio,
-            pad_ms=int(cfg.onset_pad_ms),
+            pad_ms=onset_pad_ms,
             gate=str(getattr(cfg, "onset_gate", ONSET_GATE_NONE) or ONSET_GATE_NONE),
             stats=self.last_segment_stats,
         )
@@ -1754,6 +1773,17 @@ class AnimeWhisperEngine:
                 progress_cb(0.95, "未检测到有效语音（VAD 未命中任何语音段）…")
             self.last_stats = VadStats(audio_s=len(audio) / SAMPLE_RATE)
             return []
+
+        # P0：句首静音拉回。底噪只在全片算一次（10ms RMS 的 20 分位），
+        # 每个 VAD 段再用段内 RMS 找首个可信发声帧；关闭时不做任何额外计算。
+        start_repair_stats = timing_repair.empty_stats(
+            enabled=bool(cfg.enable_start_repair)
+        )
+        noise_floor = (
+            timing_repair.estimate_noise_floor(audio, SAMPLE_RATE)
+            if cfg.enable_start_repair
+            else 0.0
+        )
 
         ngram_val = int(no_repeat_ngram_size) if int(no_repeat_ngram_size) > 0 else None
         penalty_val = float(repetition_penalty) if float(repetition_penalty) > 1.0 else 1.0
@@ -1770,6 +1800,8 @@ class AnimeWhisperEngine:
         hallucination_drops = 0
         suspect_cues = 0
         nonverbal_skips = 0
+        # 纯发声待核：只留前 50 条（audit 还会再截到 20 条），避免长片刷爆 payload。
+        nonverbal_spans: list[dict] = []
         aligned_stats = {"segments": 0, "chars": 0, "degraded": 0}
         # 走对齐层时段落先排队，循环结束后统一处理（前后两遍不共用显存）
         pending: list[tuple[int, int, str, float, float]] = []
@@ -1828,14 +1860,29 @@ class AnimeWhisperEngine:
                 seg_end_s = (start / SAMPLE_RATE) + tail_off + time_offset
                 seg_dur_s = max(0.05, tail_off - head_off)
 
-            if (
-                cfg.strip_nonverbal_edges
-                and not _is_blank(text)
-                and is_nonverbal_only(text, seg_dur_s)
-            ):
+            # 纯喘气/笑声：不论「剔除句首尾发声」开关是否打开，都先判定一次。
+            # 开关关闭时它仍作为字幕保留（用户要笑声），但下面的句首拉回会跳过它，
+            # 避免把笑声的起音当成静音拉掉。
+            nonverbal_only = (not _is_blank(text)) and is_nonverbal_only(text, seg_dur_s)
+            if cfg.strip_nonverbal_edges and nonverbal_only:
                 # 纯喘气/笑声：删掉端点的发声后什么都不剩，不该占一条字幕，
-                # 也不该进漏句清单（它本来就不是台词）。
+                # 也不该进漏句清单（它本来就不是台词）。现在改成进质检待核：
+                # 字幕行为完全不变，只是用户能在队列里一键保留/确认删除。
                 nonverbal_skips += 1
+                if (
+                    cfg.nonverbal_qa
+                    and len(text.strip()) >= 2
+                    and seg_dur_s >= 0.6
+                    and len(nonverbal_spans) < 50
+                ):
+                    nonverbal_spans.append({
+                        "start": round(seg_start_s, 3),
+                        "end": round(seg_end_s, 3),
+                        "dur": round(seg_dur_s, 2),
+                        "text": text.strip()[:120],
+                        "rule": "sound-only",
+                        **chunk_level_stats(chunk),
+                    })
                 log.debug("跳过非台词发声段 | %.2fs | %r", seg_dur_s, text[:40])
                 continue
 
@@ -1884,6 +1931,26 @@ class AnimeWhisperEngine:
                 })
                 continue
             prev_text = text
+
+            # P0：保留 end，只把段首静音拉掉。CTC 对齐路径不做——
+            # 对齐层会自己给出逐字时间，改 offset 反而会破坏对齐。
+            if cfg.enable_start_repair and not cfg.use_ctc_alignment:
+                lead_s = timing_repair.leading_silence_seconds(
+                    chunk, SAMPLE_RATE, noise_floor=noise_floor
+                )
+                pull = timing_repair.plan_start_pull(
+                    start=seg_start_s,
+                    end=seg_end_s,
+                    lead_s=lead_s,
+                    text=text,
+                    prev_end=(cues[-1].end if cues else None),
+                    head_removed=bool(head_removed),
+                    nonverbal=bool(nonverbal_only),
+                )
+                timing_repair.record(start_repair_stats, pull)
+                if pull.pulled:
+                    seg_start_s = pull.start
+                    seg_dur_s = max(0.05, seg_end_s - seg_start_s)
 
             if cfg.use_ctc_alignment:
                 # 只排队，不对齐：对齐器要多占 5GB，必须等 Whisper 卸掉再加载，
@@ -1951,6 +2018,8 @@ class AnimeWhisperEngine:
             suspect_cues=suspect_cues,
         )
         self.last_segment_stats["nonverbal_skips"] = nonverbal_skips
+        self.last_segment_stats["nonverbal_spans"] = nonverbal_spans
+        self.last_segment_stats["start_repair"] = start_repair_stats
         self.last_segment_stats["hallucination_drops"] = hallucination_drops
         self.last_segment_stats["suspect_cues"] = suspect_cues
         self.last_segment_stats["hallucination_spans"] = hallucination_spans

@@ -4,6 +4,8 @@ import test from 'node:test';
 import {
   applyChoices,
   applyHint,
+  dualChoices,
+  resolveDualApply,
   confirmDestructiveText,
   isDestructiveChoice,
   needsAbsoluteTimeline,
@@ -77,4 +79,22 @@ test('「自动」这一档不存在了', () => {
   // 残留的 'auto' 不该被当成合法值悄悄接受（类型层已排除，这里守运行时）。
   const keys = [...applyChoices(range), ...applyChoices(full)].map((c) => c.key);
   assert.equal(keys.includes('auto'), false);
+});
+
+
+test('双引擎协同不提供「追加」：服务端会 422，界面别让点', () => {
+  assert.deepEqual(
+    dualChoices(full).map((c) => c.key),
+    ['replace'],
+  );
+  assert.deepEqual(
+    dualChoices(range).map((c) => c.key),
+    ['replace_range', 'replace'],
+  );
+});
+
+test('双引擎下残留的追加退回该范围的默认档', () => {
+  assert.equal(resolveDualApply('append', full), 'replace');
+  assert.equal(resolveDualApply('append', range), 'replace_range');
+  assert.equal(resolveDualApply('replace_range', range), 'replace_range');
 });

@@ -57,6 +57,8 @@ def test_config_kwargs_maps_field_names():
     kwargs = params.config_kwargs("whisper", {"whisper.vad_threshold": 0.25})
     assert kwargs["threshold"] == 0.25
     assert kwargs["enable_sentence_split"] is True
+    assert kwargs["enable_start_repair"] is True
+    assert kwargs["nonverbal_qa"] is True
     # 透传参数不应出现在 dataclass 参数里
     assert "no_repeat_ngram_size" not in kwargs
 
@@ -69,6 +71,7 @@ def test_qwen_cue_pads_are_independent():
     assert kwargs["cue_pad_start_s"] == 0.2
     assert kwargs["cue_pad_end_s"] == 0.45
     assert params.defaults_for("qwen")["qwen.cue_pad_end_s"] == 0.45
+    assert params.config_kwargs("qwen", {})["nonverbal_qa"] is False
 
 
 def test_legacy_cue_pad_key_expands():
@@ -156,3 +159,43 @@ def test_bool_defaults_are_bool(engine):
     for spec in params.specs_for(engine):
         if spec.kind == "bool":
             assert isinstance(spec.default, bool), spec.key
+
+
+def test_vad_backend_enum_defaults_and_validation():
+    """VAD 切分器只暴露两个验证过的选项；旧值 auto 回落到推荐默认。"""
+    assert params.defaults_for("whisper")["whisper.vad_backend"] == "whisperseg"
+    assert params.config_kwargs("whisper", {})["vad_backend"] == "whisperseg"
+    assert params.config_kwargs(
+        "whisper", {"whisper.vad_backend": "silero"}
+    )["vad_backend"] == "silero"
+    # 非法值（含已否决的 silero10 / 旧 auto）被 normalize 忽略，保留默认。
+    for legacy in ("not-a-backend", "silero10", "auto"):
+        assert params.normalize(
+            "whisper", {"whisper.vad_backend": legacy}
+        )["whisper.vad_backend"] == "whisperseg"
+    spec = params.BY_KEY["whisper.vad_backend"]
+    assert spec.choices == ("whisperseg", "silero")
+    assert spec.to_dict()["choices"] == ["whisperseg", "silero"]
+    assert spec.to_dict()["choice_labels"] == {
+        "whisperseg": "WhisperSeg（推荐）",
+        "silero": "Silero 20s（兼容）",
+    }
+
+
+def test_vad_backend_scoped_metadata():
+    """参数面板的「仅 Silero 生效」与推荐阈值都来自规格表，前端不另写一份。"""
+    onset = params.BY_KEY["whisper.vad_onset_pad_ms"]
+    assert onset.backend_only == "silero"
+    assert onset.to_dict()["backend_only"] == "silero"
+
+    threshold = params.BY_KEY["whisper.vad_threshold"]
+    assert threshold.to_dict()["backend_only"] is None
+    notes = threshold.to_dict()["backend_notes"]
+    assert "0.35" in notes["whisperseg"]
+    assert "0.25" in notes["silero"]
+    assert threshold.to_dict()["backend_recommended"] == {
+        "whisperseg": 0.35,
+        "silero": 0.25,
+    }
+    # 其余参数不带后端限定，避免前端误置灰。
+    assert params.BY_KEY["whisper.vad_min_silence_ms"].backend_only == ""

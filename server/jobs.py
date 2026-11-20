@@ -189,6 +189,25 @@ class JobManager:
         self._spawn(self._run_transcribe, job, request, session, apply)
         return job
 
+    def start_dual(
+        self,
+        primary_request,
+        secondary_request,
+        *,
+        session=None,
+        apply: str = "replace",
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """一个 job 内顺序跑两个引擎：Pass A 主稿，Pass B 第二列只读。"""
+        from core import engines as engine_registry
+
+        primary = engine_registry.get(primary_request.engine_key).short_label
+        secondary = engine_registry.get(secondary_request.engine_key).short_label
+        job = self._launch("dual", f"{primary} → {secondary}", session_id, loop)
+        self._spawn(self._run_dual, job, primary_request, secondary_request, session, apply)
+        return job
+
     def start_compare(
         self,
         media_path: Path,
@@ -537,31 +556,100 @@ class JobManager:
         finally:
             self._registry.finish(job.token)
 
+    def start_asset_download(
+        self,
+        asset_key: str,
+        *,
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """下载可选资产（目前只有 WhisperSeg 切分器）；与转写共用单槽。"""
+        job = self._launch("download", f"vad:{asset_key}", session_id, loop)
+        self._spawn(self._run_asset_download, job, asset_key)
+        return job
+
     def _run_download(self, job: JobRecord, engine_key: str) -> None:
         from core import engines
 
+        spec = engines.get(engine_key)
+        self._run_fetch(
+            job,
+            result_field="engine",
+            result_value=engine_key,
+            directory=engines.model_dir(spec),
+            approx_bytes=spec.approx_bytes,
+            unit="GB",
+            label="模型",
+            ensure=lambda cb: engines.ensure_model(engine_key, progress_cb=cb),
+            installed=lambda: engines.is_installed(spec),
+            size_fn=lambda: engines.dir_size(engines.model_dir(spec), ttl_s=0),
+            log_label=f"engine={engine_key}",
+        )
+
+    def _run_asset_download(self, job: JobRecord, asset_key: str) -> None:
+        from core import vad
+
+        if asset_key != vad.WHISPERSEG_KEY:
+            job.status = "error"
+            job.error = f"未知可选资产：{asset_key}"
+            job.finished_at = time.time()
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+            self._registry.finish(job.token)
+            return
+        asset = vad.whisperseg_asset()
+        directory = Path(asset["model_dir"])
+        self._run_fetch(
+            job,
+            result_field="asset",
+            result_value=asset_key,
+            directory=directory,
+            approx_bytes=int(asset["approx_bytes"]),
+            unit="MB",
+            label="切分器",
+            ensure=lambda cb: vad.ensure_whisperseg(progress_cb=cb),
+            installed=lambda: vad.whisperseg_ready(directory),
+            size_fn=lambda: vad._dir_bytes(directory),
+            log_label=f"asset={asset_key}",
+        )
+
+    def _run_fetch(
+        self,
+        job: JobRecord,
+        *,
+        result_field: str,
+        result_value: str,
+        directory: Path,
+        approx_bytes: int,
+        unit: str,
+        label: str,
+        ensure,
+        installed,
+        size_fn,
+        log_label: str,
+    ) -> None:
+        """模型/资产下载的共同壳：磁盘增长估进度、done/error 落 job、释放单槽。"""
         job.status = "running"
         job.started_at = time.time()
         self._emit(job, {"type": "start", "job": job.snapshot()})
         stop = threading.Event()
         monitor = None
         try:
-            spec = engines.get(engine_key)
-            directory = engines.model_dir(spec)
-            if engines.is_installed(spec):
-                job.stage = "模型已就绪"
+            if installed():
+                job.stage = f"{label}已就绪"
             else:
-                expected = max(1, spec.approx_bytes)
+                expected = max(1, approx_bytes)
+                divisor = 1024**3 if unit == "GB" else 1024**2
 
                 def monitor_size() -> None:
                     # 下载器不提供可靠进度，靠磁盘增长估算总进度；只报单调值。
                     while not stop.wait(0.8):
-                        size = engines.dir_size(directory, ttl_s=0)
+                        size = size_fn()
                         ratio = min(0.97, 0.02 + size / expected * 0.95)
                         self._progress(
                             job,
                             ratio,
-                            f"正在下载模型 {size / 1024**3:.2f} / {spec.approx_bytes / 1024**3:.1f} GB",
+                            f"正在下载{label} {size / divisor:.2f} / "
+                            f"{approx_bytes / divisor:.1f} {unit}",
                         )
 
                 monitor = threading.Thread(
@@ -583,23 +671,22 @@ class JobManager:
                             },
                         )
 
-                engines.ensure_model(engine_key, progress_cb=on_progress)
+                ensure(on_progress)
 
-            installed = engines.is_installed(spec)
-            if not installed:
+            if not installed():
                 raise RuntimeError(
                     "下载结束后仍没有找到完整权重，请检查网络或代理后重试。"
                 )
             stop.set()
             if monitor is not None:
                 monitor.join(timeout=2)
-            size = engines.dir_size(directory, ttl_s=0)
+            size = size_fn()
             job.status = "done"
             job.ratio = 1.0
             job.percent = 100
-            job.stage = "模型下载完成"
+            job.stage = f"{label}下载完成"
             job.result = {
-                "engine": engine_key,
+                result_field: result_value,
                 "installed": True,
                 "size_bytes": size,
                 "model_dir": str(directory),
@@ -607,9 +694,10 @@ class JobManager:
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info(
-                "模型下载完成 | engine=%s | size=%.2fGB | dir=%s",
-                engine_key,
-                size / 1024**3,
+                "%s下载完成 | %s | size=%.2fMB | dir=%s",
+                label,
+                log_label,
+                size / 1024**2,
                 directory,
             )
         except Exception as exc:  # noqa: BLE001
@@ -617,10 +705,12 @@ class JobManager:
             job.status = "error"
             job.error = str(exc)
             job.finished_at = time.time()
-            log.exception("模型下载失败 | engine=%s", engine_key)
+            log.exception("%s下载失败 | %s", label, log_label)
             self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
         finally:
             stop.set()
+            if monitor is not None:
+                monitor.join(timeout=1)
             self._registry.finish(job.token)
 
     def _launch(
@@ -631,7 +721,13 @@ class JobManager:
         loop: asyncio.AbstractEventLoop | None,
     ) -> JobRecord:
         # 先释放 TTS 再占单槽：即使后面 JobBusy 失败，提前卸载也不会有副作用。
-        if self._on_heavy_job is not None and kind in {"transcribe", "proxy", "export", "compare"}:
+        if self._on_heavy_job is not None and kind in {
+            "transcribe",
+            "proxy",
+            "export",
+            "compare",
+            "dual",
+        }:
             try:
                 self._on_heavy_job(f"{kind} 启动")
             except Exception:  # noqa: BLE001 —— 释放失败不能挡住真正的任务
@@ -834,6 +930,295 @@ class JobManager:
             # 槽位由真正停止工作的 worker 释放（与旧实现同一套语义）
             self._registry.finish(job.token)
 
+    def _run_dual(
+        self,
+        job: JobRecord,
+        primary_request,
+        secondary_request,
+        session=None,
+        apply: str = "replace",
+    ) -> None:
+        """顺序跑两个引擎：A 写主稿，B 写第二列；B 取消/失败都不影响 A。"""
+        import gc
+        import json
+
+        from core import memory
+
+        job.status = "running"
+        job.started_at = time.time()
+        self._emit(job, {"type": "start", "job": job.snapshot()})
+        primary_key = str(getattr(primary_request, "engine_key", "") or "")
+        secondary_key = str(getattr(secondary_request, "engine_key", "") or "")
+        out_dir = Path(
+            getattr(primary_request, "export_dir", None) or self._output_dir
+        )
+
+        def pass_progress(lo: float, hi: float, label: str):
+            def cb(ratio: float, stage: str) -> None:
+                self._progress(
+                    job,
+                    lo + (hi - lo) * max(0.0, min(1.0, float(ratio))),
+                    f"{label} · {stage}",
+                )
+
+            return cb
+
+        try:
+            # 任务开始前的硬闸门：8GB 机型直接拒绝，16GB 放行；不等到 Pass A 跑完。
+            blocked = memory.dual_memory_error()
+            if blocked:
+                raise RuntimeError(blocked)
+
+            runner = self._runner
+            if runner is None:
+                from core.pipeline import run_transcription
+
+                runner = run_transcription
+
+            self._progress(job, 0.01, "[1/2] 主引擎 · 准备转写…")
+            result_a = runner(
+                primary_request,
+                on_progress=pass_progress(0.02, 0.47, "[1/2] 主引擎"),
+                cancel_event=job.token,
+                output_dir=out_dir,
+            )
+            job.result = result_a.to_dict()
+            apply_info: dict = {}
+            if session is not None:
+                apply_info = self._apply_cues(
+                    session, primary_request, result_a.cues, apply, job
+                )
+                job.result.update(apply_info)
+
+            if result_a.interrupted:
+                job.status = "cancelled"
+                job.error = "任务已取消（主稿已保存已完成部分）"
+                job.finished_at = time.time()
+                self._emit(job, {"type": "cancelled", "message": job.error, "job": job.snapshot()})
+                return
+
+            # 释放主引擎并让出统一内存；这里只做预释放，不用 available 硬拦。
+            self._progress(job, 0.48, "切换模型，释放显存…")
+            try:
+                from core.pipeline import release_engine
+
+                release_engine(primary_key)
+            except Exception:  # noqa: BLE001 - 释放失败仍要继续跑 B
+                log.warning("释放主引擎失败 | engine=%s", primary_key, exc_info=True)
+            gc.collect()
+            available_ram_gb = memory.available_ram_gb()
+            try:
+                import torch
+
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                elif torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:  # noqa: BLE001
+                log.debug("清理设备缓存失败", exc_info=True)
+
+            secondary_request.alt_review = True
+            secondary_request.write_audit = False
+            self._progress(job, 0.50, "[2/2] 副引擎复核 · 准备转写…")
+            try:
+                result_b = runner(
+                    secondary_request,
+                    on_progress=pass_progress(0.51, 0.95, "[2/2] 副引擎复核"),
+                    cancel_event=job.token,
+                    output_dir=out_dir,
+                )
+            except CommandCancelled:
+                result_b = None
+            except Exception as exc:  # noqa: BLE001 - B 失败不连累 A
+                log.exception("副引擎失败 | engine=%s", secondary_key)
+                job.result.update({
+                    "dual": True,
+                    "primary_engine": primary_key,
+                    "secondary_engine": secondary_key,
+                    "primary_cues": len(result_a.cues),
+                    "secondary_error": str(exc),
+                    "summary": (
+                        f"主稿 {len(result_a.cues)} 条已保留；"
+                        f"副引擎失败：{exc}"
+                    ),
+                })
+                job.status = "done"
+                job.ratio = 1.0
+                job.percent = 100
+                job.stage = "副引擎失败，主稿已保留"
+                job.finished_at = time.time()
+                self._emit(job, {"type": "done", "job": job.snapshot()})
+                return
+
+            cancelled = bool(result_b is None or result_b.interrupted or job.token.is_set())
+            if cancelled:
+                # 副稿没跑完：保留旧第二列（如果有），不写半份 B。
+                job.result.update({
+                    "dual": True,
+                    "primary_engine": primary_key,
+                    "secondary_engine": secondary_key,
+                    "primary_cues": len(result_a.cues),
+                    "secondary_cancelled": True,
+                    "summary": (
+                        f"主稿已完整保留（{len(result_a.cues)} 条），副引擎已取消"
+                    ),
+                })
+                job.status = "done"
+                job.ratio = 1.0
+                job.percent = 100
+                job.stage = "主稿已完整保留，副引擎已取消"
+                job.finished_at = time.time()
+                self._emit(job, {"type": "done", "job": job.snapshot()})
+                return
+
+            if not result_b.cues:
+                job.result.update({
+                    "dual": True,
+                    "primary_engine": primary_key,
+                    "secondary_engine": secondary_key,
+                    "primary_cues": len(result_a.cues),
+                    "secondary_error": "副引擎未产出字幕，第二列保持不变",
+                    "summary": (
+                        f"主稿 {len(result_a.cues)} 条已保留；副引擎没有产出字幕"
+                    ),
+                })
+                job.status = "done"
+                job.ratio = 1.0
+                job.percent = 100
+                job.stage = "副引擎无结果，主稿已保留"
+                job.finished_at = time.time()
+                self._emit(job, {"type": "done", "job": job.snapshot()})
+                return
+
+            # _apply_alt_review 从 job.result 读第二版的文件名/路径，先临时换过去。
+            job.result = result_b.to_dict()
+            alt_info = (
+                self._apply_alt_review(session, secondary_request, result_b.cues, job)
+                if session is not None
+                else {}
+            )
+
+            from core.audit import (
+                make_audit_payload,
+                merge_ensemble_items,
+                write_audit_payload,
+            )
+            from core.ensemble import build_ensemble_suggestions
+
+            self._progress(job, 0.96, "正在整理补漏建议…")
+            suggestions = build_ensemble_suggestions(
+                result_a.cues,
+                result_b.cues,
+                engine=secondary_key,
+            )
+            final = result_a.to_dict()
+            final.update(apply_info)
+            payload_raw = str(final.get("audit_payload") or "")
+            if suggestions and payload_raw:
+                try:
+                    parsed = json.loads(payload_raw)
+                    items = merge_ensemble_items(
+                        list(parsed.get("items") or []),
+                        suggestions,
+                        result_a.cues,
+                    )
+                    merged = make_audit_payload(
+                        str(parsed.get("media") or ""),
+                        items,
+                        parsed.get("statuses") or {},
+                        int(parsed.get("latest_cue_count") or len(result_a.cues)),
+                        int(parsed.get("hidden_missed") or 0),
+                        int(parsed.get("revision") or 0) + 1,
+                        None,
+                        engine=str(parsed.get("engine") or primary_key),
+                        phase=str(parsed.get("phase") or "done"),
+                        scanned=parsed.get("scanned") or {},
+                        transcribed_at=parsed.get("transcribed_at") or 0.0,
+                    )
+                    final["audit_payload"] = merged
+                    write_audit_payload(primary_request.media_path, merged)
+                    if session is not None:
+                        session.set_qa_payload(merged)
+                except Exception:  # noqa: BLE001 - 建议整理失败不应毁掉主稿
+                    log.exception("合并 ensemble 质检项失败")
+
+            summary = (
+                f"主稿 {len(result_a.cues)} 条 / 第二列 {len(result_b.cues)} 条 / "
+                f"新增 {len(suggestions)} 条补漏建议"
+            )
+            report = final.get("report")
+            if isinstance(report, dict):
+                from core.subtitles import format_srt_timestamp
+
+                rows = [
+                    {
+                        "start": item["start"],
+                        "end": item["end"],
+                        "dur": item["duration"],
+                        "time_text": (
+                            f"{format_srt_timestamp(item['start']).replace(',', '.')} → "
+                            f"{format_srt_timestamp(item['end']).replace(',', '.')}"
+                        ),
+                        "text": item["text"],
+                        "rule_text": "副引擎补漏",
+                    }
+                    for item in suggestions[:20]
+                ]
+                report.setdefault("sections", []).append({
+                    "id": "dual",
+                    "title": "双引擎协同",
+                    "headline": summary,
+                    "note": "副稿只进第二列；以下条目经时间排重与置信度筛选，采纳后插回主稿。",
+                    "items": rows,
+                    "truncated": max(0, len(suggestions) - 20),
+                })
+                report.setdefault("quality", {})["ensemble"] = len(suggestions)
+            final.update({
+                "dual": True,
+                "primary_engine": primary_key,
+                "secondary_engine": secondary_key,
+                "primary_cues": len(result_a.cues),
+                "secondary_cues": len(result_b.cues),
+                "ensemble_count": len(suggestions),
+                "alt_summary": alt_info,
+                "available_ram_gb": available_ram_gb,
+                "summary": summary,
+            })
+            job.result = final
+            job.status = "done"
+            job.ratio = 1.0
+            job.percent = 100
+            job.stage = summary
+            job.finished_at = time.time()
+            self._emit(job, {"type": "done", "job": job.snapshot()})
+            if secondary_key:
+                self._idle.touch(secondary_key)
+            log.info(
+                "双引擎完成 | primary=%s | secondary=%s | A=%d | B=%d | ensemble=%d",
+                primary_key,
+                secondary_key,
+                len(result_a.cues),
+                len(result_b.cues),
+                len(suggestions),
+            )
+        except Exception as exc:  # noqa: BLE001
+            cancelled = bool(job.token is not None and job.token.is_set())
+            job.status = "cancelled" if cancelled else "error"
+            job.error = "任务已取消" if cancelled else str(exc)
+            job.finished_at = time.time()
+            if not cancelled:
+                log.exception("双引擎任务失败 | job=%s", job.id)
+            self._emit(
+                job,
+                {
+                    "type": "cancelled" if cancelled else "error",
+                    "message": job.error,
+                    "job": job.snapshot(),
+                },
+            )
+        finally:
+            self._registry.finish(job.token)
+
     def _apply_cues(self, session, request, cues, apply: str, job=None) -> dict:
         """把一次转写的结果合并进会话。返回给前端的状态摘要。
 
@@ -926,6 +1311,9 @@ class JobManager:
                 "apply": "alt_review",
             }
             media_path = session.media_path or str(getattr(request, "media_path", "") or "")
+            replace_range = None
+            if getattr(request, "alt_review_range", False) and request.start_s is not None:
+                replace_range = (float(request.start_s), request.end_s)
             session.set_alt_review(
                 engine=str(getattr(request, "engine_key", "") or ""),
                 cues=fresh,
@@ -933,9 +1321,10 @@ class JobManager:
                 params=dict(getattr(request, "param_values", {}) or {}),
                 media_path=media_path,
                 output_dir=self._output_dir,
+                replace_range=replace_range,
             )
             return {
-                "applied": "alt_review",
+                "applied": "alt_review_range" if replace_range else "alt_review",
                 "alt_review": True,
                 "alt_engine": str(getattr(request, "engine_key", "") or ""),
                 "alt_count": len(fresh),
@@ -993,13 +1382,14 @@ class JobManager:
             raise JobNotFound(job_id)
         return job
 
-    def latest_completed(self, kind: str | None = None) -> JobRecord | None:
+    def latest_completed(self, kind: str | tuple[str, ...] | None = None) -> JobRecord | None:
         """最近一次成功完成的任务，供 /api/report 与前端恢复上次结果。"""
+        kinds = None if kind is None else ({kind} if isinstance(kind, str) else set(kind))
         with self._lock:
             done = [
                 job
                 for job in self._jobs.values()
-                if job.status == "done" and (kind is None or job.kind == kind)
+                if job.status == "done" and (kinds is None or job.kind in kinds)
             ]
         if not done:
             return None

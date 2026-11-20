@@ -32,7 +32,7 @@ def get_report(request: Request, job_id: str | None = None) -> dict:
         except JobNotFound as exc:
             raise HTTPException(status_code=404, detail="任务不存在") from exc
     else:
-        job = manager.latest_completed("transcribe")
+        job = manager.latest_completed(("transcribe", "dual"))
         if job is None:
             raise HTTPException(status_code=404, detail="还没有完成过转写任务")
 

@@ -68,6 +68,7 @@ from .transcribe import (
     _retry_suspicious,
     _split_overlong_single,
     chunk_level_stats,
+    clamp_stamps_to_audio,
     detect_device,
     is_nonverbal_only,
     strip_edge_nonverbal_ex,
@@ -653,9 +654,16 @@ class QwenCtcConfig:
     # 与 Whisper 侧同名同义：模型会如实转写「んふふ」「えへへ」这类非台词发声，
     # 人工整理版一律不留。Qwen 之前漏了这条，实测多出 19 条纯笑声字幕。
     strip_nonverbal_edges: bool = True
+    # P0：纯喘息/笑声/拟声不再静默删除，而是进质检队列（`nonverbal` kind）。
+    # 只影响队列可见性，不影响字幕文本。Qwen 对呼吸声尤其敏感，默认关闭，
+    # 由参数面板按需打开；Whisper 侧仍默认开启。
+    nonverbal_qa: bool = False
     cue_pad_start_s: float = 0.20
     cue_pad_end_s: float = 0.45
     max_new_tokens: int = 440
+    # VAD 切分器：Qwen 固定 Silero 20s。WhisperSeg 在 Qwen 上 CER 反而 +1.1pt
+    # （Test 二），所以不开放这个组合，也不跟 Whisper 的默认值联动。
+    vad_backend: str = "silero"
     # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
     # 与 Whisper 侧同一条实现（transcribe.extend_segment_onsets），别在这里再写一份。
     # 默认 400 与 core/params.py 的 `qwen.vad_onset_pad_ms` 保持一致：产品走参数表，
@@ -1103,6 +1111,7 @@ class QwenCtcEngine:
         config: QwenCtcConfig | None = None,
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
+        vad_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
@@ -1115,17 +1124,29 @@ class QwenCtcEngine:
         if progress_cb:
             progress_cb(0.06, "正在使用动态 VAD 切分语音段落…")
 
+        # vad_only 人声分离：切分看干净人声、识别仍听原声（样本下标同源，只夹紧）。
+        vad_ref = audio
+        if vad_audio is not None:
+            candidate = np.asarray(vad_audio, dtype=np.float32)
+            if candidate.size:
+                vad_ref = candidate
         speech_pad_ms = int(cfg.vad_speech_pad_ms)
         # 分窗跑 VAD：整段一次跑会因 Silero 隐状态漂移漏掉整条台词，而这个文件
         # 之前一直没跟 Whisper 侧的修复（detect_speech_stamps）。830s 耳语素材上
         # 实测整段一次跑漏 19/77 条人工台词（含 461.8s 那段），分窗后 0 条。
         stamps = detect_speech_stamps(
-            audio,
+            vad_ref,
             self._vad,
             threshold=float(cfg.vad_threshold),
             min_speech_ms=int(cfg.vad_min_speech_ms),
             min_silence_ms=int(cfg.vad_min_silence_ms),
             speech_pad_ms=speech_pad_ms,
+            backend=str(getattr(cfg, "vad_backend", "silero") or "silero"),
+        )
+        if vad_ref is not audio:
+            stamps = clamp_stamps_to_audio(stamps, len(audio))
+        self.last_segment_stats["vad_audio"] = (
+            "vocals" if vad_ref is not audio else "original"
         )
         segments = merge_vad_segments(
             stamps,
@@ -1173,6 +1194,7 @@ class QwenCtcEngine:
         truncated = 0
         capped_repeat = 0
         nonverbal_skips = 0
+        nonverbal_spans: list[dict] = []
         degraded: list[dict] = []
         total = len(segments)
         prev_text = ""
@@ -1196,6 +1218,9 @@ class QwenCtcEngine:
             text, audio_features = self._transcribe(
                 chunk, cfg, capture_audio=use_alignment
             )
+            # 保留剔除前的原文：纯发声待核需要展示「んふふ」这类真实文本，
+            # 而不是 strip 后的空串。
+            raw_text = text
             # 句首尾的非台词发声（笑声/喘气）一律先剔掉再对齐：对齐是在 text 上做的，
             # 剔在解码后等于让第一个真字的 CTC 时间当成字幕起点，边界自然收口，
             # 不需要 Whisper 那套「按段内停顿挪边界」的后处理。
@@ -1230,6 +1255,7 @@ class QwenCtcEngine:
                 text, audio_features = self._transcribe(
                     _retry_gain(chunk), cfg, capture_audio=use_alignment
                 )
+                raw_text = text
                 if cfg.strip_nonverbal_edges and not _is_blank(text):
                     cleaned = strip_edge_nonverbal_ex(text)[0]
                     stripped_to_empty = _is_blank(cleaned)
@@ -1246,8 +1272,24 @@ class QwenCtcEngine:
                     and is_nonverbal_only(text, seg_dur_s)
                 ):
                     # 纯笑声/喘气段：删掉端点发声后什么都不剩，本来就不是台词，
-                    # 不该占一条字幕，也不该进「可能漏句」清单。
+                    # 不该占一条字幕，也不该进「可能漏句」清单。现在改成进质检待核：
+                    # 字幕行为完全不变，只是用户能在队列里一键保留/确认删除。
                     nonverbal_skips += 1
+                    candidate = (raw_text if stripped_to_empty else text).strip()
+                    if (
+                        cfg.nonverbal_qa
+                        and len(candidate) >= 2
+                        and seg_dur_s >= 0.6
+                        and len(nonverbal_spans) < 50
+                    ):
+                        nonverbal_spans.append({
+                            "start": round(offset, 3),
+                            "end": round(offset + seg_dur_s, 3),
+                            "dur": round(seg_dur_s, 2),
+                            "text": candidate[:120],
+                            "rule": "sound-only",
+                            **chunk_level_stats(chunk),
+                        })
                     continue
 
                 self.last_missed_spans.append({
@@ -1318,6 +1360,9 @@ class QwenCtcEngine:
             "spans": degraded[:50],
         }
 
+        self.last_segment_stats["nonverbal_spans"] = nonverbal_spans
+        self.last_segment_stats["nonverbal_skips"] = nonverbal_skips
+
         if progress_cb and not self.last_interrupted:
             # 文案由 `core.report.align_progress_note()` 统一生成：说清分母是
             # 「语音段」而不是字幕条数，并把未对齐的三类分开列，免得用户以为漏字。
@@ -1380,6 +1425,7 @@ class QwenCtcEngine:
         start_time_s: float | None = None,
         end_time_s: float | None = None,
         time_offset: float = 0.0,
+        vad_audio_path: str | Path | None = None,
     ) -> list[SubtitleCue]:
         self.last_coverage_spans = []
         cfg = config or self.config
@@ -1401,6 +1447,23 @@ class QwenCtcEngine:
             if progress_cb:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
+        vad_audio = None
+        if vad_audio_path is not None:
+            # 与 Whisper 同一条 P3 路径：VAD 看分离人声，识别仍用上面的原声。
+            if progress_cb:
+                progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
+            try:
+                vad_audio = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=cfg.enable_loudnorm,
+                    tmp_prefix="kikusub-vad-only-",
+                    cancel_event=cancel_event,
+                )
+            except CommandCancelled:
+                self.last_interrupted = True
+                if progress_cb:
+                    progress_cb(0.99, "🛑 已取消音频解码…")
+                return []
         return self.transcribe_array(
             audio,
             progress_cb=progress_cb,
@@ -1408,6 +1471,7 @@ class QwenCtcEngine:
             config=cfg,
             cancel_event=cancel_event,
             time_offset=time_offset,
+            vad_audio=vad_audio,
         )
 
 

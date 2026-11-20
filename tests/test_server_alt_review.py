@@ -19,6 +19,7 @@ from core.subtitles import SubtitleCue  # noqa: E402
 from server.app import create_app  # noqa: E402
 from server.config import ServerConfig  # noqa: E402
 from server.jobs import JobManager  # noqa: E402
+from server.sessions import Session  # noqa: E402
 
 TOKEN = "alt-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -384,6 +385,8 @@ def test_separate_vocals_full_film_is_not_rejected(make_client, tmp_path):
     assert snapshot["status"] == "done", snapshot
     request = client.app.state.jobs._runner.last_request
     assert request.separate_vocals is True
+    # P3 默认：分离人声只做 VAD，识别仍听原声。
+    assert request.separate_mode == "vad_only"
     assert request.start_s is None and request.end_s is None
     # 服务层把 ffprobe 到的总时长带给 pipeline（1 字节假媒体探不到 → 0，pipeline 会报错让填区间）
     assert request.media_duration_s == 0.0
@@ -414,6 +417,51 @@ def test_separate_vocals_range_reaches_pipeline(make_client, tmp_path):
         time.sleep(0.01)
     assert snapshot["status"] == "done", snapshot
     assert client.app.state.jobs._runner.last_request.separate_vocals is True
+    assert client.app.state.jobs._runner.last_request.separate_mode == "vad_only"
+
+
+def test_separate_mode_to_asr_reaches_pipeline(make_client, tmp_path):
+    """高级档显式选择「分离人声后送识别」，服务层不得静默改回默认。"""
+    client = make_client([])
+    media_id = _new_media(client, tmp_path)
+
+    created = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={
+            "media_id": media_id,
+            "start": 1.0,
+            "end": 2.0,
+            "separate_vocals": True,
+            "separate_mode": "to_asr",
+        },
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+    for _ in range(200):
+        snapshot = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snapshot["status"] in {"done", "error", "cancelled"}:
+            break
+        import time
+
+        time.sleep(0.01)
+    assert snapshot["status"] == "done", snapshot
+    assert client.app.state.jobs._runner.last_request.separate_mode == "to_asr"
+
+
+def test_separate_mode_rejects_unknown_value_at_request_layer(make_client, tmp_path):
+    client = make_client([])
+    media_id = _new_media(client, tmp_path)
+    resp = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={
+            "media_id": media_id,
+            "separate_vocals": True,
+            "separate_mode": "both",
+        },
+    )
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -554,3 +602,25 @@ def test_import_alt_review_rejections(make_client, tmp_path):
         client.post("/api/alt-review/import", headers=AUTH, json={"path": str(txt)}).status_code
         == 422
     )
+
+
+def test_alt_review_range_only_replaces_inside_window(tmp_path):
+    session = Session(id="alt-range")
+    session.set_alt_review(
+        engine="whisper",
+        cues=[SubtitleCue(0.0, 1.0, "前"), SubtitleCue(10.0, 11.0, "後")],
+        media_path="",
+        output_dir=tmp_path,
+    )
+    session.set_alt_review(
+        engine="whisper",
+        cues=[SubtitleCue(5.0, 6.0, "区间内新稿")],
+        media_path="",
+        output_dir=tmp_path,
+        replace_range=(4.0, 7.0),
+    )
+    assert [(cue.start, cue.text) for cue in session.alt_review.cues] == [
+        (0.0, "前"),
+        (5.0, "区间内新稿"),
+        (10.0, "後"),
+    ]

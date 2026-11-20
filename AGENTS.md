@@ -1,14 +1,14 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-17 20:57
+updated: 2026-11-20 22:40
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
 本文件面向在此仓库中继续开发的智能体与开发者。**注意：它是索引，不是全文。**
 
-2026-11-13 起，长期积累的领域契约从本页拆到了 `docs/contracts/`：这一页原先有 65KB（≈1.7 万
-token），每次会话光读规范就要吃掉一大截上下文，而且里面还留着已经删掉的 Gradio 界面的规则
-（错误的文档比没有文档更可怕）。现在本页只保留**定位、结构、红线、索引**，细节去哪读看第 3 节。
+2026-11-13 起领域契约拆到 `docs/contracts/`：本页原先 65KB（≈1.7 万 token），每次会话光读
+规范就吃掉一大截上下文，而且留着已删除的 Gradio 规则（错误的文档比没有文档更可怕）。现在只留
+**定位、结构、红线、索引**，细节看第 3 节。
 
 ## 0. 读法（30 秒）
 
@@ -37,7 +37,7 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 - Anime Whisper：重视自然、连贯的日语对话转写；
 - Qwen3-ASR + CTC：转写后利用自带的 CTC 对齐头取得逐字发声时间，并针对日语分句；
 - SenseVoice-Small / FireRedASR2-AED：两个**可选装**的中文引擎（ONNX / CPU，权重按需下载、默认停用）；
-- Silero VAD 分段、可选动态响度归一化、人声分离（整片 / 区间）、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
+- WhisperSeg / Silero VAD 分段、可选动态响度归一化、人声分离（整片 / 区间，默认仅 VAD）、双引擎顺序协同（≥12GB 内存）、时间范围转录、原片绝对时间轴、取消后保存已完成字幕；
 - 视频 + 波形核对台、质检待核队列、批量清理标点、SRT/VTT/TXT 导出、参数预设与完整任务报告；
 - AI 提案（润色 / 翻译平行轨）、结构建议、断句重排与随包 Agent 技能。
 
@@ -49,9 +49,8 @@ token），每次会话光读规范就要吃掉一大截上下文，而且里面
 cd desktop && npm run build && npm start   # 人类手动看界面；智能体一律别用（§0.5）
 ```
 
-> 开发模式默认**不弹窗**：`npm start` / `desktop/run.sh` 是显式的人入口（内部设
-> `KIKUSUB_ALLOW_WINDOW=1`）；直接 `npx electron .` 会被主进程拒绝。智能体验证用
-> `--screenshot`（无窗口）。
+> 开发模式默认**不弹窗**：`npm start` / `desktop/run.sh` 是显式人入口（内部设
+> `KIKUSUB_ALLOW_WINDOW=1`）；直接 `npx electron .` 会被拒绝。智能体用 `--screenshot`（§0.5）。
 
 sidecar 也可以单独启动：`source .venv/bin/activate && python -m server --port 0`，stdout 首行输出 `{"event":"ready","port":…,"token":…}`。
 
@@ -76,18 +75,18 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/ai_client.py` | OpenAI 兼容 urllib 客户端；本地空 Key；判定/重载在 `ai_arbitrate.py` / `ai_local_model.py`。 |
 | `core/ai_polish.py` / `core/ai_translate.py` | 分块、提示词、结构重问与结果组装；取消只能落在分块之间；支持 `from_index` / `to_index` 片段范围与手动批次。 |
 | `core/i18n.py` | 双语排版唯一构造：`bilingual_cues()`（一条两行）与 `bilingual_entries()`（每语种一条）。 |
-| `core/transcribe.py` | 字幕结构 / 格式、时间解析、FFmpeg 抽取、Anime Whisper、Silero VAD 与启发式分句。 |
+| `core/transcribe.py` | 字幕结构 / 格式、时间解析、FFmpeg 抽取、Anime Whisper 与启发式分句；VAD 在 `core/vad.py`（WhisperSeg 默认 / Silero 20s），句首静音拉回在 `core/timing_repair.py`。 |
 | `core/qwen_ctc.py` | Qwen3-ASR 模型推理、CTC 对齐头、日语断句动态规划、字幕劈词修复、编码特征复用。 |
 | `core/short_clip.py` | 核对台短选区「轻声兜底」：降阈值重试 → 整段送引擎（只服务人工框选 / 单句重转）。 |
 | `core/audio_cache.py` | 16k wav 解码缓存（`cache_key` / `ensure_wav` / `peaks` / `prune`），转写与核对台共用一次解码；`KIKUSUB_AUDIO_CACHE=0` 关闭。 |
-| `core/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同时只允许一个重任务，取消只能由发起会话发出。 |
+| `core/jobs.py` / `server/jobs.py` | 进程内单槽任务注册表与 `CancelToken`：同时只允许一个重任务，取消只能由发起会话发出；双引擎两 pass 顺序协同在 `server/jobs.py`，中间过 `core/memory.py` 的内存闸门，副稿补漏筛选取 `core/ensemble.py`。 |
 | `core/procutil.py` | 可取消、带超时的子进程执行器（Popen + 读线程 + terminate/kill）；ffmpeg/ffprobe 统一走这里。 |
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理、后台 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 评测台：`score_srt.py` 打分（CER / 块准确率 / 劈词数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 基线。改断句 / VAD 前后必须跑同一区间；素材用 `--fixtures`。 |
 | `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、兼容读取与原子写入。 |
-| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、安装检测、`family`、`reviewable`、`file_tag` / `legacy_tags`；设置页与命名都读这张表。新增引擎在这里加一条，再到 `core/pipeline.py` 注册推理对象。 |
+| `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、安装检测、`family`、`reviewable`、`file_tag` / `legacy_tags`；设置页与命名都读这张表。 |
 | `core/sherpa_asr.py` | 两个中文引擎推理外壳（sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
 | `core/text_cues_zh.py` | 中文分句唯一实现（纯函数）：token→字符时间轴、标点 / 停顿 / 字数切条；改口径先改这里。 |
 | `core/punctuation.py` | FireRedPunc 标点恢复（ONNX Runtime / CPU）：只在完全无句读时补，按字符偏移插回原文。权重随 FireRed 下到 `<引擎目录>/punc/`。 |
@@ -161,15 +160,14 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
   完整四步与回滚口径见 [docs/release.md](docs/release.md)。
 - 提交按层拆开：`core,server` / `desktop` / `docs` 各自成 commit，不要把渲染层和内核混成一个包。
 - 改动前 `git status` 必须是干净的（或明确知道自己在改哪几个文件）；不要在混杂工作区上叠加新改动。
-- 验证按**改动范围**跑，不必每次全量（见下面「验证时机」表）。全量 `pytest -q` 约 40s，
-  但"改个文档也跑 423 例"会把注意力磨平；环境依赖的用例用 marker 排除
+- 验证按**改动范围**跑（见「验证时机」表）；环境依赖的用例用 marker 排除
   （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
 - **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 6 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。
-- 规则沉淀：Review 里同一个位置反复出错，就把结论压缩成 1–2 句写进本页「红线」，或写进对应契约；
-  能变成测试的（导错、漏 import、样式漂移）优先变成测试——`desktop/test/svelte-imports.test.cjs` 就是范例。
+- 规则沉淀：同一位置反复出错就把结论写进「红线」或对应契约；能变成测试的优先变成测试
+  （`desktop/test/svelte-imports.test.cjs` 是范例）。
 
 ### 验证时机（改什么 → 必跑什么）
 

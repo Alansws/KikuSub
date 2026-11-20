@@ -59,9 +59,21 @@ export interface AppSettings {
   video_export_dir: string;
 }
 
+export interface VadAsset {
+  key: string;
+  label: string;
+  description: string;
+  installed: boolean;
+  model_dir: string;
+  required_files: string[];
+  approx_bytes: number;
+  size_bytes: number;
+}
+
 export interface SettingsPayload {
   settings: AppSettings;
   engines: EngineInfo[];
+  vad_assets: VadAsset[];
   paths: {
     output_dir: string;
     export_dir: string;
@@ -265,14 +277,23 @@ export interface ParamSpec {
   key: string;
   label: string;
   engine: string;
-  kind: 'bool' | 'float' | 'int';
-  default: number | boolean;
+  kind: 'bool' | 'float' | 'int' | 'enum';
+  default: number | boolean | string;
+  choices?: string[] | null;
+  /** 枚举值的友好文案（值 → 展示）；缺省时直接用值。 */
+  choice_labels?: Record<string, string> | null;
   group: string;
   min: number | null;
   max: number | null;
   step: number | null;
   help: string;
   is_config: boolean;
+  /** 只对某个兄弟枚举值生效（如句首提前仅 Silero）；空/缺省 = 都生效。 */
+  backend_only?: string | null;
+  /** 按兄弟枚举值给出的校准提示（如 WhisperSeg 推荐阈值 0.35）。 */
+  backend_notes?: Record<string, string> | null;
+  /** 按兄弟枚举值给出的推荐数值；用于一键「采用推荐值」。 */
+  backend_recommended?: Record<string, number> | null;
 }
 
 export interface Cue {
@@ -795,6 +816,8 @@ export interface ReportData {
     hidden_missed: number;
     dropped: number;
     suspect: number;
+    /** 纯喘息/笑声/拟声：已从字幕移除，但进了质检队列（P0）。 */
+    nonverbal?: number;
     degraded: number;
     has_findings: boolean;
     qwen_limited: boolean;
@@ -1049,7 +1072,7 @@ export const api = {
       engines: {
         key: string;
         groups: { group: string; params: ParamSpec[] }[];
-        defaults: Record<string, number | boolean>;
+        defaults: Record<string, number | boolean | string>;
       }[];
     }>('/api/params'),
 
@@ -1062,7 +1085,7 @@ export const api = {
   },
 
   getPreset: (name: string, engine: string) =>
-    req<{ name: string; engine: string | null; values: Record<string, number | boolean> }>(
+    req<{ name: string; engine: string | null; values: Record<string, number | boolean | string> }>(
       `/api/presets/${encodeURIComponent(name)}?engine=${encodeURIComponent(engine)}`,
     ),
 
@@ -1095,7 +1118,10 @@ export const api = {
   // ---- 任务 ----
   createTranscribeJob: (payload: {
     media_id: string;
+    kind?: 'transcribe' | 'dual';
     engine: string;
+    secondary_engine?: string;
+    secondary_params?: Record<string, unknown>;
     output_format?: string;
     save_beside?: boolean;
     start?: number | null;
@@ -1104,6 +1130,7 @@ export const api = {
     apply?: 'replace' | 'append' | 'replace_range';
     alt_review?: boolean;
     separate_vocals?: boolean;
+    separate_mode?: 'vad_only' | 'to_asr';
     params?: Record<string, unknown>;
   }) =>
     req<JobSnapshot>('/api/jobs', {
@@ -1112,6 +1139,8 @@ export const api = {
         ...payload,
         // 全局勾选对整片与区间都生效：整片由服务端按 0..总时长分离。
         separate_vocals: payload.separate_vocals ?? (vocalSeparation.enabled || undefined),
+        // 默认只给 VAD 用分离人声；高级档才把分离人声送去识别。
+        separate_mode: payload.separate_mode ?? vocalSeparation.mode,
       }),
     }),
 
@@ -1329,6 +1358,11 @@ export const api = {
 
   downloadEngine: (key: string) =>
     req<JobSnapshot>(`/api/engines/${encodeURIComponent(key)}/download`, { method: 'POST' }),
+
+  downloadVadAsset: (key: string) =>
+    req<JobSnapshot>(`/api/vad/assets/${encodeURIComponent(key)}/download`, {
+      method: 'POST',
+    }),
 
   diagnostics: (lines = 200) =>
     req<{

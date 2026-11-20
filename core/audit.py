@@ -40,15 +40,25 @@ log = logging.getLogger(__name__)
 # 重启后旧 .qa.json 视为上一次运行的记录，不自动带入，保证面板默认清空。
 AUDIT_SESSION_ID = f"{os.getpid()}:{time.time_ns()}"
 
-AUDIT_KIND_ORDER = {"coverage": -1, "missed": 0, "dropped": 1, "suspect": 2}
+AUDIT_KIND_ORDER = {
+    "coverage": -1,
+    "missed": 0,
+    "ensemble": 0.5,
+    "dropped": 1,
+    "suspect": 2,
+    "nonverbal": 3,
+}
 
 # 对用户只暴露两个大组：真正可能漏台词的「漏检」，和切片内部的
 # 短句/空结果/误删「低置信」。kind 仍保留，作为组内原因标签。
 GROUP_BY_KIND = {
     "coverage": "miss",
     "missed": "low",
+    # 补漏是「主稿没有、副稿听到了」，和覆盖审计一样属于漏检，排在同一组。
+    "ensemble": "miss",
     "dropped": "low",
     "suspect": "low",
+    "nonverbal": "low",
 }
 
 AUDIT_KIND_META = {
@@ -79,6 +89,20 @@ AUDIT_KIND_META = {
         "group": "low",
         "plain": "字幕已保留，但太短或信息量低，容易是模型脑补",
         "hint": "听一遍：没问题点「✓ 保留」（核对台缺这句会自动补回），不对劲点「🗑 删除此句」或「✏️ 定位编辑」。",
+    },
+    "nonverbal": {
+        "icon": "🔇",
+        "name": "纯发声待核",
+        "group": "low",
+        "plain": "整条只有喘息/笑声/拟声，已从字幕移除；以前是静默删除，现在让你决定",
+        "hint": "试听：如果是角色笑声/拟声台词，点「保留」插回字幕；确认只是喘息就点「确认删除」。",
+    },
+    "ensemble": {
+        "icon": "🧩",
+        "name": "双引擎补漏",
+        "group": "miss",
+        "plain": "副引擎听到了主稿没有的台词，且时间上不与主稿任何字幕重叠",
+        "hint": "试听：确实漏了就点「采纳补漏」插回核对台；只是另一版断句就点「跳过」。",
     },
 }
 
@@ -124,13 +148,86 @@ def _audit_match_cues(cues, start: float, end: float) -> list[dict]:
     return matched
 
 
+def _same_blank_slot(item: dict, start: float, end: float) -> bool:
+    """这条空白待核是否就是补漏句所在的位置。
+
+    ``coverage`` 是较长空白（可能 10s+），补漏句落在里面也算同一处；
+    ``missed`` 通常与补漏句几乎同区间。两种都只比较时间，不比文本。
+    """
+    if str(item.get("kind") or "") not in {"coverage", "missed"}:
+        return False
+    item_start = float(item.get("start", 0.0) or 0.0)
+    item_end = float(item.get("end", 0.0) or 0.0)
+    overlap = min(end, item_end) - max(start, item_start)
+    if overlap <= 0:
+        return False
+    cue_dur = max(0.001, end - start)
+    return overlap / cue_dur >= 0.5 or abs(item_start - start) <= 0.25
+
+
+def _ensemble_item_from_span(span: dict, cue_list: list[SubtitleCue]) -> dict | None:
+    text = " ".join(str(span.get("text") or "").split())
+    if not text:
+        return None
+    start = round(max(0.0, float(span.get("start", 0.0) or 0.0)), 3)
+    end = round(max(start + 0.001, float(span.get("end", 0.0) or 0.0)), 3)
+    meta = AUDIT_KIND_META["ensemble"]
+    return {
+        "id": _audit_item_id("ensemble", start, end),
+        "kind": "ensemble",
+        "group": GROUP_BY_KIND["ensemble"],
+        "start": start,
+        "end": end,
+        "dur": round(end - start, 2),
+        "peak": None,
+        "rule": "only_b",
+        "rule_label": "副引擎补漏",
+        "text": text[:160],
+        # 补漏句本来就不在主稿里，这里明确给 QA 采纳时要插入的目标。
+        "cues": [{"start": start, "end": end, "text": text}],
+        "label": meta["name"],
+        "plain": meta["plain"],
+        "hint": meta["hint"],
+        "status": "pending",
+        "resolution": "",
+        "engine": str(span.get("engine") or ""),
+        "nearest_a": str(span.get("nearest_a") or "")[:160],
+    }
+
+
+def merge_ensemble_items(
+    items: list[dict],
+    ensemble_spans: list[dict] | None,
+    cues,
+) -> list[dict]:
+    """把副稿补漏项合并进已有队列，并升级同一处的空白项。
+
+    这是 `build_audit_items` 与 dual 任务共用的唯一实现：dual 在 Pass B 之后
+    拿 Pass A 的 payload 直接调用它，不必重算整张队列。
+    """
+    cue_list = _coerce_cues(cues or [])
+    out = list(items)
+    for span in sorted(ensemble_spans or [], key=lambda s: float(s.get("start", 0.0) or 0.0)):
+        item = _ensemble_item_from_span(span, cue_list)
+        if item is None:
+            continue
+        out = [
+            existing
+            for existing in out
+            if not _same_blank_slot(existing, item["start"], item["end"])
+        ]
+        out.append(item)
+    out.sort(key=lambda item: (float(item.get("start", 0.0)), AUDIT_KIND_ORDER.get(item["kind"], 9)))
+    return out
+
+
 def build_audit_items(
     missed_spans: list[dict] | None,
     segment_stats: dict | None,
     cues,
     coverage_spans: list[dict] | None = None,
 ) -> list[dict]:
-    """把四类问题合并成一条按时间排序的待核队列。
+    """把五类问题合并成一条按时间排序的待核队列。
 
     对用户只暴露两个组：
 
@@ -168,6 +265,10 @@ def build_audit_items(
             rule_label = "主 VAD 未切到"
         elif kind == "missed":
             rule_label = _missed_reason_label(reason)
+        elif kind == "nonverbal":
+            rule_label = "纯发声 / 拟声"
+        elif kind == "ensemble":
+            rule_label = "副引擎补漏"
         else:
             rule_label = _hallucination_rule_label(rule)
         item = {
@@ -259,6 +360,36 @@ def build_audit_items(
             text=str(span.get("text") or ""),
         )
 
+    # P0：纯发声待核。整条只有喘息/笑声/拟声、已被字幕剔除的段，以前只计数
+    # （`nonverbal_skips`）就消失；现在最多取 20 条进队列，让用户能保留/确认删除。
+    # 先按时长/峰值取最值得听的，再按时间排回去；`add` 里的 id 天然去重。
+    nonverbal = [
+        span
+        for span in list((segment_stats or {}).get("nonverbal_spans") or [])
+        if str(span.get("text") or "").strip()
+    ]
+    if nonverbal:
+        top = sorted(
+            nonverbal,
+            key=lambda span: (float(span.get("dur", 0.0) or 0.0), float(span.get("peak", 0.0) or 0.0)),
+            reverse=True,
+        )[:20]
+        for span in sorted(top, key=lambda span: float(span.get("start", 0.0) or 0.0)):
+            add(
+                "nonverbal",
+                span.get("start", 0.0),
+                span.get("end", 0.0),
+                peak=span.get("peak") if "peak" in span else None,
+                rule="sound-only",
+                text=str(span.get("text") or ""),
+                extra={"rms": span.get("rms")},
+            )
+
+    items = merge_ensemble_items(
+        items,
+        list((segment_stats or {}).get("ensemble_spans") or []),
+        cue_list,
+    )
     items.sort(key=lambda item: (float(item.get("start", 0.0)), AUDIT_KIND_ORDER.get(item["kind"], 9)))
     return items
 
@@ -349,11 +480,17 @@ def _audit_coverage(engine: str) -> dict:
     空 engine（idle 态）沿用旧口径标 True：那时还没有任何引擎跑过，不该拿
     「本引擎不启用」去解释一个空队列。
     """
-    is_whisper = str(engine or "") in {"", "whisper"}
+    key = str(engine or "")
+    is_whisper = key in {"", "whisper"}
     return {
         "missed": True,
         "dropped": is_whisper,
         "suspect": is_whisper,
+        # P0：Whisper 与 Qwen 都会把纯发声段记进 `nonverbal_spans`；
+        # 中文 sherpa 引擎本轮还没有接这条，标 False 比空队列更诚实。
+        "nonverbal": key in {"", "whisper", "qwen"},
+        # P2：只有 dual 任务会生成 ensemble 项；单引擎跑出来是空列表，不是缺失。
+        "ensemble": key in {"", "whisper", "qwen"},
     }
 
 

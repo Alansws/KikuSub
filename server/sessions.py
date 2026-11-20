@@ -948,12 +948,29 @@ class Session:
         params: dict | None = None,
         media_path: str = "",
         output_dir: str | Path,
+        replace_range: tuple[float, float | None] | None = None,
     ) -> AltReview:
-        """写入第二版并立刻落盘（边车文件），核对台一个字都不动。"""
+        """写入第二版并立刻落盘（边车文件），核对台一个字都不动。
+
+        ``replace_range`` 只在区间 dual 时传：只替换该范围内的旧对照，
+        范围外条目原样保留；整片模式传 None 才整列覆盖。
+        """
+        from core.cues import _unique_sorted_cues
+
         with self.lock:
+            merged = _copy(cues)
+            if replace_range is not None and self.alt_review is not None:
+                start, end = replace_range
+                limit = end if end is not None else float("inf")
+                kept = [
+                    cue
+                    for cue in self.alt_review.cues
+                    if not (float(cue.end) > float(start) and float(cue.start) < limit)
+                ]
+                merged = _unique_sorted_cues([*kept, *merged])
             alt = AltReview(
                 engine=str(engine or ""),
-                cues=_copy(cues),
+                cues=merged,
                 source=dict(source or {}),
                 created_at=time.time(),
                 params=copy.deepcopy(params or {}),

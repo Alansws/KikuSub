@@ -27,8 +27,11 @@ class ParamSpec:
     key: str  # 预设里用的键，形如 "whisper.vad_threshold"
     label: str  # 界面上的短标签
     engine: str
-    kind: str  # bool | float | int
-    default: bool | float | int
+    kind: str  # bool | float | int | enum
+    default: bool | float | int | str
+    choices: tuple[str, ...] | None = None
+    # 枚举值的友好文案；键必须覆盖 choices。前端渲染下拉时优先用它。
+    choice_labels: dict[str, str] | None = None
     group: str = "基础"
     minimum: float | None = None
     maximum: float | None = None
@@ -36,6 +39,13 @@ class ParamSpec:
     # 映射到引擎配置 dataclass 的字段；None 表示直接透传给 transcribe_file
     config_field: str | tuple[str, ...] | None = None
     help: str = ""
+    # 只对某个「兄弟枚举值」生效的参数（例如只对 Silero 生效的句首补回）。
+    # 值为兄弟枚举的 value（如 "silero"），由前端按当前切分器置灰。
+    backend_only: str = ""
+    # 按兄弟枚举值给出的额外校准提示（如 WhisperSeg 推荐阈值 0.35）。
+    backend_notes: dict[str, str] | None = None
+    # 按兄弟枚举值给出的推荐数值；前端据此提供「采用推荐值」一键校准。
+    backend_recommended: dict[str, float] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -44,12 +54,19 @@ class ParamSpec:
             "engine": self.engine,
             "kind": self.kind,
             "default": self.default,
+            "choices": list(self.choices) if self.choices else None,
+            "choice_labels": dict(self.choice_labels) if self.choice_labels else None,
             "group": self.group,
             "min": self.minimum,
             "max": self.maximum,
             "step": self.step,
             "help": self.help,
             "is_config": self.config_field is not None,
+            "backend_only": self.backend_only or None,
+            "backend_notes": dict(self.backend_notes) if self.backend_notes else None,
+            "backend_recommended": (
+                dict(self.backend_recommended) if self.backend_recommended else None
+            ),
         }
 
 
@@ -67,10 +84,28 @@ SPECS: tuple[ParamSpec, ...] = (
         "空段；实测开着能同时降低错字与漏句。",
     ),
     ParamSpec(
+        "whisper.vad_backend", "VAD 切分器", WHISPER, "enum", "whisperseg",
+        group="VAD", config_field="vad_backend",
+        choices=("whisperseg", "silero"),
+        choice_labels={
+            "whisperseg": "WhisperSeg（推荐）",
+            "silero": "Silero 20s（兼容）",
+        },
+        help="WhisperSeg 对 BGM/环境音几乎零误检，实测 CER 更低、插入更少、转写更快；"
+        "首次使用需下载约 114MB 权重，可在「设置 → 引擎与模型」预下载。"
+        "Silero 20s 不需要额外权重，适合离线或想保持旧行为的场景。",
+    ),
+    ParamSpec(
         "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.25,
         group="VAD", minimum=0.05, maximum=0.80, step=0.01, config_field="threshold",
-        help="调小对耳语更灵敏；调大抗噪更强、能过滤背景音乐。VAD 已改成分窗检测，"
-        "不再需要靠抬高阈值来压住误检。",
+        help="调小对耳语更灵敏；调大抗噪更强、能过滤背景音乐。两个切分器的概率刻度"
+        "不同：WhisperSeg 标定推荐 0.35，Silero 20s 推荐 0.25。旧预设里的 0.25 "
+        "带进 WhisperSeg 会让切分偏碎（P1 实测 CER 0.25→0.35 由 10.78% 降到 10.67%）。",
+        backend_notes={
+            "whisperseg": "WhisperSeg 标定推荐 0.35",
+            "silero": "Silero 20s 推荐 0.25",
+        },
+        backend_recommended={"whisperseg": 0.35, "silero": 0.25},
     ),
     ParamSpec(
         "whisper.vad_speech_pad_ms", "首尾留白 (ms)", WHISPER, "int", 250,
@@ -81,9 +116,13 @@ SPECS: tuple[ParamSpec, ...] = (
     ParamSpec(
         "whisper.vad_onset_pad_ms", "句首提前 (ms)", WHISPER, "int", 0,
         group="VAD", minimum=0, maximum=600, step=20, config_field="onset_pad_ms",
+        # 这是给 Silero 的起点系统性偏晚做的补偿；WhisperSeg 的帧级概率已经贴合
+        # 真实发声，再左扩只会把上一句的尾音带进来，所以只对 Silero 生效。
+        backend_only="silero",
         help="把 VAD 段起点整体向左扩。Silero 的起点系统性晚于真实发声，"
         "被吞的常是「す / そ / え」这类轻声起音的句首；0 = 关闭（与旧行为一致）。"
-        "不调阈值：调低会换来更多强制切分与音乐误检。",
+        "WhisperSeg 自身已贴合句首，此项对它不生效。不调阈值：调低会换来更多"
+        "强制切分与音乐误检。",
     ),
     ParamSpec(
         "whisper.vad_min_silence_ms", "判定停顿静音 (ms)", WHISPER, "int", 200,
@@ -124,6 +163,20 @@ SPECS: tuple[ParamSpec, ...] = (
         help="模型会如实转写「んふふ」「えへへ」这类非台词发声，它们几乎不该进字幕。"
         "开着只删句首尾、句中不动；整条只剩促音/长音符的碎片也不会占一条字幕。"
         "动画里角色的笑声算内容时，关掉即可原样保留。",
+    ),
+    ParamSpec(
+        "whisper.enable_start_repair", "句首静音自动拉回", WHISPER, "bool", True,
+        group="字幕", config_field="enable_start_repair",
+        help="保留字幕终点，只把句首的底噪/长静音按音频证据向右收；"
+        "单/双假名、「…」开头的短叹词、纯笑声与已挪过边界的句子会自动跳过；"
+        "三字以上的「…」句仍按音频证据拉回（省略号保留）。"
+        "关闭后时间轴与旧版逐字节一致，便于 A/B。",
+    ),
+    ParamSpec(
+        "whisper.nonverbal_qa", "纯拟声/喘息进质检", WHISPER, "bool", True,
+        group="字幕", config_field="nonverbal_qa",
+        help="整条只有喘息/笑声/拟声、已被字幕剔除的段，不再静默消失，"
+        "而是进质检队列（最多 20 条）让你保留或确认删除。只影响队列，不改字幕。",
     ),
     ParamSpec(
         "whisper.use_ctc_alignment", "CTC 逐字对齐（借 Qwen 对齐头）", WHISPER, "bool", False,
@@ -221,6 +274,14 @@ SPECS: tuple[ParamSpec, ...] = (
         config_field="cue_pad_end_s",
         help="最后一个字发声完再停留多久才消失。0.45s 与人工核验版一致；"
         "调小字幕切换更利落，调大留阅读余量（遇到下一条会截断）。",
+    ),
+    ParamSpec(
+        "qwen.nonverbal_qa", "纯拟声/喘息进质检", QWEN, "bool", False,
+        group="断句与字幕", config_field="nonverbal_qa",
+        help="整条只有喘息/笑声/拟声、已被字幕剔除的段，不再静默消失，"
+        "而是进质检队列（最多 20 条）让你保留或确认删除。只影响队列，不改字幕。"
+        "默认关闭：Qwen 对呼吸声很敏感，长片里容易一次多出二十条待核；"
+        "需要逐条筛拟声时再打开。",
     ),
     ParamSpec(
         "qwen.strip_nonverbal_edges", "剔除句首尾喘气/笑声", QWEN, "bool", True,
@@ -401,11 +462,16 @@ def all_defaults() -> dict:
     return {spec.key: spec.default for spec in SPECS}
 
 
-def coerce(spec: ParamSpec, raw) -> bool | float | int:
+def coerce(spec: ParamSpec, raw) -> bool | float | int | str:
     if spec.kind == "bool":
         if isinstance(raw, str):
             return raw.strip().lower() in {"1", "true", "yes", "on"}
         return bool(raw)
+    if spec.kind == "enum":
+        value = str(raw).strip()
+        if spec.choices and value not in spec.choices:
+            raise ValueError(f"{spec.key} 不支持 {value!r}")
+        return value
     if spec.kind == "int":
         value = int(round(float(raw)))
     else:

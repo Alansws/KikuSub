@@ -43,10 +43,14 @@ class CompareRange(BaseModel):
 class TranscribeJobRequest(BaseModel):
     media_id: str
     # transcribe=转写；proxy=压制 480p 监看代理；compare=用另一个引擎把窗口重听一遍
-    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy|compare)$")
+    kind: str = Field(default="transcribe", pattern="^(transcribe|proxy|compare|dual)$")
     # 合法值来自 `core.engines` 注册表（见下方 validator）：不要在这里写死引擎名，
     # 否则新增引擎会在请求层被 422 掉，而 pipeline/设置页都是正常的。
     engine: str = "whisper"
+    # kind=dual 时的副引擎；主/副必须同语种、不同引擎、且属于 Whisper/Qwen 日语族。
+    secondary_engine: str = ""
+    # 副引擎的独立参数；空表示全用该引擎默认值。
+    secondary_params: dict = Field(default_factory=dict)
     output_format: str = Field(default="SRT", pattern="^(SRT|VTT|TXT)$")
     save_beside: bool = False
     start: float | None = None
@@ -64,13 +68,16 @@ class TranscribeJobRequest(BaseModel):
     # 强 BGM / 歌曲：先对本次转写范围做 Demucs 人声分离（整片 = 0..总时长）。
     # 分离结果缓存在 audio_cache，换引擎重转直接复用。
     separate_vocals: bool = False
+    # 分离人声的用途：vad_only（默认）= 只用干净人声切分，识别仍听原声；
+    # to_asr = 分离人声直接送识别（旧行为，人声被彻底盖死时才用）。
+    separate_mode: str = Field(default="vad_only", pattern="^(vad_only|to_asr)$")
 
-    @field_validator("engine")
+    @field_validator("engine", "secondary_engine")
     @classmethod
     def _known_engine(cls, value: str) -> str:
         from core import engines
 
-        if value not in engines.KEYS:
+        if value and value not in engines.KEYS:
             raise ValueError(
                 f"未知的识别引擎：{value}（可选：{', '.join(engines.KEYS)}）"
             )
@@ -125,12 +132,51 @@ def _compare_windows(payload: TranscribeJobRequest) -> list[dict]:
     return windows
 
 
-def _build_request(request: Request, payload: TranscribeJobRequest):
+def _validate_dual(payload: TranscribeJobRequest) -> None:
+    """双引擎只允许同语种、不同引擎的日语 Whisper/Qwen 组合。"""
+    from core import engines as engine_registry
+    from core import memory
+
+    blocked = memory.dual_memory_error()
+    if blocked:
+        raise HTTPException(status_code=422, detail=blocked)
+    secondary = str(payload.secondary_engine or "").strip()
+    if not secondary:
+        raise HTTPException(status_code=422, detail="双引擎协同需要选择副引擎")
+    if secondary == payload.engine:
+        raise HTTPException(status_code=422, detail="主引擎与副引擎不能是同一个")
+    try:
+        primary_spec = engine_registry.get(payload.engine)
+        secondary_spec = engine_registry.get(secondary)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    for spec in (primary_spec, secondary_spec):
+        if spec.family not in {"whisper", "qwen"} or "日语" not in spec.languages:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "双引擎顺序协同目前只支持日语 Whisper / Qwen3-ASR；"
+                    f"{spec.label} 不参与该组合"
+                ),
+            )
+
+
+def _build_request(
+    request: Request,
+    payload: TranscribeJobRequest,
+    *,
+    engine_key: str | None = None,
+    values: dict | None = None,
+    write_audit: bool | None = None,
+):
     # 延迟导入：core.pipeline 会拉起 torch（约 7 s），只有真的要转写时才付这个代价
     from core import engines as engine_registry
     from core import params as param_specs
     from core import pipeline
     from core import settings as settings_store
+
+    engine_key = str(engine_key or payload.engine)
+    values = dict(payload.params if values is None else values)
 
     try:
         info = request.app.state.media.get(payload.media_id)
@@ -143,13 +189,12 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         raise HTTPException(status_code=422, detail="结束时间必须大于起始时间")
     # 参数键用 core.params 的规格键（whisper.vad_threshold 这种），
     # 与预设文件里的键天然一致；缺失补默认、越界夹紧都由 normalize 负责。
-    values = dict(payload.params or {})
     try:
-        family = engine_registry.family_of(payload.engine)
+        family = engine_registry.family_of(engine_key)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    config = _engine_config(payload.engine, family, values)
+    config = _engine_config(engine_key, family, values)
     if family == "qwen":
         whisper_config, qwen_config, sherpa_config = None, config, None
     elif family == "sherpa":
@@ -157,7 +202,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     else:
         whisper_config, qwen_config, sherpa_config = config, None, None
 
-    extra = param_specs.passthrough_kwargs(payload.engine, values)
+    extra = param_specs.passthrough_kwargs(engine_key, values)
 
     # 设置里的「导出文件夹」在每次任务开始时读取：用户在设置页改完之后，
     # 下一次点「开始转写」立即生效，不需要重启 sidecar。
@@ -172,7 +217,7 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
     return pipeline.TranscribeRequest(
         media_path=info.path,
         media_id=payload.media_id,
-        engine_key=payload.engine,
+        engine_key=engine_key,
         output_format=payload.output_format,
         save_beside=payload.save_beside,
         export_dir=export_dir,
@@ -187,10 +232,13 @@ def _build_request(request: Request, payload: TranscribeJobRequest):
         repetition_penalty=float(extra.get("repetition_penalty", 1.15)),
         use_alignment=bool(extra.get("use_alignment", True)),
         separate_vocals=payload.separate_vocals,
+        separate_mode=payload.separate_mode,
         # 只有核对台里的「单句/选区修正」保留原队列；转写页的整片或区间任务
         # 都是一次新的转写，报告里会出现质检统计，队列必须同步落盘——否则
         # 报告显示「漏句 1、短句 4」而质检面板是 0 条。
-        write_audit=payload.apply != "replace_range",
+        write_audit=(
+            payload.apply != "replace_range" if write_audit is None else bool(write_audit)
+        ),
         # 短选区轻声兜底只给核对台的人工短选区：`replace_range` 就是「转写选区 /
         # 重转此句 / 质检补录」三种入口的共同语义。整片与追加任务保持 False，
         # 全局 VAD 默认值与整片「空结果」的防线因此都不动。
@@ -211,7 +259,11 @@ async def create_job(
     # 「替换选区」是区间语义：没有起点时 `_apply_cues` 会落进最后的 else 分支，
     # 把整张表换成这一次的结果（用户看到的就是"全片字幕只剩这一段"）。
     # 请求层直接拦掉，不允许这种静默降级成整片覆盖。
-    if payload.kind == "transcribe" and payload.apply == "replace_range" and payload.start is None:
+    if (
+        payload.kind in {"transcribe", "dual"}
+        and payload.apply == "replace_range"
+        and payload.start is None
+    ):
         raise HTTPException(
             status_code=422,
             detail="「替换选区」需要填写起始时间；整片转写请选「覆盖」",
@@ -224,7 +276,32 @@ async def create_job(
         session.media_id = payload.media_id
 
     try:
-        if payload.kind == "compare":
+        if payload.kind == "dual":
+            if payload.apply == "append":
+                raise HTTPException(
+                    status_code=422,
+                    detail="双引擎协同只支持整片覆盖或替换区间，不支持追加",
+                )
+            _validate_dual(payload)
+            primary_request = _build_request(request, payload)
+            secondary_request = _build_request(
+                request,
+                payload,
+                engine_key=payload.secondary_engine,
+                values=payload.secondary_params,
+                write_audit=False,
+            )
+            secondary_request.alt_review = True
+            secondary_request.alt_review_range = payload.apply == "replace_range"
+            job = manager.start_dual(
+                primary_request,
+                secondary_request,
+                session=session,
+                apply=payload.apply,
+                session_id=session.id,
+                loop=loop,
+            )
+        elif payload.kind == "compare":
             from core import engines as engine_registry
 
             try:

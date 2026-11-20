@@ -285,6 +285,8 @@
     missed: '切片内为空',
     dropped: '误删待核',
     suspect: '短句待确认',
+    nonverbal: '纯发声待核',
+    ensemble: '双引擎补漏',
   };
 
   /** 待核的排前面；同组按时间。 */
@@ -635,6 +637,23 @@
                     class="act"
                     onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'confirmed' })}
                   >确认删除</button>
+                {:else if item.kind === 'nonverbal'}
+                  <button
+                    class="act primary-ghost"
+                    onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'kept' })}
+                  >保留</button>
+                  <button
+                    class="act"
+                    onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'confirmed' })}
+                  >确认删除</button>
+                {:else if item.kind === 'ensemble'}
+                  <button
+                    class="act primary"
+                    onclick={() => act(item, { action: 'mark', status: 'done', resolution: 'kept' })}
+                  >采纳补漏</button>
+                  {#if item.nearest_a}
+                    <span class="ensemble-ref" title="主稿最近的句子">主稿：{item.nearest_a}</span>
+                  {/if}
                 {:else}
                   <button
                     class="act primary-ghost"
@@ -1158,6 +1177,23 @@
   .k-suspect {
     background: var(--accent-soft);
     color: var(--accent);
+  }
+  .k-nonverbal {
+    background: var(--fill);
+    color: var(--text-2);
+  }
+  .k-ensemble {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  .ensemble-ref {
+    min-width: 0;
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--text-3);
   }
   .time {
     font-family: var(--font-mono);
