@@ -33,6 +33,12 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import {
+  beginDownload,
+  failedDownload,
+  reduceDownload,
+  type DownloadProgress,
+} from './downloadState';
 import { clipCaption, isFullClip, normalizeClip, type ClipScope } from './clipRange';
 import {
   exportModeLabel,
@@ -925,13 +931,7 @@ export const settings = $state({
   data: null as SettingsPayload | null,
   loading: false,
   error: '',
-  download: null as null | {
-    key: string;
-    label: string;
-    percent: number;
-    stage: string;
-    status: 'running' | 'done' | 'error';
-  },
+  download: null as DownloadProgress | null,
 });
 
 /** 烧录样式：字段与 core/video_export.py 的 SubtitleStyle 一一对应。 */
@@ -3197,62 +3197,49 @@ export async function toggleEngine(key: string, enabled: boolean) {
   }
 }
 
-export async function downloadEngine(key: string) {
+async function runDownload(
+  key: string,
+  label: string,
+  start: () => Promise<{ id: string }>,
+) {
   if (settings.download?.status === 'running') {
     toast('已有模型正在下载，请等它完成', 'warn');
     return;
   }
-  const info = settings.data?.engines.find((e) => e.key === key);
-  settings.download = {
-    key,
-    label: info?.label ?? key,
-    percent: 0,
-    stage: '准备下载…',
-    status: 'running',
-  };
+  settings.download = beginDownload(key, label);
   logEvent('info', 'engine-download-start', key);
   try {
-    const job = await api.downloadEngine(key);
+    const job = await start();
     api.streamJob(job.id, (ev) => {
-      if (!settings.download || settings.download.key !== key) return;
-      if (ev.job) {
-        settings.download.percent = Math.max(settings.download.percent, ev.job.percent ?? 0);
-        if (ev.job.stage) settings.download.stage = ev.job.stage;
-      }
-      if (ev.type === 'progress') {
-        settings.download.percent = Math.max(
-          settings.download.percent,
-          ev.percent ?? ev.job_percent ?? 0,
-        );
-        if (ev.stage) settings.download.stage = ev.stage;
-      }
+      const next = reduceDownload(settings.download, key, ev);
+      if (!next) return;
+      settings.download = next;
       if (ev.type === 'done') {
-        settings.download = { ...settings.download, percent: 100, stage: '下载完成', status: 'done' };
-        toast(`${settings.download.label} 模型已就绪`);
+        toast(`${label} 已就绪`);
         logEvent('info', 'engine-download-done', key);
         void loadSettings(true);
         void refreshConfig();
       }
       if (ev.type === 'error') {
-        settings.download = {
-          ...settings.download,
-          stage: ev.message || '下载失败',
-          status: 'error',
-        };
-        toast(`模型下载失败：${ev.message || ''}`, 'error');
+        toast(`下载失败：${next.stage}`, 'error');
         logEvent('error', 'engine-download-failed', key, ev.message);
       }
     });
   } catch (err) {
-    settings.download = {
-      key,
-      label: info?.label ?? key,
-      percent: 0,
-      stage: (err as Error).message,
-      status: 'error',
-    };
+    settings.download = failedDownload(key, label, (err as Error).message);
     toast((err as Error).message, 'error');
     logEvent('error', 'engine-download-start', key, String(err));
   }
+}
+
+export async function downloadEngine(key: string) {
+  const info = settings.data?.engines.find((e) => e.key === key);
+  await runDownload(key, info?.label ?? key, () => api.downloadEngine(key));
+}
+
+/** 可选 VAD 切分器（WhisperSeg）预下载：与引擎下载共用同一条进度通道。 */
+export async function downloadVadAsset(key: string) {
+  const info = settings.data?.vad_assets?.find((a) => a.key === key);
+  await runDownload(key, info?.label ?? key, () => api.downloadVadAsset(key));
 }
 

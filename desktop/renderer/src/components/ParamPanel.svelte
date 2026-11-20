@@ -10,7 +10,10 @@
 
   function display(spec: ParamSpec, value: number | boolean | string): string {
     if (spec.kind === 'bool') return value ? '开' : '关';
-    if (spec.kind === 'enum') return String(value);
+    if (spec.kind === 'enum') {
+      const key = String(value);
+      return spec.choice_labels?.[key] ?? key;
+    }
     const num = Number(value);
     if (spec.step && spec.step < 0.1) return num.toFixed(2);
     if (spec.step && spec.step < 1) return num.toFixed(2);
@@ -43,7 +46,7 @@
                   onchange={(e) => setParam(engine, spec.key, e.currentTarget.value)}
                 >
                   {#each spec.choices ?? [] as choice (choice)}
-                    <option value={choice}>{choice}</option>
+                    <option value={choice}>{spec.choice_labels?.[choice] ?? choice}</option>
                   {/each}
                 </select>
               </label>

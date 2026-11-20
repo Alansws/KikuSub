@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from core import engines
 from core import settings as settings_store
+from core import vad as vad_backends
 from core.logging_setup import clear_logs, prune_logs
 from core.paths import MODELS_DIR, OUTPUT_DIR, PRESETS_PATH
 
@@ -168,6 +169,7 @@ def _payload(request: Request, settings: dict) -> dict:
             enabled_keys=settings.get("enabled_engines") or [],
             include_size=True,
         ),
+        "vad_assets": [vad_backends.whisperseg_asset()],
         "paths": _paths(request, settings),
         "runtime": _runtime(request),
         "ffmpeg": _ffmpeg_info(),
@@ -244,6 +246,33 @@ async def download_engine(
         engines.model_dir(spec),
         job.id,
     )
+    return job.snapshot()
+
+
+@router.get("/api/vad/assets")
+def list_vad_assets() -> dict:
+    """可选 VAD 资产（目前只有 WhisperSeg 切分器）；只读磁盘，不联网。"""
+    return {"assets": [vad_backends.whisperseg_asset()]}
+
+
+@router.post("/api/vad/assets/{asset_key}/download", status_code=201)
+async def download_vad_asset(
+    asset_key: str,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
+    if asset_key != vad_backends.WHISPERSEG_KEY:
+        raise HTTPException(status_code=404, detail=f"未知可选资产：{asset_key}")
+    manager: JobManager = request.app.state.jobs
+    try:
+        job = manager.start_asset_download(
+            asset_key,
+            session_id=session.id,
+            loop=asyncio.get_running_loop(),
+        )
+    except JobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    log.info("开始下载 VAD 资产 | asset=%s | job=%s", asset_key, job.id)
     return job.snapshot()
 
 

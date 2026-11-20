@@ -537,31 +537,100 @@ class JobManager:
         finally:
             self._registry.finish(job.token)
 
+    def start_asset_download(
+        self,
+        asset_key: str,
+        *,
+        session_id: str = "",
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> JobRecord:
+        """下载可选资产（目前只有 WhisperSeg 切分器）；与转写共用单槽。"""
+        job = self._launch("download", f"vad:{asset_key}", session_id, loop)
+        self._spawn(self._run_asset_download, job, asset_key)
+        return job
+
     def _run_download(self, job: JobRecord, engine_key: str) -> None:
         from core import engines
 
+        spec = engines.get(engine_key)
+        self._run_fetch(
+            job,
+            result_field="engine",
+            result_value=engine_key,
+            directory=engines.model_dir(spec),
+            approx_bytes=spec.approx_bytes,
+            unit="GB",
+            label="模型",
+            ensure=lambda cb: engines.ensure_model(engine_key, progress_cb=cb),
+            installed=lambda: engines.is_installed(spec),
+            size_fn=lambda: engines.dir_size(engines.model_dir(spec), ttl_s=0),
+            log_label=f"engine={engine_key}",
+        )
+
+    def _run_asset_download(self, job: JobRecord, asset_key: str) -> None:
+        from core import vad
+
+        if asset_key != vad.WHISPERSEG_KEY:
+            job.status = "error"
+            job.error = f"未知可选资产：{asset_key}"
+            job.finished_at = time.time()
+            self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
+            self._registry.finish(job.token)
+            return
+        asset = vad.whisperseg_asset()
+        directory = Path(asset["model_dir"])
+        self._run_fetch(
+            job,
+            result_field="asset",
+            result_value=asset_key,
+            directory=directory,
+            approx_bytes=int(asset["approx_bytes"]),
+            unit="MB",
+            label="切分器",
+            ensure=lambda cb: vad.ensure_whisperseg(progress_cb=cb),
+            installed=lambda: vad.whisperseg_ready(directory),
+            size_fn=lambda: vad._dir_bytes(directory),
+            log_label=f"asset={asset_key}",
+        )
+
+    def _run_fetch(
+        self,
+        job: JobRecord,
+        *,
+        result_field: str,
+        result_value: str,
+        directory: Path,
+        approx_bytes: int,
+        unit: str,
+        label: str,
+        ensure,
+        installed,
+        size_fn,
+        log_label: str,
+    ) -> None:
+        """模型/资产下载的共同壳：磁盘增长估进度、done/error 落 job、释放单槽。"""
         job.status = "running"
         job.started_at = time.time()
         self._emit(job, {"type": "start", "job": job.snapshot()})
         stop = threading.Event()
         monitor = None
         try:
-            spec = engines.get(engine_key)
-            directory = engines.model_dir(spec)
-            if engines.is_installed(spec):
-                job.stage = "模型已就绪"
+            if installed():
+                job.stage = f"{label}已就绪"
             else:
-                expected = max(1, spec.approx_bytes)
+                expected = max(1, approx_bytes)
+                divisor = 1024**3 if unit == "GB" else 1024**2
 
                 def monitor_size() -> None:
                     # 下载器不提供可靠进度，靠磁盘增长估算总进度；只报单调值。
                     while not stop.wait(0.8):
-                        size = engines.dir_size(directory, ttl_s=0)
+                        size = size_fn()
                         ratio = min(0.97, 0.02 + size / expected * 0.95)
                         self._progress(
                             job,
                             ratio,
-                            f"正在下载模型 {size / 1024**3:.2f} / {spec.approx_bytes / 1024**3:.1f} GB",
+                            f"正在下载{label} {size / divisor:.2f} / "
+                            f"{approx_bytes / divisor:.1f} {unit}",
                         )
 
                 monitor = threading.Thread(
@@ -583,23 +652,22 @@ class JobManager:
                             },
                         )
 
-                engines.ensure_model(engine_key, progress_cb=on_progress)
+                ensure(on_progress)
 
-            installed = engines.is_installed(spec)
-            if not installed:
+            if not installed():
                 raise RuntimeError(
                     "下载结束后仍没有找到完整权重，请检查网络或代理后重试。"
                 )
             stop.set()
             if monitor is not None:
                 monitor.join(timeout=2)
-            size = engines.dir_size(directory, ttl_s=0)
+            size = size_fn()
             job.status = "done"
             job.ratio = 1.0
             job.percent = 100
-            job.stage = "模型下载完成"
+            job.stage = f"{label}下载完成"
             job.result = {
-                "engine": engine_key,
+                result_field: result_value,
                 "installed": True,
                 "size_bytes": size,
                 "model_dir": str(directory),
@@ -607,9 +675,10 @@ class JobManager:
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info(
-                "模型下载完成 | engine=%s | size=%.2fGB | dir=%s",
-                engine_key,
-                size / 1024**3,
+                "%s下载完成 | %s | size=%.2fMB | dir=%s",
+                label,
+                log_label,
+                size / 1024**2,
                 directory,
             )
         except Exception as exc:  # noqa: BLE001
@@ -617,10 +686,12 @@ class JobManager:
             job.status = "error"
             job.error = str(exc)
             job.finished_at = time.time()
-            log.exception("模型下载失败 | engine=%s", engine_key)
+            log.exception("%s下载失败 | %s", label, log_label)
             self._emit(job, {"type": "error", "message": job.error, "job": job.snapshot()})
         finally:
             stop.set()
+            if monitor is not None:
+                monitor.join(timeout=1)
             self._registry.finish(job.token)
 
     def _launch(

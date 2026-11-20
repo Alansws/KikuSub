@@ -59,9 +59,21 @@ export interface AppSettings {
   video_export_dir: string;
 }
 
+export interface VadAsset {
+  key: string;
+  label: string;
+  description: string;
+  installed: boolean;
+  model_dir: string;
+  required_files: string[];
+  approx_bytes: number;
+  size_bytes: number;
+}
+
 export interface SettingsPayload {
   settings: AppSettings;
   engines: EngineInfo[];
+  vad_assets: VadAsset[];
   paths: {
     output_dir: string;
     export_dir: string;
@@ -268,6 +280,8 @@ export interface ParamSpec {
   kind: 'bool' | 'float' | 'int' | 'enum';
   default: number | boolean | string;
   choices?: string[] | null;
+  /** 枚举值的友好文案（值 → 展示）；缺省时直接用值。 */
+  choice_labels?: Record<string, string> | null;
   group: string;
   min: number | null;
   max: number | null;
@@ -1332,6 +1346,11 @@ export const api = {
 
   downloadEngine: (key: string) =>
     req<JobSnapshot>(`/api/engines/${encodeURIComponent(key)}/download`, { method: 'POST' }),
+
+  downloadVadAsset: (key: string) =>
+    req<JobSnapshot>(`/api/vad/assets/${encodeURIComponent(key)}/download`, {
+      method: 'POST',
+    }),
 
   diagnostics: (lines = 200) =>
     req<{
