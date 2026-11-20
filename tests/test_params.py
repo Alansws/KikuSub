@@ -57,6 +57,8 @@ def test_config_kwargs_maps_field_names():
     kwargs = params.config_kwargs("whisper", {"whisper.vad_threshold": 0.25})
     assert kwargs["threshold"] == 0.25
     assert kwargs["enable_sentence_split"] is True
+    assert kwargs["enable_start_repair"] is True
+    assert kwargs["nonverbal_qa"] is True
     # 透传参数不应出现在 dataclass 参数里
     assert "no_repeat_ngram_size" not in kwargs
 
@@ -69,6 +71,7 @@ def test_qwen_cue_pads_are_independent():
     assert kwargs["cue_pad_start_s"] == 0.2
     assert kwargs["cue_pad_end_s"] == 0.45
     assert params.defaults_for("qwen")["qwen.cue_pad_end_s"] == 0.45
+    assert params.config_kwargs("qwen", {})["nonverbal_qa"] is False
 
 
 def test_legacy_cue_pad_key_expands():

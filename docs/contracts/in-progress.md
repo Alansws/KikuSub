@@ -3,6 +3,26 @@
 > 从 `AGENTS.md` 拆出（2026-11-16，AGENTS.md 有 20KB 上限）。这里记「做到哪、下一步是什么」；
 > 方向与红线仍在 [AGENTS.md](../../AGENTS.md)，待办清单在 [backlog.md](../backlog.md)。
 
+## P0 时机修复 + 拟声质检（2026-11-20 已落地）
+
+- `core/timing_repair.py`：音频感知的句首静音拉回（保留 end）；`whisper.enable_start_repair`
+  默认开。闸门：`head_removed` / 纯拟声 / 「…」+单双假名 / 单双假名保底。
+- `nonverbal` 质检 kind：Whisper 与 Qwen 的纯喘息/笑声/拟声不再静默删除，进队列（最多 20 条）；
+  `whisper.nonverbal_qa` 默认开，`qwen.nonverbal_qa` 默认关（Qwen 对呼吸声敏感，
+  长片容易一次多出二十条待核；参数面板可手动打开），只改队列不改字幕。
+- 同区间 `score_srt.py` 结果：Test 1 Whisper CER 9.80% / 漏块 9 / 最长 4.71s；
+  Test 2 Whisper 15.48% / 13 / 3.82s；Test 2 Qwen 11.47% / 10 / 3.89s——三项均与基线逐项一致。
+- 质检条数：Test 1 Whisper 85→88（+3 纯发声）、Test 2 Whisper 75→76（+1；
+  评测卡同一跑为 77，属单次转写波动）、Test 2 Qwen 5→25（+20，命中 20 条上限）。
+  **2026-11-20 复核后 `qwen.nonverbal_qa` 默认改 false**：Qwen 基线只有 5 条待核，
+  打开后变成 25 条纯喘息，长片里太吵；参数保留，需要时手动开。
+- 旧 112 条 Test 2 样本（用户提到的 0.6–0.89s 句首静音）离线复算：
+  16 条高静音里拉回 6 条（0.51–0.84s），2 条「…むぅ/…んっ」按长叹词跳过，
+  8 条 CPS 正常跳过。
+- 当前默认 104 条 Test 2 直连诊断：`start_repair` 检查 90 段、拉回 0
+  （head_removed 2 / 句首省略短叹 3 / 无静音 35 / 静音不足 0.55s 50），
+  说明当前 VAD 分段本身已经够紧；旧 112 条样本是不同分段/参数下的历史产物。
+
 ## 转录引擎标定（四引擎均已完成一轮）
 
 - Anime Whisper：[转录标定-AnimeWhisper-2026-11.md](../转录标定-AnimeWhisper-2026-11.md)

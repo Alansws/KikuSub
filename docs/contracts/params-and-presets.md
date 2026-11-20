@@ -153,3 +153,14 @@ PY
 | `tests/test_presets.py::test_cannot_overwrite_another_engines_preset` | 同名跨引擎覆盖被拒 |
 | `tests/test_server_api.py::test_preset_roundtrip` | HTTP 层 404 / 409 / 422 与过滤 |
 | `core/smoke.py` 第 4 段 | 内核在干净解释器里仍能完成 CRUD 与引擎校验 |
+
+## 8. P0 新增参数（2026-11-20）
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `whisper.enable_start_repair` | true | 保留 end，只把 Anime Whisper 段首的底噪/长静音按音频证据向右收；关闭 = 旧时间轴逐字节一致 |
+| `whisper.nonverbal_qa` | true | 纯喘息/笑声/拟声被字幕剔除后进质检队列（最多 20 条），不静默消失 |
+| `qwen.nonverbal_qa` | false | 同上；Qwen 对呼吸声敏感，默认关闭避免长片一次多出二十条待核，需要时手动打开；CTC 时间轴不变 |
+
+老预设没有这三个键时，`params.normalize()` 补当前默认值；保存时写完整快照。
+它们都不改变引擎绑定、不新增引擎 key，因此不触发跨引擎 409 规则。

@@ -13,7 +13,7 @@
 - **断句改动必须有数字（2026-11）**：改 `qwen_ctc._break_costs` / `partition_cues` / VAD 参数前后，必须用 `python tools/eval/score_srt.py --reference ... --hypothesis ... --from ... --to ...` 跑同一区间，同时看 CER、`particle_start_cues`、`aux_start_cues`、最长条与 >4.3s 条数。禁止只凭个别样例“看起来更好”就改词边界；减少劈词与块均准确率之间存在已知取舍。
 - **并发与取消（2026-11 加固）**：转写/局部转写必须通过 `jobs.JobRegistry` 单槽占用，**禁止**再引入模块级 `CANCEL_EVENT`。取消令牌必须归属于发起任务的会话；别的窗口点「打断」只能收到“本会话没有任务”的提示，绝不能误伤正在跑的任务。客户端断开只发取消信号，槽位由真正停止工作的 worker 在 `finally` 中释放，避免“界面已返回、模型还在跑”时被新任务覆盖。所有 `subprocess` 外部命令必须走 `procutil.run_command`（超时/取消/terminate），代理成片先写 `*.part.mp4` 再原子 rename。
 - **`app.job` 不是「正在跑」的判据（2026-11-14 修复）**：任务结束后 `app.job` 会保留最后一份快照（状态栏、工具栏要读时长与百分比），所以 `!!app.job` 永远为真。要判断「有任务在跑」一律用 `lib/jobState.ts` 的 `jobBusy()`（`running` / `queued` / `cancelling`）；2026-11-14 就是因为它，「另一引擎复核」按钮在第一次转写之后永久变灰。
-- **覆盖审计（2026-11 新增）**：主 VAD 的漏检（VAD 没切到、Whisper 根本没收到）不会产生 `missed` 记录，所以 `core/coverage.py` 必须保持一条**只读旁路**：按字幕切空白间隙 → 20ms/40ms RMS 包络 → 每个间隙取最长候选 → 局部峰值归一化后跑一次 Silero 只取概率 → `last_coverage_spans` 交给 `build_audit_items(coverage_spans=...)`。它**不回写**字幕、不改主 VAD 参数、不改 `load_wav_mono` 的电平；`find_coverage_spans()` 失败必须吞掉，不能影响转写。质检对用户只暴露两个组：`coverage` → `miss`（漏检，默认置顶），`missed/dropped/suspect` → `low`（低置信，默认折叠）；`_audit_coverage()` 仍然只表达引擎能力，不要把 `coverage` 塞进去。默认参数（8s 空白 / 1.5s 候选 / 65 分位 / 局部 VAD 均值 0.20）是在 2026-11-10 的 14 分钟样本上调的；改阈值前先用同一段音频跑 `find_coverage_spans()` 看召回与条数。
+- **覆盖审计（2026-11 新增）**：主 VAD 的漏检（VAD 没切到、Whisper 根本没收到）不会产生 `missed` 记录，所以 `core/coverage.py` 必须保持一条**只读旁路**：按字幕切空白间隙 → 20ms/40ms RMS 包络 → 每个间隙取最长候选 → 局部峰值归一化后跑一次 Silero 只取概率 → `last_coverage_spans` 交给 `build_audit_items(coverage_spans=...)`。它**不回写**字幕、不改主 VAD 参数、不改 `load_wav_mono` 的电平；`find_coverage_spans()` 失败必须吞掉，不能影响转写。质检对用户只暴露两个组：`coverage` → `miss`（漏检，默认置顶），`missed/dropped/suspect/nonverbal` → `low`（低置信/待核，默认折叠）；`_audit_coverage()` 仍然只表达引擎能力，不要把 `coverage` 塞进去。默认参数（8s 空白 / 1.5s 候选 / 65 分位 / 局部 VAD 均值 0.20）是在 2026-11-10 的 14 分钟样本上调的；改阈值前先用同一段音频跑 `find_coverage_spans()` 看召回与条数。
 - **补录区间必须夹在空白边界内（2026-11 修复）**：`QaPanel.fill()` / `ReviewView` 的 `padEnd:0.3` 会把覆盖项尾部的下一句开头也切进来；`transcribeRange()` 现在接受 `clampStart/clampEnd`，调用方必须传 `item.gap_start/gap_end`。`server/jobs.py` 的 `replace_range` 也不能再按「cue.start < 区间尾就删」处理：只删除重叠 ≥50% 或中点落入区间的 cue，边缘被切到 0.2s 的邻句必须保留。回归用例在 `tests/test_server_jobs_range.py`。
 
 #### 3.4 桌面版核对台（`desktop/renderer/src/views/ReviewView.svelte`）
@@ -309,6 +309,22 @@
   `StatusBar` 的「质检」按钮对两种模式都走 `toggleQaPanel()`；从其他页面打开会先切回核对屏。
 - 质检动作（mark / skip / delete_cue / restore）现在也进统一历史；`focus` 不记。
   `_apply_state` 恢复 `qa_payload` 时必须写回媒体同名 `.qa.json`。
+- **纯发声待核（P0，2026-11-20）**：整条只有喘息/笑声/拟声、已被字幕剔除的段，
+  以前只计数 `nonverbal_skips` 就静默消失；现在由 `core.audit` 生成 `nonverbal`
+  kind（group `low`，最多 20 条），`QaPanel` 提供「保留 / 确认删除」。保留走
+  `qa.apply_action` 的 `mark kept`，由 `_audit_ensure_item_cues` 把原文按原时间
+  幂等插回，一步 ⌘Z 可退；确认删除只标状态，不动字幕。开关是
+  `whisper.nonverbal_qa`（默认 true）/ `qwen.nonverbal_qa`（默认 false：
+  Qwen 对呼吸声敏感，长片容易一次多出二十条，需要时在参数面板打开）。
+  **它只影响队列可见性，不改变字幕文本或 CER**。
+- **句首静音拉回（P0，2026-11-20）**：`whisper.enable_start_repair`（默认 true）
+  在 Anime Whisper 逐段循环里，保留 end，只按「10ms RMS + 全片底噪」把段首静音
+  向右收。四道闸门：`head_removed`（已被笑声边界挪过）、`is_nonverbal_only`、
+  「…」开头且只有单/双假名（长叹词保护；三字以上仍按音频证据拉回）、
+  单/双假名（阈值 0.8s / 最多 40% / 保底 0.8s）。
+  CTC 对齐路径不做（对齐层自己给逐字时间）。统计写入
+  `segment_stats["start_repair"]`，报告有「句首静音拉回」一行；关闭后时间轴与
+  旧版逐字节一致，供 A/B。
 
 
 #### 3.4.4 批量清理标点（2026-11-15 新增，2026-11-17 改口径）

@@ -215,6 +215,41 @@ def test_coverage_spans_reach_audit_payload_and_report(media, tmp_path, monkeypa
     assert result.coverage_spans
 
 
+def test_nonverbal_spans_reach_audit_payload_and_report(media, tmp_path, monkeypatch):
+    _patch_dirs(monkeypatch, tmp_path)
+
+    class _NonverbalEngine(_FakeEngine):
+        def transcribe_file(self, media_path, **kwargs):
+            cues = super().transcribe_file(media_path, **kwargs)
+            self.last_segment_stats = {
+                "nonverbal_spans": [{
+                    "start": 4.0, "end": 5.2, "dur": 1.2,
+                    "text": "ふふっ", "rule": "sound-only", "peak": 0.2, "rms": 0.02,
+                }],
+                "nonverbal_skips": 1,
+                "start_repair": {
+                    "enabled": True, "considered": 2, "pulled": 1,
+                    "total_pull_s": 0.8, "max_pull_s": 0.8,
+                },
+            }
+            return cues
+
+    result = pipeline.run_transcription(
+        pipeline.TranscribeRequest(media_path=media),
+        output_dir=tmp_path,
+        engine=_NonverbalEngine(),
+    )
+    payload = json.loads(result.audit_payload)
+    assert payload["scanned"]["nonverbal"] == 1
+    nonverbal = [item for item in payload["items"] if item["kind"] == "nonverbal"]
+    assert len(nonverbal) == 1
+    assert nonverbal[0]["text"] == "ふふっ"
+    assert result.report_data["quality"]["nonverbal"] == 1
+    section_ids = [section["id"] for section in result.report_data["sections"]]
+    assert "nonverbal" in section_ids
+    assert "start_repair" in section_ids
+
+
 def test_sensevoice_uses_sherpa_dispatch_and_own_suffix(media, tmp_path, monkeypatch):
     """中文引擎走 sherpa 分支：只拿 config，不拿 qwen 的 use_alignment。"""
     _patch_dirs(monkeypatch, tmp_path)
