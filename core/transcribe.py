@@ -42,10 +42,11 @@ logging.getLogger("transformers").addFilter(_TransformersLogFilter())
 import numpy as np
 import soundfile as sf
 import torch
-from silero_vad import get_speech_timestamps, load_silero_vad
+from silero_vad import load_silero_vad
 
 from . import audio_cache
 from . import timing_repair
+from .vad import detect_speech_stamps, vad_neg_threshold  # noqa: F401 - re-export for sherpa_asr
 from .coverage import find_coverage_spans
 from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
@@ -344,6 +345,10 @@ class WhisperVadConfig:
     # 借用 Qwen 的 CTC 对齐头拿逐字时间（core/align_layer.py）。
     # 默认关：要多常驻一份 Qwen 权重（MPS 4.3 GB），而且要先装 Qwen 引擎。
     use_ctc_alignment: bool = False
+    # VAD 后端：auto = 跟随 KIKUSUB_VAD_BACKEND（A/B）/ 默认 Silero 20s；
+    # silero20 / silero10 / whisperseg 为显式选择。TEN 仅 A/B 环境变量可用，
+    # 不进参数面板（负样本误报过高）。
+    vad_backend: str = "auto"
     # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
     # 见 `extend_segment_onsets()` 与路线文档 P0-1。
     onset_pad_ms: int = 0
@@ -791,80 +796,6 @@ def chunk_level_stats(chunk: np.ndarray | None) -> dict:
         "peak": round(float(np.max(np.abs(data))), 4),
         "rms": round(float(np.sqrt(np.mean(data ** 2))), 5),
     }
-
-
-def vad_neg_threshold(threshold: float) -> float:
-    """VAD 退出阈值：与 Silero 默认迟滞（threshold - 0.15）一致，但不低于下限。"""
-    return max(float(threshold) - 0.15, VAD_NEG_THRESHOLD_FLOOR)
-
-
-def detect_speech_stamps(
-    audio: np.ndarray,
-    vad,
-    *,
-    threshold: float,
-    min_speech_ms: int,
-    min_silence_ms: int,
-    speech_pad_ms: int,
-    window_s: float = VAD_WINDOW_S,
-    overlap_s: float = VAD_WINDOW_OVERLAP_S,
-) -> list[dict]:
-    """分窗跑 Silero VAD，返回按样本计的语音段（已消掉重叠窗的重复段）。
-
-    为什么要分窗：Silero 是带隐状态的流式模型，`get_speech_timestamps` 对整段
-    音频一次跑完时，越往后隐状态漂移越明显。830s 耳语素材上实测：整段一次跑，
-    461.8–463.8s 那段概率稳定在 0.4–0.9 的台词被判成静音（阈值降到 0.08 也检不出）；
-    把同一段放进 30s 窗内重跑则稳定命中。分窗后每窗 `reset_states()`，
-    结果不再依赖「前面播了多少」。
-
-    `audio` 是 float32 的一维数组；返回的 start/end 是**整段音频内的样本下标**。
-    """
-    audio = np.asarray(audio)
-    total = len(audio)
-    if total == 0:
-        return []
-
-    kwargs = dict(
-        sampling_rate=SAMPLE_RATE,
-        threshold=float(threshold),
-        min_speech_duration_ms=int(min_speech_ms),
-        min_silence_duration_ms=int(min_silence_ms),
-        speech_pad_ms=int(speech_pad_ms),
-        neg_threshold=vad_neg_threshold(threshold),
-    )
-
-    window = max(1.0, float(window_s))
-    hop = max(0.1, window - max(0.0, float(overlap_s)))
-    total_s = total / SAMPLE_RATE
-    if total_s <= window:
-        return list(get_speech_timestamps(torch.from_numpy(audio), vad, **kwargs))
-
-    stamps: list[dict] = []
-    start_s = 0.0
-    while start_s < total_s:
-        end_s = min(total_s, start_s + window)
-        a = int(round(start_s * SAMPLE_RATE))
-        b = int(round(end_s * SAMPLE_RATE))
-        chunk = audio[a:b]
-        if chunk.size:
-            offset = a
-            for stamp in get_speech_timestamps(torch.from_numpy(chunk), vad, **kwargs):
-                stamps.append(
-                    {"start": int(stamp["start"]) + offset, "end": int(stamp["end"]) + offset}
-                )
-        if end_s >= total_s:
-            break
-        start_s += hop
-
-    # 相邻窗口重叠 1s，同一段语音可能被检出两次：排序后做区间并集。
-    stamps.sort(key=lambda s: s["start"])
-    merged: list[dict] = []
-    for stamp in stamps:
-        if merged and stamp["start"] <= merged[-1]["end"]:
-            merged[-1]["end"] = max(merged[-1]["end"], stamp["end"])
-        else:
-            merged.append(dict(stamp))
-    return merged
 
 
 def _frame_rms(audio: np.ndarray) -> np.ndarray:
@@ -1732,6 +1663,7 @@ class AnimeWhisperEngine:
             min_speech_ms=int(cfg.min_speech_ms),
             min_silence_ms=int(cfg.min_silence_ms),
             speech_pad_ms=int(cfg.speech_pad_ms),
+            backend=str(getattr(cfg, "vad_backend", "auto") or "auto"),
         )
         raw_speech_s = sum((s["end"] - s["start"]) for s in stamps) / SAMPLE_RATE
         segments = merge_vad_segments(

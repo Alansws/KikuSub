@@ -660,6 +660,8 @@ class QwenCtcConfig:
     cue_pad_start_s: float = 0.20
     cue_pad_end_s: float = 0.45
     max_new_tokens: int = 440
+    # VAD 后端：auto = 跟随 KIKUSUB_VAD_BACKEND / 默认 Silero 20s。
+    vad_backend: str = "auto"
     # 句首补回：把 VAD 块起点向左扩多少毫秒（0 = 关闭，与旧行为逐字节一致）。
     # 与 Whisper 侧同一条实现（transcribe.extend_segment_onsets），别在这里再写一份。
     # 默认 400 与 core/params.py 的 `qwen.vad_onset_pad_ms` 保持一致：产品走参数表，
@@ -1130,6 +1132,7 @@ class QwenCtcEngine:
             min_speech_ms=int(cfg.vad_min_speech_ms),
             min_silence_ms=int(cfg.vad_min_silence_ms),
             speech_pad_ms=speech_pad_ms,
+            backend=str(getattr(cfg, "vad_backend", "auto") or "auto"),
         )
         segments = merge_vad_segments(
             stamps,

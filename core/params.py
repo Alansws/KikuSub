@@ -27,8 +27,9 @@ class ParamSpec:
     key: str  # 预设里用的键，形如 "whisper.vad_threshold"
     label: str  # 界面上的短标签
     engine: str
-    kind: str  # bool | float | int
-    default: bool | float | int
+    kind: str  # bool | float | int | enum
+    default: bool | float | int | str
+    choices: tuple[str, ...] | None = None
     group: str = "基础"
     minimum: float | None = None
     maximum: float | None = None
@@ -44,6 +45,7 @@ class ParamSpec:
             "engine": self.engine,
             "kind": self.kind,
             "default": self.default,
+            "choices": list(self.choices) if self.choices else None,
             "group": self.group,
             "min": self.minimum,
             "max": self.maximum,
@@ -65,6 +67,14 @@ SPECS: tuple[ParamSpec, ...] = (
         group="基础", config_field="enable_loudnorm",
         help="弱人声增强（dynaudnorm）。安静母带（整片峰值 < 0.1）不开会把大段台词识别成"
         "空段；实测开着能同时降低错字与漏句。",
+    ),
+    ParamSpec(
+        "whisper.vad_backend", "VAD 切分器", WHISPER, "enum", "auto",
+        group="VAD", config_field="vad_backend",
+        choices=("auto", "silero20", "silero10", "whisperseg"),
+        help="auto = 跟随 KIKUSUB_VAD_BACKEND（评测）或默认 Silero 20s。"
+        "silero10 更灵敏但误报更多；whisperseg 首次选择会自动下载约 114MB 权重，"
+        "对轻声/耳语召回最好，但长句可能变长。改用后请重跑同一区间评测。",
     ),
     ParamSpec(
         "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.25,
@@ -423,11 +433,16 @@ def all_defaults() -> dict:
     return {spec.key: spec.default for spec in SPECS}
 
 
-def coerce(spec: ParamSpec, raw) -> bool | float | int:
+def coerce(spec: ParamSpec, raw) -> bool | float | int | str:
     if spec.kind == "bool":
         if isinstance(raw, str):
             return raw.strip().lower() in {"1", "true", "yes", "on"}
         return bool(raw)
+    if spec.kind == "enum":
+        value = str(raw).strip()
+        if spec.choices and value not in spec.choices:
+            raise ValueError(f"{spec.key} 不支持 {value!r}")
+        return value
     if spec.kind == "int":
         value = int(round(float(raw)))
     else:
