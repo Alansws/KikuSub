@@ -34,6 +34,7 @@ for arg in "$@"; do
 done
 
 SIDECAR_BIN="build/pack/dist/sidecar/sidecar"
+CLI_BIN="build/pack/dist/kikusub"
 APP="build/pack/KikuSub.app"
 
 need_sidecar=0
@@ -52,6 +53,19 @@ if [ "$need_sidecar" = "1" ]; then
   bash tools/pack/build_sidecar.sh
 else
   echo "== sidecar 仍是最新，跳过（FORCE_SIDECAR=1 可强制重打）=="
+fi
+
+need_cli=0
+if [ ! -x "$CLI_BIN" ]; then
+  need_cli=1
+elif [ -n "$(find tools/kikusub -name '*.py' -newer "$CLI_BIN" -print -quit 2>/dev/null || true)" ]; then
+  need_cli=1
+fi
+if [ "$need_cli" = "1" ]; then
+  echo "== CLI 有改动：重打 kikusub =="
+  bash tools/pack/build_cli.sh
+else
+  echo "== kikusub CLI 仍是最新，跳过 =="
 fi
 
 echo "== 构建渲染层 =="

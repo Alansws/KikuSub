@@ -17,9 +17,11 @@ source tools/pack/_rmtree.sh
 APP="build/pack/KikuSub.app"
 ELECTRON_APP="desktop/node_modules/electron/dist/Electron.app"
 SIDECAR="build/pack/dist/sidecar"
+CLI="build/pack/dist/kikusub"
 
 [ -d "$ELECTRON_APP" ] || { echo "缺少 Electron：cd desktop && npm install" >&2; exit 1; }
 [ -d "$SIDECAR" ] || { echo "缺少 sidecar：先跑 build_sidecar.sh" >&2; exit 1; }
+[ -x "$CLI" ] || { echo "缺少 kikusub CLI：先跑 build_cli.sh" >&2; exit 1; }
 [ -d "desktop/renderer/dist" ] || { echo "缺少渲染层构建：cd desktop && npx vite build" >&2; exit 1; }
 
 # 防止“只重打了 app、没有重打 sidecar”：渲染层会出现新按钮，而 Python 侧还是旧接口
@@ -35,6 +37,16 @@ if [ -x "$SIDECAR_BIN" ]; then
     echo "❌ sidecar 比 Python 源码旧：$STALE_PY" >&2
     echo "   先运行：bash tools/pack/build_sidecar.sh" >&2
     echo "   然后再执行本脚本；否则新界面会调用旧接口。" >&2
+    exit 1
+  fi
+fi
+
+# CLI 也必须比源码新：`kikusub` 是独立二进制，旧版会跟新 sidecar 的接口对不上。
+if [ -x "$CLI" ]; then
+  STALE_CLI="$(find tools/kikusub -name '*.py' -newer "$CLI" -print -quit 2>/dev/null || true)"
+  if [ -n "$STALE_CLI" ]; then
+    echo "❌ kikusub CLI 比源码旧：$STALE_CLI" >&2
+    echo "   先运行：bash tools/pack/build_cli.sh" >&2
     exit 1
   fi
 fi
@@ -179,6 +191,13 @@ cp presets.json "$APP/Contents/Resources/python-presets.json" 2>/dev/null || tru
 echo "== 5/8 放入 Python sidecar（$(du -sh "$SIDECAR" | cut -f1)，慢）=="
 cp -R "$SIDECAR" "$APP/Contents/Resources/python"
 cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || true
+
+# 外部 CLI：`kikusub` 放在 Contents/MacOS（与主可执行文件同级），设置页会把它
+# 软链到 ~/.local/bin/kikusub。先单独签名，理由同下面的 ffmpeg。
+cp "$CLI" "$APP/Contents/MacOS/kikusub"
+chmod 755 "$APP/Contents/MacOS/kikusub"
+codesign --force --sign - "$APP/Contents/MacOS/kikusub" >/dev/null 2>&1 || true
+echo "已内置 CLI：$(du -h "$APP/Contents/MacOS/kikusub" | cut -f1)"
 
 echo "== 6/8 放入内置 ffmpeg / ffprobe（没有 Homebrew 也能导入视频）=="
 # 为什么要随包：macOS 不自带 ffmpeg，而从访达启动的 .app 只拿到
