@@ -13,10 +13,8 @@
    * - 「只改几处」走 ops JSON，勾选后一次原子应用。
    */
   import Icon from '../components/Icon.svelte';
-  import ClipScopePicker from '../components/ClipScopePicker.svelte';
-  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
+  import AiBatchToolbar from '../components/ai/AiBatchToolbar.svelte';
   import SourceSwitch from '../components/ai/SourceSwitch.svelte';
-  import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
   import '../components/ai/ai-workbench.css';
   import { untrack } from 'svelte';
@@ -581,97 +579,106 @@
 </script>
 
 <div class="reshape aiw-page">
-  <header class="aiw-head">
-    <div class="aiw-title-row">
-      <h1 class="aiw-title">断句重排</h1>
-
-      <div class="aiw-config">
-        <span class="aiw-label">做法</span>
-        <div class="seg" role="tablist" aria-label="做法">
-          <button
-            role="tab"
-            aria-selected={reshape.mode === 'rewrite'}
-            class:on={reshape.mode === 'rewrite'}
-            onclick={() => switchMode('rewrite')}
-            title="让模型自由重切，整份换掉这一段（条数与时间码都可变）"
-          >整份重写</button>
-          <button
-            role="tab"
-            aria-selected={reshape.mode === 'ops'}
-            class:on={reshape.mode === 'ops'}
-            onclick={() => switchMode('ops')}
-            title="只改模型点名的那几处（合并 / 改时间 / 增删），逐项可拒"
-          >只改几处</button>
-        </div>
-
-        <span class="aiw-divider" aria-hidden="true"></span>
-
-        <span class="aiw-label">底稿</span>
-        <SourceSwitch
-          source={reshape.source}
-          hasB={dual.exists}
-          aCount={app.cues.length}
-          bCount={dual.count}
-          bLabel={altEngineLabel()}
-          dualLabel="双源 A+B"
-          onchange={switchSource}
-          onimport={() => void importB()}
-        />
-
-        {#if !isOps}
-          <TemplatePicker
-            items={templates}
-            value={activeTemplate}
-            title="断句重排提示词模板"
-            onchange={(id) => void selectPromptTemplate(id, promptCategory())}
-          />
-          <span class="aiw-divider" aria-hidden="true"></span>
-          <ClipScopePicker compact label="处理范围" disabled={reshape.applying} />
-          <BatchRangeBar
-            from={batch.from}
-            to={batch.to}
-            spanFrom={scopeSpan.from}
-            spanTo={scopeSpan.to}
-            count={batch.count}
-            total={app.cues.length}
-            size={reshape.batchSize}
-            manual={reshape.batchManual}
-            disabled={reshape.applying}
-            onApply={setReshapeBatch}
-            onStep={stepReshapeBatch}
-            onSize={setReshapeBatchSize}
-            onReset={resetReshapeBatch}
-          />
-        {/if}
-      </div>
-
-      <div class="aiw-spacer"></div>
-
-      <div class="aiw-head-end">
-        {#if !isOps && reshape.longMode}
-          <span class="aiw-chip">已覆盖 <b>{appliedCount()}</b>/<b>{reshape.segments.length}</b> 段</span>
-        {:else if app.cues.length}
-          <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
-        {/if}
-        <button class="btn ghost sm" onclick={() => setView('prompts')} title="打开提示词库">
-          提示词库
-        </button>
-      </div>
-    </div>
-
-    {#if railSegments.length}
-      <SegmentRail
-        label={reshape.longMode ? '智能分段' : '当前分段'}
-        segments={railSegments}
-        active={reshape.longMode ? reshape.segmentIndex : 0}
-        status={railStatus}
-        onselect={(index) => {
-          if (reshape.longMode) setSegment(index);
+  <AiBatchToolbar
+    title="断句重排"
+    channel="manual"
+    channels={['api', 'manual']}
+    apiAvailable={false}
+    apiNote="断句重排要整份换稿，目前只走外部模型：复制提示词 → 粘回 SRT → 覆盖本段"
+    templates={isOps
+      ? null
+      : {
+          items: templates,
+          value: activeTemplate,
+          title: '断句重排提示词模板',
+          onchange: (id) => void selectPromptTemplate(id, promptCategory()),
         }}
-        disabled={!reshape.longMode}
+    rangeVisible={!isOps}
+    busy={reshape.applying}
+    batch={isOps
+      ? null
+      : {
+          from: batch.from,
+          to: batch.to,
+          spanFrom: scopeSpan.from,
+          spanTo: scopeSpan.to,
+          count: batch.count,
+          total: app.cues.length,
+          size: reshape.batchSize,
+          manual: reshape.batchManual,
+          disabled: reshape.applying,
+          onApply: setReshapeBatch,
+          onStep: stepReshapeBatch,
+          onSize: setReshapeBatchSize,
+          onReset: resetReshapeBatch,
+        }}
+  >
+    {#snippet modeConfig()}
+      <div class="seg" role="tablist" aria-label="做法">
+        <button
+          role="tab"
+          aria-selected={reshape.mode === 'rewrite'}
+          class:on={reshape.mode === 'rewrite'}
+          onclick={() => switchMode('rewrite')}
+          title="让模型自由重切，整份换掉这一段（条数与时间码都可变）"
+        >整份重写</button>
+        <button
+          role="tab"
+          aria-selected={reshape.mode === 'ops'}
+          class:on={reshape.mode === 'ops'}
+          onclick={() => switchMode('ops')}
+          title="只改模型点名的那几处（合并 / 改时间 / 增删），逐项可拒"
+        >只改几处</button>
+      </div>
+      <span class="aiw-divider" aria-hidden="true"></span>
+      <SourceSwitch
+        source={reshape.source}
+        hasB={dual.exists}
+        aCount={app.cues.length}
+        bCount={dual.count}
+        bLabel={altEngineLabel()}
+        dualLabel="双源 A+B"
+        onchange={switchSource}
+        onimport={() => void importB()}
       />
-    {/if}
-  </header>
+    {/snippet}
+
+    {#snippet laneManual()}
+      <span class="aiw-lane-note">
+        {#if isOps}
+          结构建议按<b>全片</b>原稿索引应用：左侧 <b>1 复制提示词 → 2 粘回 ops JSON</b>，再逐项勾选。
+        {:else}
+          左侧按 <b>1 复制提示词 → 2 粘回 SRT → 3 覆盖</b> 操作即可。
+        {/if}
+      </span>
+    {/snippet}
+
+    {#snippet statusExtra()}
+      {#if isOps && app.cues.length}
+        <span class="aiw-chip" title="结构建议按全片原稿索引应用，不叠加处理范围 / 批次">
+          全片 <b>{app.cues.length}</b> 条
+        </span>
+      {/if}
+    {/snippet}
+
+    {#snippet railExtra()}
+      {#if railSegments.length > 1}
+        <SegmentRail
+          compact
+          label={reshape.longMode ? '智能分段' : '当前分段'}
+          badge={reshape.longMode ? `已覆盖 ${appliedCount()}/${reshape.segments.length} 段` : ''}
+          segments={railSegments}
+          active={reshape.longMode ? reshape.segmentIndex : 0}
+          status={railStatus}
+          onselect={(index) => {
+            if (reshape.longMode) setSegment(index);
+          }}
+          disabled={!reshape.longMode}
+        />
+      {/if}
+    {/snippet}
+  </AiBatchToolbar>
+
 
   {#if reshape.stale && !isOps}
     <div class="note warn stale">
@@ -910,7 +917,16 @@
                   </button>
                   <p class="aiw-step-meta">⌘Z 一次整批撤回；应用后这份建议即被丢弃</p>
                 {:else}
-                  <div class="aiw-idle">粘贴后在这里勾选要应用的改动</div>
+                  <div class="aiw-guide">
+                    <span class="aiw-guide-icon"><Icon name="listcheck" size={13} /></span>
+                    <div>
+                      <div class="aiw-guide-title">第 3 步 · 逐项确认改动</div>
+                      <div class="aiw-guide-text">
+                        粘回 ops JSON 后，这里按「合并 / 改时间 / 改文字 / 新增 / 删除」分组列出每一处；
+                        冲突项会标红且不能勾选，应用只作用于勾选子集。
+                      </div>
+                    </div>
+                  </div>
                 {/if}
               {:else}
                 {#if draft}
@@ -951,7 +967,16 @@
                     <button class="aiw-link" onclick={() => discardDraft()} disabled={reshape.applying}>丢弃</button>
                   </div>
                 {:else}
-                  <div class="aiw-idle">粘贴后在这里确认覆盖</div>
+                  <div class="aiw-guide">
+                    <span class="aiw-guide-icon"><Icon name="split" size={13} /></span>
+                    <div>
+                      <div class="aiw-guide-title">第 3 步 · 覆盖前先确认</div>
+                      <div class="aiw-guide-text">
+                        粘回模型重排后的 SRT，这里会出现「原稿 → 新稿」的条数与体检结果；
+                        覆盖只替换本段，⌘Z 一次整批撤回。
+                      </div>
+                    </div>
+                  </div>
                 {/if}
               {/if}
             </div>
@@ -962,7 +987,7 @@
       <section class="aiw-card brief-card">
         <div class="aiw-card-head">
           <span class="aiw-card-title">{isOps ? '结构速览' : '本段速览'}</span>
-          <span class="aiw-card-sub">{isOps ? '勾选后应用' : '只读'}</span>
+          <span class="aiw-card-sub">只读</span>
         </div>
         <div class="brief-grid">
           <div class="brief-item">
@@ -1023,7 +1048,9 @@
           <span class="aiw-hint">原稿 ↔ 新稿 · 双击新稿可改</span>
         {:else if isOps}
           <span class="aiw-chip">命中 <b>{hitMap.size}</b> 条</span>
-          <span class="aiw-hint">受影响的句子已在表中标出</span>
+          <span class="aiw-hint">
+            {structure.ops.length ? '受影响的句子已在表中标出' : '粘贴后这里会标出受影响的句子'}
+          </span>
         {:else if previewDual}
           <span class="aiw-chip">B · {altEngineLabel()} <b>{dual.count}</b> 条</span>
         {/if}
@@ -1606,14 +1633,6 @@
     gap: var(--sp-2);
     margin-top: 2px;
   }
-  .aiw-config {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-2);
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
   /* 二次确认时主按钮换成警示色（仍然是主题令牌） */
   .btn.armed {
     background: var(--danger-soft);
@@ -1644,9 +1663,6 @@
     }
     .preview {
       min-height: 460px;
-    }
-    .aiw-title-row {
-      padding: var(--sp-2) var(--sp-3) var(--sp-2);
     }
     .preview-cols.ref-single,
     .preview-row.ref-single {

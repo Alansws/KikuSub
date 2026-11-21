@@ -111,3 +111,72 @@ def test_char_ops_for_insert_delete():
     assert [op["op"] for op in ops] == ["eq", "del", "ins", "eq"]
     assert text_similarity("abc", "abc") == 1.0
     assert text_similarity("", "x") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# ignore_punct（2026-11-21 界面重构 Step 2）
+#
+# 两个引擎的标点取舍不是听写分歧：默认把它们判为一致，只留真正「听不同」的行。
+# 守护三个方向：默认滤掉、关掉还原、真差异（含数字里的 . ）绝不能被滤掉。
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_punct_hides_punct_only_difference():
+    """计划里那条：んんっ だーめ vs んんっ、だーめ 默认算一致。"""
+    a = [C(0.0, 2.0, "んんっ だーめ")]
+    b = [C(0.0, 2.0, "んんっ、だーめ")]
+
+    review = build_review(a, b)
+    assert kinds(review) == ["same"]
+    stats = review["stats"]
+    assert stats["diff"] == 0
+    assert stats["badge"] == 0
+    assert stats["same"] == 1
+    assert stats["punct_only"] == 1
+    # 行上留了标记，界面能解释「为什么它变成了 = 」
+    assert review["rows"][0]["punct_only"] is True
+    assert review["rows"][0]["a_text"] == "んんっ だーめ"  # 原始文本不被改写
+
+
+def test_ignore_punct_off_restores_strict_compare():
+    a = [C(0.0, 2.0, "んんっ だーめ")]
+    b = [C(0.0, 2.0, "んんっ、だーめ")]
+
+    review = build_review(a, b, ignore_punct=False)
+    assert kinds(review) == ["diff"]
+    stats = review["stats"]
+    assert stats["diff"] == 1
+    assert stats["badge"] == 1
+    assert stats["punct_only"] == 0
+    assert "punct_only" not in review["rows"][0]
+    assert review["rows"][0]["char_ops"]
+
+
+def test_ignore_punct_keeps_real_text_difference():
+    """真听写差异（雨 / 飴）不能被过滤掉，哪怕两边标点也不同。"""
+    review = build_review(
+        [C(0, 1, "今日は雨だ。")],
+        [C(0, 1, "今日は飴だ")],
+    )
+    assert kinds(review) == ["diff"]
+    assert review["stats"]["diff"] == 1
+    assert review["stats"]["punct_only"] == 0
+
+
+def test_ignore_punct_does_not_strip_ascii_dots_in_numbers():
+    """``.`` / ``,`` 故意不在忽略表里：1.5 与 15 是两个数，滤掉就成了藏错。"""
+    review = build_review([C(0, 1, "残り 1.5 秒")], [C(0, 1, "残り 15 秒")])
+    assert kinds(review) == ["diff"]
+    assert review["stats"]["diff"] == 1
+
+
+def test_ignore_punct_keeps_counts_invariant():
+    """过滤只改 same/diff 的归属，不改配对：A=配对+仅A、B=配对+仅B 仍成立。"""
+    a = [C(0, 1, "あ。"), C(1, 2, "い、"), C(2, 3, "う")]
+    b = [C(0, 1, "あ"), C(1, 2, "い。"), C(2, 3, "ゔ")]
+    review = build_review(a, b)
+    stats = review["stats"]
+    assert stats["a_count"] == stats["paired"] + stats["only_a"]
+    assert stats["b_count"] == stats["paired"] + stats["only_b"]
+    assert stats["punct_only"] == 2
+    assert stats["diff"] == 1

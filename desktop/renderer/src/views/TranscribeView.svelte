@@ -1,19 +1,16 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
-  import ParamPanel from '../components/ParamPanel.svelte';
+  import EngineChoiceCards from '../components/transcribe/EngineChoiceCards.svelte';
+  import ExpertParamsDrawer from '../components/transcribe/ExpertParamsDrawer.svelte';
   import {
     app,
-    applyPreset,
     cancelJob,
-    deletePreset,
     importSubtitleFromExport,
     importTranslationFromExport,
-    savePresetAs,
     setView,
     startTranscribe,
     toast,
-    tuning,
   } from '../lib/store.svelte';
   import {
     type ApplyMode,
@@ -37,6 +34,11 @@
   let outputFormat = $state('SRT');
   let startText = $state('');
   let endText = $state('');
+  /**
+   * 主区只保留 3 个场景开关。区间输入藏在「仅转写指定片段」后面，
+   * 不勾选时等同于整片；从核对台同步区间过来会自动展开并勾上。
+   */
+  let clipOnly = $state(false);
   let absolute = $state(true);
   /**
    * 「结果处理」不再是 自动/覆盖/追加 三选一：没有「自动」这一档，档位按
@@ -44,8 +46,6 @@
    * 字幕的那个。判断与文案都在 `lib/applyMode.ts`，这里只存用户的选择。
    */
   let applyMode = $state<ApplyMode>('replace_range');
-  let presetName = $state('');
-  let picked = $state('');
   /** 核对台非空时的整片结果去向：覆盖第一版 / 放进第二列。 */
   let destination = $state<'cover' | 'alt'>('cover');
   let lastDestKey = '';
@@ -124,6 +124,10 @@
       secondaryEngine = defaultSecondary;
     }
   });
+  // 切到只剩一个日语引擎时，不能把「双引擎」留在一个没有副引擎的非法状态。
+  $effect(() => {
+    if (dualMode && !dualCandidates.length) dualMode = false;
+  });
   /**
    * 人声分离对整片 / 区间都生效：知道总时长（有媒体）或填了完整区间就能勾。
    * 整片由服务端按 0..总时长分离；长片会自动分段，不再拦截。
@@ -146,6 +150,7 @@
     if (!req) return;
     startText = req.start;
     endText = req.end;
+    clipOnly = true;
     applyMode = 'replace_range';
   });
 
@@ -167,27 +172,6 @@
     void app.connected;
     void app.media?.id;
     if (app.connected) void refreshAltReview();
-  });
-
-  // 只列出与当前引擎绑定的预设；未绑定/别的引擎的一律不显示，免得选错。
-  const presetsForEngine = $derived(
-    tuning.presets.filter((p) => p.engine === engine),
-  );
-  /** 当前引擎自己的「已载入预设」；切引擎后不能把上一个引擎的预设当成可删对象。 */
-  const deletablePreset = $derived(
-    picked || (tuning.activePresetEngine === engine ? tuning.activePreset : ''),
-  );
-
-  // 换引擎时清掉上一套引擎的选中项；参数面板本身按引擎分开存，不互相污染。
-  let lastPresetEngine = engine;
-  $effect(() => {
-    if (lastPresetEngine === engine) return;
-    lastPresetEngine = engine;
-    picked = '';
-    if (tuning.activePresetEngine && tuning.activePresetEngine !== engine) {
-      tuning.activePreset = '';
-      tuning.activePresetEngine = '';
-    }
   });
 
   function go() {
@@ -217,7 +201,7 @@
     );
   }
 
-  /** 交换主副：主引擎在「识别引擎」里，副引擎是本卡片的选择；交换要两边一起换。 */
+  /** 交换主副：主引擎在「识别引擎」卡里，副引擎是本卡片的选择；交换要两边一起换。 */
   function swapRoles() {
     if (!secondaryEngine || secondaryEngine === engine) return;
     const oldPrimaryKey = engine;
@@ -226,6 +210,12 @@
     engine = secondaryEngine;
     secondaryEngine = oldPrimaryKey;
     toast(`已交换：${oldSecondaryLabel} 为主，${oldPrimaryLabel} 为副`, 'info');
+  }
+
+  /** 「仅转写指定片段」开关：关掉就是整片，清空起止与待填选区。 */
+  function setClipOnly(on: boolean) {
+    clipOnly = on;
+    if (!on) clearRange();
   }
 
   /**
@@ -237,6 +227,18 @@
     startText = '';
     endText = '';
     app.slice = null;
+    clipOnly = false;
+  }
+
+  /** 双引擎开关：只允许在确实存在可配对副引擎时打开。 */
+  function setDualMode(on: boolean) {
+    if (on && !dualCandidates.length) return;
+    dualMode = on;
+    if (!on) return;
+    destination = 'cover';
+    // 双引擎没有「追加」；用户若停在追加档，切过来立刻落到合法档。
+    applyMode = resolveDualApply(applyMode, applyCtx);
+    if (!secondaryEngine) secondaryEngine = defaultSecondary;
   }
 
   /** 本次任务提交时锁定的范围（来自 jobMeta，不跟随输入框，避免显示与执行不一致）。 */
@@ -261,25 +263,6 @@
     ),
   );
 
-  async function onPick(name: string) {
-    picked = name;
-    if (!name) return;
-    const ok = await applyPreset(name, engine);
-    if (!ok) picked = '';
-  }
-
-  async function onSave() {
-    await savePresetAs(presetName || picked, engine);
-    presetName = '';
-  }
-
-  async function onDelete() {
-    const target = deletablePreset;
-    if (!target) return;
-    await deletePreset(target);
-    picked = '';
-  }
-
   /** 转写线程已经把字幕写到导出文件夹；这里只负责把用户带过去。 */
   function openExportFolder() {
     const dir =
@@ -298,60 +281,105 @@
 
 <div class="pane">
   <PageHeader title="开始转写" subtitle={transcribeSub} />
-  <div class="cols">
-    <section class="left">
-      <!-- 左栏按「做什么」分三张轻卡片：基础与范围 / 结果与协同 / 已有字幕。
-           之前十几个控件平铺成一张网格，用户找不到「结果去向」和「双引擎」
-           的关系；分组后右侧参数面板也不再显得孤零零一排。 -->
-      <div class="card">
-        <div class="card-title">基础设置与范围</div>
-        <div class="card-body">
-          <div class="row">
-            <label class="row-label" for="engine">识别引擎</label>
-            {#if enabledEngines.length}
-              <!-- 引擎可能到 3–4 个：平铺分段会溢出（4 个中日引擎就放不下），
-                   表单里改用下拉。顶栏那个胶囊是全局快捷入口，两者绑同一个值。 -->
-              <div class="row-control engine-pick">
-                <div class="field engine-field">
-                  <select id="engine" bind:value={engine}>
-                    {#each enabledEngines as e (e.key)}
-                      <option value={e.key}>
-                        {e.label}{e.installed ? '' : `（未下载 · ${e.approx_label}）`}
-                      </option>
-                    {/each}
-                  </select>
-                  <span class="chev"><Icon name="chevron-down" size={11} /></span>
-                </div>
-              </div>
-            {:else}
-              <div class="row-control no-engine">
-                没有启用的引擎。
-                <button class="btn tiny" onclick={() => setView('settings')}>去设置里启用</button>
-              </div>
-            {/if}
+  <div class="main-scroll">
+    <div class="main-col">
+      <!-- 1) 选口径：两个日语主力用卡片讲清楚差别；中文引擎只要启用就保留入口。 -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-copy">
+            <div class="card-title">识别引擎</div>
+            <p class="card-sub">按这次的素材选口径；与顶栏引擎胶囊共用同一个值，不需要两处各选一次。</p>
           </div>
-          {#if currentEngine && !currentEngine.installed}
-            <p class="row-hint warn">
-              尚未下载 · {currentEngine.approx_label} · 开始转写会先下载
-            </p>
+          {#if currentEngine}
+            <span class="engine-state" class:ready={currentEngine.installed}>
+              <span class="state-dot" class:ready={currentEngine.installed}></span>
+              {currentEngine.installed ? '当前引擎已就绪' : `未下载 · ${currentEngine.approx_label}`}
+            </span>
           {/if}
+        </div>
 
-          <div class="row">
-            <label class="row-label" for="range">时间区间</label>
-            <div class="row-control range">
-              <div class="field mono" style="width:104px">
-                <input id="range" class="mono" bind:value={startText} placeholder="片头" />
+        <EngineChoiceCards bind:engine engines={enabledEngines} onmanage={() => setView('settings')} />
+
+        {#if currentEngine && !currentEngine.installed}
+          <p class="hint warn">
+            首次使用会先下载 {currentEngine.approx_label}；下载完成后自动开始，期间可以取消。
+          </p>
+        {/if}
+      </section>
+
+      <!-- 2) 只留三个场景开关：强 BGM、只转片段、双引擎协同。 -->
+      <section class="card">
+        <div class="card-head">
+          <div class="card-copy">
+            <div class="card-title">这次怎么转</div>
+            <p class="card-sub">只保留会影响结果的三个场景开关；其余声学参数在页面底部的专家抽屉里。</p>
+          </div>
+        </div>
+
+        <div class="switch-grid">
+          <label
+            class="switch-card"
+            class:disabled={!canSeparate}
+            title="对整片或已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用。"
+          >
+            <input
+              type="checkbox"
+              bind:checked={vocalSeparation.enabled}
+              disabled={!canSeparate}
+            />
+            <span class="sw-copy">
+              <b>强 BGM / 歌曲人声分离</b>
+              <small>先把歌声与伴奏分开，再切分/识别；适合音乐盖过人声的段落。</small>
+            </span>
+          </label>
+
+          <label class="switch-card" title="只转写一段起止时间；不勾选就是整片">
+            <input
+              type="checkbox"
+              checked={clipOnly}
+              onchange={(e) => setClipOnly(e.currentTarget.checked)}
+            />
+            <span class="sw-copy">
+              <b>仅转写指定片段</b>
+              <small>填起止时间只处理这一段；留空任一端按片头 / 片尾算。</small>
+            </span>
+          </label>
+
+          <label
+            class="switch-card"
+            class:disabled={!dualCandidates.length}
+            title={dualCandidates.length
+              ? '两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；副稿只读进第二列。'
+              : '需要再启用一个日语引擎才能双引擎协同'}
+          >
+            <input
+              type="checkbox"
+              checked={dualMode}
+              disabled={!dualCandidates.length}
+              onchange={(e) => setDualMode(e.currentTarget.checked)}
+            />
+            <span class="sw-copy">
+              <b>双引擎顺序协同</b>
+              <small>{dualCandidates.length
+                ? '再顺序跑一个副引擎，生成只读对照（≥12GB 内存）。'
+                : '需要另启一个日语引擎；去设置里启用。'}</small>
+            </span>
+          </label>
+        </div>
+
+        {#if clipOnly}
+          <div class="detail">
+            <span class="detail-label">起止时间</span>
+            <div class="range-row">
+              <div class="field mono time-field">
+                <input class="mono" bind:value={startText} placeholder="片头" aria-label="起始时间" />
               </div>
               <span class="dash">–</span>
-              <div class="field mono" style="width:104px">
-                <input class="mono" bind:value={endText} placeholder="片尾" />
+              <div class="field mono time-field">
+                <input class="mono" bind:value={endText} placeholder="片尾" aria-label="结束时间" />
               </div>
-              <button
-                class="btn ghost"
-                onclick={clearRange}
-                title="清空起止时间 = 转写整片（不写区间后缀）"
-              >
-                全片
+              <button class="btn ghost" type="button" onclick={clearRange} title="清空起止时间 = 转写整片">
+                回到整片
               </button>
               <label
                 class="check"
@@ -369,229 +397,181 @@
               </label>
             </div>
           </div>
-          <p class="row-hint">留空起止 = 转写整片；「全片」会同时清空输入框与待填选区。</p>
+          <p class="hint">留空任一端 = 该端按片头 / 片尾；「回到整片」会清空输入与待填选区。</p>
+        {/if}
 
-          <div class="row">
-            <span class="row-label">输出格式</span>
-            <div class="row-control">
-              <div class="seg" style="justify-self:start">
-                {#each ['SRT', 'VTT', 'TXT'] as f (f)}
-                  <button class:on={outputFormat === f} onclick={() => (outputFormat = f)}>{f}</button>
-                {/each}
-              </div>
-            </div>
-          </div>
-
-          <div class="row">
-            <span class="row-label">人声分离</span>
-            <div class="row-control wrap">
-              <label
-                class="check"
-                title="对整片或已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用。长片自动分段分离，代价是耗时随长度增长"
+        {#if vocalSeparation.enabled}
+          <div class="detail">
+            <span class="detail-label">分离用途</span>
+            <div class="seg mode-seg" role="group" aria-label="人声分离用途">
+              <button
+                type="button"
+                class:on={vocalSeparation.mode === 'vad_only'}
+                onclick={() => (vocalSeparation.mode = 'vad_only')}
+                title="分离人声只用于 VAD 切分，识别仍听原声：不会被削掉日语清辅音"
               >
-                <input
-                  id="sep"
-                  type="checkbox"
-                  bind:checked={vocalSeparation.enabled}
-                  disabled={!canSeparate}
-                />
-                强 BGM / 歌曲
-              </label>
-              {#if vocalSeparation.enabled}
-                <div class="seg mode-seg" role="group" aria-label="人声分离用途">
-                  <button
-                    class:on={vocalSeparation.mode === 'vad_only'}
-                    onclick={() => (vocalSeparation.mode = 'vad_only')}
-                    title="分离人声只用于 VAD 切分，识别仍听原声：不会被削掉日语清辅音"
-                  >
-                    仅用于 VAD 切分（推荐）
-                  </button>
-                  <button
-                    class:on={vocalSeparation.mode === 'to_asr'}
-                    onclick={() => (vocalSeparation.mode = 'to_asr')}
-                    title="高级：分离人声直接送识别。只在人声被纯歌声/极重混响彻底盖死时用"
-                  >
-                    分离人声后送识别
-                  </button>
-                </div>
-              {/if}
+                仅用于 VAD 切分（推荐）
+              </button>
+              <button
+                type="button"
+                class:on={vocalSeparation.mode === 'to_asr'}
+                onclick={() => (vocalSeparation.mode = 'to_asr')}
+                title="高级：分离人声直接送识别。只在人声被纯歌声/极重混响彻底盖死时用"
+              >
+                分离人声后送识别
+              </button>
             </div>
           </div>
-          {#if !canSeparate}
-            <p class="row-hint">先导入媒体或填写起止时间，才能开启分离。</p>
-          {:else if !vocalSeparation.enabled}
-            <p class="row-hint">
-              整片或区间会先分离人声；默认只把它用于 VAD 切分，原声仍送识别。
-            </p>
-          {:else if vocalSeparation.mode === 'vad_only'}
-            <p class="row-hint">
-              切分看干净人声、识别听原声——保住日语清辅音细节，只从更准的边界获益。
-            </p>
-          {:else}
-            <p class="row-hint">
-              分离人声直接送识别，适合人声被纯歌声/极重混响彻底盖死的段落；
-              代价是清辅音可能被一起削掉，建议先只试这一小段。
-            </p>
-          {/if}
-        </div>
-      </div>
+          <p class="hint">
+            {vocalSeparation.mode === 'vad_only'
+              ? '切分看干净人声、识别听原声——保住日语清辅音细节，只从更准的边界获益。'
+              : '分离人声直接送识别，适合人声被纯歌声/极重混响彻底盖死的段落；代价是清辅音可能被一起削掉，建议先只试这一小段。'}
+          </p>
+        {:else if !canSeparate}
+          <p class="hint">先导入媒体或填写起止时间，才能开启分离。</p>
+        {/if}
 
-      <div class="card">
-        <div class="card-title">结果与协同模式</div>
-        <div class="card-body">
-          <div class="row">
-            <span class="row-label">结果处理</span>
-            <div class="row-control">
-              <div class="seg">
-                {#each applyOptions as opt (opt.key)}
-                  <button
-                    class:on={effectiveApply === opt.key}
-                    class:danger-opt={opt.key === 'replace' && !fullCover}
-                    onclick={() => (applyMode = opt.key)}
-                    title={applyHint(opt.key, applyCtx)}
-                  >
-                    {opt.label}
-                  </button>
+        {#if dualMode}
+          <!-- 流向固定：主稿写核对台，副稿只读进第二列并把补漏候选送质检。
+               结果去向那档选择因此被收起，避免用户以为还能改。 -->
+          <div class="duo">
+            <div class="duo-row">
+              <span class="duo-role">主引擎</span>
+              <b class="duo-name">{primaryLabel}</b>
+              <span class="duo-arrow" aria-hidden="true">→</span>
+              <span class="duo-dest">写入核对台（主稿）</span>
+            </div>
+            <div class="duo-row">
+              <span class="duo-role">副引擎</span>
+              <select class="duo-select" bind:value={secondaryEngine} aria-label="副引擎">
+                {#each dualCandidates as item (item.key)}
+                  <option value={item.key}>{item.label}</option>
                 {/each}
-              </div>
+              </select>
+              <span class="duo-arrow" aria-hidden="true">→</span>
+              <span class="duo-dest">双引擎复核（只读）+ 补漏进质检</span>
+            </div>
+            <div class="duo-foot">
+              <span class="duo-note">
+                两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；副稿永远不改核对台。
+              </span>
+              <button
+                class="btn tiny ghost"
+                type="button"
+                onclick={swapRoles}
+                disabled={!secondaryEngine}
+                title="交换主/副引擎；主引擎同时同步到上方「识别引擎」与顶栏胶囊"
+              >
+                <Icon name="split" size={11} />交换主副
+              </button>
             </div>
           </div>
-          <p class="row-hint" class:warn-hint={destructive}>{applyHintText}</p>
+        {/if}
+      </section>
 
-          {#if dualCandidates.length}
-            <div class="row">
-              <span class="row-label">双引擎协同</span>
-              <div class="row-control">
-                <div class="seg">
-                  <button
-                    class:on={!dualMode}
-                    onclick={() => {
-                      dualMode = false;
-                    }}
-                  >
-                    单引擎
-                  </button>
-                  <button
-                    class:on={dualMode}
-                    onclick={() => {
-                      destination = 'cover';
-                      dualMode = true;
-                      // 双引擎没有「追加」；用户若停在追加档，切过来立刻落到合法档。
-                      applyMode = resolveDualApply(applyMode, applyCtx);
-                    }}
-                  >
-                    顺序跑副引擎
-                  </button>
-                </div>
-              </div>
-            </div>
-            {#if dualMode}
-              <!-- 流向固定：主稿写核对台，副稿只读进第二列并把补漏候选送质检。
-                   结果去向那档选择因此被收起，避免用户以为还能改。 -->
-              <div class="duo">
-                <div class="duo-row">
-                  <span class="duo-role">主引擎</span>
-                  <b class="duo-name">{primaryLabel}</b>
-                  <span class="duo-arrow" aria-hidden="true">→</span>
-                  <span class="duo-dest">写入核对台（主稿）</span>
-                </div>
-                <div class="duo-row">
-                  <span class="duo-role">副引擎</span>
-                  <select class="duo-select" bind:value={secondaryEngine} aria-label="副引擎">
-                    {#each dualCandidates as item (item.key)}
-                      <option value={item.key}>{item.label}</option>
-                    {/each}
-                  </select>
-                  <span class="duo-arrow" aria-hidden="true">→</span>
-                  <span class="duo-dest">双引擎复核（只读）+ 补漏进质检</span>
-                </div>
-                <div class="duo-foot">
-                  <span class="duo-note">
-                    两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；
-                    副稿永远不改核对台。
-                  </span>
-                  <button
-                    class="btn tiny ghost"
-                    onclick={swapRoles}
-                    disabled={!secondaryEngine}
-                    title="交换主/副引擎；主引擎同时同步到上方「识别引擎」"
-                  >
-                    <Icon name="split" size={11} />交换主副
-                  </button>
-                </div>
-              </div>
-            {:else}
-              <p class="row-hint">
-                只跑当前引擎。需要一次产出主稿与只读的第二列时，选「顺序跑副引擎」。
-              </p>
-            {/if}
-          {/if}
+      <!-- 3) 结果与输出：保留所有去向/格式逻辑，但把主按钮放到最醒目的位置。 -->
+      <section class="card">
+        <div class="card-head tight">
+          <div class="card-copy">
+            <div class="card-title">结果与输出</div>
+          </div>
+        </div>
+
+        <div class="row-line">
+          <span class="line-label">结果处理</span>
+          <div class="seg">
+            {#each applyOptions as opt (opt.key)}
+              <button
+                type="button"
+                class:on={effectiveApply === opt.key}
+                class:danger-opt={opt.key === 'replace' && !fullCover}
+                onclick={() => (applyMode = opt.key)}
+                title={applyHint(opt.key, applyCtx)}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
 
           {#if canChooseDest && !dualMode}
-            <div class="row">
-              <span class="row-label">结果去向</span>
-              <div class="row-control">
-                <div class="seg">
-                  <button class:on={destination === 'cover'} onclick={() => (destination = 'cover')}>
-                    覆盖核对台
-                  </button>
-                  <button class:on={destination === 'alt'} onclick={() => (destination = 'alt')}>
-                    放进双引擎复核
-                  </button>
-                </div>
-              </div>
+            <span class="line-label sub">去向</span>
+            <div class="seg">
+              <button
+                type="button"
+                class:on={destination === 'cover'}
+                onclick={() => (destination = 'cover')}
+              >
+                覆盖核对台
+              </button>
+              <button
+                type="button"
+                class:on={destination === 'alt'}
+                onclick={() => (destination = 'alt')}
+              >
+                放进双引擎复核
+              </button>
             </div>
-            <p class="row-hint">
-              {destination === 'alt'
-                ? '第二版只进参考列，核对台一个字都不改。'
-                : '本次整片结果替换当前核对台。'}
-            </p>
-            {#if dual.exists}
-              <div class="alt-state">
-                <span class="alt-label">已有第二版</span>
-                <b>{altEngineLabel()} · {dual.count} 条</b>
-                <button class="btn tiny" onclick={() => setView('dual')}>查看对照</button>
-                <button
-                  class="btn tiny ghost"
-                  onclick={async () => {
-                    if (window.confirm('删除当前第二版？核对台不受影响。')) {
-                      await deleteAltReview();
-                    }
-                  }}
-                >
-                  删除
-                </button>
-              </div>
-            {/if}
           {/if}
 
-          <div class="row action-row">
-            <span class="row-label"></span>
-            <div class="row-control actions">
-              {#if running}
-                <button class="btn danger" onclick={cancelJob}>
-                  <Icon name="stop" size={12} />中途打断
-                </button>
-                <span class="hint">同一时间只允许一个重任务</span>
-              {:else}
-                <button
-                  class="btn primary lg"
-                  onclick={go}
-                  disabled={!app.media || !app.connected || !hasEnabledEngine}
-                >
-                  <Icon name="play" size={12} />开始转写
-                </button>
-                <span class="hint">
-                  {app.media ? '结果写入导出文件夹' : '先导入媒体，再开始转写'}
-                </span>
-              {/if}
-            </div>
+          <span class="line-label sub">格式</span>
+          <div class="seg">
+            {#each ['SRT', 'VTT', 'TXT'] as f (f)}
+              <button type="button" class:on={outputFormat === f} onclick={() => (outputFormat = f)}>
+                {f}
+              </button>
+            {/each}
           </div>
         </div>
-      </div>
+        <p class="hint" class:warn-hint={destructive}>{applyHintText}</p>
+
+        {#if canChooseDest && !dualMode}
+          <p class="hint">
+            {destination === 'alt'
+              ? '第二版只进参考列，核对台一个字都不改。'
+              : '本次整片结果替换当前核对台。'}
+          </p>
+          {#if dual.exists}
+            <div class="alt-state">
+              <span class="alt-label">已有第二版</span>
+              <b>{altEngineLabel()} · {dual.count} 条</b>
+              <button class="btn tiny" type="button" onclick={() => setView('dual')}>查看对照</button>
+              <button
+                class="btn tiny ghost"
+                type="button"
+                onclick={async () => {
+                  if (window.confirm('删除当前第二版？核对台不受影响。')) {
+                    await deleteAltReview();
+                  }
+                }}
+              >
+                删除
+              </button>
+            </div>
+          {/if}
+        {/if}
+
+        <div class="run-row">
+          {#if running}
+            <button class="btn danger" type="button" onclick={cancelJob}>
+              <Icon name="stop" size={12} />中途打断
+            </button>
+            <span class="hint">同一时间只允许一个重任务</span>
+          {:else}
+            <button
+              class="btn primary run-btn"
+              type="button"
+              onclick={go}
+              disabled={!app.media || !app.connected || !hasEnabledEngine}
+            >
+              <Icon name="play" size={13} />开始转写
+            </button>
+            <span class="hint">{app.media ? '结果写入导出文件夹' : '先导入媒体，再开始转写'}</span>
+          {/if}
+        </div>
+      </section>
 
       {#if app.job && app.jobKind === 'transcribe'}
-        <div class="card progress-card">
+        <section class="card progress-card">
           <div class="card-title">本次任务</div>
           <div class="card-body">
             <div class="pc-top">
@@ -610,7 +590,7 @@
               {:else if app.job.status === 'done'}
                 <span>完成 · {app.cues.length} 条字幕</span>
               {:else if app.job.status === 'error'}
-                <span style="color: var(--danger)">{app.job.error}</span>
+                <span class="err-text">{app.job.error}</span>
               {:else}
                 <span>{app.job.status}</span>
               {/if}
@@ -619,7 +599,9 @@
               <div class="pc-note">
                 <span>{alignNote}</span>
                 {#if app.report?.job_id === app.job.id}
-                  <button class="btn tiny ghost" onclick={() => setView('report')}>对齐明细</button>
+                  <button class="btn tiny ghost" type="button" onclick={() => setView('report')}>
+                    对齐明细
+                  </button>
                 {/if}
               </div>
             {/if}
@@ -632,8 +614,8 @@
                     · {app.job.result.secondary_error}
                   {/if}
                 </span>
-                <button class="btn tiny" onclick={() => setView('dual')}>查看第二列</button>
-                <button class="btn tiny ghost" onclick={() => setView('review')}>质检补漏</button>
+                <button class="btn tiny" type="button" onclick={() => setView('dual')}>查看第二列</button>
+                <button class="btn tiny ghost" type="button" onclick={() => setView('review')}>质检补漏</button>
               </div>
             {:else if app.job.status === 'done' && app.job.result?.alt_review}
               <div class="alt-done">
@@ -642,30 +624,40 @@
                   第二引擎 {app.job.result?.alt_engine || engine} · {app.job.result?.alt_count ?? 0} 条；
                   核对台未改动
                 </span>
-                <button class="btn tiny" onclick={() => setView('dual')}>打开双引擎复核</button>
+                <button class="btn tiny" type="button" onclick={() => setView('dual')}>打开双引擎复核</button>
               </div>
             {/if}
             {#if app.job.status === 'done' && app.lastSavedPath}
               <div class="saved-row">
                 <span class="saved-ok"><Icon name="check" size={10} />已自动保存</span>
                 <span class="saved-path mono" title={app.lastSavedPath}>{app.lastSavedPath}</span>
-                <button class="btn tiny ghost" onclick={revealSaved}>在访达中显示</button>
-                <button class="btn tiny" onclick={openExportFolder}>
+                <button class="btn tiny ghost" type="button" onclick={revealSaved}>在访达中显示</button>
+                <button class="btn tiny" type="button" onclick={openExportFolder}>
                   <Icon name="folder" size={10} />导出文件夹
                 </button>
               </div>
             {/if}
           </div>
-        </div>
+        </section>
       {/if}
+
+      <!-- 90/10 的 10：15 个声学滑块与预设管理收进默认收起的抽屉，
+           参数绑定与预设读写逻辑原样保留。 -->
+      <ExpertParamsDrawer {engine} />
 
       <!-- 已有字幕走独立入口：原文轨与译文轨可以分别导入，
            不必为了补一份译文重新跑一次转写。 -->
-      <div class="card">
-        <div class="card-title">已有字幕</div>
-        <div class="card-body si-row">
+      <section class="card">
+        <div class="card-head">
+          <div class="card-copy">
+            <div class="card-title">已有字幕</div>
+            <p class="card-sub">不重新转写，直接把原文或逐条对齐的译文导进核对台。</p>
+          </div>
+        </div>
+        <div class="si-row">
           <button
             class="si-btn"
+            type="button"
             onclick={importSubtitleFromExport}
             disabled={!app.connected || running}
             title="从导出文件夹选择原文字幕，导入核对台（不重新转写）"
@@ -675,6 +667,7 @@
           </button>
           <button
             class="si-btn"
+            type="button"
             onclick={importTranslationFromExport}
             disabled={!app.connected || running || !app.cues.length}
             title={app.cues.length
@@ -685,47 +678,14 @@
             <span class="si-text"><b>导入译文</b><em>逐条对齐</em></span>
           </button>
         </div>
-      </div>
-    </section>
-
-    <section class="right">
-      <div class="preset-bar">
-        <span class="pb-label">预设</span>
-        <select
-          value={picked}
-          title="只显示与当前识别引擎绑定的预设"
-          onchange={(e) => onPick(e.currentTarget.value)}
-        >
-          <option value="">（未选择）</option>
-          {#each presetsForEngine as p (p.name)}
-            <option value={p.name}>{p.name}</option>
-          {/each}
-        </select>
-        <div class="field preset-name">
-          <input
-            bind:value={presetName}
-            placeholder="存为新预设…"
-            onkeydown={(e) => {
-              if (e.key === 'Enter') onSave();
-            }}
-          />
-        </div>
-        <button class="btn" onclick={onSave} disabled={!presetName.trim() && !picked}>
-          <Icon name="check" size={11} />保存
-        </button>
-        <button class="btn ghost" onclick={onDelete} disabled={!deletablePreset}>
-          <Icon name="trash" size={11} />
-        </button>
-      </div>
-
-      <ParamPanel {engine} />
-    </section>
+      </section>
+    </div>
   </div>
 </div>
 
 <style>
   .pane {
-    padding: var(--sp-8) var(--sp-10) var(--sp-8);
+    padding: var(--sp-4) var(--sp-6) var(--sp-6);
     overflow: hidden;
     flex: 1;
     min-height: 0;
@@ -733,142 +693,156 @@
     flex-direction: column;
   }
 
-  .cols {
-    display: grid;
-    /* 左栏原来 360px：区间行 + 结果处理提示会横向被切。这里把宽屏下原本空着的
-       左侧留白收进内容区（max-width 1120 → 1280），并给左栏 440px；右栏仍可伸缩。 */
-    grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
-    gap: var(--sp-6);
+  .main-scroll {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    padding-right: var(--sp-1);
+  }
+
+  .main-col {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
     width: 100%;
-    max-width: 1280px;
+    max-width: 1040px;
     margin: 0 auto;
     min-height: 0;
-    flex: 1;
   }
 
-  .left {
-    overflow-y: auto;
-    min-width: 0;
-    padding-right: var(--sp-1);
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-3);
-  }
-
-  .right {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-3);
-    min-width: 0;
-    min-height: 0;
-    border-left: 1px solid var(--separator-soft);
-    padding-left: 22px;
-  }
-
-  /* ---- 左栏轻卡片：分区标题 + 行式表单。卡片用 raise 底，与右侧连续面板
-     形成「左右都是分组的」视觉重量，而不是左边一坨控件、右边一片留白。 ---- */
   .card {
     border: 1px solid var(--separator-soft);
     border-radius: 10px;
     background: var(--bg-content);
-    padding: 11px 14px var(--sp-3);
+    padding: 10px var(--sp-4);
+    min-width: 0;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-2);
+    min-width: 0;
+  }
+  .card-head.tight {
+    margin-bottom: var(--sp-2);
+  }
+  .card-copy {
     min-width: 0;
   }
   .card-title {
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 600;
     letter-spacing: 0.02em;
     color: var(--text-2);
-    margin-bottom: 9px;
   }
-  .card-body {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 0;
+  .card-sub {
+    margin: 3px 0 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-3);
+    text-wrap: pretty;
   }
 
-  .row {
-    display: grid;
-    grid-template-columns: 68px minmax(0, 1fr);
-    gap: 10px;
+  .engine-state {
+    display: inline-flex;
     align-items: center;
-    min-width: 0;
-  }
-  .row-label {
-    font-size: 12.5px;
-    color: var(--text-2);
-    text-align: right;
+    gap: 5px;
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    color: var(--text-3);
     white-space: nowrap;
   }
-  .row-control {
-    display: flex;
-    align-items: center;
+  .state-dot {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    border-radius: 50%;
+    background: var(--warn);
+    box-shadow: 0 0 0 2px var(--warn-soft);
+  }
+  .state-dot.ready {
+    background: var(--success);
+    box-shadow: 0 0 0 2px var(--success-soft);
+  }
+
+  .switch-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--sp-2);
     min-width: 0;
   }
-  .row-control.wrap {
-    flex-wrap: wrap;
+  .switch-card {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    padding: var(--sp-2) 10px;
+    border: 1px solid var(--separator);
+    border-radius: 8px;
+    background: var(--fill);
+    cursor: default;
+    min-width: 0;
+    transition:
+      border-color var(--dur) var(--ease),
+      background var(--dur) var(--ease);
   }
-  /* 提示单独占一行、与输入左缘对齐：不再被塞进同一行的 flex 剩余空间里，
-     因此不会出现「本次整片结果替换当前核对\n台」那种单字换行。 */
-  .row-hint {
-    margin: 0 0 2px 78px;
+  .switch-card:hover {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+  }
+  .switch-card.disabled {
+    opacity: 0.55;
+  }
+  .switch-card input {
+    margin: 2px 0 0;
+    accent-color: var(--control-on);
+    flex: 0 0 auto;
+  }
+  .sw-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .sw-copy b {
     font-size: 12px;
-    line-height: 1.55;
+    font-weight: 600;
+    line-height: 16px;
+    color: var(--text);
+  }
+  .sw-copy small {
+    font-size: 10.5px;
+    line-height: 1.45;
     color: var(--text-3);
     text-wrap: pretty;
-    overflow-wrap: break-word;
-    min-width: 0;
-  }
-  .row-hint.warn {
-    color: var(--warn);
-  }
-  .row-hint.warn-hint {
-    color: var(--warn);
-  }
-  .row-hint + .row {
-    margin-top: 1px;
   }
 
-  .engine-pick {
+  .detail {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    margin-top: var(--sp-3);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--separator-soft);
     min-width: 0;
   }
-  .engine-field {
-    width: 210px;
-    position: relative;
-    flex: 0 1 auto;
-    min-width: 150px;
-  }
-  .engine-field select {
-    appearance: none;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-size: var(--fs-ui);
-    width: 100%;
-    padding-right: var(--sp-4);
-    cursor: default;
-  }
-  .engine-field .chev {
-    position: absolute;
-    right: 8px;
+  .detail-label {
+    font-size: 11.5px;
     color: var(--text-3);
-    pointer-events: none;
-    display: grid;
-    place-items: center;
+    min-width: 52px;
   }
-
-  .range {
+  .range-row {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
+    min-width: 0;
+  }
+  .time-field {
+    width: 104px;
   }
   .dash {
     color: var(--text-3);
@@ -889,14 +863,17 @@
     flex: 0 1 auto;
   }
 
-  .actions {
-    display: flex;
-    gap: var(--sp-2);
-    align-items: center;
-    flex-wrap: wrap;
+  .hint {
+    margin: 6px 0 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-3);
+    text-wrap: pretty;
+    overflow-wrap: break-word;
   }
-  .action-row {
-    margin-top: var(--sp-1);
+  .hint.warn,
+  .hint.warn-hint {
+    color: var(--warn);
   }
 
   /* 双引擎流向：主角是「谁写哪里」，不靠一段长提示解释。 */
@@ -909,6 +886,7 @@
     flex-direction: column;
     gap: 7px;
     min-width: 0;
+    margin-top: var(--sp-3);
   }
   .duo-row {
     display: flex;
@@ -969,14 +947,31 @@
     flex: 0 0 auto;
   }
 
+  .row-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .line-label {
+    font-size: 12px;
+    color: var(--text-2);
+    min-width: 56px;
+  }
+  .line-label.sub {
+    min-width: auto;
+    color: var(--text-3);
+  }
+
   .alt-state {
     display: flex;
     align-items: center;
     gap: 7px;
+    flex-wrap: wrap;
+    margin-top: var(--sp-2);
     font-size: 12px;
     color: var(--text-2);
-    margin-left: 78px;
-    flex-wrap: wrap;
   }
   .alt-label {
     color: var(--text-3);
@@ -988,21 +983,117 @@
     white-space: nowrap;
   }
 
-  .no-engine {
-    font-size: 12px;
-    color: var(--text-3);
+  .run-row {
     display: flex;
-    align-items: center;
-    gap: var(--sp-2);
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-1);
+    margin-top: var(--sp-3);
+    padding-top: 10px;
+    border-top: 1px solid var(--separator-soft);
   }
-  .hint {
-    font-size: 12px;
-    color: var(--text-3);
+  .run-row .hint {
+    margin: 0;
+    text-align: center;
+  }
+  .run-btn {
+    width: 100%;
+    height: 36px;
+    justify-content: center;
+    font-size: var(--fs-body);
+    font-weight: 600;
   }
 
-  .btn.lg {
-    height: var(--ctl-h-lg);
-    padding: 0 14px;
+  .err-text {
+    color: var(--danger);
+  }
+
+  .progress-card .card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .pc-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: var(--sp-2);
+  }
+  .pc-stage {
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+  .pc-pct {
+    font-size: 12px;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  .pc-bar {
+    height: 5px;
+    border-radius: 3px;
+    background: var(--fill-strong);
+    overflow: hidden;
+  }
+  .pc-bar > i {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+    transition: width 300ms var(--ease);
+  }
+  .pc-meta {
+    display: flex;
+    gap: 14px;
+    margin-top: var(--sp-2);
+    font-size: 12px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    flex-wrap: wrap;
+  }
+  .pc-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-3);
+  }
+  .pc-note .btn {
+    flex: 0 0 auto;
+  }
+
+  .alt-done,
+  .saved-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--separator-soft);
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .saved-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--success);
+  }
+  .saved-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .saved-row .btn {
+    flex: 0 0 auto;
   }
 
   /* 原文 / 译文导入：两张小文件卡，独立成区，不和「开始转写」抢层级。 */
@@ -1075,6 +1166,7 @@
     color: var(--text-3);
     white-space: nowrap;
   }
+
   /* 「覆盖整片」在区间任务里是唯一会丢数据的档位：靠令牌给一点警示色，
      让它在被点之前就与另外两档区分开（点下去还有一次确认）。 */
   .seg button.danger-opt,
@@ -1082,193 +1174,21 @@
     color: var(--warn);
   }
 
-  .progress-card .card-body {
-    gap: 0;
-  }
-  .pc-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    margin-bottom: var(--sp-2);
-  }
-  .pc-stage {
-    font-size: 12.5px;
-    font-weight: 500;
-  }
-  .pc-pct {
-    font-size: 12px;
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  }
-  .pc-bar {
-    height: 5px;
-    border-radius: 3px;
-    background: var(--fill-strong);
-    overflow: hidden;
-  }
-  .pc-bar > i {
-    display: block;
-    height: 100%;
-    border-radius: 3px;
-    background: var(--accent);
-    transition: width 300ms var(--ease);
-  }
-  .pc-meta {
-    display: flex;
-    gap: 14px;
-    margin-top: var(--sp-2);
-    font-size: 12px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    flex-wrap: wrap;
-  }
-
-  /* 对齐说明：一句话解释 230/257 的口径，右侧给一个进报告页的入口。 */
-  .pc-note {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-2);
-    margin-top: var(--sp-2);
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--text-3);
-  }
-
-  .pc-note .btn {
-    flex: 0 0 auto;
-  }
-
-  .alt-done {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: 9px;
-    padding-top: 9px;
-    border-top: 1px solid var(--separator-soft);
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-  .saved-row {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-top: 9px;
-    padding-top: 9px;
-    border-top: 1px solid var(--separator-soft);
-    min-width: 0;
-    flex-wrap: wrap;
-  }
-  .saved-ok {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    flex: 0 0 auto;
-    font-size: 12px;
-    color: var(--success);
-  }
-  .saved-path {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    color: var(--text-3);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .saved-row .btn {
-    flex: 0 0 auto;
-  }
-
-  .preset-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 auto;
-  }
-  .pb-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-3);
-  }
-  .preset-bar select {
-    appearance: none;
-    height: 26px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background-color: var(--bg-content);
-    color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
-    padding: 0 22px 0 var(--sp-2);
-    max-width: 190px;
-    background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
-      linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
-    background-position: calc(100% - 12px) 11px, calc(100% - 8px) 11px;
-    background-size: 4px 4px, 4px 4px;
-    background-repeat: no-repeat;
-  }
-  .preset-name {
-    width: 132px;
-    flex: 0 1 132px;
-  }
-
-  /* 1280 以下右栏变窄，预设条先换行，避免「存为新预设」被挤成 40px。 */
-  @media (max-width: 1280px) {
-    .preset-bar {
-      flex-wrap: wrap;
-    }
-    .preset-bar select {
-      flex: 1 1 140px;
-      max-width: none;
-    }
-    .preset-name {
-      flex: 1 1 120px;
-      width: auto;
+  @media (max-width: 1040px) {
+    .switch-grid {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 
-  /* 紧凑模式（≤900px）：双栏放不下（680 下右栏只剩 200px，标签会竖排），
-     改成单栏上下排，整页滚动；右栏的分隔线从左边改成上边。 */
   @media (max-width: 900px) {
     .pane {
-      overflow-y: auto;
-      padding: var(--sp-5) var(--sp-4) var(--sp-6);
+      padding: var(--sp-4);
     }
-    .cols {
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--sp-5);
-      flex: 0 0 auto;
-    }
-    .left {
-      overflow: visible;
-      padding-right: 0;
-    }
-    .right {
-      border-left: 0;
-      border-top: 1px solid var(--separator-soft);
-      padding-left: 0;
-      padding-top: var(--sp-4);
-    }
-    .row {
-      grid-template-columns: 60px minmax(0, 1fr);
-    }
-    .row-hint {
-      margin-left: 70px;
-    }
-    .alt-state {
-      margin-left: 70px;
-    }
-    .preset-bar {
+    .card-head {
       flex-wrap: wrap;
     }
-    .preset-bar select {
-      flex: 1 1 120px;
-      max-width: none;
-    }
-    .preset-name {
-      flex: 1 1 120px;
-      width: auto;
+    .engine-state {
+      white-space: normal;
     }
   }
 </style>

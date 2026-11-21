@@ -18,6 +18,8 @@
     disabled = false,
     label = '',
     hint = '',
+    badge = '',
+    compact = false,
   }: {
     segments: AiSegment[];
     active?: number;
@@ -26,6 +28,10 @@
     disabled?: boolean;
     label?: string;
     hint?: string;
+    /** 轨道右侧的计数徽标（如「已覆盖 0/4 段」）；放在这里因为它只对多段有意义。 */
+    badge?: string;
+    /** 紧凑版（统一工作条里用）：单行细带，只留序号 / 条数 / 状态点。 */
+    compact?: boolean;
   } = $props();
 
   function clock(value: number): string {
@@ -45,15 +51,16 @@
 </script>
 
 {#if segments.length}
-  <div class="aiw-rail-wrap">
-    {#if label || hint}
+  <div class="aiw-rail-wrap" class:compact>
+    {#if label || hint || badge}
       <div class="aiw-rail-head">
         {#if label}<span>{label}</span>{/if}
+        {#if badge}<span class="aiw-chip">{badge}</span>{/if}
         <span class="aiw-spacer"></span>
-        {#if hint}<span>{hint}</span>{/if}
+        {#if hint && !compact}<span>{hint}</span>{/if}
       </div>
     {/if}
-    <div class="aiw-rail" role="group" aria-label={label || '智能分段'}>
+    <div class="aiw-rail" class:compact role="group" aria-label={label || '智能分段'}>
       {#each segments as segment, index (segment.from)}
         {@const state = status(segment, index)}
         <button

@@ -22,6 +22,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from core.paths import ffmpeg_bin
 from core.procutil import CommandTimeout, run_command, tail
 from core.textio import write_text_atomic
 
@@ -127,7 +128,7 @@ def _normalize_audio(source: Path, target: Path, *, start: float | None, end: fl
     重编码，ffmpeg 的 accurate_seek 会解到目标帧）；不给就是整段转换（上传）。
     """
     target.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-y"]
+    cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-y"]
     if start is not None:
         cmd += ["-ss", f"{max(0.0, float(start)):.3f}"]
     if start is not None and end is not None:

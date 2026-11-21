@@ -53,6 +53,8 @@
 
   const translationLangs = $derived(Object.keys(app.translations).sort());
   const hasTranslations = $derived(translationLangs.length > 0);
+  /** 没有译文轨时「译文 / 双语」只能置灰：就地写一句去哪生成，而不是让按钮空着。 */
+  const NO_TRANSLATION_HINT = '暂无译文轨，可在 AI 处理 → 翻译生成后导出双语';
   const selectedTranslation = $derived(
     exporter.track === 'source' ? null : (app.translations[exporter.lang] ?? null),
   );
@@ -308,6 +310,9 @@
           双语
         </button>
       </div>
+      {#if !hasTranslations}
+        <span class="trk-hint">{NO_TRANSLATION_HINT}</span>
+      {/if}
       <select class="select" bind:value={subFormat} title="字幕格式">
         <option value="SRT">SRT</option>
         <option value="VTT">VTT</option>
@@ -409,6 +414,9 @@
               双语
             </button>
           </div>
+          {#if !hasTranslations}
+            <span class="trk-hint">{NO_TRANSLATION_HINT}</span>
+          {/if}
           {#if exporter.track !== 'source'}
             <select
               class="select"
@@ -756,13 +764,6 @@
         {/if}
 
         <div class="actions">
-          <div class="why">
-            <b>为什么在 KikuSub 里导出</b>
-            <span>
-              时间轴与译文已在内存里，不用来回导字幕；软字幕封装可做到不重编码；
-              硬字幕与软字幕都由本机直接封装，不需要额外安装字幕组件。
-            </span>
-          </div>
           <div class="spacer"></div>
           <button
             class="btn primary go"
@@ -853,6 +854,11 @@
     align-items: center;
     gap: var(--sp-2);
     flex-wrap: wrap;
+  }
+  .trk-hint {
+    font-size: 12px;
+    color: var(--text-3);
+    line-height: 1.5;
   }
   .seg {
     display: inline-flex;
@@ -1224,22 +1230,6 @@
     margin-top: 14px;
     padding-top: var(--sp-3);
     border-top: 1px solid var(--separator-soft);
-  }
-  .why {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-width: 600px;
-  }
-  .why b {
-    font-size: 12px;
-    color: var(--text-2);
-    font-weight: 500;
-  }
-  .why span {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.55;
   }
   .go {
     height: 34px;

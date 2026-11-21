@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core import audio_cache, proxy
-from core.paths import OUTPUT_DIR
+from core.paths import OUTPUT_DIR, ffprobe_bin
 from core.procutil import CommandCancelled, CommandTimeout, run_command
 
 # 与 core.paths / desktop 导入入口保持一致；这里只做快速失败，真正的解码能力由 ffmpeg 决定。
@@ -113,7 +113,7 @@ def _ffprobe_json(path: Path) -> dict:
     try:
         proc = run_command(
             [
-                "ffprobe", "-v", "error",
+                ffprobe_bin(), "-v", "error",
                 "-show_entries",
                 "format=duration,bit_rate:"
                 "stream=codec_type,codec_name,width,height,bit_rate,avg_frame_rate,r_frame_rate",

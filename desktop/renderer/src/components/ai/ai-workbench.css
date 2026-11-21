@@ -241,52 +241,99 @@ button.aiw-count:hover {
   outline-offset: 1px;
 }
 
-/* ---------- 操作条：两条工作流并排，不是两张卡 ---------- */
+/* ---------- 第 2 行：执行通道一选一 + 该通道的动作 + 本次批次 ---------- */
 
-.aiw-launch {
+.aiw-cmd-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   flex-wrap: wrap;
-  padding: 7px 14px;
+  padding: 6px 14px;
   background: var(--bg-inspector);
   border-top: 1px solid var(--separator-soft);
   min-width: 0;
 }
-.aiw-channel {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+
+/* 分段开关：轨道用 fill-strong、选中片补投影，和页内「单源 / 双源」区分开——
+   这里是「怎么跑」，比「处理什么」更靠近主操作。 */
+.aiw-lane {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  height: var(--ctl-h);
+  border-radius: var(--rad-control);
+  background: var(--fill-strong);
 }
-.aiw-channel + .aiw-channel {
-  padding-left: var(--sp-3);
-  border-left: 1px solid var(--separator-soft);
-}
-.aiw-channel-tag {
+.aiw-lane button {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  border: 0;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--rad-control);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.aiw-lane button:hover:not(:disabled) {
+  color: var(--text);
+}
+.aiw-lane button.on {
+  background: var(--raise);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: var(--shadow-seg);
+}
+html[data-theme='dark'] .aiw-lane button.on {
+  background: rgba(236, 241, 250, 0.14);
+}
+.aiw-lane button:disabled {
+  color: var(--text-3);
+  opacity: 0.6;
+}
+.aiw-lane button:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.aiw-lane-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+/* 通道说明（断句重排只有外部手动时的操作提示）：一行小字，不抢按钮 */
+.aiw-lane-note {
   font-size: 11px;
   line-height: 16px;
-  letter-spacing: 0.02em;
   color: var(--text-3);
-  white-space: nowrap;
+  min-width: 0;
 }
-.aiw-channel-tag b {
+.aiw-lane-note b {
   color: var(--text-2);
   font-weight: 600;
 }
+.aiw-batch {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* 「复制 → 粘贴」之间的方向提示（只在外部手动通道里出现） */
 .aiw-arrow {
   color: var(--text-3);
   font-size: 12px;
   line-height: 1;
+  flex: 0 0 auto;
 }
-.aiw-sep {
-  color: var(--text-3);
-  font-size: 12px;
-  line-height: 1;
-}
+
 .aiw-state {
   width: 6px;
   height: 6px;
@@ -809,8 +856,7 @@ button.aiw-tc:hover {
 }
 
 /* 列表内的小块空态：不撑成整屏白板 */
-.aiw-inline-empty {
-  display: flex;
+.aiw-inline-empty {  display: flex;
   align-items: center;
   gap: var(--sp-2);
   padding: 14px;
@@ -844,6 +890,199 @@ button.aiw-tc:hover {
   font-size: 12px;
   line-height: 17px;
   color: var(--text-3);
+}
+
+/* ---------- 无提案时的中心引导卡（翻译 / 断句重排） ----------
+   以前没有提案就是一片空白，用户得自己猜「先点哪一个」。这里按当前执行通道
+   给 1–2 步说明，并把主按钮放在同一个卡里，视线不用来回找。 */
+
+.aiw-blank {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  overflow: auto;
+}
+.aiw-blank-card {
+  width: min(580px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-5) var(--sp-5) var(--sp-4);
+  border: 1px solid var(--separator);
+  border-radius: var(--rad-panel);
+  background: var(--raise);
+  box-shadow: var(--shadow-seg);
+  color: var(--text-2);
+}
+.aiw-blank-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.aiw-blank-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--rad-card);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.aiw-blank-title {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+.aiw-blank-sub {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+.aiw-blank-steps {
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.aiw-blank-steps li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+.aiw-blank-steps li > i {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.aiw-blank-steps b {
+  color: var(--text);
+  font-weight: 600;
+}
+.aiw-blank-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px var(--sp-2);
+  border-radius: var(--rad-card);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.aiw-blank-note.ok {
+  background: var(--fill);
+  color: var(--text-3);
+}
+.aiw-blank-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+/* 步骤卡里的小引导块（断句重排「只改几处」未粘贴时） */
+.aiw-guide {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--separator);
+  border-radius: var(--rad-card);
+  background: var(--bg-inspector);
+}
+.aiw-guide-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.aiw-guide-title {
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+.aiw-guide-text {
+  font-size: 11.5px;
+  line-height: 17px;
+  color: var(--text-3);
+}
+
+/* ---------- 紧凑分段轨：多段时才出现，只占一条细带 ---------- */
+
+.aiw-rail-wrap.compact {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 14px 6px;
+  min-width: 0;
+}
+.aiw-rail-wrap.compact .aiw-rail-head {
+  flex: 0 0 auto;
+  padding: 0;
+  white-space: nowrap;
+}
+.aiw-rail-wrap.compact .aiw-rail-head .aiw-spacer {
+  display: none;
+}
+.aiw-rail-wrap.compact .aiw-rail-head .aiw-chip {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 18px;
+}
+.aiw-rail.compact {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.aiw-rail.compact .aiw-rail-item {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  gap: 5px;
+  border-radius: 6px;
+}
+.aiw-rail.compact .aiw-rail-no {
+  font-size: 10.5px;
+  line-height: 18px;
+}
+.aiw-rail.compact .aiw-rail-count {
+  font-size: 11.5px;
+  line-height: 18px;
+}
+.aiw-rail.compact .aiw-rail-time {
+  display: none;
+}
+.aiw-rail.compact .aiw-rail-flag {
+  flex-basis: 10px;
+  width: 10px;
+  height: 10px;
 }
 
 /* ---------- 顶栏里的次级动作菜单 ---------- */
@@ -907,21 +1146,8 @@ button.aiw-tc:hover {
   }
 }
 
-/* ---------- 表头下的一条控制/统计带 ---------- */
+/* ---------- 统计 / 过滤器：挂在表头或底栏，不再单独占一行 ---------- */
 
-.aiw-subbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 6px 14px;
-  border-bottom: 1px solid var(--separator-soft);
-  background: var(--bg-inspector);
-  font-size: 12px;
-  color: var(--text-2);
-  min-width: 0;
-  flex-wrap: wrap;
-}
 .aiw-hint {
   font-size: 11px;
   line-height: 16px;

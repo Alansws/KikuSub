@@ -125,9 +125,10 @@
     return `${detail} 还不能用：到「设置 → 引擎与模型」启用并下载模型。`;
   });
 
+  // 说明只有一行：这一块占的是「无需滚动即可操作」的高度预算，第二句交给 AI 卡片自己说。
   const tip = $derived.by(() => {
     const target = readyLabel || '另一个引擎';
-    return `把这一句的时间窗送给「${target}」再听一遍；不会改动当前字幕，采用后才进历史。`;
+    return `把这一句送给「${target}」再听一遍；采用后才进历史。`;
   });
 
   const retryLabel = $derived.by(() => {
@@ -339,8 +340,6 @@
     {/if}
     {#if engineHint}
       <p class="so-tip hint">{engineHint}</p>
-    {:else}
-      <p class="so-tip">也可以直接补一条听音线索，让下方 AI 先还原这一句。</p>
     {/if}
     {#if !readyEngine}
       <button
@@ -366,21 +365,14 @@
     {/if}
   {/if}
 
-  {#if has && !altText.trim()}
-    <p class="so-tip hint">另一引擎未识别到内容；可在下方补听音线索，让 AI 直接推断。</p>
-  {/if}
-
   <ArbitrationCard {index} textA={text} textB={altText} bAttempted={has} />
 </section>
 
 <style>
   .second-opinion {
-    margin-top: var(--sp-4);
-    padding: var(--sp-3) 0 0;
-    border-top: 1px solid var(--line-2);
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
+    gap: 6px;
   }
 
   .so-head {
@@ -494,7 +486,7 @@
     margin: 0;
     color: var(--text-3);
     font-size: 11.5px;
-    line-height: 1.55;
+    line-height: 1.45;
   }
   .so-tip.hint {
     color: var(--warn);
@@ -669,7 +661,7 @@
     justify-content: center;
     gap: 5px;
     width: 100%;
-    height: 30px;
+    height: 28px;
     padding: 0 10px;
     border: 1px solid var(--accent-line);
     border-radius: 7px;

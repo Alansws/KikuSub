@@ -37,9 +37,12 @@
   `beginScrub / setScrub / endScrub` 负责暂停、16ms 节流写 `video.currentTime`、松手
   恢复原播放状态。视频进度条复用同一套（禁止再写独立的 click-to-seek），三者共同保证
   拖动时能逐帧预览。
-- **底部字幕轨道**：`LANE_H=17px`，`selection.cueBlockAtX()` 按 `(start, end)` 把同区间的双语/
-  三语行聚合成一块。拖块体整体平移、拖两端单独改起止；提交走 `applyCueTimes()`
-  （整表替换，服务端只压一次历史，⌘Z 一次能退回整块）。
+- **底部字幕轨道**：`LANE_H=24px`（块高 `LANE_H-6=18px`；2026-11-21 从 17px 提高——
+  11px 的块在缩放后只有几像素宽，抓两端太难），`selection.cueBlockAtX()` 按
+  `(start, end)` 把同区间的双语/三语行聚合成一块。拖块体整体平移、拖两端单独改起止；
+  提交走 `applyCueTimes()`（整表替换，服务端只压一次历史，⌘Z 一次能退回整块）。
+  波形高度默认值同步 80 → 88（`localStorage['kikusub.waveHeight']`，下限 80），
+  波形本身的可视高度不变。
 - **同步**：`cueIndex` 变化时（点波形、拖播放头、播放中）表格 `revealRow()` 且
   `play.selected` 跟到该块；用户点的行若已在当前块内则保留其选择，不能被“块内第一条”
   规则抢回去。
@@ -279,14 +282,16 @@
   - 下载走 `core/tts/model_store.py` 的独立后台线程（不占 `JobManager` 单槽），
     进度由 `/api/tts/voices` 的 `engine.download` 带出；模型约 3.3GB，**不随包分发**。
   - 前端：`store.tts` 的 `voiceId`/`speed` 落 `localStorage['kikusub.ttsVoiceId']` /
-    `['kikusub.ttsSpeed']`（旧 `ttsVoice`/`ttsRate` 自动迁移）。右侧检查器把 TTS 面板
-    收成「播放卡片 + 操作 chip」：卡片里是带「朗读 / 停止 / 生成中」文字的实心主按钮、
-    音色/语速下拉和当前声线的参考信息（时长、来源、「音量已对齐」）；卡片下是
-    **上传 / 截取 / 音色库（带数量）/ 管理** 四个 chip，模型未就绪时另有一条实心
-    下载 CTA。音色库用图标动作（试听 / 设为默认 / 管理）而不是一行文字链接。
-    参考音频约束（3–10 秒、单人干声）放在上传/截取入口的 title 与各自面板提示里，
-    不再常驻一条灰字。字幕表与波形右键「以此句音频新建音色…」仍走
-    `extractTtsVoiceFromCue()`。
+    `['kikusub.ttsSpeed']`（旧 `ttsVoice`/`ttsRate` 自动迁移）。
+    **界面（2026-11-21 Step 3 重排）**：`components/inspector/TtsControls.svelte` 常驻在
+    「当前条目」的操作行里——**一枚「朗读 / 停止 / 生成中」按钮 + 音色下拉 + 「⚙」**，
+    与「试听原声」同一行（原来那张底部「TTS 对照」大卡片在 1360×838 下会被底部
+    保存栏截断，用户得滚动才看得见）。语速、**上传 / 截取 / 音色库（带数量）/ 管理**
+    与「下载克隆模型」CTA 收进「⚙」按需展开的面板（`.tts-panel`），默认收起、不占
+    常驻高度；音色库用图标动作（试听 / 设为默认 / 管理）而不是一行文字链接，模型下载
+    进度与批量建音色进度也在面板里。参考音频约束（3–10 秒、单人干声）放在上传/截取
+    入口的 title 与各自面板提示里，不再常驻一条灰字。字幕表与波形右键「以此句音频
+    新建音色…」仍走 `extractTtsVoiceFromCue()`。
     换句/换片仍必须 `stopTts()`；不做云端 TTS，不读 AI Key。
   - **降级是硬要求**：没装 `omnivoice`、没下模型、MPS 失败（回退 CPU）都必须只让克隆
     引擎不可用，系统语音与界面不能卡死；合成失败返回可读的 502/503，前端弹 toast。
@@ -566,3 +571,58 @@
 - **回归**：`tests/test_chapters.py`（衔接/夹紧/重复 id/转义/持久化/一步历史/撤销
   写盘）、`tests/test_export_chapters.py`（三种模式 + `ffprobe -show_chapters`）、
   `tools/shots/verify_chapters.mjs`（真实界面：添加/编辑/⌘Z/旗标跳转/仅封装导出）。
+
+#### 3.4.10 检查器结构拆分与「第一次打开」的默认态（2026-11-21，界面重构 Step 3）
+
+> 触发：两份用户报障——**长片打开时停在片头黑场、波形是 1.0× 全片挤压**（整部片压进
+> 两三百像素里什么也看不清）；**右侧栏底部「TTS 对照」大卡片被底部保存栏截断**，
+> 得滚动才看得见，看起来像功能没了。顺带把 2200 行的 `Inspector.svelte` 拆开。
+
+- **检查器结构（只拆不改行为）**：
+
+  | 文件 | 职责 |
+  | --- | --- |
+  | `components/Inspector.svelte` | 页签 + 三个页签的内容挂载 + 常驻保存栏（约 240 行） |
+  | `components/inspector/CuePane.svelte` | 「当前条目」：显示模式行、稿纸卡、操作行、字幕剪贴板 |
+  | `components/inspector/TtsControls.svelte` | 朗读控件：图标按钮 + 音色下拉 + 「⚙」面板（见 §3.4.2） |
+  | `components/inspector/ReviewAssistant.svelte` | 纠偏助手的挂载点（复核 / AI 判定见 §3.4.5） |
+  | `components/inspector/InspectorMeta.svelte` | 只读信息：来源 / 质检速览 / 生效参数 / 输出 |
+  | `components/inspector/SaveDock.svelte` | 底部保存栏（暂存 / 格式 / 导出 / 恢复） |
+
+  拆分只搬家：状态与副作用仍只有在原处那一份（草稿草写与 `registerCueDraftCommit`、
+  换句 `stopTts()`、`refreshDraftInfo`/`loadTranslations`/`loadTtsVoices` 的刷新时机、
+  「导入 / 恢复草稿后不引用上一次转写的报告」的口径都没变）。
+
+- **「当前条目」两行操作**：第 1 行「听」= `试听原声` + 朗读（图标）/ 音色下拉 / 「⚙」；
+  第 2 行「改」= `聚焦` / 复制 / 删除 / `更新此行`（主操作）。两行合起来约 64px，
+  比原来的「单行 + 底部 TTS 大卡片（134px）」省约 100px，这是「不用滚动就能操作完」
+  的来源。
+- **不溢出的判据是可测的**：`tools/shots/verify_review_defaults.mjs` 在 1360×838 里断言
+  从显示模式到 AI 判定的整块 `bottom ≤ .ins-scroll.clientHeight`，且 `≤ .save-dock.top`。
+  只读的「生效参数 / 输出」在 AI 已配置或双语稿下仍可能需要滚动——那是信息，不是操作。
+- **第一次打开这部片（没有本机现场快照）**：`lib/reviewStart.ts` 的
+  `planInitialReviewView()` 给默认现场——**选中第 1 条字幕、播放头 seek 到它的起点、
+  视野 `duration/50`（`INITIAL_VIEW_ZOOM=50`，和「聚焦」69× 同量级）**。
+  - **短片不缩**：`duration ≤ SHORT_FILM_SECONDS(60s)` 保持全片视图（样片 / 片段本来
+    一眼看得完，放大反而是看不到全貌）；长片才用 50×。
+  - 视野下限 `MIN_INITIAL_SPAN=2s`（10 分钟片 12s、2 小时片 144s；太短的窗口没法拖）。
+  - 第 1 条字幕放在窗口偏左（左边留 1/4 上下文），`viewStart` 夹进 `[0, duration-span]`。
+  - 只在这部片**还没有快照**时生效；有快照仍然优先恢复现场（§3.4.7），显式跳转
+    （`focusRange()`）仍然整次压过默认态。**没有字幕就先不定位**：等字幕到了再跑一次
+    （`restoreDoneFor` 此时还不记），否则会停在片头。
+  - **`persistViewport()` 在 `restoreDoneFor !== path` 时不写盘**：那一刻视窗还是
+    「全片 1.0×」的复位值，写下去会变成快照，下一次打开反而把它当成用户位置恢复，
+    默认态永远出不来。
+- **有译文轨就默认双语**：`claimTranslationDefault()` 是进程内一次性名额——本次启动
+  第一次真正满足「`app.track === 'source'` 且已挂译文轨」时 `setTrackMode('both')`
+  （不是「第一次进核对台」：那时译文轨可能还没加载完，抢跑会看不到译文就白烧掉名额）。
+  不落盘：用户明确选回「原文」之后，换片 / 切页回来都不许再翻成双语（`app.track`
+  仍由 `setTrackMode` 写 `localStorage['kikusub.track']`）。
+- **预算**：`ReviewView.svelte` 3787 → 3780（查找高亮切分搬进 `lib/findMatches.ts`，
+  腾出的行数用于接线默认态与 `LANE_H`），`store.svelte.ts` 3258 → 3255；
+  新增逻辑在 `lib/reviewStart.ts`（纯函数 + 一次性名额）。
+- **回归**：`desktop/test/reviewStart.test.mjs`（长片 / 短片 / 无字幕 / 无时长 /
+  一次性名额）、`tools/shots/verify_review_defaults.mjs`（真实界面：50× + 第 1 条 +
+  真的 seek、默认双语且只生效一次、操作区不溢出重爬、朗读面板按需展开）；
+  既有 `verify_review_viewport.mjs` / `verify_cue_clipboard.mjs` /
+  `verify_review_transport.mjs` / `verify_arbitration*.mjs` 同轮全绿。

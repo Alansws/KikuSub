@@ -163,7 +163,9 @@
       <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
         打开文件夹
       </button>
-      <button class="btn tiny primary" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台">
+      <!-- 次级入口：导入原文是「接着上次的活干」，不是本页主流程（拖入素材才是），
+           所以用描边按钮，别和拖入区抢主操作的视觉重心。 -->
+      <button class="btn tiny" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台（可选，接着上次的活干）">
         <Icon name="export" size={10} />导入原文…
       </button>
     </div>

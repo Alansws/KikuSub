@@ -53,6 +53,7 @@ from .vad import (  # noqa: F401 - re-export for sherpa_asr
 )
 from .coverage import find_coverage_spans
 from .paths import APP_ROOT, MODELS_DIR as PATHS_MODELS_DIR
+from .paths import ffmpeg_bin
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
 
 log = logging.getLogger(__name__)
@@ -463,7 +464,7 @@ def decode_wav_16k(
     ``cancel_event`` 可以是 ``threading.Event`` 或 ``jobs.CancelToken``；
     ``run_command`` 会轮询它并在取消/超时时终止 ffmpeg 子进程。
     """
-    cmd = ["ffmpeg", "-y", "-nostdin"]
+    cmd = [ffmpeg_bin(), "-y", "-nostdin"]
 
     if start_time_s is not None and start_time_s > 0:
         cmd.extend(["-ss", f"{start_time_s:.3f}"])
@@ -517,7 +518,7 @@ def decode_wav_16k(
             tail(proc.stderr, 800),
         )
 
-    fallback_cmd = ["ffmpeg", "-y", "-nostdin"]
+    fallback_cmd = [ffmpeg_bin(), "-y", "-nostdin"]
     if start_time_s is not None and start_time_s > 0:
         fallback_cmd.extend(["-ss", f"{start_time_s:.3f}"])
     fallback_cmd.extend(["-i", str(input_path)])

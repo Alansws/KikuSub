@@ -1,14 +1,13 @@
 ---
 created: 2026-11-12 21:26
-updated: 2026-11-20 22:40
+updated: 2026-11-21 19:50
 ---
 # AGENTS.md — 日语影片字幕转录工作台开发指南
 
 本文件面向在此仓库中继续开发的智能体与开发者。**注意：它是索引，不是全文。**
 
-2026-11-13 起领域契约拆到 `docs/contracts/`：本页原先 65KB（≈1.7 万 token），每次会话光读
-规范就吃掉一大截上下文，而且留着已删除的 Gradio 规则（错误的文档比没有文档更可怕）。现在只留
-**定位、结构、红线、索引**，细节看第 3 节。
+2026-11-13 起领域契约拆到 `docs/contracts/`：原先 65KB 的全文每会话都要读一遍，且留有已删除的
+Gradio 规则（错误的文档比没有文档更可怕）。本页只留**定位、结构、红线、索引**，细节看第 3 节。
 
 ## 0. 读法（30 秒）
 
@@ -60,7 +59,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 
 | 路径 | 职责 |
 | --- | --- |
-| `desktop/` | **桌面端（主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首启向导、退出清理、AI 密钥（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 八视图 + 设置，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/api.ts` 客户端。 |
+| `desktop/` | **桌面端（主入口）**。`main/` 是 Electron 主进程：窗口/菜单/单实例、sidecar 生命周期、首启向导、退出清理、AI 密钥（`aikey.cjs`）、技能安装（`skill.cjs`）；`files.cjs` 可被 `node --test` 覆盖。`renderer/src/` 是 Svelte 5 渲染层：`views/` 11 个页面，`lib/store.svelte.ts` 工作区、`lib/aiWorkspace.svelte.ts` 提案/双源、`lib/api.ts` 客户端。 |
 | `desktop/resources/skill/` | 随包 Agent 技能，构建时复制进 app，设置页「一键配置」装到 `~/.agents/skills/`。 |
 | `desktop/main/windowmode.cjs` | **窗口可见性判定（纯函数）**：截图 / `KIKUSUB_NO_WINDOW` / 开发模式默认拒绝 / 显式允许 / 打包版；单测在 `desktop/test/window-mode.test.cjs`。 |
 | `core/` | **算法内核包**（无 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 与 `tests/test_core_boundary.py` 看守边界。**禁止在 `core/` 内 import gradio / fastapi。** |
@@ -84,7 +83,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理、后台 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 评测台：`score_srt.py` 打分（CER / 块准确率 / 劈词数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 基线。改断句 / VAD 前后必须跑同一区间；素材用 `--fixtures`。 |
-| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
+| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）+ `fetch_ffmpeg.sh`（sha256 钉死的静态 ffmpeg/ffprobe，不入库）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、兼容读取与原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、安装检测、`family`、`reviewable`、`file_tag` / `legacy_tags`；设置页与命名都读这张表。 |
 | `core/sherpa_asr.py` | 两个中文引擎推理外壳（sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
@@ -124,7 +123,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 2. **提案只有一个实现**：源指纹 digest、结构校验、`apply_polish()` 都在 `core/ai_proposal.py`；
    前端不得自己算 digest 或另写校验。
 3. **并发与取消**：转写必须通过 `jobs.JobRegistry` 单槽占用，取消令牌归属发起会话；
-   **禁止**再引入模块级 `CANCEL_EVENT`。所有外部命令走 `procutil.run_command`（超时/取消/terminate）。
+   **禁止**再引入模块级 `CANCEL_EVENT`。所有外部命令走 `procutil.run_command`（超时/取消/terminate）；
+   ffmpeg/ffprobe 用 `core.paths.ffmpeg_bin()` / `ffprobe_bin()`，**不许写裸命令名**（见 desktop-lifecycle §3.8）。
 4. **断句改动必须有数字**：改 `_break_costs` / `partition_cues` / VAD 参数前后，用
    `tools/eval/score_srt.py` 对同一区间跑 CER、劈词数、最长条；禁止凭个别样例"看起来更好"。
 5. **历史只有一条线**：`Session.history` 是 ≤50 步的 `WorkspaceState` 时间线，所有编辑必须带 `label`；
@@ -142,11 +142,9 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
     或跑 `node tools/shots/verify_reshape_flow.mjs` / `verify_review_transport.mjs`；
     只看编译通过不算验证。**「手点一遍」不许成为打开窗口的理由**（§0.5）。
-11. **两个大文件只许变短**（`lib/store.svelte.ts` 3258 行 / `views/ReviewView.svelte` 3787 行）：
-    改它们前，先把
-    **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
-    `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
-    变成"先读完 4000 行"。
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3255 行 / `views/ReviewView.svelte` 3780 行）：
+    改它们前，先把**这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。
+    界面重构（Step 3/5/6）拆出的检查器 / 工作条 / 设置折叠都在 `components/` 下，预算未放宽。守卫是 `tests/test_big_file_budget.py`，抽完把预算下调。
 12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag` / `reviewable`），推理对象与分派进 `core/pipeline.py`；
     `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护一份引擎 key 白名单
     （加中文引擎时踩过：`if payload.engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
@@ -162,7 +160,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 改动前 `git status` 必须是干净的（或明确知道自己在改哪几个文件）；不要在混杂工作区上叠加新改动。
 - 验证按**改动范围**跑（见「验证时机」表）；环境依赖的用例用 marker 排除
   （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
-- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 6 个真实类型错误已冻结成基线
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 5 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。

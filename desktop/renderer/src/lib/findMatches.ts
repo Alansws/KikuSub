@@ -121,3 +121,65 @@ export function ordinalOfHit(rawHits: FindHit[], hit: FindHit): number {
   }
   return ordinal;
 }
+
+/**
+ * 一条字幕文本被切成「命中 / 未命中」片段（表格每行渲染 <span> 用）。
+ *
+ * `track` 决定这条文本是否在当前搜索范围内：原文模式下不点亮译文行，
+ * 译文模式下不点亮原文行，双语两条都点亮。`currentOrdinal` 是当前命中在这条轨里
+ * 的第几个（按显示文本数），只点亮那一处；`skipped` 是本轮跳过的起点集合，
+ * 用于给它们加删除线。
+ */
+export interface FindSegment {
+  text: string;
+  hit: boolean;
+  /** 当前正在处理的这一处（仅一处为 true）。 */
+  cur: boolean;
+  /** 本轮已跳过。 */
+  skipped: boolean;
+}
+
+export interface HighlightContext {
+  /** 查找栏是否开着：关着就别给整表套正则。 */
+  open: boolean;
+  query: string;
+  caseSensitive: boolean;
+  /** 本次查找覆盖的轨；不在其中的轨一律不点亮。 */
+  tracks: FindTrack[];
+}
+
+function plainSegment(text: string): FindSegment {
+  return { text, hit: false, cur: false, skipped: false };
+}
+
+export function highlightSegments(
+  text: string,
+  track: FindTrack,
+  currentOrdinal: number,
+  skipped: Set<number> | undefined,
+  ctx: HighlightContext,
+): FindSegment[] {
+  const query = ctx.query;
+  if (!ctx.open || !query || !ctx.tracks.includes(track)) {
+    return [plainSegment(text)];
+  }
+  const re = new RegExp(escapeRe(query), ctx.caseSensitive ? 'g' : 'gi');
+  const parts: FindSegment[] = [];
+  let last = 0;
+  let ordinal = 0;
+  let found: RegExpExecArray | null;
+  while ((found = re.exec(text)) !== null) {
+    if (found.index > last) parts.push(plainSegment(text.slice(last, found.index)));
+    parts.push({
+      text: found[0],
+      hit: true,
+      cur: ordinal === currentOrdinal,
+      skipped: skipped?.has(found.index) ?? false,
+    });
+    ordinal += 1;
+    last = found.index + found[0].length;
+    if (found[0].length === 0) re.lastIndex += 1;
+  }
+  if (last < text.length) parts.push(plainSegment(text.slice(last)));
+  return parts.length ? parts : [plainSegment(text)];
+}

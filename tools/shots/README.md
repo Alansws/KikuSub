@@ -19,6 +19,11 @@ bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline
 
 # 4) 一次跑三套主题：文件名带 -light / -dark / -mincho 后缀
 bash tools/shots/capture_matrix.sh --theme dark --states "polish reshape dual"
+
+# 5) 重出 README 成品图（见下一节）
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh \
+  --seed tools/shots/readme-seed.json --delay 12000 \
+  --states "import transcribe review translate export settings"
 ```
 
 沙箱或 CI 里 Electron 起不来时，用 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 追加启动参数；
@@ -27,9 +32,26 @@ bash tools/shots/capture_matrix.sh --theme dark --states "polish reshape dual"
 `--theme` 的 `polish / reshape / dual` 拍的是**空态**。带字幕、B 版与提案的 AI 三页基线用
 下一节的专用脚本。
 
-状态名：`transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。`review` 用
-`tools/shots/seed.json` 造 12 条字幕（不需要真跑转写）；其余状态靠 `KIKUSUB_DEV_EVAL`
-点侧栏切换，所以截图里显示的是真实页面而不是空壳。
+状态名：`import` `transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。
+`--seed` 指定种子（默认 `tools/shots/seed.json`；`--seed tools/shots/readme-seed.json` 是 README 成品图那份）。
+**导入 / 转写 / 核对 / 翻译 / 导出这五个状态都用种子**：空态的转写与导出页只有一句「先导入媒体」，
+对验收和 README 都没信息量。其余状态靠 `KIKUSUB_DEV_EVAL` 点侧栏切换，截到的是真实页面而不是空壳。
+
+> 早期 `transcribe` 状态其实没有点侧栏，截出来是导入页——文件名一直在骗人。现在每个状态都显式点
+> `.sb-item[n]`；导出页额外等 3 秒，让样式预览取回当前帧，否则会截到「渲染中…」+ 纯色底。
+
+## README 成品图
+
+`docs/images/*.jpg` 由同一套无窗口路径生成，只是种子不同：
+
+- `tools/shots/readme-seed.json`：12 条演示台词 + 一版中文译文 + 一份「另一引擎」结果，时间挪到
+  《言叶之庭》约 2:00 的那座桥——不挪的话首帧是黑场，首屏截图会是一整块黑。
+- 主图 `review`、`transcribe`、`translate`、`export` 用上面第 5 条命令；双引擎 / 润色 / 断句重排用
+  `capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual" --size 1440x900`。
+- 设置页两张（引擎与模型 / AI 与技能折叠态）单独一个脚本——要等引擎注册表落地，否则会截到
+  半透明骨架屏：`bash tools/shots/capture_settings_pages.sh /tmp/readme-settings`
+  （加 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 可在沙箱里跑）。
+- 落盘是 2× Retina PNG，转 JPG 用 `sips -Z 2000 -s format jpeg -s formatOptions 82`。
 
 ## AI 三页专用矩阵
 
@@ -183,6 +205,26 @@ bash tools/shots/capture_settings_matrix.sh --only light-engines,dark-env
 （体积约 1/3），转换命令与当次结论见
 `docs/sprints/2026-11-settings-redesign/落地记录.md`。
 
+## 设置 AI「进阶」折叠 + 导出页收尾回归
+
+2026-11-21（界面重构 Step 6）新增。四件在真实界面里断言：
+
+- 全新配置时「进阶：单句判定独立模型与本地部署」默认收起，顶层只剩核心配置；
+- 预置判定地址 / 模型 + 自动判定时默认展开（既有高级配置不会因为折叠而消失）；
+- 点开 / 收起都生效，收起后摘要是「跟随全局 / 已单独配置 / 本机 LM Studio · 自动判定开/关」；
+- 导出页底部不再有「为什么在 KikuSub 里导出」，无译文轨时置灰的「译文 / 双语」旁有引导。
+
+```bash
+node tools/shots/verify_settings_ai_fold.mjs
+# 沙箱 / CI
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_ai_fold.mjs
+```
+
+截图落在系统临时目录的 `kikusub-settings-ai-fold/`：`settings-ai-fold-collapsed.png`、
+`settings-ai-fold-configured.png`、`export-track-hint.png`、`export-bottom.png`。
+契约口径见 [ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.7 与
+[export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
+
 ## 基线
 
 `docs/images/shots/baseline/` 现在有两组基线：
@@ -222,6 +264,24 @@ node tools/shots/verify_review_viewport.mjs
 
 截图落在系统临时目录的 `kikusub-review-viewport/review-viewport.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.7。
+
+## 核对台「打开体验 + 右侧栏不溢出」回归
+
+2026-11-21（界面重构 Step 3）新增。10 分钟「长片」+ 已挂译文轨的种子，断言：
+
+- 没有本机现场快照时默认**聚焦第 1 条字幕 + ~50× 视野**，并且真的 seek 到第 1 条
+  （不再停在片头黑场）；短片（≤60s）仍保持全片视图；
+- 有译文轨时默认**双语**，且只生效一次（手动切回原文后，换页回来不许再翻回去）；
+- 1360×838 下从显示模式到 AI 判定整块**不用滚动**就能操作，也不会滑到底部保存栏下面；
+- 操作行里「试听原声 / 朗读 / 音色 / ⚙」同一行，朗读面板默认收起、点开后也在可视高度内。
+
+```bash
+node tools/shots/verify_review_defaults.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_review_defaults.mjs
+```
+
+截图落在系统临时目录的 `kikusub-review-defaults/review-defaults.png`。契约口径见
+[review-console.md](../../docs/contracts/review-console.md) §3.4.10。
 
 ## 章节 / 时刻点标记与成片写入回归
 

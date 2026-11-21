@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .paths import MODELS_DIR
+from .paths import MODELS_DIR, ffmpeg_bin
 from .procutil import run_command, tail
 
 log = logging.getLogger(__name__)
@@ -274,7 +274,7 @@ def release() -> None:
 def _extract_clip(media: Path, dest: Path, start: float, end: float, cancel_event=None) -> None:
     duration = max(0.1, float(end) - float(start))
     cmd = [
-        "ffmpeg",
+        ffmpeg_bin(),
         "-y",
         "-nostdin",
         "-hide_banner",

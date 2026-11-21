@@ -624,3 +624,60 @@ def test_alt_review_range_only_replaces_inside_window(tmp_path):
         (5.0, "区间内新稿"),
         (10.0, "後"),
     ]
+
+
+def test_alt_review_diff_ignores_punctuation_by_default(make_client, tmp_path):
+    """默认 ignore_punct：只有标点 / 空白不同的行不算差异，徽标跟着降。
+
+    2026-11-21 界面重构 Step 2：`?ignore_punct=0` 必须能还原严格比对
+    （用户要能看见「到底哪里标点不同」）。
+    """
+    client = make_client([SubtitleCue(0, 1, "おはよう。"), SubtitleCue(1, 2, "今日は、雨だ")])
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    _seed_primary(client)
+    assert _run_alt_job(client, media_id)["status"] == "done"
+
+    loose = client.get("/api/alt-review?diff=1", headers=AUTH).json()
+    assert loose["ignore_punct"] is True
+    assert loose["stats"]["diff"] == 0
+    assert loose["stats"]["badge"] == 0
+    assert loose["stats"]["punct_only"] == 2
+    assert [row["kind"] for row in loose["rows"]] == ["same", "same"]
+
+    strict = client.get("/api/alt-review?diff=1&ignore_punct=0", headers=AUTH).json()
+    assert strict["ignore_punct"] is False
+    assert strict["stats"]["diff"] == 2
+    assert strict["stats"]["badge"] == 2
+    assert strict["stats"]["punct_only"] == 0
+    assert [row["kind"] for row in strict["rows"]] == ["diff", "diff"]
+
+
+def test_patch_cue_keeps_custom_history_label(make_client, tmp_path):
+    """「采用 B 句」走 PATCH /api/cues/{i} 时，历史标签必须是它自己那句话。
+
+    复核页不新增写接口（避免两套可编辑字幕），单句采纳就是这条带 label 的 PATCH；
+    ⌘Z 的提示与历史列表直接读这个 label。
+    """
+    client = make_client([SubtitleCue(0, 1, "おはよう")])
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    _seed_primary(client)
+
+    resp = client.patch(
+        "/api/cues/0",
+        headers=AUTH,
+        json={"text": "おはよう、元気？", "label": "采用第二版：第 1 条"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["undo_label"] == "采用第二版：第 1 条"
+    assert resp.json()["cues"][0]["text"] == "おはよう、元気？"
+
+    # 历史按时间正序返回（工具栏再 reverse 显示）：最新一步在末尾。
+    items = client.get("/api/cues/history", headers=AUTH).json()["items"]
+    assert items[-1]["label"] == "采用第二版：第 1 条"
+
+    # 不传 label 的普通编辑仍回落到旧文案（别的调用方零改动）
+    plain = client.patch("/api/cues/0", headers=AUTH, json={"text": "おはよう"})
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["undo_label"] == "修改第 1 条文本"

@@ -2,27 +2,31 @@
   /**
    * 润色页：以核对台当前稿（A）为骨架的 1:1 文本建议。
    *
-   * 版式分三层，和双引擎复核页共用一套紧凑语法：
-   *   1. 顶栏：标题 + 单源/双源 + 模板 + 低频入口；
-   *   2. 操作条：通道 A（API 自动）与通道 B（外部模型）并排，不再上下各放一套按钮；
-   *   3. 数据表：**没有提案时也先画表**（A + 虚线待生成的终稿列），拿到提案后原地激活。
+   * 版式（2026-11-21 Step 5 起）：
+   *   1. 统一工作条两行：第 1 行「处理什么」= 标题 + 单源/双源 + 模板 + 范围 + 状态；
+   *      第 2 行「怎么跑」= 执行通道二选一（自动 API / 外部手动）+ 该通道动作 + 批次；
+   *   2. 数据表：**没有提案时也先画表**（A + 虚线待生成的终稿列），拿到提案后原地激活；
+   *   3. 底部应用条：只看改动 / 理由 / 全选 / 更多应用 / 应用采纳 —— 失效时主按钮禁用。
    *
    * 时间轴铁律（D-1）不变：第 3 栏与第 1 栏严格 1:1，所有采用粒度都走
    * `apply_polish()`，一次 ⌘Z 全退。
    */
   import Icon from '../components/Icon.svelte';
-  import ClipScopePicker from '../components/ClipScopePicker.svelte';
-  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
+  import AiBatchToolbar from '../components/ai/AiBatchToolbar.svelte';
+  import AiApplyBar from '../components/ai/AiApplyBar.svelte';
+  import ProposalMenu from '../components/ai/ProposalMenu.svelte';
   import SourceSwitch from '../components/ai/SourceSwitch.svelte';
-  import TemplatePicker from '../components/ai/TemplatePicker.svelte';
   import SegmentRail from '../components/ai/SegmentRail.svelte';
   import '../components/ai/ai-workbench.css';
   import { untrack } from 'svelte';
   import {
     ai,
+    aiApiReady,
     aiBatchActive,
     aiBatchKey,
     aiBatchSpan,
+    aiEntryLabel,
+    aiSetup,
     applyAiAcceptedDiffs,
     applyAiAllDiffs,
     applyAiWholeColumn,
@@ -31,12 +35,14 @@
     discardAiProposal,
     importAiProposal,
     loadAiProposal,
+    loadAiSetup,
     parseAiPastedSrt,
     planAiSegments,
     resetAiBatch,
     saveAiProposalAs,
     setAiBatch,
     setAiBatchSize,
+    setAiChannel,
     setAiEdit,
     setAiKind,
     setAiMode,
@@ -47,25 +53,20 @@
     toggleAiAccept,
     segmentKey,
   } from '../lib/aiWorkspace.svelte';
-  import { altEngineLabel, dual, loadAltDiff, refreshAltReview } from '../lib/dualReview.svelte';
-  import { api, type AiConfig } from '../lib/api';
-  import { clipSpan, formatRange } from '../lib/clipRange';
+  import { altEngineLabel, dual, refreshAltReview } from '../lib/dualReview.svelte';
+  import { clipSpan } from '../lib/clipRange';
   import { bRefsFor } from '../lib/previewDiff';
   import { loadPrompts, promptItemsFor, prompts, selectPromptTemplate } from '../lib/promptStore.svelte';
   import { recallScroll, rememberScroll } from '../lib/scrollMemory';
-  import { app, exporter, focusRange, jumpToCue, setExportClip, setView } from '../lib/store.svelte';
+  import { app, exporter, focusRange, jumpToCue, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
   let draft = $state('');
   let bCollapsed = $state(false);
-  let menuOpen = $state(false);
   let applyMenuOpen = $state(false);
   /** 逐条理由默认收起：12 行重复同一句会稀释终稿本身。 */
   let showNotes = $state(false);
-  let aiConfig = $state<AiConfig | null>(null);
-  /** `null` = 还没问到；false = 主进程明确说没有 Key。 */
-  let keyReady = $state<boolean | null>(null);
   /** 表格滚动容器：从核对台回来要停在同一段、同一句附近。 */
   let listEl = $state<HTMLDivElement | null>(null);
 
@@ -111,9 +112,6 @@
   const scopedRows = $derived(
     batch.count > 0 ? rows.slice(batch.from - 1, batch.to) : [],
   );
-  const scopeTitle = $derived(
-    scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
-  );
   /** 磁盘上的建议可能来自另一个范围：提示一句，应用时也只写回它自己的范围。 */
   const proposalRange = $derived(ai.proposal?.source.range ?? null);
   const rangeMismatch = $derived(
@@ -157,16 +155,14 @@
   const filledCount = $derived(ai.segments.filter((seg) => segmentFilled(seg)).length);
   const hasAnyNotes = $derived(Boolean(ai.proposal) && rows.some((row) => row.note.trim().length > 0));
   const dualVisible = $derived(ai.mode === 'dual' && !bCollapsed);
-  const aiNeedsSetup = $derived(
-    aiConfig !== null && (!aiConfig.enabled || keyReady === false),
-  );
-  const entryLabel = $derived(
-    ai.proposal?.entry === 'manual'
-      ? '外部粘贴'
-      : ai.proposal?.entry === 'skill'
-        ? '外部 Agent'
-        : '本机生成',
-  );
+  /** 自动 API 通道是否可用（设置 + Key 都就绪）。 */
+  const apiReady = $derived(aiSetup.loaded && aiApiReady());
+  const aiNeedsSetup = $derived(aiSetup.loaded && !apiReady);
+  /**
+   * 源文本已变化（digest 不符）：这份建议已经失效，应用一定会被 409 拒绝。
+   * 主按钮必须同时禁用并给出口，不能一边红字告警一边亮着红色提交键。
+   */
+  const invalid = $derived(Boolean(ai.proposal) && !ai.digestMatch);
 
   /**
    * 表格滚动位置的 key：换片 / 换源 / 换分段都算另一张表，各自记忆。
@@ -218,7 +214,7 @@
       void loadAiProposal();
       void loadPrompts();
       void refreshAltReview();
-      void loadAiStatus();
+      void loadAiSetup(true);
     }
   });
 
@@ -234,19 +230,6 @@
     untrack(() => syncAiBatchScope());
   });
 
-  async function loadAiStatus() {
-    try {
-      aiConfig = await api.getAiConfig();
-    } catch {
-      aiConfig = null;
-    }
-    try {
-      const state = await window.kikusub?.aiKey?.status?.();
-      keyReady = Boolean(state?.has) || Boolean(aiConfig?.key_optional);
-    } catch {
-      keyReady = false;
-    }
-  }
 
   $effect(() => {
     // 第二版/条数变化后重新切段；长片分段不会因为回填而失效。
@@ -313,9 +296,38 @@
 </script>
 
 <div class="polish aiw-page">
-  <header class="aiw-head">
-    <div class="aiw-title-row">
-      <h1 class="aiw-title">润色</h1>
+  <AiBatchToolbar
+    title="润色"
+    channel={ai.channel}
+    channels={['api', 'manual']}
+    apiNote="设置 → AI 优化里启用并填写 API Key；也可以直接用「外部手动」"
+    onChannel={(next) => setAiChannel(next)}
+    templates={{
+      items: polishTemplates,
+      value: activeTemplateId,
+      title: '润色提示词模板',
+      onchange: (id) =>
+        void selectPromptTemplate(id, ai.mode === 'dual' ? 'polish_dual' : 'polish_single'),
+    }}
+    busy={ai.generating || ai.applying}
+    batch={{
+      from: batch.from,
+      to: batch.to,
+      spanFrom: scopeSpan.from,
+      spanTo: scopeSpan.to,
+      count: batch.count,
+      total: app.cues.length,
+      size: ai.batchSize,
+      manual: aiBatchActive(),
+      disabled: ai.generating || ai.applying,
+      onApply: setAiBatch,
+      onStep: stepAiBatch,
+      onSize: setAiBatchSize,
+      onReset: resetAiBatch,
+    }}
+    progress={ai.generating ? ai.progress : null}
+  >
+    {#snippet modeConfig()}
       <SourceSwitch
         source={ai.mode}
         hasB={dual.exists}
@@ -324,124 +336,125 @@
         bLabel={altEngineLabel()}
         onchange={(next) => setAiMode(next)}
       />
-      <TemplatePicker
-        items={polishTemplates}
-        value={activeTemplateId}
-        title="润色提示词模板"
-        onchange={(id) =>
-          void selectPromptTemplate(id, ai.mode === 'dual' ? 'polish_dual' : 'polish_single')}
-      />
-      <ClipScopePicker compact label="处理范围" disabled={ai.generating} />
-      <div class="aiw-spacer"></div>
-      <button class="btn ghost sm" onclick={() => setView('prompts')} title="打开提示词库">
-        提示词库
+    {/snippet}
+
+    {#snippet laneApi()}
+      <button
+        class="btn primary"
+        onclick={startAiPolish}
+        disabled={ai.generating || !app.cues.length || !apiReady}
+        title={apiReady
+          ? '生成一份润色建议（不修改字幕）'
+          : '先在设置 → AI 优化里启用并配置 API Key'}
+      >
+        {ai.generating ? `生成中 ${ai.progress}%` : '生成润色建议'}
       </button>
-    </div>
-
-    <div class="aiw-launch">
-      <div class="aiw-channel">
-        <span class="aiw-channel-tag" class:needs-setup={aiNeedsSetup}>
-          <i class="aiw-state" class:warn={aiNeedsSetup}></i><b>A</b> API 自动
-        </span>
-        <button
-          class="btn primary"
-          onclick={startAiPolish}
-          disabled={ai.generating || !app.cues.length || aiNeedsSetup}
-          title={aiNeedsSetup
-            ? '先在设置 → AI 优化里启用并配置 API Key'
-            : '生成一份润色建议（不修改字幕）'}
-        >
-          {ai.generating ? `生成中 ${ai.progress}%` : '生成润色建议'}
+      {#if ai.generating}
+        <button class="aiw-link" onclick={cancelAiPolish}>取消</button>
+        <span class="aiw-hint">{ai.stage || '准备中'}</span>
+      {:else if !aiSetup.loaded}
+        <span class="aiw-hint">读取配置…</span>
+      {:else if !apiReady}
+        <span class="aiw-hint">未启用 / 未配置 Key</span>
+        <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里打开">
+          去设置
         </button>
-        {#if ai.generating}
-          <button class="aiw-link" onclick={cancelAiPolish}>取消</button>
-          <span class="aiw-hint">{ai.stage || '准备中'}</span>
-        {:else if aiConfig === null}
-          <span class="aiw-hint">读取配置…</span>
-        {:else if !aiConfig.enabled}
-          <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里打开">
-            未启用 · 去设置
-          </button>
-        {:else if keyReady === false}
-          <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里填写 API Key">
-            未配置 Key · 去设置
-          </button>
-        {:else}
-          <span class="aiw-mono" title={aiConfig.base_url}>{aiConfig.model || '未指定模型'}</span>
-        {/if}
-      </div>
+      {:else}
+        <span class="aiw-mono" title={aiSetup.baseUrl}>{aiSetup.model || '未指定模型'}</span>
+      {/if}
+    {/snippet}
 
-      <div class="aiw-channel">
-        <span class="aiw-channel-tag"><b>B</b> 外部模型</span>
-        <button
-          class="btn ghost"
-          onclick={() => void copyAiPrompt()}
-          disabled={!app.cues.length}
-          title={aiBatchActive()
-            ? '复制本批的提示词；只包含这一批的条目'
-            : ai.longMode
-              ? '复制当前分段的提示词'
-              : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
-        >{aiBatchActive() ? '复制本批提示词' : ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
-        <span class="aiw-arrow" aria-hidden="true">→</span>
-        <button
-          class="btn ghost"
-          onclick={togglePaste}
-          disabled={!app.cues.length}
-          title={aiBatchActive() || ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
-        >{ai.pasteOpen ? '收起粘贴' : '粘贴回复'}</button>
-        <span class="aiw-sep" aria-hidden="true">/</span>
-        <button
-          class="btn ghost"
-          onclick={importAiProposal}
-          title="导入外部工具 / Agent 写好的建议文件"
-        >导入建议文件…</button>
-      </div>
+    {#snippet laneManual()}
+      <button
+        class="btn"
+        onclick={() => void copyAiPrompt()}
+        disabled={!app.cues.length}
+        title={aiBatchActive()
+          ? '复制本批的提示词；只包含这一批的条目'
+          : ai.longMode
+            ? '复制当前分段的提示词'
+            : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
+      >{aiBatchActive() ? '复制本批提示词' : ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
+      <span class="aiw-arrow" aria-hidden="true">→</span>
+      <button
+        class="btn ghost"
+        onclick={togglePaste}
+        disabled={!app.cues.length}
+        title={aiBatchActive() || ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
+      >{ai.pasteOpen ? '收起粘贴' : '粘贴回复'}</button>
+      <button
+        class="btn ghost"
+        onclick={importAiProposal}
+        title="导入外部工具 / Agent 写好的建议文件"
+      >导入建议文件…</button>
+    {/snippet}
 
-      <div class="aiw-spacer"></div>
+    {#snippet statusExtra()}
       {#if ai.proposal}
-        <div class="aiw-status">
-          <span
-            class="aiw-chip accent"
-            title={ai.proposal.entry === 'manual'
-              ? '从外部模型复制提示词、再把回复粘回来的结果'
-              : ai.proposal.entry === 'skill'
-                ? '由随包 Agent 技能写出的提案文件'
-                : '在本机「生成润色建议」里调用模型得到的结果'}
-          >{entryLabel}</span>
-          {#if ai.proposal.source.digest_b}<span class="aiw-chip">双源</span>{/if}
-          {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
-            <span class="aiw-mono">{ai.proposal.model}</span>
-          {/if}
-        </div>
+        <span
+          class="aiw-chip accent"
+          title={ai.proposal.entry === 'manual'
+            ? '从外部模型复制提示词、再把回复粘回来的结果'
+            : ai.proposal.entry === 'skill'
+              ? '由随包 Agent 技能写出的提案文件'
+              : '在本机「生成润色建议」里调用模型得到的结果'}
+        >{aiEntryLabel()}</span>
+        {#if ai.proposal.source.digest_b}<span class="aiw-chip">双源</span>{/if}
+        {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
+          <span class="aiw-mono">{ai.proposal.model}</span>
+        {/if}
+        {#if ai.mode === 'dual'}
+          <button
+            class="aiw-link"
+            onclick={() => (bCollapsed = !bCollapsed)}
+            title="折叠 B 栏，给终稿更多宽度"
+          >{bCollapsed ? '展开 B 栏' : '折叠 B 栏'}</button>
+        {/if}
+        <ProposalMenu
+          loading={ai.loading}
+          generating={ai.generating}
+          saving={ai.saving}
+          onReload={() => void loadAiProposal(true)}
+          onSaveAs={() => void saveAiProposalAs()}
+          onDiscard={() => void discardAiProposal()}
+        />
       {:else if ai.loading}
         <span class="aiw-hint">正在读取建议…</span>
       {/if}
-    </div>
+    {/snippet}
 
-    {#if ai.generating}
-      <div class="aiw-progress" aria-hidden="true"><i style={`width:${ai.progress}%`}></i></div>
-    {/if}
+    {#snippet railExtra()}
+      {#if ai.mode === 'dual' && ai.longMode && ai.segments.length}
+        <SegmentRail
+          compact
+          label={`长片分段 · 已回填 ${filledCount}/${ai.segments.length}`}
+          segments={ai.segments}
+          active={ai.segmentIndex}
+          status={railStatus}
+          onselect={selectSegment}
+          hint="点分段切换表格 · 复制 / 粘贴只作用于当前段"
+        />
+      {/if}
+    {/snippet}
+  </AiBatchToolbar>
 
-    {#if ai.mode === 'dual' && ai.longMode && ai.segments.length}
-      <SegmentRail
-        label={`长片分段 · 已回填 ${filledCount}/${ai.segments.length}`}
-        segments={ai.segments}
-        active={ai.segmentIndex}
-        status={railStatus}
-        onselect={selectSegment}
-        hint="点分段切换表格 · 复制 / 粘贴只作用于当前段"
-      />
-    {/if}
-  </header>
-
-  {#if visibleErrors.length}
-    <div class="note err"><Icon name="warn" size={11} /><span>{visibleErrors[0]}</span></div>
-  {:else if ai.proposal && !ai.digestMatch}
+  {#if invalid}
     <div class="note err">
       <Icon name="warn" size={11} />
-      <span>源文本已变化：这份建议是针对另一版字幕生成的，应用会被拒绝。</span>
+      <span>
+        源文本已变化：这份建议是针对另一版字幕生成的，应用会被拒绝。
+        请重新生成（或重新粘贴）一份建议后再应用。
+      </span>
+      <button
+        class="aiw-link"
+        onclick={() => {
+          setAiChannel('api');
+          void startAiPolish();
+        }}
+      >重新生成</button>
     </div>
+  {:else if visibleErrors.length}
+    <div class="note err"><Icon name="warn" size={11} /><span>{visibleErrors[0]}</span></div>
   {:else if rangeMismatch && proposalRange}
     <div class="note warn">
       <Icon name="warn" size={11} />
@@ -509,108 +522,6 @@
     </div>
   {/if}
 
-  <div class="aiw-subbar">
-    <BatchRangeBar
-      from={batch.from}
-      to={batch.to}
-      spanFrom={scopeSpan.from}
-      spanTo={scopeSpan.to}
-      count={batch.count}
-      total={app.cues.length}
-      size={ai.batchSize}
-      manual={aiBatchActive()}
-      disabled={ai.generating || ai.applying}
-      onApply={setAiBatch}
-      onStep={stepAiBatch}
-      onSize={setAiBatchSize}
-      onReset={resetAiBatch}
-    />
-    {#if scoped}
-      <span
-        class="aiw-chip accent"
-        title="表格、复制提示词、粘贴回填、写回都只作用于这个范围；范围外保持原样"
-      >
-        片段 · {scopeTitle} · <b>{scopeSpan.count}</b> / {app.cues.length} 条
-      </span>
-      <button
-        class="aiw-link"
-        onclick={() => setExportClip({ start: 0, end: 0, label: '' })}
-        title="回到全片处理"
-      >全片</button>
-    {:else}
-      <span class="aiw-chip">共 <b>{app.cues.length}</b> 条</span>
-    {/if}
-    {#if activeSegment}
-      <span class="aiw-chip accent" title="表格、复制提示词、粘贴回填都只作用于这一段">
-        第 <b>{ai.segmentIndex + 1}</b>/<b>{ai.segments.length}</b> 段 · 第 <b>{activeSegment.from}–{activeSegment.to}</b> 条
-      </span>
-    {/if}
-    {#if ai.proposal}
-      <span class="aiw-chip">改动 <b class:hot={changedCount > 0}>{changedCount}</b></span>
-      <span class="aiw-chip accent">采纳 <b>{acceptedCount}</b></span>
-      {#if ai.mode === 'dual'}
-        <span class="aiw-chip" title="两份字幕的漏句统计；B 只作参考，不参与覆盖">
-          漏句 <b>{dual.stats?.only_a ?? 0}</b> / <b>{dual.stats?.only_b ?? 0}</b>
-        </span>
-      {/if}
-    {:else}
-      <span class="aiw-hint">
-        {ai.mode === 'dual'
-          ? 'A 与 B 已就绪 · 生成后在同一张表里激活 AI 终稿'
-          : 'A 列已就绪 · 生成后在同一张表里激活 AI 终稿'}
-      </span>
-    {/if}
-    <div class="aiw-spacer"></div>
-    {#if ai.proposal}
-      <label class="aiw-check">
-        <input type="checkbox" bind:checked={ai.changedOnly} />
-        只看改动
-      </label>
-      {#if hasAnyNotes}
-        <label class="aiw-check" title="在终稿下方显示逐条理由">
-          <input type="checkbox" bind:checked={showNotes} />
-          理由
-        </label>
-      {/if}
-      {#if ai.mode === 'dual'}
-        <button class="aiw-link" onclick={() => (bCollapsed = !bCollapsed)} title="折叠 B 栏，给终稿更多宽度">
-          {bCollapsed ? '展开 B 栏' : '折叠 B 栏'}
-        </button>
-      {/if}
-      <button class="aiw-link" onclick={() => setAllAiAccept(true)}>全选</button>
-      <button class="aiw-link" onclick={() => setAllAiAccept(false)}>全不选</button>
-      <div class="aiw-menu-wrap">
-        <button
-          class="aiw-icon-btn"
-          onclick={() => (menuOpen = !menuOpen)}
-          title="更多操作"
-          aria-label="更多操作"
-          aria-expanded={menuOpen}
-        >⋯</button>
-        {#if menuOpen}
-          <button class="aiw-menu-backdrop" aria-label="关闭菜单" onclick={() => (menuOpen = false)}></button>
-          <div class="aiw-menu" role="menu">
-            <button
-              role="menuitem"
-              onclick={() => {
-                menuOpen = false;
-                void loadAiProposal(true);
-              }}
-              disabled={ai.loading || ai.generating}
-            >重新加载</button>
-            <button role="menuitem" onclick={() => { menuOpen = false; void saveAiProposalAs(); }} disabled={ai.saving}>
-              另存…
-            </button>
-            <button
-              class="danger"
-              role="menuitem"
-              onclick={() => { menuOpen = false; void discardAiProposal(); }}
-            >丢弃</button>
-          </div>
-        {/if}
-      </div>
-    {/if}
-  </div>
 
   {#if !app.cues.length}
     <div class="aiw-empty">
@@ -738,61 +649,68 @@
     </div>
 
     {#if ai.proposal}
-      <div class="aiw-applybar">
-        <span class="aiw-hint">⌘Z 一次整批退回</span>
-        <div class="aiw-spacer"></div>
-        <div class="aiw-menu-wrap">
-          <button
-            class="btn ghost"
-            onclick={() => (applyMenuOpen = !applyMenuOpen)}
-            aria-expanded={applyMenuOpen}
-            title="更多应用方式（会忽略右侧的采纳/排除）"
-          >
-            更多应用
-            <Icon name="chevron-down" size={11} />
-          </button>
-          {#if applyMenuOpen}
-            <button class="aiw-menu-backdrop" aria-label="关闭菜单" onclick={() => (applyMenuOpen = false)}></button>
-            <div class="aiw-menu up" role="menu">
-              <button
-                role="menuitem"
-                onclick={() => {
-                  applyMenuOpen = false;
-                  if (window.confirm('应用全部差异？\n\n会忽略右侧逐条的采纳/排除，把所有与 A 不同的条目写回核对台。\n⌘Z 可整批退回。')) {
-                    void applyAiAllDiffs();
-                  }
-                }}
-              >全部差异 · 忽略采纳</button>
-              <button
-                role="menuitem"
-                onclick={() => {
-                  applyMenuOpen = false;
-                  if (window.confirm('整列应用 AI 终稿？\n\n会无视右侧的采纳/排除，把整栏写回核对台。\n⌘Z 可整批退回。')) {
-                    void applyAiWholeColumn();
-                  }
-                }}
-              >整列应用 · 无视采纳</button>
-            </div>
+      <AiApplyBar
+        applyLabel={`应用采纳${acceptedCount ? ` · ${acceptedCount}` : ''}`}
+        accepted={acceptedCount}
+        changed={changedCount}
+        busy={ai.applying}
+        invalid={invalid}
+        changedOnly={ai.changedOnly}
+        onChangedOnly={(value) => (ai.changedOnly = value)}
+        onAll={setAllAiAccept}
+        onApply={applyAiAcceptedDiffs}
+      >
+        {#snippet extra()}
+          {#if hasAnyNotes}
+            <label class="aiw-check" title="在终稿下方显示逐条理由">
+              <input type="checkbox" bind:checked={showNotes} />
+              理由
+            </label>
           {/if}
-        </div>
-        <button
-          class="btn primary"
-          onclick={applyAiAcceptedDiffs}
-          disabled={ai.applying || acceptedCount === 0}
-          title="只应用「已采纳且确有差异」的条目；⌘Z 一次全退"
-        >
-          {ai.applying ? '应用中…' : `应用采纳${acceptedCount ? ` · ${acceptedCount}` : ''}`}
-        </button>
-      </div>
+          <div class="aiw-menu-wrap">
+            <button
+              class="btn ghost"
+              onclick={() => (applyMenuOpen = !applyMenuOpen)}
+              aria-expanded={applyMenuOpen}
+              disabled={invalid}
+              title={invalid
+                ? '源文本已变化：重新生成后才能应用'
+                : '更多应用方式（会忽略右侧的采纳/排除）'}
+            >
+              更多应用
+              <Icon name="chevron-down" size={11} />
+            </button>
+            {#if applyMenuOpen}
+              <button class="aiw-menu-backdrop" aria-label="关闭菜单" onclick={() => (applyMenuOpen = false)}></button>
+              <div class="aiw-menu up" role="menu">
+                <button
+                  role="menuitem"
+                  onclick={() => {
+                    applyMenuOpen = false;
+                    if (window.confirm('应用全部差异？\n\n会忽略右侧逐条的采纳/排除，把所有与 A 不同的条目写回核对台。\n⌘Z 可整批退回。')) {
+                      void applyAiAllDiffs();
+                    }
+                  }}
+                >全部差异 · 忽略采纳</button>
+                <button
+                  role="menuitem"
+                  onclick={() => {
+                    applyMenuOpen = false;
+                    if (window.confirm('整列应用 AI 终稿？\n\n会无视右侧的采纳/排除，把整栏写回核对台。\n⌘Z 可整批退回。')) {
+                      void applyAiWholeColumn();
+                    }
+                  }}
+                >整列应用 · 无视采纳</button>
+              </div>
+            {/if}
+          </div>
+        {/snippet}
+      </AiApplyBar>
     {/if}
   {/if}
 </div>
 
 <style>
-  .polish .aiw-channel-tag.needs-setup {
-    color: var(--warn);
-  }
-
   .note {
     display: flex;
     align-items: flex-start;
@@ -855,10 +773,6 @@
     align-items: center;
     gap: var(--sp-2);
     flex-wrap: wrap;
-  }
-
-  .aiw-subbar .aiw-chip b.hot {
-    color: var(--warn);
   }
 
   .aiw-cols,
@@ -979,12 +893,6 @@
   }
 
   @media (max-width: 900px) {
-    .aiw-title-row {
-      padding: var(--sp-2) var(--sp-3) var(--sp-2);
-    }
-    .aiw-launch {
-      padding: 6px 10px;
-    }
     .aiw-cols,
     .aiw-row {
       grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1.15fr) 22px;

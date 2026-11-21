@@ -101,6 +101,16 @@
   // 设置页可以停用引擎；工具栏只显示启用的那几个，引擎变多也不会挤爆。
   const engines = $derived((app.config?.engines ?? []).filter((e) => e.enabled));
 
+  /**
+   * 引擎胶囊只属于「要选识别引擎」的两页：转写（这次用哪个引擎跑）与核对台
+   * （重转此句 / 质检补录读 app.engine）。
+   *
+   * 导入、设置与 AI 处理页与引擎无关，胶囊在那儿只是顶栏中央的一块常驻杂音
+   * （2026-11-21 「顶栏去噪」）。隐藏的是 UI，不是状态：`app.engine` 仍由
+   * App.svelte 的 $effect 同步，切回转写 / 核对台时胶囊按同一份引擎列表重建。
+   */
+  const engineVisible = $derived(app.view === 'transcribe' || app.view === 'review');
+
   const sub = $derived.by(() => {
     const m = app.media;
     if (!m) return '拖入即用';
@@ -138,14 +148,17 @@
 <header class="toolbar">
   <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>
   <div class="tb-sub">{sub}</div>
-  <div class="tb-sep tb-sep-lead"></div>
 
-  {#if engines.length}
-    <EngineSwitch bind:engine {engines} onmanage={manageEngines} />
-  {:else}
-    <button class="btn ghost" onclick={() => setView('settings')}>
-      <Icon name="warn" size={12} />没有启用的引擎
-    </button>
+  {#if engineVisible}
+    <div class="tb-sep tb-sep-lead"></div>
+
+    {#if engines.length}
+      <EngineSwitch bind:engine {engines} onmanage={manageEngines} />
+    {:else}
+      <button class="btn ghost" onclick={() => setView('settings')}>
+        <Icon name="warn" size={12} />没有启用的引擎
+      </button>
+    {/if}
   {/if}
 
   {#if proxyBusy}

@@ -17,6 +17,11 @@
   这是刻意的：两个模型的断句本来就不同，复核页的任务是把差异如实摆出来，
   不是替用户合并句子。
 - **每次都由当前两份字幕现算**，不持久化下标映射。
+
+2026-11-21（界面重构 Step 2）起另有 ``ignore_punct``（默认 ``True``）：
+只有标点 / 空白不同的行判为 ``same`` 并打 ``punct_only`` 标记，不再计入
+``stats.diff`` 与徽标 ``stats.badge``——两个引擎的句读取舍不是听写分歧，
+不滤掉会把真正要人听的分歧淹在几百条假阳性里。传 ``False`` 回到逐字严格比对。
 """
 
 from __future__ import annotations
@@ -36,10 +41,31 @@ LOW_OVERLAP_SIMILARITY = 0.35
 
 _WS_RE = re.compile(r"\s+")
 
+#: ``ignore_punct=True``（默认）时**不计入文本差异**的字符：常见中日标点 + 空白。
+#: 2026-11-21 起默认忽略：两个引擎对同一句话的标点取舍常常不同（句读、引号、省略号），
+#: 那是排版分歧，不是听写分歧——不滤掉会把真正要人听的分歧淹在几百条假阳性里。
+#:
+#: 故意**不包含** ASCII 的 ``.`` / ``,`` / ``-`` / ``'``：它们会出现在数字、版本号与
+#: 英文缩写里（``1.5`` vs ``15``、``1,000`` vs ``1000``），去掉等于把真差异藏起来。
+IGNORED_PUNCT_CHARS = "、。，．…‥！？!?「」『』（）()【】〔〕：:；;·・“”‘’"
+_IGNORED_PUNCT_RE = re.compile("[" + re.escape(IGNORED_PUNCT_CHARS) + "]")
+
 
 def normalize_text(text: str) -> str:
     """相似度比较用：去掉所有空白，转小写。不改原始文本。"""
     return _WS_RE.sub("", str(text or "")).lower()
+
+
+def compare_key(text: str, *, ignore_punct: bool = True) -> str:
+    """「算不算同一句话」用的归一化。
+
+    ``ignore_punct`` 为真（默认）时在 :func:`normalize_text` 之上再去掉
+    :data:`IGNORED_PUNCT_CHARS` 里的标点；假时与 ``normalize_text`` 等价。
+    只影响 ``same`` / ``diff`` 的判定，**不改**配对（时间对齐）与逐字 diff 的文本。
+    """
+    key = normalize_text(text)
+    return _IGNORED_PUNCT_RE.sub("", key) if ignore_punct else key
+
 
 
 def text_similarity(a: str, b: str) -> float:
@@ -137,11 +163,17 @@ def build_review(
     b_cues: list[SubtitleCue],
     *,
     gap: float = GAP_TOLERANCE,
+    ignore_punct: bool = True,
 ) -> dict:
     """逐条对齐两份字幕，返回 ``{"rows": [...], "stats": {...}}``。
 
     ``rows`` 里的 ``a_indices`` / ``b_indices`` 是 0 基、指向传入列表的下标；
     每条 row 最多一个 A 下标和一个 B 下标。
+
+    ``ignore_punct=True``（默认）时，**只有标点 / 空白不同**的一对判为 ``same``，
+    并在该行打 ``punct_only: True``：它们不计入 ``stats.diff``，也不计入徽标
+    ``stats.badge``；``stats.punct_only`` 单独记下被忽略的行数，供界面说明
+    「已忽略 N 处仅标点差异」。传 ``False`` 时回到逐字严格比对（标点也算差异）。
     """
     a = list(a_cues or [])
     b = list(b_cues or [])
@@ -161,17 +193,22 @@ def build_review(
         cur_a, cur_b = a[i], b[j]
         if _pair_ok(cur_a, cur_b, gap):
             ratio = text_similarity(cur_a.text, cur_b.text)
-            same = normalize_text(cur_a.text) == normalize_text(cur_b.text)
-            rows.append(
-                _row(
-                    cur_a,
-                    cur_b,
-                    "same" if same else "diff",
-                    ratio,
-                    a_index=i,
-                    b_index=j,
-                )
+            same = compare_key(cur_a.text, ignore_punct=ignore_punct) == compare_key(
+                cur_b.text, ignore_punct=ignore_punct
             )
+            # 文本「真的不一样」，但去掉标点后一致 → 记 punct_only，界面可解释。
+            punct_only = same and normalize_text(cur_a.text) != normalize_text(cur_b.text)
+            row = _row(
+                cur_a,
+                cur_b,
+                "same" if same else "diff",
+                ratio,
+                a_index=i,
+                b_index=j,
+            )
+            if punct_only:
+                row["punct_only"] = True
+            rows.append(row)
             i += 1
             j += 1
             continue
@@ -190,17 +227,21 @@ def build_review(
     paired = sum(1 for row in rows if row["kind"] in ("same", "diff"))
     only_a = sum(1 for row in rows if row["kind"] == "only_a")
     only_b = sum(1 for row in rows if row["kind"] == "only_b")
+    diff = sum(1 for row in rows if row["kind"] == "diff")
     stats = {
         "total": len(rows),
         "paired": paired,
         "same": sum(1 for row in rows if row["kind"] == "same"),
-        "diff": sum(1 for row in rows if row["kind"] == "diff"),
+        "diff": diff,
         "only_a": only_a,
         "only_b": only_b,
         "a_count": len(a),
         "b_count": len(b),
+        # ``ignore_punct`` 滤掉的那部分：界面写「已忽略 N 处仅标点差异」用。
+        "punct_only": sum(1 for row in rows if row.get("punct_only")),
         # 徽标只统计文本差异行（Q8）；+ / − 在页内单独展示。
-        "badge": sum(1 for row in rows if row["kind"] == "diff"),
+        # 2026-11-21 起 ``diff`` 已排除「仅标点不同」，徽标跟着降。
+        "badge": diff,
     }
     # 不变量：每一条 A/B 都必须落在「配对」或自己的独有行里，绝不被合并隐藏。
     assert stats["a_count"] == paired + only_a

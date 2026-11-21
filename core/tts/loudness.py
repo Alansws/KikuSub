@@ -26,6 +26,7 @@ import os
 import re
 from pathlib import Path
 
+from core.paths import ffmpeg_bin
 from core.procutil import CommandTimeout, run_command, tail
 
 log = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ def measure(path: Path | str, *, target: float = TARGET_LUFS) -> dict:
     """
     proc = _run(
         [
-            "ffmpeg",
+            ffmpeg_bin(),
             "-hide_banner",
             "-nostdin",
             "-i",
@@ -189,7 +190,7 @@ def normalize_file(
     try:
         proc = _run(
             [
-                "ffmpeg",
+                ffmpeg_bin(),
                 "-hide_banner",
                 "-nostdin",
                 "-y",

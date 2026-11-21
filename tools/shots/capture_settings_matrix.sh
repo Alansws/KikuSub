@@ -113,7 +113,7 @@ done
 want "light-engines-open" && \
   shot light engines "-open" "document.querySelectorAll('.detail-btn').forEach((b)=>b.click()); document.querySelector('.settings').scrollTop = 560;"
 want "light-ai-open" && \
-  shot light ai "-open" "document.querySelector('details.advanced summary')?.click();"
+  shot light ai "-open" "document.querySelector('details.ai-adv > summary')?.click();"
 want "light-env-open" && \
   shot light env "-open" "document.querySelector('details.paths-more summary')?.click(); document.querySelector('details.log-more summary')?.click(); document.querySelector('.settings').scrollTop = 99999;"
 

@@ -385,6 +385,18 @@
   `AbortController` 中断在途请求。不做提示词库第六类，也不做 QaPanel 入口。
 - **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
   结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
+- **设置页分级（2026-11-21，界面重构 Step 6）**：设置 → AI 与技能顶层只留
+  「启用 AI 优化 / 服务地址 / 模型 / API Key / 连接测试」与底部「Agent 技能」；
+  单句判定覆盖、自动判定、本地上下文档位与分块参数都收进
+  `components/settings/ai/AiAdvancedFold.svelte`（标题
+  「进阶：单句判定独立模型与本地部署」）。默认开合由纯函数
+  `lib/settings/aiFold.ts` 的 `advancedAiInUse()` 决定：判定服务地址 / 判定模型 /
+  判定 Key 任一已填（含解不开待重填）或 `ai_auto_arbitrate` 已开就默认展开——既有高级
+  配置不会因为折叠而消失。它要等两把 Key 的「有没有」都问过主进程（`aiState.keyChecked`）
+  才生效，否则「只存过判定 Key」的配置会被异步返回前的空状态误判；用户点过折叠区之后
+  以用户为准，保存 / 清 Key 引起的配置刷新不会把面板弹回去。收起时摘要仍写明
+  「跟随全局 / 已单独配置 / 本机 LM Studio · 自动判定开/关」。
+  单测在 `desktop/test/settings-ai-fold.test.mjs`。
 - **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 动态模式 / 预算 /
   结果校验）、`tests/test_ai_local_model.py`（loopback 限制 / 卸载后重载 / 同档位 no-op）、
   `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、422 放宽、
@@ -395,7 +407,9 @@
   `tools/shots/verify_arbitration.mjs`（第三版真实界面）、
   `tools/shots/verify_arbitration_dialog.mjs`（常驻区 / 空识别提示 / 草稿持久 / 浮窗
   拖动缩放 / Esc / 发送追问与清空重判分离 / 请求体无旧 history / 撤销同步结果卡 /
-  复制反馈 / 文本可选中 / 单一对话入口）。
+  复制反馈 / 文本可选中 / 单一对话入口）、
+  `tools/shots/verify_settings_ai_fold.mjs`（进阶折叠默认收起 / 已配置默认展开 /
+  手动开合 / 摘要文案 / 导出页无译文引导 —— 见 §3.8.2 末条）。
 
 #### 3.7.8 片段范围：局部润色 / 局部翻译（2026-11-20）
 
@@ -501,3 +515,34 @@
 - **回归**：`tests/test_reshape.py`（尾部译文平移 / 只动本段）、
   `tools/shots/verify_batch_and_align.mjs`（选择范围 → 越界警告 → 覆盖 → 条数 6→5、
   尾部译文平移 toast）。
+
+#### 3.7.12 三页统一工作条与「执行通道」（2026-11-21）
+
+翻译 / 润色 / 断句重排共用 `components/ai/AiBatchToolbar.svelte`，头部固定**两行**：
+
+- 第 1 行「处理什么」：标题 + 页内模式（断句重排的做法 / 翻译的目标语种）+ 模板 +
+  处理范围 + 右侧状态（来源徽标、⋯ 菜单、提示词库入口）。
+- 第 2 行「怎么跑」：`[ 自动 API | 外部手动 ]` **二选一分段开关** + 该通道的动作链 + 本次批次。
+- 长片的智能分段轨只在**多段**时以紧凑单行（`SegmentRail compact`）出现，已覆盖计数挂在轨头；
+  单段不额外占一行。
+- 模板 / 范围 / 批次仍复用既有组件，状态仍由 `aiWorkspace` / `reshape` 持有；低频的
+  重新加载 / 另存 / 丢弃收进 `components/ai/ProposalMenu.svelte`，两页不再各写一份。
+
+「自动 API」与「外部手动」是两条**互斥**的工作流：切换后只显示选中通道的动作，不再把
+「生成建议」和「复制提示词」并排挤在同一行。断句重排没有 in-app 生成接口，它的「自动 API」
+明确置灰并给说明，只能走外部手动。
+
+- **通道状态**：`lib/aiWorkspace.svelte.ts` 的 `ai.channel` / `setAiChannel()`。
+  `loadAiSetup()` 探到本机 AI 没启用 / 没 Key 时默认落在**能用**的外部手动；用户自己切过
+  （`channelTouched`）之后不再自动改写。
+- **来源徽标**：不再用「外部粘贴」（和按钮「粘贴回复」撞语义），统一 `aiEntryLabel()`：
+  本机生成 / Agent 文件 / 外部回复。
+- **digest 失效禁用应用**：`ai.digestMatch === false` 时，`components/ai/AiApplyBar.svelte`
+  的主按钮与「更多应用」一律禁用，告警与按钮旁都写「请先重新生成」。禁止一边红字告警、
+  一边留着可点的红色主提交键。
+- **空态引导**：无提案时按当前通道给 1–2 步引导卡（`.aiw-blank-*`），翻译页不再是一片空白；
+  本机 API 未就绪时柔和引导「去设置」或「改用外部手动」。断句重排的「只改几处」在粘稿前
+  也用同一套引导块说明第 3 步，而不是一行小字。
+- **回归**：`tools/shots/capture_ai_toolbar.mjs`（三页两行头 / 第 1 行不折行 / 翻译模板
+  单一入口 / 失效禁用 / 空态卡）、`tools/shots/verify_reshape_flow.mjs`（分段计划冻结）、
+  `tools/shots/verify_batch_and_align.mjs`（批次与时间轴对齐）。

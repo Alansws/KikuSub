@@ -125,15 +125,15 @@ const EVAL = String.raw`
     await sleep(1200);
     const polishRows = document.querySelectorAll('.aiw-row').length;
     const polishPicker = Boolean(document.querySelector('.aiw-title-row .clip-scope'));
-    const polishSubbar = text(document.querySelector('.aiw-subbar'));
+    const polishSubbar = text(document.querySelector('.aiw-title-row .clip-scope'));
 
     // 6) 翻译页：同样只有 4 行
     sidebar('翻译')?.click();
     await waitFor(() => document.querySelector('.ai'));
     await sleep(1000);
     const translateRows = document.querySelectorAll('.ai .list .row').length;
-    const translateSubbar = text(document.querySelector('.ai .head .clip-scope'));
-    const translatePicker = Boolean(document.querySelector('.ai .head .clip-scope'));
+    const translateSubbar = text(document.querySelector('.ai .aiw-title-row .clip-scope'));
+    const translatePicker = Boolean(document.querySelector('.ai .aiw-title-row .clip-scope'));
 
     // 7) 章节面板「仅处理此片段」：先换回全片，再一键带入
     sidebar('核对台')?.click();

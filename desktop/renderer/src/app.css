@@ -800,6 +800,47 @@ html[data-theme='dark'] .card {
   white-space: nowrap;
   min-width: 0;
 }
+/* AI 通道的输入与状态：AiPanel（核心配置）与 AiAdvancedFold（进阶折叠区）共用。 */
+/* 2026-11-21 分级折叠时从 AiPanel 提上来，两处不再各写一份。 */
+.ai-input {
+  font: inherit;
+  font-size: 12px;
+  height: var(--ctl-h-lg);
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--rad-control);
+  background: var(--raise);
+  color: var(--text);
+  outline: none;
+}
+.ai-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ai-input.mono {
+  font-family: var(--font-mono);
+}
+.key-input {
+  flex: 0 1 190px;
+  color: var(--text-2);
+}
+.key-state {
+  font-size: var(--fs-label);
+  color: var(--warn);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.key-state.ok {
+  color: var(--success);
+}
+.set-row-desc.test-ok {
+  color: var(--success);
+}
+.set-row-desc.test-bad {
+  color: var(--danger);
+}
 
 /* ---------- 开关 ---------- */
 /* 设置页的引擎卡与 AI 分组共用。ParamPanel 里另有一份历史实现，不在本次范围。 */

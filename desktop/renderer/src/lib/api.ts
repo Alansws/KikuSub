@@ -608,6 +608,8 @@ export interface DualRow {
   b_end: number | null;
   ratio: number;
   char_ops?: { op: 'eq' | 'del' | 'ins'; text: string }[];
+  /** 两边只有标点 / 空白不同（服务端 ``ignore_punct`` 判为一致时的标记）。 */
+  punct_only?: boolean;
 }
 
 export interface DualStats {
@@ -618,7 +620,9 @@ export interface DualStats {
   only_b: number;
   a_count: number;
   b_count: number;
-  /** 侧栏徽标只统计 ~（文本不同）条数。 */
+  /** 被 ``ignore_punct`` 忽略的「仅标点 / 空白不同」行数（解释性统计）。 */
+  punct_only: number;
+  /** 侧栏徽标只统计 ~（文本不同）条数；`ignore_punct` 下已排除仅标点差异。 */
   badge: number;
 }
 
@@ -633,6 +637,8 @@ export interface AltReviewPayload {
   params?: Record<string, unknown>;
   rows: DualRow[];
   stats: DualStats | null;
+  /** 服务端这次实际用的口径（``false`` = 标点也算差异）。 */
+  ignore_punct?: boolean;
 }
 
 export interface AiProposalPayload {
@@ -1217,10 +1223,11 @@ export const api = {
   /** 清空原文字幕（连同无法再对齐的译文轨，一次历史）。 */
   clearCues: () => req<CueSnapshot>('/api/cues/clear', { method: 'POST' }),
 
-  patchCue: (index: number, patch: Partial<Cue>) =>
+  /** `label` 写进统一历史（复核页「采用 B 句」用它，⌘Z 提示才说得清）。 */
+  patchCue: (index: number, patch: Partial<Cue>, label = '') =>
     req<CueSnapshot>(`/api/cues/${index}`, {
       method: 'PATCH',
-      body: JSON.stringify(patch),
+      body: JSON.stringify({ ...patch, label }),
     }),
 
   deleteCue: (index: number) =>
@@ -1549,8 +1556,18 @@ export const api = {
   },
 
   // ---- 双引擎复核（第二版）-----------------------------------------------
-  getAltReview: (diff = false) =>
-    req<AltReviewPayload>(`/api/alt-review${diff ? '?diff=1' : ''}`),
+  /**
+   * 第二版摘要 / 差异行。
+   *
+   * `ignorePunct` 默认开：只有标点 / 空白不同的行由服务端判为一致，
+   * 不计入 `~ 文本不同` 与侧栏徽标（`core.dual_review.build_review`）。
+   */
+  getAltReview: (diff = false, ignorePunct = true) => {
+    const q = new URLSearchParams();
+    if (diff) q.set('diff', '1');
+    q.set('ignore_punct', ignorePunct ? '1' : '0');
+    return req<AltReviewPayload>(`/api/alt-review?${q}`);
+  },
 
   deleteAltReview: () => req<{ removed: boolean; exists: boolean }>('/api/alt-review', { method: 'DELETE' }),
 
