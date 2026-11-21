@@ -13,6 +13,7 @@ import { api, type ChapterMark, type Cue, type ReportData, type ReviewSource } f
 import { loadChapters } from './chapters.svelte';
 import {
   app,
+  loadTranslations,
   openMedia,
   openSubtitle,
   qa,
@@ -49,6 +50,8 @@ export async function applyDevSeed(seed: {
     }>;
     dialogOpen?: boolean;
   };
+  /** 仅开发截图用：灌一版译文平行轨（验证「有译文轨时默认双语」与双语排版）。 */
+  translations?: { lang: string; texts: string[] };
   reviewSource?: ReviewSource | null;
   /** 仅开发截图 / 无窗口回归用：灌一份章节 / 时刻点标记（走真实保存链路）。 */
   chapters?: ChapterMark[];
@@ -64,6 +67,14 @@ export async function applyDevSeed(seed: {
     if (seed.chapters?.length) {
       await api.saveChapters({ marks: seed.chapters, label: '开发种子：章节标记' });
       await loadChapters(true);
+    }
+    if (seed.translations?.texts?.length) {
+      // 走真实接口：`loadTranslations()` 之后 app.track 的默认双语逻辑才会命中
+      await api.applyTranslation({
+        lang: seed.translations.lang || 'zh-Hans',
+        texts: seed.translations.texts,
+      });
+      await loadTranslations();
     }
     if (seed.report) app.report = seed.report;
     if (seed.subtitlePath) {

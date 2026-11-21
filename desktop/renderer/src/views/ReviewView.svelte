@@ -44,6 +44,7 @@
     replaceInCue,
     replaceInTranslation,
     seekTo,
+    setTrackMode,
     splitCueAt,
     startProxyJob,
     toast,
@@ -60,9 +61,9 @@
   import {
     collectFindHits,
     countSkippedHits,
-    escapeRe,
     filterSkippedHits,
     findHitKey,
+    highlightSegments,
     ordinalOfHit,
     skippedStartsByCueTrack,
     type FindHit,
@@ -114,6 +115,7 @@
     storePeaks,
     takeExplicitJump,
   } from '../lib/reviewViewport';
+  import { claimTranslationDefault, planInitialReviewView } from '../lib/reviewStart';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -135,9 +137,9 @@
   let scrollTop = $state(0);
   let viewH = $state(0);
   let waveW = $state(0);
-  // 波形高度：默认 80（D 稿），可拖动底部把手调整；记住用户选择。
+  // 波形高度：默认 88 = 原来的 80 + 字幕轨道新增的 7px，波形本身的可视高度不变。
   const savedHeight = Number(localStorage.getItem('kikusub.waveHeight') || 0);
-  let waveHeight = $state(Math.max(72, Math.min(300, savedHeight || 80)));
+  let waveHeight = $state(Math.max(80, Math.min(300, savedHeight || 88)));
 
   // 波形视窗（秒）。duration 来自媒体元数据。
   const duration = $derived(app.media?.duration ?? 0);
@@ -173,7 +175,10 @@
 
   // 时间轴三条竖带。绘制与命中判定共用同一组常量，避免“看到的”和“点到的”错位。
   const RULER_H = 17; // 顶部刻度条：按住拖动 = 擦洗播放头
-  const LANE_H = 17; // 底部字幕轨道：拖块体移动整句，拖两端改时间戳
+  // 底部字幕轨道：拖块体移动整句，拖两端改时间戳。块高 = LANE_H - 6，
+  // 2026-11-21 从 17 提到 24（块 11 → 18px）：11px 的块在缩放后只有几像素宽，
+  // 抓两端改时间又要点得准，热区太小。
+  const LANE_H = 24;
   const RESIZE_H = 6; // 最底部的波形高度把手
   const EDGE = 6; // 字幕块左右端的抓取宽度（px）
   const PLAYHEAD_GRAB = 8; // 播放头两侧的抓取宽度（px）
@@ -428,6 +433,10 @@
   /** 把某部影片的现场落盘（默认当前片）。切换影片前必须先调一次。 */
   function persistViewport(path = app.media?.path ?? '') {
     if (!path) return;
+    // 还没给这部片定过现场（历史恢复 / 首次默认态都还没跑）就不要写：
+    // 那一刻视窗还是「全片 1.0×」的复位值，写下去会变成现场快照，
+    // 下一次打开反而把它当用户位置恢复回来了。
+    if (restoreDoneFor !== path) return;
     rememberViewport(path, currentSnapshot());
   }
 
@@ -759,33 +768,56 @@
   });
 
   /**
-   * 恢复这部影片上次的工作现场。
+   * 恢复这部影片上次的工作现场；没有现场时用「第 1 条 + ~50× 视野」的默认态。
    *
    * 时机由 `videoMetaReady` 把关（`<video>` 的 loadedmetadata）：早于它 seek 会被
    * 浏览器丢弃，缩放也没有 duration 可夹。显式跳转（双引擎复核 / 质检面板点
    * 时间码）在 `focusRange()` 里记过一笔，这里消费掉并且**整次跳过历史恢复**，
    * 保证「用户刚点的那一下」不会被旧位置覆盖。
+   *
+   * 默认态（`lib/reviewStart`）解决的是长片第一次打开时「全片 1.0× + 播放头停在
+   * 片头黑场」：没有快照就聚焦第 1 条字幕，而不是把整部片压进几百像素。
    */
   $effect(() => {
     const media = app.media;
     const ready = videoMetaReady;
     const d = duration;
     if (!media || !ready || d <= 0 || restoreDoneFor === media.path) return;
-    restoreDoneFor = media.path;
     const raw = readViewportForRestore(media.path);
-    const plan = planViewportRestore(raw, d, MIN_SPAN, {
-      explicit: takeExplicitJump(media.path),
-    });
-    if (!plan) return;
-    if (plan.span > 0) setView(plan.viewStart, plan.span);
-    if (plan.selection) selection = { start: plan.selection.start, end: plan.selection.end };
-    const index = resolveCueIndex(app.cues, raw);
-    if (index !== null) {
-      play.selected = index;
-      play.selectNonce += 1;
+    // 既没有现场快照、字幕也还没来：等字幕到了再定默认态（否则会停在片头全片）。
+    // 这里先不记 restoreDoneFor，effect 会在 cues 变化时再跑一次。
+    if (!raw && !app.cues.length) return;
+    restoreDoneFor = media.path;
+    const explicit = takeExplicitJump(media.path);
+    const plan = planViewportRestore(raw, d, MIN_SPAN, { explicit });
+    if (plan) {
+      if (plan.span > 0) setView(plan.viewStart, plan.span);
+      if (plan.selection) selection = { start: plan.selection.start, end: plan.selection.end };
+      const index = resolveCueIndex(app.cues, raw);
+      if (index !== null) {
+        play.selected = index;
+        play.selectNonce += 1;
+      }
+      // metadata 已经就绪：这里的 seek 一定落得下去
+      if (plan.seekTo !== null) seekTo(plan.seekTo);
+      return;
     }
-    // metadata 已经就绪：这里的 seek 一定落得下去
-    if (plan.seekTo !== null) seekTo(plan.seekTo);
+    const start = explicit ? null : planInitialReviewView(d, app.cues, MIN_SPAN);
+    if (!start) return;
+    setView(start.viewStart, start.span);
+    play.selected = start.cueIndex;
+    play.selectNonce += 1;
+    if (start.seekTo !== null) seekTo(start.seekTo);
+  });
+
+  /**
+   * 已经挂了译文轨就默认双语：本次启动只在第一次「有译文轨 + 当前是原文」时
+   * 翻一次，之后用户选什么就是什么（`setTrackMode` 仍负责持久化）。
+   */
+  $effect(() => {
+    const hasTrack = Boolean(app.translations[app.trackLang]);
+    if (!app.cues.length || !hasTrack || app.track !== 'source') return;
+    if (claimTranslationDefault()) setTrackMode('both');
   });
 
   // 质检 / 选区聚焦请求
@@ -1810,58 +1842,19 @@
     return captionTextLines(text).join(' / ');
   }
 
-  interface FindSegment {
-    text: string;
-    hit: boolean;
-    /** 当前正在处理的这一处（仅一处为 true）。 */
-    cur: boolean;
-    /** 本轮已跳过。 */
-    skipped: boolean;
-  }
-
-  function plainSegment(text: string): FindSegment {
-    return { text, hit: false, cur: false, skipped: false };
-  }
-
-  /**
-   * 把一条字幕文本切成「命中 / 未命中」片段，交给表格渲染 <span>。
-   *
-   * track 决定这条文本是否在当前搜索范围内：原文模式下不点亮译文行，
-   * 译文模式下不点亮原文行，双语两条都点亮。
-   *
-   * `currentOrdinal` 是当前命中在这条轨里的第几个（按显示文本数），只点亮那一处；
-   * `skipped` 是本轮跳过的起点集合，用于给它们加删除线。
-   */
-  function highlightSegments(
+  /** 切片逻辑在 lib/findMatches（纯函数），这里只把当前的查找上下文接进来。 */
+  const highlight = (
     text: string,
-    track: FindTrack = 'source',
-    currentOrdinal = -1,
+    track: FindTrack,
+    currentOrdinal: number,
     skipped?: Set<number>,
-  ): FindSegment[] {
-    const query = findState.query;
-    if (!findState.open || !query || !findTracks.includes(track)) {
-      return [plainSegment(text)];
-    }
-    const re = new RegExp(escapeRe(query), findState.caseSensitive ? 'g' : 'gi');
-    const parts: FindSegment[] = [];
-    let last = 0;
-    let ordinal = 0;
-    let found: RegExpExecArray | null;
-    while ((found = re.exec(text)) !== null) {
-      if (found.index > last) parts.push(plainSegment(text.slice(last, found.index)));
-      parts.push({
-        text: found[0],
-        hit: true,
-        cur: ordinal === currentOrdinal,
-        skipped: skipped?.has(found.index) ?? false,
-      });
-      ordinal += 1;
-      last = found.index + found[0].length;
-      if (found[0].length === 0) re.lastIndex += 1;
-    }
-    if (last < text.length) parts.push(plainSegment(text.slice(last)));
-    return parts.length ? parts : [plainSegment(text)];
-  }
+  ) =>
+    highlightSegments(text, track, currentOrdinal, skipped, {
+      open: findState.open,
+      query: findState.query,
+      caseSensitive: findState.caseSensitive,
+      tracks: findTracks,
+    });
 
   /** 当前命中在这条 cue / 这条轨里的序号；不是当前行返回 -1。 */
   function currentOrdinalFor(index: number, track: FindTrack): number {
@@ -2492,7 +2485,7 @@
               {#if app.track === 'target'}
                 <span class="line" class:stale={isTranslationStale(i)}>
                   {#if translationAt(i)}
-                    {#each highlightSegments(
+                    {#each highlight(
                       cueDisplayText(translationAt(i)),
                       'target',
                       currentOrdinalFor(i, 'target'),
@@ -2510,7 +2503,7 @@
                 </span>
               {:else if app.track === 'both'}
                 <span class="line">
-                  {#each highlightSegments(
+                  {#each highlight(
                     cueDisplayText(cue.text),
                     'source',
                     currentOrdinalFor(i, 'source'),
@@ -2524,7 +2517,7 @@
                   {/each}
                 </span>
                 <span class="line sub" class:stale={isTranslationStale(i)}>
-                  {#each highlightSegments(
+                  {#each highlight(
                     cueDisplayText(translationAt(i)),
                     'target',
                     currentOrdinalFor(i, 'target'),
@@ -2539,7 +2532,7 @@
                 </span>
               {:else}
                 <span class="line">
-                  {#each highlightSegments(
+                  {#each highlight(
                     cueDisplayText(cue.text),
                     'source',
                     currentOrdinalFor(i, 'source'),

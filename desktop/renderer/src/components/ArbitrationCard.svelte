@@ -237,9 +237,7 @@
   {:else}
     <div class="arb-hint">
       <div class="arb-hint-head">
-        <label for={hintId}>
-          {hasResult ? '补充线索 / 追问' : '听音线索（空耳 / 罗马音，可选）'}
-        </label>
+        <label for={hintId}>{hasResult ? '补充线索 / 追问' : '听音线索（可选）'}</label>
         {#if hasResult}
           <button class="arb-link" onclick={reset} title="清掉这一句的临时对话与结果">
             重置对话
@@ -249,6 +247,7 @@
       <textarea
         id={hintId}
         rows="2"
+        title="空耳 / 罗马音都行：例「斯国一 / sugoi」。只发送文本，不发送时间轴、音频或截图"
         maxlength={MAX_HINT_CHARS}
         value={draft}
         placeholder={hasResult
@@ -258,7 +257,7 @@
         onkeydown={onHintKeydown}
       ></textarea>
       <div class="arb-hint-foot">
-        <span>只发送文本，不发送时间轴、音频或截图</span>
+        <span>只发文本 · 不进历史</span>
         {#if hasResult}
           <button
             class="arb-send-followup"
@@ -369,8 +368,8 @@
   .arb {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
-    padding-top: var(--sp-2);
+    gap: 6px;
+    padding-top: 6px;
     border-top: 1px dashed var(--line-2);
   }
   .arb-head {
@@ -422,7 +421,7 @@
     margin: 0;
     color: var(--text-3);
     font-size: 11.5px;
-    line-height: 1.55;
+    line-height: 1.45;
   }
   .arb-tip.warn {
     color: var(--warn);
@@ -453,7 +452,7 @@
   }
   .arb-hint textarea {
     width: 100%;
-    min-height: 38px;
+    min-height: 34px;
     max-height: 96px;
     resize: vertical;
     padding: 5px 7px;
