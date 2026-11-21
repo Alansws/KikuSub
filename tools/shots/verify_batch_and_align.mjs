@@ -122,6 +122,16 @@ const EVAL = String.raw`
       return { list, stop: () => clearInterval(timer) };
     };
     const batchInputs = (root) => [...(root?.querySelectorAll('.batch-no') ?? [])];
+    /** 顶部工作条的通道是一选一：测试统一走「外部手动」（不依赖本机是否配了 API）。 */
+    const useManual = async (root) => {
+      const tab = [...(root?.querySelectorAll('.aiw-lane button') ?? [])].find((el) =>
+        (el.textContent || '').includes('外部手动'),
+      );
+      if (tab && !tab.classList.contains('on')) {
+        tab.click();
+        await sleep(350);
+      }
+    };
     const setPicker = async (root, valueText) => {
       const sel = root.querySelector('.clip-select');
       const option = [...sel.options].find((item) => (item.textContent || '').includes(valueText));
@@ -138,30 +148,31 @@ const EVAL = String.raw`
       sidebar('润色')?.click();
       await waitFor(() => document.querySelector('.aiw-page'));
       await sleep(1000);
+      await useManual(document.querySelector('.aiw-page'));
       await setPicker(document.querySelector('.aiw-title-row'), '章节1');
       await sleep(500);
       const polishInitialRows = document.querySelectorAll('.aiw-row').length;
-      const initialBatch = batchInputs(document.querySelector('.aiw-subbar')).map((el) => el.value);
+      const initialBatch = batchInputs(document.querySelector('.aiw-cmd-row')).map((el) => el.value);
 
       // 手动批 1–2
-      let inputs = batchInputs(document.querySelector('.aiw-subbar'));
+      let inputs = batchInputs(document.querySelector('.aiw-cmd-row'));
       fill(inputs[0], '1');
       fill(inputs[1], '2');
       await commitInput(inputs[1]);
       const polishTwoRows = document.querySelectorAll('.aiw-row').length;
-      const batchText = text(document.querySelector('.aiw-subbar .cue-batch'));
+      const batchText = text(document.querySelector('.aiw-cmd-row .cue-batch'));
 
       // 下一批 → 3–4
-      const nextButton = buttonByText(document.querySelector('.aiw-subbar .cue-batch'), '下一批');
+      const nextButton = buttonByText(document.querySelector('.aiw-cmd-row .cue-batch'), '下一批');
       nextButton?.click();
       await sleep(700);
-      inputs = batchInputs(document.querySelector('.aiw-subbar'));
+      inputs = batchInputs(document.querySelector('.aiw-cmd-row'));
       const nextBatch = inputs.map((el) => el.value);
       const polishNextRows = document.querySelectorAll('.aiw-row').length;
       const copiedIndexes = [...document.querySelectorAll('.aiw-row .aiw-idx')].map((el) => text(el));
 
       // 复制提示词 → 只含本批 2 条
-      buttonByText(document.querySelector('.aiw-launch'), '复制本批提示词')?.click();
+      buttonByText(document.querySelector('.aiw-cmd-row'), '复制本批提示词')?.click();
       await sleep(900);
       const copyToast = toastText();
       const pasteBox = await waitFor(() => document.querySelector('.polish .paste-box'));
@@ -176,7 +187,7 @@ const EVAL = String.raw`
       const polishPasteRows = document.querySelectorAll('.aiw-row').length;
 
       // 再粘 3 条到 2 条批次 → 润色仍拒绝
-      buttonByText(document.querySelector('.aiw-launch'), '粘贴回复')?.click();
+      buttonByText(document.querySelector('.aiw-cmd-row'), '粘贴回复')?.click();
       await sleep(500);
       const pasteBox2 = document.querySelector('.polish .paste-box');
       fill(pasteBox2, ${JSON.stringify(POLISH_MISMATCH_SRT)});
@@ -189,6 +200,7 @@ const EVAL = String.raw`
       sidebar('翻译')?.click();
       await waitFor(() => document.querySelector('.ai'));
       await sleep(1000);
+      await useManual(document.querySelector('.ai'));
       // 批次从润色页带过来（3–4），回到整段做 1–4 的对齐测试
       if (document.querySelector('.ai .batch-reset')) {
         document.querySelector('.ai .batch-reset').click();
@@ -210,12 +222,12 @@ const EVAL = String.raw`
       const mergedEmpty = text(document.querySelector('.ai .align-empty'));
 
       // 应用（只写本批 1–4）
-      buttonByText(document.querySelector('.ai .head'), '应用')?.click();
+      buttonByText(document.querySelector('.ai .aiw-applybar'), '应用')?.click();
       await sleep(1400);
       const applyToast = toastText();
 
       // 严格条数开关：同一份 3 条贴回 4 条批次 → 422
-      buttonByText(document.querySelector('.ai .head'), '粘贴结果')?.click();
+      buttonByText(document.querySelector('.ai .aiw-cmd-row'), '粘贴结果')?.click();
       await sleep(500);
       const strictBox = document.querySelector('.ai .paste .chk input');
       if (strictBox && !strictBox.checked) {
@@ -233,7 +245,7 @@ const EVAL = String.raw`
       await waitFor(() => document.querySelector('.reshape'));
       await sleep(1200);
       const reshapeHasPicker = Boolean(document.querySelector('.reshape .aiw-title-row .clip-scope'));
-      const reshapeHasBatch = Boolean(document.querySelector('.reshape .aiw-title-row .cue-batch'));
+      const reshapeHasBatch = Boolean(document.querySelector('.reshape .aiw-cmd-row .cue-batch'));
       const reshapeRangeLabel = text(document.querySelector('.reshape .aiw-card .aiw-card-sub'));
 
       const reshapeBox = await waitFor(() =>
@@ -253,7 +265,8 @@ const EVAL = String.raw`
       const reshapeToasts = toastRecorder.list;
       const reshapeApplyToast = reshapeToasts.join(' | ');
       const reshapeCoverToast = reshapeToasts.find((item) => item.includes('已覆盖第 1–4 条')) || '';
-      const reshapeHeadCount = text(document.querySelector('.reshape .aiw-head-end'));
+      // 总条数读侧栏「核对台」徽标：头部不再重复展示一个「共 N 条」
+      const reshapeHeadCount = '共 ' + text(document.querySelector('.sb-item[aria-label^="核对台"] .sb-count')) + ' 条';
       const reshapeRowsAfter = document.querySelectorAll('.reshape .preview-row').length;
 
       return JSON.stringify({
