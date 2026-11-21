@@ -514,15 +514,31 @@ const PATH_CANDIDATES = [
   '/usr/local/sbin',
 ];
 
+/**
+ * 随包自带的静态 ffmpeg/ffprobe（Step 7 起）。
+ *
+ * 打包后在 `KikuSub.app/Contents/Resources/bin/`——没有装过 Homebrew 的普通用户
+ * 靠这一份就能导入视频。开发模式不读它：本机 Homebrew 的 ffmpeg 版本更新，
+ * 而且 `build/pack/vendor/` 里那份可能压根没下载。
+ */
+function bundledBinDir() {
+  return IS_DEV ? '' : path.join(process.resourcesPath, 'bin');
+}
+
 function augmentedPath() {
   const parts = (process.env.PATH || '').split(':').filter(Boolean);
-  const extra = process.env.KIKUSUB_FFMPEG_DIR
-    ? [process.env.KIKUSUB_FFMPEG_DIR, ...PATH_CANDIDATES]
-    : PATH_CANDIDATES;
-  for (const dir of extra) {
-    if (!parts.includes(dir)) parts.push(dir);
+  // 前置顺序 = 优先级：显式指定目录 → 包内自带 → 系统 PATH → Homebrew 常见位置。
+  // sidecar 自己也会按同样顺序解析（core/paths.py），这里是给它一份一致的 PATH，
+  // 也给 `findTool()` 用来在启动日志里说清楚最终用的是哪一份。
+  const prepend = [];
+  if (process.env.KIKUSUB_FFMPEG_DIR) prepend.push(process.env.KIKUSUB_FFMPEG_DIR);
+  const bundled = bundledBinDir();
+  if (bundled) prepend.push(bundled);
+  const ordered = [...prepend.reverse(), ...parts];
+  for (const dir of PATH_CANDIDATES) {
+    if (!ordered.includes(dir)) ordered.push(dir);
   }
-  return parts.join(':');
+  return ordered.join(':');
 }
 
 /** 在 PATH 里找可执行文件，找不到返回 null（用于启动时把话说清楚）。 */
@@ -578,6 +594,13 @@ function startSidecar() {
   const modelReady = modelsPresent(models);
 
   const env = { ...process.env, PYTHONUNBUFFERED: '1', PATH: augmentedPath() };
+  const bundledDir = bundledBinDir();
+  if (bundledDir && fs.existsSync(bundledDir)) {
+    // 显式告诉 sidecar 包内 bin 在哪，不让 Python 去猜目录层数：PyInstaller onedir 下
+    // `core/paths.py` 的 `__file__` 是 `Resources/python/sidecar/core/paths.py`，
+    // 比源码布局深一层（第一版就猜错过，日志里写着 `Resources/python/bin`）。
+    env.KIKUSUB_BUNDLE_BIN = bundledDir;
+  }
   const ffmpeg = findTool('ffmpeg');
   const ffprobe = findTool('ffprobe');
   if (!ffmpeg || !ffprobe) {
@@ -601,7 +624,7 @@ function startSidecar() {
   console.log('[sidecar] 模型目录', models, modelReady ? '(已就绪)' : '(⚠️ 未找到模型，首次转写会下载)');
   mainLog(
     `[sidecar] start exe=${exe} args=${args.join(' ')} cwd=${cwd} data=${base} models=${models} ` +
-      `modelReady=${modelReady} ffmpeg=${ffmpeg || '(none)'}`,
+      `modelReady=${modelReady} ffmpeg=${ffmpeg || '(none)'} bundledBin=${bundledDir || '(dev)'}`,
   );
   const child = spawn(exe, args, {
     cwd,

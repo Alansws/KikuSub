@@ -72,7 +72,12 @@ git push origin main
 ## ② 本地实测（不许跳过）
 
 ```bash
-# 1) 发版前置检查：版本号 / tag 是否已存在 / sidecar 新鲜度 / 工作区干净 / 快速测试
+# 0) 取回随包内置的静态 ffmpeg/ffprobe（约 130 MB，只在首次/升级版本时需要；
+#    二进制不入库，preflight 第 8 项会拦住「没带 ffmpeg 就发版」）
+bash tools/pack/fetch_ffmpeg.sh
+
+# 1) 发版前置检查：版本号 / tag 是否已存在 / sidecar 新鲜度 / 工作区干净 /
+#    内置 ffmpeg / 快速测试
 bash tools/release/preflight.sh --with-tests
 
 # 2) 重打 sidecar + 构建渲染层 + 装配 .app（第一次会跑 3–5 分钟）
@@ -193,6 +198,8 @@ bash tools/pack/build_dmg.sh
 | 渲染层没构建就装配 | `build_app.sh`（缺 `renderer/dist` 退出） | 直接退出 |
 | 图标换了没重生成 | `build_app.sh` 每次都从 `docs/app-icon.png` 重渲染 | 不会漏 |
 | 工作区有未提交改动就发版 | `tools/release/preflight.sh` | 退出码 1 |
+| 发出去的 `.app` 没带内置 ffmpeg（用户还得装 Homebrew） | preflight 第 8 项 + `build_app.sh` 的 `KIKUSUB_REQUIRE_BUNDLED_FFMPEG` | 退出码 1 |
+| 内置 ffmpeg 来历不明 / 没带 GPL 许可 | `tools/pack/fetch_ffmpeg.sh` 钉死 sha256；装配时带 `NOTICE-ffmpeg.txt` + 许可全文 | 校验失败即退出 |
 
 **本地钩子（可选，一次配置）**：把发版闸门挂到 `git push` 上——
 
@@ -213,4 +220,5 @@ CI 的 `release-tag` job 才是硬约束；钩子只是让本地早点发现。
 | `About` 里版本与 tag 不一致 | 改了 tag 没改 `package.json`，或反过来 | 先改 `package.json`，再打 tag；CI 会拦 |
 | DMG 在访达里是白色通用磁盘 | 卷图标没写进去 | `build_dmg.sh` 会自动处理；若手动打包需 `.VolumeIcon.icns` + `SetFile -a C` |
 | 下载后打不开 | Gatekeeper（未公证） | Release notes 写清右键「打开」 |
+| 用户报「导入视频 Internal Server Error」 | 包内没有 ffmpeg，且对方没装 Homebrew | 确认 `Contents/Resources/bin/ffmpeg` 存在；重新 `fetch_ffmpeg.sh` 后重装配 |
 | 用户升级后 AI Key 失效 | 千万别改成 `safeStorage`（见 `docs/contracts/ai-proposal.md`） | 保持 `aikey.cjs` 方案 |

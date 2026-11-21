@@ -157,3 +157,54 @@
 - **不许智能体代劳**：`npx electron .`、`npm start`、`desktop/run.sh`、
   `open *.app`、`rebuild.sh --open` 都属于「人要看界面」的操作。要确认界面就截图落盘，
   用 `read_image` 看 PNG。规则入口在 `AGENTS.md` §0.5 与红线 13。
+
+### 3.8 外部工具 ffmpeg / ffprobe：随包静态二进制（2026-11-21 新增，Step 7）
+
+macOS **不自带 ffmpeg**，而从访达启动的 `.app` 只拿到 `/usr/bin:/bin:/usr/sbin:/sbin`——
+Homebrew 的 `/opt/homebrew/bin` 不在里面。所以在 Step 7 之前，「下载 .app → 双击 → 导入视频」
+对没装过 Homebrew 的普通用户是**必然失败**，报的还是 Internal Server Error。这一节把
+「工具从哪来」定成一个顺序，不再靠用户装 brew。
+
+**解析只有一处实现**：`core/paths.py` 的 `ffmpeg_bin()` / `ffprobe_bin()`。
+凡是拼 `subprocess` 命令的地方都必须用它们，**禁止再把裸 `"ffmpeg"` 写进命令列表**
+（回归：`tests/test_ffmpeg_paths.py` 会用 AST 扫 `core/` 与 `server/`，命中即失败）。
+
+| 顺序 | 来源 | 用途 |
+| --- | --- | --- |
+| 1 | `KIKUSUB_FFMPEG` / `KIKUSUB_FFPROBE`（完整文件路径） | 用户把 ffmpeg 装在奇怪位置时的最终手段 |
+| 2 | `KIKUSUB_FFMPEG_DIR`（目录，含两个工具） | 老变量，主进程一直支持；错误文案里也写着它 |
+| 3 | **包内 `Contents/Resources/bin/`** | 随 `.app` 分发的静态 ffmpeg/ffprobe（Step 7） |
+| 4 | 系统 `PATH` | 开发机上的 Homebrew；装了 brew 的用户 |
+| 5 | 裸名字兜底 | 让 `subprocess` 抛 `FileNotFoundError`，各模块据此给「请安装 ffmpeg」的提示 |
+
+- **包内位置有两个来源，顺序固定**：① 主进程打包态显式传
+  `KIKUSUB_BUNDLE_BIN=<resourcesPath>/bin`；② 没有它时 Python 按目录层数推
+  （`_bundled_bin_candidates()`）。**不要只写 `APP_ROOT.parent / "bin"`**：PyInstaller
+  onedir 会把 `core` 冻进可执行文件，`core/paths.py` 的 `__file__` 是
+  `Resources/python/sidecar/core/paths.py`，`APP_ROOT` 是 **onedir 目录本身**，
+  `APP_ROOT.parent` 是 `Resources/python`。Step 7 第一版就是这么写错的，日志里是
+  `bundled_bin=…/Resources/python/bin`、`PATH+=(无)`，包内 ffmpeg 完全没被发现；
+  验收脚本 `tools/pack/verify_bundled_ffmpeg.sh` 正是靠「干净 PATH 跑打包 sidecar」把它逼出来的。
+- **主进程同步前置 PATH**：`desktop/main/main.cjs` 的 `augmentedPath()` 把
+  `KIKUSUB_FFMPEG_DIR → Resources/bin → 原 PATH → Homebrew 常见目录` 拼成 sidecar 的环境；
+  `core/paths.install_bundled_bin_path()` 在 sidecar 启动时再前置一次（幂等），给
+  「按 PATH 找 ffmpeg」的第三方代码兜底。
+- **开发环境不读包内二进制**：仓库根旁边的 `bin/` 不存在，解析自然落到 Homebrew——
+  本机开发仍是无缝的，不需要为了跑测试下载 130 MB。
+- **设置页诊断要能说清楚用的是哪份**：`/api/settings` 的 `ffmpeg` 块多一个
+  `source` 字段（`bundled` / `explicit` / `system`），路径照旧。
+- **来源与许可必须清晰**（GPLv3 的分发义务）：二进制不入库（约 130 MB），由
+  `tools/pack/fetch_ffmpeg.sh` 按**钉死的版本 + sha256** 取回；`build_app.sh` 第 6 步把
+  `ffmpeg` / `ffprobe` / `LICENSE-ffmpeg-GPLv3.txt` / `NOTICE-ffmpeg.txt` 放进
+  `Contents/Resources/bin/`，**先单独 ad-hoc 签名这两个 Mach-O**，再签整个 `.app`。
+  当前来源是 Martin Riedl 的 FFmpeg Build Server（静态链接、arm64、Developer ID 签名 + 公证、
+  `--enable-gpl --enable-version3`，含 x264/x265/libass），版本与校验值写在
+  `tools/pack/fetch_ffmpeg.sh` 顶部与生成的 `NOTICE.txt` 里。
+- **缺内置 ffmpeg 时**：`build_app.sh` 只告警（开发机可以只用 Homebrew）；
+  `KIKUSUB_REQUIRE_BUNDLED_FFMPEG=1` 变成硬失败，`tools/release/preflight.sh` 第 8 项
+  默认就按「发版必须随包」要求它。
+- **验收命令**：`bash tools/pack/verify_bundled_ffmpeg.sh`（可加
+  `KIKUSUB_STEP7_MEDIA=/path/to/film.mkv`）。它把 PATH 清成
+  `/usr/bin:/bin:/usr/sbin:/sbin`、直接起 `.app` 里的 sidecar，断言
+  `/api/settings` 的 `ffmpeg.source == "bundled"`，并真跑一次 ffprobe（探时长）与
+  ffmpeg（生成缩略图）。**pytest 只能证明解析顺序，证明不了冻结后的布局**，两者都要有。

@@ -84,7 +84,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理、后台 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 评测台：`score_srt.py` 打分（CER / 块准确率 / 劈词数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 基线。改断句 / VAD 前后必须跑同一区间；素材用 `--fixtures`。 |
-| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）。改 Python 后必须先重打 sidecar。 |
+| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）+ `fetch_ffmpeg.sh`（sha256 钉死的静态 ffmpeg/ffprobe，不入库）。改 Python 后必须先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、兼容读取与原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、安装检测、`family`、`reviewable`、`file_tag` / `legacy_tags`；设置页与命名都读这张表。 |
 | `core/sherpa_asr.py` | 两个中文引擎推理外壳（sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
@@ -124,7 +124,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 2. **提案只有一个实现**：源指纹 digest、结构校验、`apply_polish()` 都在 `core/ai_proposal.py`；
    前端不得自己算 digest 或另写校验。
 3. **并发与取消**：转写必须通过 `jobs.JobRegistry` 单槽占用，取消令牌归属发起会话；
-   **禁止**再引入模块级 `CANCEL_EVENT`。所有外部命令走 `procutil.run_command`（超时/取消/terminate）。
+   **禁止**再引入模块级 `CANCEL_EVENT`。所有外部命令走 `procutil.run_command`（超时/取消/terminate）；
+   ffmpeg/ffprobe 用 `core.paths.ffmpeg_bin()` / `ffprobe_bin()`，**不许写裸命令名**（见 desktop-lifecycle §3.8）。
 4. **断句改动必须有数字**：改 `_break_costs` / `partition_cues` / VAD 参数前后，用
    `tools/eval/score_srt.py` 对同一区间跑 CER、劈词数、最长条；禁止凭个别样例"看起来更好"。
 5. **历史只有一条线**：`Session.history` 是 ≤50 步的 `WorkspaceState` 时间线，所有编辑必须带 `label`；
