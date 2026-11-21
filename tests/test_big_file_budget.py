@@ -35,9 +35,14 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              lib/exportStorage.ts（store 先降到 3228），再用腾出的行数接线
 #              `exporter.clip` + `setExportClip()`（接线后 3258）。净预算仍是从
 #              3278 下调到 3258——这次没有为了加功能而放宽任何行数。
+# 2026-11-21（界面重构 Step 3）：核对台的「查找高亮切分」整段搬进
+#              `lib/findMatches.ts`（`highlightSegments` 本来就是纯函数），
+#              ReviewView 3787 → 3748；再用腾出的行数接线「默认打开态」
+#              （`lib/reviewStart.ts`：长片 50× 视野 + 第 1 条 + 有译文轨默认双语）
+#              与字幕轨道 17 → 24px（连线后 3780）。净预算 3787 → 3780。
 BUDGET = {
-    "lib/store.svelte.ts": 3258,
-    "views/ReviewView.svelte": 3787,
+    "lib/store.svelte.ts": 3255,
+    "views/ReviewView.svelte": 3780,
 }
 
 
