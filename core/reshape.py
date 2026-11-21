@@ -21,6 +21,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import math
 import re
 from dataclasses import dataclass, field
@@ -51,6 +53,12 @@ _FENCE_RE = re.compile(r"^\s*```[a-zA-Z]*\s*$", re.MULTILINE)
 
 class ReshapeError(ValueError):
     """粘贴内容不可用；调用方把 ``str(exc)`` 直接给用户看。"""
+
+
+def proposal_path(output_dir: Path | str, stem: str) -> Path:
+    """断句重排提案文件：与润色/结构并列，但文件名独立。"""
+    base = str(stem or "").strip() or "subtitles"
+    return Path(output_dir) / f"{base}.ai-reshape.json"
 
 
 def digest_of(cues: Iterable[SubtitleCue]) -> str:

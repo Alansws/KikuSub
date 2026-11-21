@@ -44,6 +44,7 @@ from core.procutil import begin_shutdown, terminate_all_processes
 
 from .app import API_VERSION, create_app
 from .config import ServerConfig, new_token
+from .runtime_file import RuntimeFile
 
 
 def _shutdown_children() -> None:
@@ -231,6 +232,23 @@ def main(argv: list[str] | None = None) -> int:
     sock.bind((config.host, config.port))
     sock.listen(2048)
     actual_port = sock.getsockname()[1]
+
+    # 外部 CLI 的发现通道：端口/token 只有这里能给它。写在握手之前、监听之后，
+    # 所以文件出现时 HTTP 已经可以连；0600 + 原子替换见 runtime_file.py。
+    # 写不出来不能拖垮应用：CLI 是附加能力，App 本身仍要能起来。
+    runtime = RuntimeFile(Path(config.output_dir) / "runtime.json")
+    try:
+        runtime.write(
+            port=actual_port,
+            token=config.token,
+            version=API_VERSION,
+            output_dir=config.output_dir,
+        )
+        app.state.runtime = runtime
+        atexit.register(runtime.clear)
+        log.info("运行期握手文件 | %s", runtime.path)
+    except OSError as exc:
+        log.warning("运行期握手文件写入失败（CLI 将找不到这个实例）：%s", exc)
 
     # 首行握手：必须是 stdout 的第一行，主进程按行读取。
     print(

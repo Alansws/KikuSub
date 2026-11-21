@@ -30,6 +30,12 @@ def get_session(request: Request, response: Response) -> Session:
     store = session_store(request)
     sid = (request.headers.get(SESSION_HEADER) or "").strip() or request.cookies.get(SESSION_COOKIE)
     session = store.get(sid)
+    # 只有「客户端带着已有 id 回来」才算 App 的活跃会话；CLI 新建的空会话不能抢注，
+    # 否则下一次 CLI 会读到空工程而不是界面上正在编辑的字幕。
+    if sid and sid == session.id:
+        runtime = getattr(request.app.state, "runtime", None)
+        if runtime is not None:
+            runtime.note_session(session.id)
     if sid != session.id:
         response.set_cookie(
             SESSION_COOKIE,
@@ -39,6 +45,19 @@ def get_session(request: Request, response: Response) -> Session:
             path="/",
         )
     return session
+
+
+def media_path(request: Request, session: Session) -> str:
+    """当前会话绑定的媒体绝对路径；没绑定/已被移走时返回空串。
+
+    证据接口、第二版同步、导出提示都要同一个口径，避免各路由各写一份。
+    """
+    if session.media_id:
+        try:
+            return str(request.app.state.media.get(session.media_id).path)
+        except Exception:  # noqa: BLE001 - 媒体被移走时退回 session.media_path
+            pass
+    return str(session.media_path or "")
 
 
 def settings_path(request: Request) -> Path:

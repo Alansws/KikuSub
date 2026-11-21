@@ -13,16 +13,21 @@
 
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core import ai_polish
 from core import prompts as prompt_store
 from core import reshape
-from core.subtitles import SubtitleCue
+from core.subtitles import SubtitleCue, cues_to_srt
+from core.textio import write_text_atomic
 
 from .deps import get_session, settings_path
-from .routes_cues import _snapshot
+from .routes_cues import _media_stem, _snapshot
 from .security import require_token
 from .sessions import Session
 
@@ -41,6 +46,15 @@ class ReshapeCue(BaseModel):
     text: str = ""
 
 
+class SaveReshapeProposalRequest(BaseModel):
+    """CLI / 外部 agent 提交的整份新稿：只存提案，不直接改字幕。"""
+
+    text: str = Field(min_length=1, description="新稿 SRT（必须带时间码）")
+    from_index: int = 1
+    to_index: int | None = None
+    digest: str = Field(default="", description="解析时看到的原稿指纹；对不上拒绝")
+
+
 class ApplyReshapeRequest(BaseModel):
     cues: list[ReshapeCue] = Field(default_factory=list)
     from_index: int = 1
@@ -48,6 +62,29 @@ class ApplyReshapeRequest(BaseModel):
     #: 解析时服务端给的源指纹；原稿在这之后被改过就必须拒绝，否则下标已经错位。
     digest: str = ""
     label: str = ""
+
+
+def _output_dir(request: Request) -> Path:
+    return Path(request.app.state.config.output_dir)
+
+
+def _proposal_payload(block: list[SubtitleCue], *, cues: list, start: int, end: int) -> dict:
+    total = len(cues)
+    return {
+        "version": 1,
+        "kind": "reshape",
+        "entry": "cli",
+        "created_at": round(time.time(), 3),
+        "source": {
+            "count": total,
+            "digest": reshape.digest_of(cues),
+            "range": {"from": start, "to": end, "total": total},
+        },
+        "cues": [
+            {"start": round(cue.start, 3), "end": round(cue.end, 3), "text": cue.text}
+            for cue in block
+        ],
+    }
 
 
 def _mode(raw: str) -> str:
@@ -226,3 +263,110 @@ def reshape_apply(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**_snapshot(session), "replace": result}
+
+
+@router.post("/api/ai/reshape/proposal", status_code=201)
+def save_reshape_proposal(
+    payload: SaveReshapeProposalRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
+    """把整份新稿存成提案文件（CLI `propose reshape` 的唯一入口）。
+
+    与 ``/from-text`` 的区别只在于「落盘」：解析、体检、digest 绑定全部复用同一套。
+    应用仍由用户点「覆盖」触发，绝不在这里改字幕。
+    """
+    cues = session.review_cues
+    if not cues:
+        raise HTTPException(status_code=409, detail="当前没有字幕")
+    total = len(cues)
+    if payload.digest and payload.digest != reshape.digest_of(cues):
+        raise HTTPException(
+            status_code=409,
+            detail="原稿在提交之后被改过：这份新稿的条号区间已经不可信，请重新生成",
+        )
+    start, end = _span(session, payload.from_index, payload.to_index)
+    try:
+        block = reshape.parse_draft(payload.text)
+        reshape.validate_block(block)
+    except reshape.ReshapeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    stem = _media_stem(request, session) or "subtitles"
+    path = reshape.proposal_path(_output_dir(request), stem)
+    data = _proposal_payload(block, cues=cues, start=start, end=end)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    return {"path": str(path), "count": len(block), "range": {"from": start, "to": end}}
+
+
+def _load_reshape(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and data.get("kind") == "reshape" else None
+
+
+@router.get("/api/ai/reshape/proposal")
+def get_reshape_proposal(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> dict:
+    """读已落盘的断句重排提案 + 当前原稿上的体检；``stale`` 为真时禁止应用。"""
+    cues = session.review_cues
+    if not cues:
+        raise HTTPException(status_code=409, detail="当前没有字幕")
+    stem = _media_stem(request, session) or "subtitles"
+    path = reshape.proposal_path(_output_dir(request), stem)
+    data = _load_reshape(path)
+    if data is None:
+        raise HTTPException(
+            status_code=409,
+            detail="还没有断句重排提案：让 agent 用 kikusub propose reshape 提交一份",
+        )
+    source = data.get("source") or {}
+    stale = str(source.get("digest") or "") != reshape.digest_of(cues)
+    raw_cues = data.get("cues") or []
+    try:
+        block = [
+            SubtitleCue(float(item["start"]), float(item["end"]), str(item.get("text") or ""))
+            for item in raw_cues
+        ]
+        reshape.validate_block(block)
+    except (KeyError, TypeError, ValueError, reshape.ReshapeError) as exc:
+        raise HTTPException(status_code=422, detail=f"提案文件已损坏：{exc}") from exc
+    span = source.get("range") or {}
+    start = int(span.get("from") or 1)
+    end = int(span.get("to") or len(cues))
+    before_texts = [cue.text for cue in cues[start - 1 : end]]
+    diag = reshape.diagnose(block, before_texts=before_texts)
+    return {
+        "path": str(path),
+        "stale": stale,
+        "source": dict(source),
+        "cues": [
+            {"start": cue.start, "end": cue.end, "text": cue.text} for cue in block
+        ],
+        # 渲染层「载入外部提案」直接把它填进粘贴框，避免前端再写一份 SRT 序列化。
+        "text": cues_to_srt(block),
+        "diagnostics": diag.to_dict(),
+        "notes": reshape.summary_notes(diag),
+        "range": {"from": start, "to": end, "total": len(cues)},
+    }
+
+
+@router.delete("/api/ai/reshape/proposal")
+def delete_reshape_proposal(
+    request: Request, session: Session = Depends(get_session)
+) -> dict:
+    stem = _media_stem(request, session) or "subtitles"
+    path = reshape.proposal_path(_output_dir(request), stem)
+    removed = False
+    try:
+        if path.exists():
+            path.unlink()
+            removed = True
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"删除断句重排提案失败：{exc}") from exc
+    return {"removed": removed, "path": str(path)}

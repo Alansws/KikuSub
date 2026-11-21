@@ -30,7 +30,7 @@ from core import dual_review, export_naming
 from core.cues import _unique_sorted_cues
 from core.subtitles import cues_from_subtitle_file
 
-from .deps import get_session
+from .deps import get_session, media_path as _media_path
 from .routes_cues import _BILINGUAL_FILE_RE, _snapshot
 from .security import require_token
 from .sessions import AltReview, Session
@@ -51,15 +51,6 @@ class ReplacePrimaryRequest(BaseModel):
 
 def _output_dir(request: Request) -> Path:
     return Path(request.app.state.config.output_dir)
-
-
-def _media_path(request: Request, session: Session) -> str:
-    if session.media_id:
-        try:
-            return str(request.app.state.media.get(session.media_id).path)
-        except Exception:
-            pass
-    return str(session.media_path or "")
 
 
 def _ensure_synced(request: Request, session: Session) -> str:

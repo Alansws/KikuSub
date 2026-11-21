@@ -34,6 +34,8 @@ from .routes_export import router as export_router
 from .routes_jobs import router as jobs_router
 from .routes_media import router as media_router
 from .routes_presets import router as presets_router
+from .routes_proposals import router as proposals_router
+from .routes_evidence import router as evidence_router
 from .routes_prompts import router as prompts_router
 from .routes_qa import router as qa_router
 from .routes_report import router as report_router
@@ -215,6 +217,8 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(export_router)
     app.include_router(presets_router)
     app.include_router(prompts_router)
+    app.include_router(proposals_router)
+    app.include_router(evidence_router)
     app.include_router(jobs_router)
     app.include_router(report_router)
     app.include_router(qa_router)
