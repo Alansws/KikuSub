@@ -19,6 +19,11 @@ bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline
 
 # 4) 一次跑三套主题：文件名带 -light / -dark / -mincho 后缀
 bash tools/shots/capture_matrix.sh --theme dark --states "polish reshape dual"
+
+# 5) 重出 README 成品图（见下一节）
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh \
+  --seed tools/shots/readme-seed.json --delay 12000 \
+  --states "import transcribe review translate export settings"
 ```
 
 沙箱或 CI 里 Electron 起不来时，用 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 追加启动参数；
@@ -27,9 +32,26 @@ bash tools/shots/capture_matrix.sh --theme dark --states "polish reshape dual"
 `--theme` 的 `polish / reshape / dual` 拍的是**空态**。带字幕、B 版与提案的 AI 三页基线用
 下一节的专用脚本。
 
-状态名：`transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。`review` 用
-`tools/shots/seed.json` 造 12 条字幕（不需要真跑转写）；其余状态靠 `KIKUSUB_DEV_EVAL`
-点侧栏切换，所以截图里显示的是真实页面而不是空壳。
+状态名：`import` `transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。
+`--seed` 指定种子（默认 `tools/shots/seed.json`；`--seed tools/shots/readme-seed.json` 是 README 成品图那份）。
+**导入 / 转写 / 核对 / 翻译 / 导出这五个状态都用种子**：空态的转写与导出页只有一句「先导入媒体」，
+对验收和 README 都没信息量。其余状态靠 `KIKUSUB_DEV_EVAL` 点侧栏切换，截到的是真实页面而不是空壳。
+
+> 早期 `transcribe` 状态其实没有点侧栏，截出来是导入页——文件名一直在骗人。现在每个状态都显式点
+> `.sb-item[n]`；导出页额外等 3 秒，让样式预览取回当前帧，否则会截到「渲染中…」+ 纯色底。
+
+## README 成品图
+
+`docs/images/*.jpg` 由同一套无窗口路径生成，只是种子不同：
+
+- `tools/shots/readme-seed.json`：12 条演示台词 + 一版中文译文 + 一份「另一引擎」结果，时间挪到
+  《言叶之庭》约 2:00 的那座桥——不挪的话首帧是黑场，首屏截图会是一整块黑。
+- 主图 `review`、`transcribe`、`translate`、`export` 用上面第 5 条命令；双引擎 / 润色 / 断句重排用
+  `capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual" --size 1440x900`。
+- 设置页两张（引擎与模型 / AI 与技能折叠态）单独一个脚本——要等引擎注册表落地，否则会截到
+  半透明骨架屏：`bash tools/shots/capture_settings_pages.sh /tmp/readme-settings`
+  （加 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 可在沙箱里跑）。
+- 落盘是 2× Retina PNG，转 JPG 用 `sips -Z 2000 -s format jpeg -s formatOptions 82`。
 
 ## AI 三页专用矩阵
 

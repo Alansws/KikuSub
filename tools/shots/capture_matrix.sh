@@ -9,6 +9,8 @@
 #   bash tools/shots/capture_matrix.sh --compare docs/images/shots/baseline
 #   bash tools/shots/capture_matrix.sh --theme dark --states "polish reshape dual"
 #                                                         # 带主题后缀，一次跑三套主题
+#   bash tools/shots/capture_matrix.sh --seed tools/shots/readme-seed.json --delay 12000
+#                                                         # 重出 README 成品图（见 tools/shots/README.md）
 #   沙箱 / CI 里 Electron 起不来时：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash ...
 #
 # 退出码：0 正常；2 参数错误；3 缺少 electron/ffmpeg 依赖。
@@ -20,7 +22,11 @@ SIZE="1360x838"
 DELAY=4500
 COMPARE=""
 MEDIA="${KIKUSUB_SHOT_MEDIA:-/tmp/kikusub-shot-media.mp4}"
-STATES="transcribe review dual polish reshape translate prompts export settings"
+STATES="import transcribe review dual polish reshape translate prompts export settings"
+# 种子文件：默认 12 条演示字幕（时间从 0 开始）。README 的成品图另有一份
+# `tools/shots/readme-seed.json`——时间落在《言叶之庭》那座桥约 1:58 处，
+# 首屏截图才不会是一块黑画面。
+SEED_FILE="$REPO_ROOT/tools/shots/seed.json"
 # 主题：light（默认，沿用旧文件名）/ dark / mincho。显式传 --theme 时文件名带主题后缀，
 # 方便一次跑完三套主题再并排看；不传时保持原来的 <state>-<size>.png，基线比对不受影响。
 THEME=""
@@ -36,7 +42,8 @@ while [ $# -gt 0 ]; do
     --states) STATES="${2:?}"; shift 2 ;;
     --compare) COMPARE="${2:?}"; shift 2 ;;
     --theme) THEME="${2:?}"; shift 2 ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    --seed) SEED_FILE="${2:?}"; shift 2 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "未知参数：$1" >&2; exit 2 ;;
   esac
 done
@@ -64,8 +71,9 @@ if [ ! -f "$MEDIA" ]; then
     -c:v libx264 -preset ultrafast "$MEDIA" || exit 3
 fi
 
+[ -f "$SEED_FILE" ] || { echo "缺少种子文件：$SEED_FILE" >&2; exit 2; }
 SEED="$(mktemp -t kikusub-shot-seed).json"
-python3 - "$REPO_ROOT/tools/shots/seed.json" "$MEDIA" "$SEED" <<'PY'
+python3 - "$SEED_FILE" "$MEDIA" "$SEED" <<'PY'
 import json, sys
 src, media, dst = sys.argv[1:4]
 data = json.load(open(src, encoding='utf-8'))
@@ -100,14 +108,21 @@ shot() {  # $1=状态名 $2=dev-eval $3=是否用 seed
 
 for st in $STATES; do
   case "$st" in
-    transcribe) shot transcribe "" "" ;;
+    # 截图模式的初始视图是「导入」以外的一屏（转写），所以每个状态都显式点侧栏；
+    # 早期 `transcribe` 不点，截出来其实是导入页，文件名一直在骗人。
+    # 需要「有片 + 有字幕」才有意义的页面用 seed（导入 / 转写 / 核对 / 翻译 / 导出）：
+    # 空态的转写与导出页只能看见「先导入媒体」，对 README 与人工验收都没信息量。
+    import)     shot import "document.querySelectorAll('.sb-item')[0].click()" "seed" ;;
+    transcribe) shot transcribe "document.querySelectorAll('.sb-item')[1].click()" "seed" ;;
     review)     shot review "" "seed" ;;
     # 侧栏顺序（components/Sidebar.svelte）：0 导入 / 1 转写 / 2 核对台 / 3 双引擎 /
     # 4 润色 / 5 断句重排 / 6 翻译 / 7 导出 / 8 提示词库 / 9 设置
     settings)   shot settings "document.querySelectorAll('.sb-item')[9].click()" "" ;;
     prompts)    shot prompts "document.querySelectorAll('.sb-item')[8].click()" "" ;;
-    export)     shot export "document.querySelectorAll('.sb-item')[7].click()" "" ;;
-    translate)  shot translate "document.querySelectorAll('.sb-item')[6].click()" "" ;;
+    # 导出页的「样式预览」要等一次 style-preview 请求回来（有片时取当前帧），
+    # 点完立刻截会截到「渲染中…」+ 纯色底，看起来像坏了。
+    export)     shot export "(async()=>{document.querySelectorAll('.sb-item')[7].click(); await new Promise((r)=>setTimeout(r,3000));})()" "seed" ;;
+    translate)  shot translate "document.querySelectorAll('.sb-item')[6].click()" "seed" ;;
     polish)     shot polish "document.querySelectorAll('.sb-item')[4].click()" "" ;;
     reshape)    shot reshape "document.querySelectorAll('.sb-item')[5].click()" "" ;;
     dual)       shot dual "document.querySelectorAll('.sb-item')[3].click()" "" ;;
