@@ -6,7 +6,7 @@
  * 走 `--screenshot` 静默路径（透明窗口取帧），不弹窗口。断言失败退出码非 0。
  */
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,7 +16,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BASE = path.join(os.tmpdir(), 'kikusub-external-proposals');
 const OUT = path.join(BASE, 'out');
 const DATA = path.join(BASE, 'data');
-const MEDIA = '/tmp/kikusub-int/episode.mp4';
+const MEDIA = path.join(BASE, 'media.mp4');
 
 const CUES = [
   { start: 0.2, end: 1.8, text: 'おはようございます' },
@@ -83,6 +83,37 @@ const EVAL = String.raw`
     return out;
   })()
 `;
+
+function ensureMedia() {
+  if (fs.existsSync(MEDIA)) return;
+  fs.mkdirSync(BASE, { recursive: true });
+  execFileSync(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=320x180:rate=15:duration=12',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=12',
+      '-shortest',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-y',
+      MEDIA,
+    ],
+    { stdio: 'ignore' },
+  );
+}
 
 function seed() {
   const file = path.join(BASE, 'seed.json');
@@ -175,9 +206,7 @@ function check(name, condition, detail) {
 }
 
 async function main() {
-  if (!fs.existsSync(MEDIA)) {
-    throw new Error(`缺少测试媒体：${MEDIA}（用 ffmpeg 生成 12s testsrc 即可）`);
-  }
+  ensureMedia();
   const data = await run();
   console.log(JSON.stringify(data));
   check('提案写入成功', data.saved === 201, String(data.saved));
