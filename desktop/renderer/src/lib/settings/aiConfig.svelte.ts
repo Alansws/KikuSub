@@ -34,6 +34,12 @@ export const aiState = $state({
   arbTestMsg: '',
   /** 高级参数展开时才有意义的“已保存”提示 */
   savedAt: 0,
+  /**
+   * 全局 / 判定两把 Key 的「有没有」是否已经问过主进程。
+   * AiAdvancedFold 要等它为 true 才能判断进阶配置——否则「只存过判定 Key」的那类
+   * 配置会在异步返回前被当成「未配置」。
+   */
+  keyChecked: false,
   /** 本机 LM Studio 探测 / 重载状态。 */
   localModel: {
     loading: false,
@@ -84,6 +90,7 @@ export async function refreshAiKey() {
     aiState.arbKeyBroken = false;
     aiState.arbKeyLegacy = false;
   }
+  aiState.keyChecked = true;
 }
 
 export async function patchAi(patch: Parameters<typeof api.patchAiConfig>[0]): Promise<boolean> {
