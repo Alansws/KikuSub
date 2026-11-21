@@ -4,17 +4,46 @@
   import { dual } from '../lib/dualReview.svelte';
   import appIcon from '../assets/app-icon.png';
 
-  // 按工作流顺序：导入 → 转写 → 核对 → 双引擎复核 → 润色 → 断句重排 → 翻译 → 导出。
-  // ⌘1..⌘8 与这张表一一对应（见 lib/shortcuts.svelte.ts）。
-  const items: { view: View; icon: string; label: string; key: string }[] = [
-    { view: 'import', icon: 'tray', label: '导入', key: '⌘1' },
-    { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
-    { view: 'review', icon: 'listcheck', label: '核对台', key: '⌘3' },
-    { view: 'dual', icon: 'rows', label: '双引擎复核', key: '⌘4' },
-    { view: 'polish', icon: 'sparkle', label: '润色', key: '⌘5' },
-    { view: 'reshape', icon: 'split', label: '断句重排', key: '⌘6' },
-    { view: 'translate', icon: 'quote', label: '翻译', key: '⌘7' },
-    { view: 'export', icon: 'export', label: '导出', key: '⌘8' },
+  interface NavItem {
+    view: View;
+    icon: string;
+    label: string;
+    key: string;
+  }
+
+  /**
+   * 按「工作心智」分四段，而不是八条平级步骤（2026-11-21 去噪）：
+   * 准备 → 转写核对 → AI 处理 → 交付。分组只加视觉分隔，不改路由。
+   *
+   * **段内顺序必须保持不变**：`⌘1..⌘8` 与这张表一一对应（见 lib/shortcuts.svelte.ts），
+   * 主进程「视图」菜单也是这个顺序；调顺序等于把快捷键和菜单一起打乱。
+   * 所以 AI 处理段里仍是 润色(⌘5) / 断句重排(⌘6) / 翻译(⌘7)，不是按拼音重排。
+   */
+  const nav: { group: string; items: NavItem[] }[] = [
+    {
+      group: '准备',
+      items: [{ view: 'import', icon: 'tray', label: '导入', key: '⌘1' }],
+    },
+    {
+      group: '转写核对',
+      items: [
+        { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
+        { view: 'review', icon: 'listcheck', label: '核对台', key: '⌘3' },
+        { view: 'dual', icon: 'rows', label: '双引擎复核', key: '⌘4' },
+      ],
+    },
+    {
+      group: 'AI 处理',
+      items: [
+        { view: 'polish', icon: 'sparkle', label: '润色', key: '⌘5' },
+        { view: 'reshape', icon: 'split', label: '断句重排', key: '⌘6' },
+        { view: 'translate', icon: 'quote', label: '翻译', key: '⌘7' },
+      ],
+    },
+    {
+      group: '交付',
+      items: [{ view: 'export', icon: 'export', label: '导出', key: '⌘8' }],
+    },
   ];
 </script>
 
@@ -27,30 +56,30 @@
     </span>
   </div>
 
-  <div class="sb-label">工作区</div>
-
-  {#each items as item (item.view)}
-    <button
-      class="sb-item"
-      class:active={app.view === item.view}
-      onclick={() => setView(item.view)}
-      title={`${item.label}（${item.key}）`}
-      aria-label={`${item.label}（${item.key}）`}
-    >
-      <span class="ico"><Icon name={item.icon} /></span>
-      <span>{item.label}</span>
-      {#if item.view === 'review' && app.cues.length}
-        <span class="sb-count">{app.cues.length}</span>
-      {:else if item.view === 'dual' && dual.exists}
-        <span class="sb-count alt" title="文本差异行数（+ / − 漏句在页内单独显示）">
-          {dual.stats?.badge ?? 0}
-        </span>
-      {/if}
-    </button>
+  {#each nav as section, index (section.group)}
+    <div class="sb-label" class:lead={index === 0}>{section.group}</div>
+    {#each section.items as item (item.view)}
+      <button
+        class="sb-item"
+        class:active={app.view === item.view}
+        onclick={() => setView(item.view)}
+        title={`${item.label}（${item.key}）`}
+        aria-label={`${item.label}（${item.key}）`}
+      >
+        <span class="ico"><Icon name={item.icon} /></span>
+        <span>{item.label}</span>
+        {#if item.view === 'review' && app.cues.length}
+          <span class="sb-count">{app.cues.length}</span>
+        {:else if item.view === 'dual' && dual.exists}
+          <span class="sb-count alt" title="文本差异行数（+ / − 漏句在页内单独显示）">
+            {dual.stats?.badge ?? 0}
+          </span>
+        {/if}
+      </button>
+    {/each}
   {/each}
 
   <div class="sb-spacer"></div>
-
 
   <button
     class="sb-item"
@@ -107,12 +136,17 @@
     color: var(--text-3);
     margin-top: 1px;
   }
+  /* 分组标签是「分隔」而不是「标题」：比导航正文更小更淡，读起来不抢行。
+     第一段贴着品牌标，上边距要比后续分段小。 */
   .sb-label {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    color: var(--text-2);
-    padding: 10px var(--sp-2) var(--sp-1);
-    letter-spacing: 0.02em;
+    color: var(--text-3);
+    letter-spacing: 0.06em;
+    padding: 16px var(--sp-2) 5px;
+  }
+  .sb-label.lead {
+    padding-top: 6px;
   }
 
   .sb-item {
@@ -135,11 +169,18 @@
   .sb-item:hover {
     background: var(--fill);
   }
+  /* 选中态只有一层柔和强调色底（2026-11-21 去噪）：去掉外圈 2px 朱红左线，
+     全站与设置页 / 核对台保持一致，侧栏不再像「八条带边框的步骤」。 */
   .sb-item.active {
     background: var(--accent-soft);
     color: var(--accent);
     font-weight: 500;
-    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  /* 键盘焦点用内侧细环：全局 2px 外描边套在浅底选中项外面会读成「报错框」，
+     内侧环（accent-ring）既去掉外圈朱红框，又保住键盘用户看得见焦点。 */
+  .sb-item:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: -2px;
   }
   .sb-item.active .ico {
     color: var(--accent);
