@@ -196,7 +196,9 @@ Homebrew 的 `/opt/homebrew/bin` 不在里面。所以在 Step 7 之前，「下
 - **来源与许可必须清晰**（GPLv3 的分发义务）：二进制不入库（约 130 MB），由
   `tools/pack/fetch_ffmpeg.sh` 按**钉死的版本 + sha256** 取回；`build_app.sh` 第 6 步把
   `ffmpeg` / `ffprobe` / `LICENSE-ffmpeg-GPLv3.txt` / `NOTICE-ffmpeg.txt` 放进
-  `Contents/Resources/bin/`，**先单独 ad-hoc 签名这两个 Mach-O**，再签整个 `.app`。
+  `Contents/Resources/bin/`，**先单独 ad-hoc 签名这两个 Mach-O**，再签整个 `.app`
+  （重新签名会替换 Mach-O 里的签名块，包内二进制的体积与 sha256 因此与下载时不同——
+  实测 ffmpeg 小约 3.9 MB，是预期行为，`NOTICE-ffmpeg.txt` 里写明了）。
   当前来源是 Martin Riedl 的 FFmpeg Build Server（静态链接、arm64、Developer ID 签名 + 公证、
   `--enable-gpl --enable-version3`，含 x264/x265/libass），版本与校验值写在
   `tools/pack/fetch_ffmpeg.sh` 顶部与生成的 `NOTICE.txt` 里。

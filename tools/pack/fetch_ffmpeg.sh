@@ -36,18 +36,66 @@ BIN_DIR="$OUT_DIR/bin"
 STAMP="$OUT_DIR/.fetched"
 
 FORCE=0
+# --notice：只按现有二进制重写 NOTICE.txt（改了文字模板时用，不必再下一次 130 MB）。
+NOTICE_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --notice) NOTICE_ONLY=1 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "未知参数：$arg" >&2; exit 2 ;;
   esac
 done
 
-if [ "$FORCE" = "0" ] && [ -x "$BIN_DIR/ffmpeg" ] && [ -x "$BIN_DIR/ffprobe" ] \
+write_notice() {
+cat > "$OUT_DIR/NOTICE.txt" <<NOTICE
+KikuSub 随包内置的 FFmpeg 静态二进制
+=====================================
+
+版本        : FFmpeg ${FFMPEG_VERSION}（macOS arm64 / 静态链接）
+构建来源    : Martin Riedl's FFmpeg Build Server
+              https://ffmpeg.martin-riedl.de/
+下载地址    : ${BASE_URL}/
+下载日期    : $(date '+%Y-%m-%d %H:%M:%S %z')
+构建配置    : --enable-gpl --enable-version3 --pkg-config-flags=--static
+              （含 libx264 / libx265 / libass / libfreetype / libvpx / libopus 等，
+                完整清单见 \`ffmpeg -version\` 第一段）
+许可        : GPL v3 —— 全文见随包 LICENSE-ffmpeg-GPLv3.txt，
+              上游源码 https://ffmpeg.org/download.html
+              该构建的编译脚本 https://git.martin-riedl.de/ffmpeg/build-script
+签名        : 上游以 Developer ID（Martin Riedl, KU3N25YGLU）签名；装配 KikuSub.app
+              时会被 ad-hoc 重新签名，与主程序一致。**重新签名会替换 Mach-O 里的
+              签名块，所以包内二进制的体积与 sha256 与下面的「下载时原始文件」略有
+              差异**（实测 ffmpeg −3.9 MB / ffprobe 同样变小），这是预期行为。
+
+校验（sha256）
+-------------
+ffmpeg.zip  ${FFMPEG_ZIP_SHA256}
+ffprobe.zip ${FFPROBE_ZIP_SHA256}
+bin/ffmpeg  ${FFMPEG_SHA256}  (${FFMPEG_SIZE} bytes)
+bin/ffprobe ${FFPROBE_SHA256}  (${FFPROBE_SIZE} bytes)
+
+为什么要随包：macOS 不自带 ffmpeg，而从访达启动的 .app 拿不到 Homebrew 的
+/opt/homebrew/bin。内置这一份以后，没装过 Homebrew 的用户下载 .app 双击即可导入视频。
+NOTICE
+}
+
+if [ "$FORCE" = "0" ] && [ "$NOTICE_ONLY" = "0" ] && [ -x "$BIN_DIR/ffmpeg" ] && [ -x "$BIN_DIR/ffprobe" ] \
    && [ "$(cat "$STAMP" 2>/dev/null || true)" = "$FFMPEG_VERSION" ]; then
   echo "已存在内置 ffmpeg ${FFMPEG_VERSION}：${BIN_DIR}（--force 可重下）"
   du -sh "$BIN_DIR"
+  exit 0
+fi
+
+if [ "$NOTICE_ONLY" = "1" ]; then
+  [ -x "$BIN_DIR/ffmpeg" ] && [ -x "$BIN_DIR/ffprobe" ] || {
+    echo "没有现成的二进制可写 NOTICE：$BIN_DIR" >&2; exit 1; }
+  FFMPEG_SHA256="$(shasum -a 256 "$BIN_DIR/ffmpeg" | awk '{print $1}')"
+  FFPROBE_SHA256="$(shasum -a 256 "$BIN_DIR/ffprobe" | awk '{print $1}')"
+  FFMPEG_SIZE="$(stat -f%z "$BIN_DIR/ffmpeg")"
+  FFPROBE_SIZE="$(stat -f%z "$BIN_DIR/ffprobe")"
+  write_notice
+  echo "已重写 $OUT_DIR/NOTICE.txt"
   exit 0
 fi
 
@@ -109,40 +157,12 @@ for tool in ffmpeg ffprobe; do
   }
 done
 
+
 FFMPEG_SHA256="$(shasum -a 256 "$BIN_DIR/ffmpeg" | awk '{print $1}')"
 FFPROBE_SHA256="$(shasum -a 256 "$BIN_DIR/ffprobe" | awk '{print $1}')"
 FFMPEG_SIZE="$(stat -f%z "$BIN_DIR/ffmpeg")"
 FFPROBE_SIZE="$(stat -f%z "$BIN_DIR/ffprobe")"
-
-cat > "$OUT_DIR/NOTICE.txt" <<NOTICE
-KikuSub 随包内置的 FFmpeg 静态二进制
-=====================================
-
-版本        : FFmpeg ${FFMPEG_VERSION}（macOS arm64 / 静态链接）
-构建来源    : Martin Riedl's FFmpeg Build Server
-              https://ffmpeg.martin-riedl.de/
-下载地址    : ${BASE_URL}/
-下载日期    : $(date '+%Y-%m-%d %H:%M:%S %z')
-构建配置    : --enable-gpl --enable-version3 --pkg-config-flags=--static
-              （含 libx264 / libx265 / libass / libfreetype / libvpx / libopus 等，
-                完整清单见 \`ffmpeg -version\` 第一段）
-许可        : GPL v3 —— 全文见随包 LICENSE-ffmpeg-GPLv3.txt，
-              上游源码 https://ffmpeg.org/download.html
-              该构建的编译脚本 https://git.martin-riedl.de/ffmpeg/build-script
-签名        : 上游以 Developer ID（Martin Riedl, KU3N25YGLU）签名；装配 KikuSub.app
-              时会被 ad-hoc 重新签名，与主程序一致。
-
-校验（sha256）
--------------
-ffmpeg.zip  ${FFMPEG_ZIP_SHA256}
-ffprobe.zip ${FFPROBE_ZIP_SHA256}
-bin/ffmpeg  ${FFMPEG_SHA256}  (${FFMPEG_SIZE} bytes)
-bin/ffprobe ${FFPROBE_SHA256}  (${FFPROBE_SIZE} bytes)
-
-为什么要随包：macOS 不自带 ffmpeg，而从访达启动的 .app 拿不到 Homebrew 的
-/opt/homebrew/bin。内置这一份以后，没装过 Homebrew 的用户下载 .app 双击即可导入视频。
-NOTICE
-
+write_notice
 echo "$FFMPEG_VERSION" > "$STAMP"
 
 echo
