@@ -13,7 +13,8 @@
 
   /**
    * 按「工作心智」分四段，而不是八条平级步骤（2026-11-21 去噪）：
-   * 准备 → 转写核对 → AI 处理 → 交付。分组只加视觉分隔，不改路由。
+   * 准备（导入 / 转写）→ 核对（核对台 / 双引擎复核）→ AI 处理（润色 / 断句重排 / 翻译）
+   * → 交付（导出）。分组只加视觉分隔，不改路由。
    *
    * **段内顺序必须保持不变**：`⌘1..⌘8` 与这张表一一对应（见 lib/shortcuts.svelte.ts），
    * 主进程「视图」菜单也是这个顺序；调顺序等于把快捷键和菜单一起打乱。
@@ -22,12 +23,14 @@
   const nav: { group: string; items: NavItem[] }[] = [
     {
       group: '准备',
-      items: [{ view: 'import', icon: 'tray', label: '导入', key: '⌘1' }],
+      items: [
+        { view: 'import', icon: 'tray', label: '导入', key: '⌘1' },
+        { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
+      ],
     },
     {
-      group: '转写核对',
+      group: '核对',
       items: [
-        { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
         { view: 'review', icon: 'listcheck', label: '核对台', key: '⌘3' },
         { view: 'dual', icon: 'rows', label: '双引擎复核', key: '⌘4' },
       ],
