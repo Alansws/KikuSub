@@ -142,7 +142,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
     或跑 `node tools/shots/verify_reshape_flow.mjs` / `verify_review_transport.mjs`；
     只看编译通过不算验证。**「手点一遍」不许成为打开窗口的理由**（§0.5）。
-11. **两个大文件只许变短**（`lib/store.svelte.ts` 3258 行 / `views/ReviewView.svelte` 3787 行）：
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3255 行 / `views/ReviewView.svelte` 3780 行）：
     改它们前，先把
     **这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。守卫是
     `tests/test_big_file_budget.py`，抽完把预算下调。不是"为了拆而拆"，是为了不让功能开发
@@ -162,7 +162,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 - 改动前 `git status` 必须是干净的（或明确知道自己在改哪几个文件）；不要在混杂工作区上叠加新改动。
 - 验证按**改动范围**跑（见「验证时机」表）；环境依赖的用例用 marker 排除
   （`-m "not needs_macos"` 等，见 `pytest.ini`）。基线命令：`python -m core.smoke`。
-- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 6 个真实类型错误已冻结成基线
+- **改 `.svelte` 后多跑一步** `npm run check:svelte`：存量 5 个真实类型错误已冻结成基线
   （`desktop/test/svelte-check-baseline.json`），只许降不许升。`tsc` 看不到 `.svelte`，
   这一步是目前唯一的类型防线。
 - 合入 `main` 前过一遍 [docs/review.md](docs/review.md) 的自审清单。

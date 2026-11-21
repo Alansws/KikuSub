@@ -223,6 +223,24 @@ node tools/shots/verify_review_viewport.mjs
 截图落在系统临时目录的 `kikusub-review-viewport/review-viewport.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.7。
 
+## 核对台「打开体验 + 右侧栏不溢出」回归
+
+2026-11-21（界面重构 Step 3）新增。10 分钟「长片」+ 已挂译文轨的种子，断言：
+
+- 没有本机现场快照时默认**聚焦第 1 条字幕 + ~50× 视野**，并且真的 seek 到第 1 条
+  （不再停在片头黑场）；短片（≤60s）仍保持全片视图；
+- 有译文轨时默认**双语**，且只生效一次（手动切回原文后，换页回来不许再翻回去）；
+- 1360×838 下从显示模式到 AI 判定整块**不用滚动**就能操作，也不会滑到底部保存栏下面；
+- 操作行里「试听原声 / 朗读 / 音色 / ⚙」同一行，朗读面板默认收起、点开后也在可视高度内。
+
+```bash
+node tools/shots/verify_review_defaults.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_review_defaults.mjs
+```
+
+截图落在系统临时目录的 `kikusub-review-defaults/review-defaults.png`。契约口径见
+[review-console.md](../../docs/contracts/review-console.md) §3.4.10。
+
 ## 章节 / 时刻点标记与成片写入回归
 
 检查器「章节」页签 + 波形顶部旗标：播放头插时刻点、选区设为章节（回车添加）、
