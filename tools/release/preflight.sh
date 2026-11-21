@@ -7,6 +7,7 @@
 #
 # 检查项：工作区干净、版本号格式、tag 是否已存在（"没改版本号不许发"）、HEAD 是否已合入
 # main（主线口径）、package-lock 一致、sidecar 新鲜度、渲染层产物、应用图标尺寸、
+# 随包内置的 ffmpeg/ffprobe（没有它，没装 Homebrew 的用户双击打不开视频）、
 # ruff 与主进程用例。
 #
 # 退出码：0 全部通过；1 有阻塞项（**不许发版**）；2 参数错误。
@@ -45,7 +46,7 @@ echo "== 发版前置检查（$(basename "${REPO_ROOT}")）=="
 
 # ---------------------------------------------------------------- 1. 工作区
 echo
-echo "[1/8] 工作区"
+echo "[1/9] 工作区"
 if [ -n "$(git status --porcelain)" ]; then
   fail "有未提交改动（发版必须从一个干净的工作区出发）："
   git status --short | sed 's/^/       /'
@@ -55,7 +56,7 @@ fi
 
 # ---------------------------------------------------------------- 2. 版本号
 echo
-echo "[2/8] 版本号"
+echo "[2/9] 版本号"
 VERSION=""
 if [ -n "${PY}" ]; then
   VERSION="$("${PY}" - <<'PY'
@@ -77,7 +78,7 @@ fi
 
 # ---------------------------------------------------------------- 3. tag 是否已发过
 echo
-echo "[3/8] 版本号是否已发过"
+echo "[3/9] 版本号是否已发过"
 if [ -z "${VERSION}" ]; then
   warn "版本号未知，跳过"
 elif git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
@@ -90,7 +91,7 @@ fi
 
 # ---------------------------------------------------------------- 4. 主线口径
 echo
-echo "[4/8] 是否已合入主线（main）"
+echo "[4/9] 是否已合入主线（main）"
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(detached)')"
 if ! git rev-parse -q --verify refs/heads/main >/dev/null; then
   warn "本地没有 main 分支，跳过（发版必须从 main 打 tag）"
@@ -107,7 +108,7 @@ fi
 
 # ---------------------------------------------------------------- 5. 依赖锁
 echo
-echo "[5/8] package-lock 与 package.json"
+echo "[5/9] package-lock 与 package.json"
 if [ -n "${PY}" ] && [ -f desktop/package-lock.json ]; then
   if "${PY}" - "${VERSION}" <<'PY'
 import json, sys
@@ -128,7 +129,7 @@ fi
 
 # ---------------------------------------------------------------- 6. sidecar
 echo
-echo "[6/8] sidecar 新鲜度"
+echo "[6/9] sidecar 新鲜度"
 SIDECAR_BIN="build/pack/dist/sidecar/sidecar"
 if [ ! -x "${SIDECAR_BIN}" ]; then
   fail "还没有 sidecar —— 先跑 bash tools/pack/build_sidecar.sh"
@@ -158,7 +159,7 @@ fi
 
 # ---------------------------------------------------------------- 7. 图标
 echo
-echo "[7/8] 应用图标（唯一源 docs/app-icon.png）"
+echo "[7/9] 应用图标（唯一源 docs/app-icon.png）"
 ICON="docs/app-icon.png"
 if [ ! -f "${ICON}" ]; then
   fail "缺少 ${ICON} —— build_app.sh 会直接退出"
@@ -187,9 +188,32 @@ PY
   esac
 fi
 
-# ---------------------------------------------------------------- 8. 快速测试
+# ---------------------------------------------------------------- 8. 内置 ffmpeg
 echo
-echo "[8/8] 快速检查"
+echo "[8/9] 随包内置 ffmpeg / ffprobe"
+# macOS 不自带 ffmpeg，从访达启动的 .app 又拿不到 /opt/homebrew/bin；没有随包二进制，
+# 「下载 .app 双击即用」就不成立。二进制不入库（约 130 MB），由 fetch_ffmpeg.sh 按
+# 钉死的版本 + sha256 取回，所以发版机必须先跑它。
+BUNDLED_FFMPEG="build/pack/vendor/ffmpeg/bin"
+if [ -x "${BUNDLED_FFMPEG}/ffmpeg" ] && [ -x "${BUNDLED_FFMPEG}/ffprobe" ]; then
+  pass "已就绪（$(du -sh "${BUNDLED_FFMPEG}" | cut -f1)：ffmpeg + ffprobe）"
+  if [ -f "build/pack/vendor/ffmpeg/NOTICE.txt" ]; then
+    pass "来源 / 许可 / sha256 已写进 NOTICE.txt"
+  else
+    fail "缺少 build/pack/vendor/ffmpeg/NOTICE.txt —— 重新跑 bash tools/pack/fetch_ffmpeg.sh"
+  fi
+  if [ "$(uname -m)" = "arm64" ] && file "${BUNDLED_FFMPEG}/ffmpeg" | grep -q arm64; then
+    pass "arm64 静态二进制"
+  else
+    fail "${BUNDLED_FFMPEG}/ffmpeg 不是 arm64（可在本机跑一下 -version 确认）"
+  fi
+else
+  fail "缺少内置 ffmpeg/ffprobe —— 先跑 bash tools/pack/fetch_ffmpeg.sh（否则发出去的 .app 需要用户自装 ffmpeg）"
+fi
+
+# ---------------------------------------------------------------- 9. 快速测试
+echo
+echo "[9/9] 快速检查"
 if command -v ruff >/dev/null 2>&1; then
   if ruff check . >/dev/null 2>&1; then
     pass "ruff clean"

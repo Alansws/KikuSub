@@ -37,7 +37,7 @@ if [ -x "$SIDECAR_BIN" ]; then
   fi
 fi
 
-echo "== 0/7 生成应用图标 =="
+echo "== 0/8 生成应用图标 =="
 # 唯一图标源是 docs/app-icon.png（1024×1024、带 alpha、圆角与投影已烘进图里）。
 # 用它重渲染整套 iconset，而不是把某张扁平 PNG 直接转 icns：
 # 直接转的话 Finder 在深色背景下会露出白角，或者沿用上一版缓存图。
@@ -55,7 +55,7 @@ iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
 # 这里一起刷新，否则改完图标跑开发模式仍是上一次拷进去的旧图。
 cp docs/app-icon.png desktop/build/icon.png
 
-echo "== 1/7 复制 Electron 框架 =="
+echo "== 1/8 复制 Electron 框架 =="
 # 旧实例还在跑时 rm -rf 会把它的 cwd 和正在读的文件一起抽走：sidecar 是 detached 的，
 # 父进程退出它不会跟着死，之后它每一次 os.getcwd() 都是 ENOENT——torch 在 import 期
 # 就会踩（torch/_dynamo/config.py: default_debug_dir_root），于是界面上只剩一句
@@ -93,10 +93,10 @@ rm -rf "$APP/Contents/Resources/default_app.asar"
 # 我们的 Info.plist 已经指向 icon.icns，这份完全是噪声。
 rm -f "$APP/Contents/Resources/electron.icns"
 
-echo "== 2/7 改名主可执行文件 =="
+echo "== 2/8 改名主可执行文件 =="
 mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/KikuSub"
 
-echo "== 3/7 写入 Info.plist =="
+echo "== 3/8 写入 Info.plist =="
 # 版本号只有一个来源：desktop/package.json。Info.plist 的 CFBundleShortVersionString
 # 与包内 package.json 必须同值，否则访达「显示简介」、About 面板与 tag 会各说各话
 # （0.4.0 发版前这里写死过 "0.2.0"，tests/test_pack_version.py 已加守卫）。
@@ -150,7 +150,7 @@ PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' 
   exit 1
 }
 
-echo "== 4/7 放入应用代码（main + renderer + package.json）=="
+echo "== 4/8 放入应用代码（main + renderer + package.json）=="
 mkdir -p "$APP/Contents/Resources/app"
 cp -R desktop/main "$APP/Contents/Resources/app/main"
 cp -R desktop/renderer/dist "$APP/Contents/Resources/app/renderer-dist"
@@ -174,11 +174,41 @@ fi
 cp desktop/build/icon.icns "$APP/Contents/Resources/icon.icns"
 cp presets.json "$APP/Contents/Resources/python-presets.json" 2>/dev/null || true
 
-echo "== 5/7 放入 Python sidecar（$(du -sh "$SIDECAR" | cut -f1)，慢）=="
+echo "== 5/8 放入 Python sidecar（$(du -sh "$SIDECAR" | cut -f1)，慢）=="
 cp -R "$SIDECAR" "$APP/Contents/Resources/python"
 cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || true
 
-echo "== 6/7 模型目录（本机自用：指向仓库里已下载的 6.6 GB）=="
+echo "== 6/8 放入内置 ffmpeg / ffprobe（没有 Homebrew 也能导入视频）=="
+# 为什么要随包：macOS 不自带 ffmpeg，而从访达启动的 .app 只拿到
+# /usr/bin:/bin:/usr/sbin:/sbin，Homebrew 的 /opt/homebrew/bin 不在里面——今天
+# 用户的第一道门槛就是「brew install ffmpeg」。内置这一份以后，下载 .app 双击即可用。
+# 核心的查找顺序在 core/paths.py（包内 bin → 系统 PATH），主进程在 main.cjs 里
+# 把同一个目录前置进 sidecar 的 PATH。
+BUNDLED_SRC="build/pack/vendor/ffmpeg"
+BUNDLED_DST="$APP/Contents/Resources/bin"
+if [ -x "$BUNDLED_SRC/bin/ffmpeg" ] && [ -x "$BUNDLED_SRC/bin/ffprobe" ]; then
+  mkdir -p "$BUNDLED_DST"
+  cp "$BUNDLED_SRC/bin/ffmpeg" "$BUNDLED_SRC/bin/ffprobe" "$BUNDLED_DST/"
+  chmod 755 "$BUNDLED_DST/ffmpeg" "$BUNDLED_DST/ffprobe"
+  # GPLv3：分发二进制就必须带上许可全文与来源/校验信息。
+  cp tools/pack/ffmpeg-COPYING.GPLv3.txt "$BUNDLED_DST/LICENSE-ffmpeg-GPLv3.txt"
+  cp "$BUNDLED_SRC/NOTICE.txt" "$BUNDLED_DST/NOTICE-ffmpeg.txt"
+  # 先单独签这两个二进制：它们在 Resources/ 下，`codesign --deep` 不保证会扫到，
+  # 而 .app 的整体签名会把它们当普通资源封存——不签的嵌套 Mach-O 会让
+  # `codesign --verify --strict` 报「code object is not signed at all」。
+  codesign --force --sign - "$BUNDLED_DST/ffmpeg" >/dev/null 2>&1 || true
+  codesign --force --sign - "$BUNDLED_DST/ffprobe" >/dev/null 2>&1 || true
+  echo "已内置：$(du -sh "$BUNDLED_DST" | cut -f1)（$("$BUNDLED_DST/ffmpeg" -version 2>/dev/null | head -1 | cut -d' ' -f1-3)）"
+else
+  if [ "${KIKUSUB_REQUIRE_BUNDLED_FFMPEG:-0}" = "1" ]; then
+    echo "❌ 缺少内置 ffmpeg/ffprobe（KIKUSUB_REQUIRE_BUNDLED_FFMPEG=1）：先跑 bash tools/pack/fetch_ffmpeg.sh" >&2
+    exit 1
+  fi
+  echo "⚠️ 没有 $BUNDLED_SRC/bin —— 这个 .app 只能在装了 ffmpeg 的机器上用。" >&2
+  echo "   要做出「双击即用」的包：bash tools/pack/fetch_ffmpeg.sh" >&2
+fi
+
+echo "== 7/8 模型目录（本机自用：指向仓库里已下载的 6.6 GB）=="
 APPSUP="${KIKUSUB_APP_SUPPORT_DIR:-$HOME/Library/Application Support/KikuSub}"
 mkdir -p "$APPSUP"
 MODELS_REAL="$(cd "$REPO_ROOT/models" 2>/dev/null && pwd -P || true)"
@@ -191,7 +221,7 @@ else
   echo "⚠️ 仓库里没有 models/，首次转写会触发下载"
 fi
 
-echo "== 7/7 自签 =="
+echo "== 8/8 自签 =="
 # 用 ad-hoc 签名即可：AI 密钥走本机加密（见 desktop/main/aikey.cjs），**不依赖钥匙串**，
 # 所以"每次重打包 cdhash 变化"没有副作用。换成固定证书只在需要钥匙串/公证时才值得。
 codesign --force --deep --sign - "$APP" 2>&1 | tail -3 || echo "（自签失败，本机运行通常也能启动）"
