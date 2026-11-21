@@ -20,6 +20,7 @@
   import { loadAiConfig } from '../lib/settings/aiConfig.svelte';
   import { loadDiagnostics } from '../lib/settings/diagnostics.svelte';
   import { loadSkill } from '../lib/settings/skill.svelte';
+  import { loadCli } from '../lib/settings/cli.svelte';
   import { loadHardware } from '../lib/settings/hardware.svelte';
   import { clearTtsTimer, syncTtsDownloadState } from '../lib/settings/ttsPrefs.svelte';
   import { onDestroy } from 'svelte';
@@ -43,6 +44,7 @@
     void loadDiagnostics(120);
     void loadAiConfig();
     void loadSkill();
+    void loadCli();
     void loadTtsVoices();
     void loadHardware(true);
   });

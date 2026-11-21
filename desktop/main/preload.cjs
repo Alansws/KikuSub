@@ -48,6 +48,13 @@ contextBridge.exposeInMainWorld('kikusub', {
     install: (paths) => ipcRenderer.invoke('skill:install', paths),
   },
 
+  // 外部命令行工具：把 app 内的 kikusub 软链到 ~/.local/bin
+  cli: {
+    status: () => ipcRenderer.invoke('cli:status'),
+    install: () => ipcRenderer.invoke('cli:install'),
+    uninstall: () => ipcRenderer.invoke('cli:uninstall'),
+  },
+
   // AI 密钥：加解密都在主进程，渲染进程只在发起请求那一刻取用
   aiKey: {
     set: (text, scope) => ipcRenderer.invoke('ai-key:set', text, scope),

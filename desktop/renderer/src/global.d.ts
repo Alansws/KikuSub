@@ -88,6 +88,32 @@ declare global {
           fileCount: number;
         }>;
       };
+      cli: {
+        status(): Promise<{
+          ok: boolean;
+          error?: string;
+          command: string;
+          target: string;
+          linkPath: string;
+          binDir: string;
+          targetExists: boolean;
+          installed: boolean;
+          upToDate: boolean;
+          inPath: boolean;
+          conflict: boolean;
+          hint?: { binDir: string; line: string; command: string; note: string };
+        }>;
+        install(): Promise<{
+          ok: boolean;
+          error?: string;
+          linkPath?: string;
+          target?: string;
+          installed?: boolean;
+          upToDate?: boolean;
+          inPath?: boolean;
+        }>;
+        uninstall(): Promise<{ ok: boolean; removed?: boolean; error?: string }>;
+      };
       aiKey: {
         set(text: string, scope?: 'global' | 'arbitrate'): Promise<{ ok: boolean; reason?: string }>;
         get(scope?: 'global' | 'arbitrate'): Promise<string>;

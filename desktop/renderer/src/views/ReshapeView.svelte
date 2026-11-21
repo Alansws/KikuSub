@@ -80,6 +80,7 @@
   import { app, exporter, loadTranslations, setView, toast } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
   import { loadAiProposal } from '../lib/aiWorkspace.svelte';
+  import { externalProposals, loadExternalReshape } from '../lib/externalProposals.svelte';
 
   let editing = $state(0);
   let editingText = $state('');
@@ -579,6 +580,23 @@
 </script>
 
 <div class="reshape aiw-page">
+  {#if externalProposals.reshape}
+    {@const external = externalProposals.reshape}
+    <div class="external-proposal" class:stale={external.stale}>
+      <span>
+        外部 Agent 提交了断句重排提案：<b>{external.count}</b> 条
+        {#if external.stale}（这份提案绑定的字幕已经变过，不能直接载入）{/if}
+      </span>
+      <span class="external-actions">
+        <button
+          class="btn sm"
+          disabled={external.stale}
+          onclick={() => void loadExternalReshape()}
+        >载入到粘贴框</button>
+        <button class="btn sm ghost" onclick={() => (externalProposals.reshape = null)}>忽略</button>
+      </span>
+    </div>
+  {/if}
   <AiBatchToolbar
     title="断句重排"
     channel="manual"
@@ -1226,6 +1244,27 @@
 </div>
 
 <style>
+  .external-proposal {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    margin: 0 var(--sp-4) var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-2);
+    background: var(--accent-soft);
+    font-size: var(--fs-label);
+  }
+  .external-proposal.stale {
+    border-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+  }
+  .external-actions {
+    display: flex;
+    gap: 6px;
+    flex: none;
+  }
   .note {
     display: flex;
     align-items: flex-start;
