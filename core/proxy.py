@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import OUTPUT_DIR
+from .paths import OUTPUT_DIR, ffmpeg_bin, ffprobe_bin
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail, terminate_process
 
 log = logging.getLogger(__name__)
@@ -163,7 +163,7 @@ def build_streaming_cmd(media_path: Path, dest: Path) -> tuple[list[str], str, s
     if sys.platform == "darwin":
         return (
             [
-                "ffmpeg", "-y", "-nostdin",
+                ffmpeg_bin(), "-y", "-nostdin",
                 "-hwaccel", "videotoolbox",
                 "-i", str(media_path),
                 "-vf", "scale=-2:480,format=yuv420p",
@@ -179,7 +179,7 @@ def build_streaming_cmd(media_path: Path, dest: Path) -> tuple[list[str], str, s
         )
     return (
         [
-            "ffmpeg", "-y", "-nostdin", "-threads", "0",
+            ffmpeg_bin(), "-y", "-nostdin", "-threads", "0",
             "-i", str(media_path),
             "-vf", "scale=-2:480,format=yuv420p",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
@@ -201,7 +201,7 @@ def create_proxy(media_path: Path, dest: Path | None = None, cancel_event=None) 
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    base = ["ffmpeg", "-y", "-nostdin", "-threads", "0", "-i", str(media_path)]
+    base = [ffmpeg_bin(), "-y", "-nostdin", "-threads", "0", "-i", str(media_path)]
     video_filter = "scale=-2:480,format=yuv420p"
     audio_args = ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
     attempts: list[tuple[str, list[str], float]] = []
@@ -209,7 +209,7 @@ def create_proxy(media_path: Path, dest: Path | None = None, cancel_event=None) 
     if sys.platform == "darwin":
         attempts.append((
             "VideoToolbox 全硬件",
-            ["ffmpeg", "-y", "-nostdin", "-hwaccel", "videotoolbox", "-i", str(media_path),
+            [ffmpeg_bin(), "-y", "-nostdin", "-hwaccel", "videotoolbox", "-i", str(media_path),
              "-vf", video_filter, "-c:v", "h264_videotoolbox", "-b:v", "2200k",
              *audio_args, str(dest)],
             1200.0,
@@ -259,7 +259,7 @@ def probe_duration(media_path: Path) -> float:
     """探不到时长就返回 0（前端据此走不确定进度，不要瞎猜）。"""
     try:
         proc = run_command(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", str(media_path)],
             timeout=20,
         )

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import platform
 import shutil
 import sys
@@ -23,7 +24,13 @@ from core import engines
 from core import settings as settings_store
 from core import vad as vad_backends
 from core.logging_setup import clear_logs, prune_logs
-from core.paths import MODELS_DIR, OUTPUT_DIR, PRESETS_PATH
+from core.paths import (
+    MODELS_DIR,
+    OUTPUT_DIR,
+    PRESETS_PATH,
+    bundled_bin_dir,
+    ffmpeg_bin,
+)
 
 from . import API_VERSION
 from .deps import get_session, settings_path
@@ -78,10 +85,25 @@ def _tail(path: Path, lines: int) -> str:
     return "\n".join(text.splitlines()[-min(lines, MAX_LOG_LINES) :])
 
 
+def _ffmpeg_source(path: str) -> str:
+    """这个 ffmpeg 是哪来的：包内自带 / 环境变量指定 / 系统 PATH。
+
+    设置页只显示路径，但排查「为什么没用到我 brew 装的那份」时需要这个标签，
+    所以一起写进 /api/settings —— 多一个字段不破坏旧前端。
+    """
+    if Path(path) == (bundled_bin_dir() / "ffmpeg"):
+        return "bundled"
+    if (os.environ.get("KIKUSUB_FFMPEG") or os.environ.get("KIKUSUB_FFMPEG_DIR") or "").strip():
+        return "explicit"
+    return "system"
+
+
 def _ffmpeg_info() -> dict:
-    executable = shutil.which("ffmpeg")
+    resolved = ffmpeg_bin()
+    candidate = Path(resolved)
+    executable = resolved if candidate.is_absolute() and candidate.is_file() else shutil.which(resolved)
     if not executable:
-        return {"path": "", "version": "", "ok": False}
+        return {"path": "", "version": "", "ok": False, "source": ""}
     try:
         import subprocess
 
@@ -95,7 +117,7 @@ def _ffmpeg_info() -> dict:
         first = (proc.stdout or "").splitlines()[0] if proc.stdout else ""
     except Exception:  # noqa: BLE001 - 诊断信息不该反过来把接口打挂
         first = ""
-    return {"path": executable, "version": first, "ok": True}
+    return {"path": executable, "version": first, "ok": True, "source": _ffmpeg_source(executable)}
 
 
 def _runtime(request: Request) -> dict:

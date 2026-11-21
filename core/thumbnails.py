@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+from .paths import ffmpeg_bin
 from .procutil import CommandCancelled, CommandTimeout, run_command, tail
 
 log = logging.getLogger(__name__)
@@ -131,7 +132,7 @@ def thumbnail_for(
 
         temp = directory / f".{key}.{os.getpid()}.{time.time_ns()}.jpg"
         first = directory / f".{key}.{os.getpid()}.{time.time_ns()}.first.jpg"
-        common = ["ffmpeg", "-hide_banner", "-nostdin", "-y"]
+        common = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-y"]
         scaled = f"scale={width}:-2:flags=fast_bilinear"
 
         def single_frame(at: float, target: Path) -> None:

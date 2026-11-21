@@ -31,7 +31,15 @@ from pathlib import Path
 import uvicorn
 
 from core.logging_setup import prune_logs, setup_logging
-from core.paths import MODELS_DIR, PRESETS_PATH, ensure_usable_cwd
+from core.paths import (
+    MODELS_DIR,
+    PRESETS_PATH,
+    bundled_bin_dir,
+    ensure_usable_cwd,
+    ffmpeg_bin,
+    ffprobe_bin,
+    install_bundled_bin_path,
+)
 from core.procutil import begin_shutdown, terminate_all_processes
 
 from .app import API_VERSION, create_app
@@ -145,12 +153,27 @@ def _pin_torch_debug_dir() -> None:
     )
 
 
+def _existing_tool(resolved: str) -> str:
+    """把解析结果变成日志里的一句话：绝对路径存在就照写，否则标成未找到。
+
+    ``ffmpeg_bin()`` 找不到时会退回裸名字（让 subprocess 抛 FileNotFoundError），
+    这里不能把裸名字当成「找到了」写进日志——那会让排查环境问题的人误判。
+    """
+    candidate = Path(resolved)
+    if candidate.is_absolute() and candidate.is_file():
+        return str(candidate)
+    return shutil.which(resolved) or ""
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
     # 必须在任何可能碰 cwd 的代码之前（日志落盘、torch 懒加载都在后面）。
     _pin_torch_debug_dir()
     repaired_cwd = ensure_usable_cwd()
+    # 包内 ffmpeg/ffprobe 先于系统 PATH 生效（Step 7：无 Homebrew 的机器也要能
+    # 双击即用）。必须在 setup_logging 之前，才能把「前置了哪个目录」写进日志。
+    bundled_bins = install_bundled_bin_path()
 
     config = ServerConfig(
         host=args.host,
@@ -180,12 +203,16 @@ def main(argv: list[str] | None = None) -> int:
         bool(getattr(sys, "frozen", False)),
         sys.version.split()[0],
     )
+    ffmpeg_path = _existing_tool(ffmpeg_bin())
+    ffprobe_path = _existing_tool(ffprobe_bin())
     log.info(
-        "运行环境 | %s %s | ffmpeg=%s | ffprobe=%s",
+        "运行环境 | %s %s | ffmpeg=%s | ffprobe=%s | bundled_bin=%s | PATH+=%s",
         platform.platform(),
         platform.machine(),
-        shutil.which("ffmpeg") or "(未找到)",
-        shutil.which("ffprobe") or "(未找到)",
+        ffmpeg_path or "(未找到)",
+        ffprobe_path or "(未找到)",
+        bundled_bin_dir(),
+        ",".join(bundled_bins) or "(无)",
     )
     log.info(
         "运行期目录 | output=%s | models=%s | presets=%s | log=%s",

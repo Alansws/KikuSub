@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from core import settings as settings_store
 from core import video_export
+from core.paths import ffmpeg_bin
 from core.procutil import run_command
 
 from .deps import get_session, settings_path
@@ -251,7 +252,7 @@ def _preview_frame(request: Request, media_path: Path, at_s: float, width: int, 
     try:
         result = run_command(
             [
-                "ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                ffmpeg_bin(), "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-ss", f"{max(0.0, at_s):.3f}",
                 "-i", str(media_path),
                 "-frames:v", "1", "-vf", video_filter,

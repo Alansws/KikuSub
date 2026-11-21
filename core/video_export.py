@@ -27,6 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .i18n import bilingual_cues, bilingual_entries, target_cues
+from .paths import ffmpeg_bin, ffprobe_bin
 from .procutil import (
     CommandCancelled,
     CommandTimeout,
@@ -559,7 +560,7 @@ def probe_source(path: Path) -> SourceInfo:
     try:
         proc = run_command(
             [
-                "ffprobe",
+                ffprobe_bin(),
                 "-v", "error",
                 "-show_entries",
                 "format=duration,bit_rate,size,format_name:stream=codec_type,codec_name,width,height,bit_rate",
@@ -1091,7 +1092,7 @@ def _render_sprite(
     sprite = Image.new("RGBA", (out_w, block_h * (count + 1)), (0, 0, 0, 0))
     for offset, cue in enumerate(cues[batch_start:batch_end]):
         if is_shutting_down() or (cancel_event is not None and cancel_event.is_set()):
-            raise CommandCancelled(["ffmpeg"])
+            raise CommandCancelled([ffmpeg_bin()])
         layer = _text_layer(
             str(cue.text or "").strip(),
             out_w=out_w,
@@ -1435,7 +1436,7 @@ def run_export(
         srt_path = tmpdir / "subtitles.srt"
         srt_path.write_text(cues_to_srt(track_cues), encoding="utf-8")
         cmd = [
-            "ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+            ffmpeg_bin(), "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
             # 没有 -progress 时 ffmpeg 的 stdout 是空的，读线程会一直阻塞：
             # 进度停在 0%、取消也收不到。这个参数是进度与取消能工作的前提。
             "-nostats", "-progress", "pipe:1",
@@ -1478,7 +1479,7 @@ def run_export(
                 on_progress(0.01, f"正在渲染字幕图层 0/{max(1, len(chunks))}", {})
             for index, chunk in enumerate(chunks):
                 if is_shutting_down() or (cancel_event is not None and cancel_event.is_set()):
-                    raise CommandCancelled(["ffmpeg"])
+                    raise CommandCancelled([ffmpeg_bin()])
                 start_index = index * batch
                 end_index = start_index + len(chunk)
                 sprite_path = tmpdir / f"subs_{index:03d}.png"
@@ -1622,7 +1623,7 @@ def run_export(
         def remux_chapters(source: Path, target: Path) -> tuple[int, str]:
             """二次 remux：把 ffmetadata 里的章节注入成片（-c copy，不重编码）。"""
             remux_cmd = [
-                "ffmpeg", "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                ffmpeg_bin(), "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-nostats", "-progress", "pipe:1",
                 "-i", str(source), "-i", str(chapter_meta),
                 "-map", "0", "-map_chapters", "1", "-c", "copy",
