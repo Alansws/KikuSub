@@ -136,7 +136,7 @@
 - **严格的时间轴保护**：无论是内置 API 生成还是外部网页复制回填，AI 提案都不包含时间戳——软件按源指纹（`digest`）与条号回填文本，确保源字幕改动后旧提案自动失效、不会错位覆盖。如果希望重新划分句长与时间轴，可使用专门的「断句重排」车道。
 - **双通道随意切换**：不配 API Key 时默认落在「外部手动」，支持自动分批复制提示词并在回填时按时间戳智能对齐（不强求网页模型输出完全一致的条数）。
 - **本地密钥安全与判定独立覆盖**：API Key 使用本机主密钥做 AES-256-GCM 加密存储；「设置 → AI 与技能 → 进阶」中可单独为单句判定配置一套本机模型（如 LM Studio / Ollama 的无审查微调模型），并自动校准 `2048 / 4096 / 8192` 上下文档位，与全局润色/翻译配置互不干扰。
-- **Agent 技能包**：支持一键安装技能到 `~/.agents/skills/kikusub-subtitle`，在外部 AI 助手中直接基于当前字幕文件生成标准润色或翻译提案（契约见 [`docs/contracts/ai-proposal.md`](docs/contracts/ai-proposal.md)）。
+- **Agent 技能包 + 命令行**：支持一键安装技能到 `~/.agents/skills/kikusub-subtitle`；设置页「AI 与技能 → 命令行工具」会把随包 `kikusub` 软链到 `~/.local/bin`。外部 AI 助手可用 `kikusub project / cues / cue / listen` 读工程与逐句证据，用 `kikusub propose` 把润色/翻译/结构建议/断句重排提交到审阅队列；提案提交后界面 2 秒内提示并刷新，应用仍由人点（契约见 [`docs/contracts/ai-proposal.md`](docs/contracts/ai-proposal.md)）。
 
 ![设置 → AI 与技能：高级本地判定与上下文配置收于折叠区](docs/images/settings-ai.jpg)
 

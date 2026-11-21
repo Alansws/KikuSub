@@ -536,7 +536,7 @@
   `loadAiSetup()` 探到本机 AI 没启用 / 没 Key 时默认落在**能用**的外部手动；用户自己切过
   （`channelTouched`）之后不再自动改写。
 - **来源徽标**：不再用「外部粘贴」（和按钮「粘贴回复」撞语义），统一 `aiEntryLabel()`：
-  本机生成 / Agent 文件 / 外部回复。
+  本机生成 / 命令行 Agent（`entry=cli`）/ Agent 文件 / 外部回复。
 - **digest 失效禁用应用**：`ai.digestMatch === false` 时，`components/ai/AiApplyBar.svelte`
   的主按钮与「更多应用」一律禁用，告警与按钮旁都写「请先重新生成」。禁止一边红字告警、
   一边留着可点的红色主提交键。
@@ -546,3 +546,23 @@
 - **回归**：`tools/shots/capture_ai_toolbar.mjs`（三页两行头 / 第 1 行不折行 / 翻译模板
   单一入口 / 失效禁用 / 空态卡）、`tools/shots/verify_reshape_flow.mjs`（分段计划冻结）、
   `tools/shots/verify_batch_and_align.mjs`（批次与时间轴对齐）。
+
+#### 3.7.13 外部 CLI 与提案状态轮询（2026-11-21）
+
+- **CLI 只提交、不应用**：`kikusub propose polish|translate` → `POST /api/ai/proposal`；
+  `propose structure` → `POST /api/ai/structure/from-json`（模型只给 `{"ops":[...]}`，
+  digest/revision 本地绑定）；`propose reshape` → `POST /api/ai/reshape/proposal`。
+  三个入口都走 `core/ai_proposal` / `core/ai_structure` / `core/reshape` 的既有校验；
+  CLI 不自己算 digest、不调用任何 `/apply`，失败就整份拒绝。
+- **断句重排也落盘**：`{output_dir}/{stem}.ai-reshape.json`
+  `{version, kind:"reshape", entry:"cli", source:{count,digest,range:{from,to,total}}, cues:[...]}`。
+  `GET /api/ai/reshape/proposal` 返回 `stale`（digest 与当前字幕不符）、体检与 `text`（SRT），
+  供渲染层一键填回粘贴框；应用仍走既有的 `/api/ai/reshape/apply`（digest 校验在服务端）。
+- **状态轮询**：`GET /api/proposals/status` 只 stat 四类文件（polish / 多语种 translate /
+  structure / reshape），返回 `{items:[{kind,lang,path,mtime_ns,size}], revision}`；**不读正文**。
+  渲染层每 2 秒轮询一次、窗口聚焦立即拉一次（`lib/externalProposals.svelte.ts`）。
+- **不覆盖草稿**：润色/翻译有未提交的 `ai.edits` / 取消采纳时只弹提示、不重载；结构建议只在
+  面板打开时刷新；断句重排只提示，由用户点「载入到粘贴框」。轮询失败静默重试，不打扰用户。
+- **来源徽标**：`entry: "cli"` 显示「命令行 Agent」；旧文件方式 `entry: "skill"` 仍显示「Agent 文件」。
+- **验收**：`tests/test_server_proposals.py`（状态 / reshape 提案 / stale）、
+  `tools/shots/verify_external_proposals.mjs`（写提案 → 2 秒内提示并自动载入润色页）。

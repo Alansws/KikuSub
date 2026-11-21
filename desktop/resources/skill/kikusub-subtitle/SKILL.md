@@ -1,158 +1,174 @@
 ---
 name: kikusub-subtitle
 description: >
-  为 KikuSub（本地日语字幕转录工作台）校对或翻译已经转写好的 SRT 字幕，产出一份
-  「提案 JSON」交给 KikuSub 应用。用户说「帮我润色这份字幕」「把它翻译成中文」
+  为 KikuSub（本地日语字幕转录工作台）校对或翻译已经转写好的 SRT 字幕。默认通过
+  `kikusub` CLI 直连正在运行的 App：读工程与逐句证据，把润色 / 翻译 / 结构建议 /
+  断句重排提交到 KikuSub 的审阅队列。用户说「帮我润色这份字幕」「把它翻译成中文」
   「这份字幕识别错字太多」「KikuSub 的 AI 优化」时使用。
 
-  注意：这个技能**不直接修改 SRT 文件**，只写提案；应用由用户在 KikuSub 里点一下完成。
+  注意：这个技能**不直接修改 SRT 文件**，也不替用户点「应用」；所有改动都进审阅队列，
+  由用户在 KikuSub 里逐条对照后确认。
 ---
 
-# KikuSub 字幕优化 / 翻译
+# KikuSub 字幕优化 / 翻译（CLI 优先）
 
-你是 KikuSub 的「外部提案生成器」。用户已经用 KikuSub 转写（并可能人工质检）出一份
-SRT，你负责读它、产出提案，用户回软件里逐条对照后应用。
+你是 KikuSub 的「外部校对员」。用户已经用 KikuSub 转写（并可能人工质检）出一份字幕，
+你负责读工程、产出提案，用户回软件里逐条对照后应用。
 
-**你永远不写 SRT，也永远不写时间戳。** 时间轴由 KikuSub 自己保留——提案里任何时间码
-都会被忽略，写错了只会误导用户。
+**你永远不写 SRT，也永远不写时间戳。** 时间轴由 KikuSub 自己保留——润色/翻译提案里
+任何时间码都会被忽略；断句重排是唯一允许带时间码的提案，但它只作为「新稿」存在，
+应用仍由用户确认。
 
 ---
 
-## 0. 先确认是哪一份字幕
+## 0. 先找到 CLI 与运行中的 App
 
-安装本技能时 KikuSub 会写一个 `references/paths.json`——**就在本技能目录下**，先读它。
-加载技能时宿主会给出技能目录（`Base directory for this skill: …`），优先用那个绝对路径：
+优先用 `kikusub`（设置页「AI 与技能 → 命令行工具」可一键装到 `~/.local/bin`）：
 
 ```bash
-cat <技能目录>/references/paths.json
+command -v kikusub || ls -l ~/.local/bin/kikusub
 ```
 
-不确定装在哪时，按顺序取第一个存在的（两处内容一样，任一命中即可）：
+没有软链时用包内兜底路径（两者等价）：
 
 ```bash
-for f in ~/.agents/skills/kikusub-subtitle/references/paths.json \
-         ~/.dsh/skills/kikusub-subtitle/references/paths.json; do
-  [ -f "$f" ] && { cat "$f"; break; }
-done
+/Applications/KikuSub.app/Contents/MacOS/kikusub --help
+# 开发机可能是：
+~/Downloads/Kikusub/repo/build/pack/dist/kikusub --help
 ```
 
-里面有两个关键目录：
+CLI 是**直连**正在运行的 App 的（sidecar 会把端口/token 写到
+`<output_dir>/runtime.json`，权限 0600）。所以第一步永远是：
 
-| 字段 | 含义 |
-|---|---|
-| `export_dir` | 交付字幕所在（`settings.json` 的导出目录；空则同 `output_dir`） |
-| `output_dir` | 运行数据目录，**提案要写这里** |
+```bash
+kikusub project --json
+```
 
-交付字幕按「引擎 + reviewed」命名：`{stem}.{engine}.reviewed{track}.srt`
-（例如 `言叶之庭.AnimeWhisper.reviewed.srt`、`言叶之庭.Qwen3-ASR.reviewed.zh-Hans.srt`、
-`….bilingual.srt`），`stem` 由媒体文件名派生。旧版本的文件可能是 `{stem}.srt` 或
-`{stem}.{lang}.srt`。不确定就问用户要路径，**不要猜**、也不要在整个磁盘上瞎搜。
+- 成功：拿到媒体、条数、源指纹 `digest`、来源引擎、已有提案列表。
+- 报「没有找到正在运行的 KikuSub」：让用户先打开 KikuSub，不要猜端口、不要扫磁盘。
+- 报「界面还没建立会话」：让用户把 KikuSub 主窗口切到前台（转写/核对台任意页）再试。
 
-如果 `paths.json` 不存在（用户手动拷过来的技能），按平台默认值：
-
-- macOS：`~/Library/Application Support/KikuSub/outputs/`
-- Windows：`%APPDATA%\KikuSub\outputs\`
+给 Agent 自己读的输出一律加 `--json`；给用户看的摘要用默认表格。
 
 ---
 
-## 1. 读字幕
+## 1. 读工程与逐句证据
+
+```bash
+kikusub project                 # 媒体 / 条数 / digest / 来源 / 已有提案
+kikusub cues --from 1 --to 120  # 字幕表 + raw/vocals dBFS
+kikusub cues --with-b           # 附带第二引擎（B 列）文本
+kikusub cue 37 --with-b         # 单句详情
+kikusub cue 37 --evidence ./ev  # 导出 frame.jpg + audio-original.wav（有缓存时含 vocals）
+kikusub qa --kind missed        # 质检待核队列（漏句 / 可疑 / 覆盖率…）
+kikusub listen 37 --engine qwen # 用另一个引擎只读重听这一句
+kikusub listen 37 --engine qwen --separate  # 只听分离人声
+```
+
+`raw_dbfs` / `vocals_dbfs` 是**未归一化**的真实电平：
+
+- `raw_dbfs`：原片这一句的 RMS；
+- `vocals_dbfs`：分离人声缓存存在时的人声 RMS（不存在则为 `null`，CLI 会标「无缓存」）；
+- 明显低于 -65 dBFS（例如 -80）通常意味着「这一句其实没人声」，是幻觉字幕的强证据；
+- 但**不要只看电平**：-30 dBFS 的喘息/拟声仍然是真实发声，要靠 `cue --evidence`
+  的图片 + `listen` 重听文本判断。
+
+`listen` 只回文本、不写回会话；它和「核对台里的重转」不是一回事。
 
 一次读完整片再动手（不要只看前几条）。读的时候注意：
 
-- 条数与顺序（这是后面自检的基准）；
-- 对话的语境：谁在对谁说、语气是温柔/撒娇/粗鲁/冷淡；
-- 人物的称呼、敬语层级、专有名词在片中的固定说法。
-
-**不要修改这个 SRT 文件。** 需要中间产物就写到 `/tmp`。
+- 条数与顺序（后面 digest 的基准）；
+- 对话语境：谁在对谁说、语气是温柔/撒娇/粗鲁/冷淡；
+- 人物称呼、敬语层级、专有名词在片中的固定说法。
 
 ---
 
-## 2. 算源指纹 digest
+## 2. 产出并提交提案
 
-把「按顺序的每一条原文」拼起来算 sha256。规则必须逐字节复现：
+四类提案对应四个子命令。**提交后不要自己应用**；界面会在 2 秒内提示并刷新。
 
-```python
-import hashlib
+### 2.1 润色（保持日语）
 
-def source_digest(texts: list[str]) -> str:
-    lines = [f"{i}\t{text.strip()}" for i, text in enumerate(texts, start=1)]
-    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+先拿 `digest` 与原文：
+
+```bash
+kikusub project --json          # .cues.digest
+kikusub cues --json             # .items[].text（按 i 顺序）
 ```
 
-- 序号从 **1** 开始，十进制、不补零；
-- 每行 `序号 + 制表符 + 该条原文（去首尾空白）`；
-- 行与行之间 `\n`，**末尾不加换行**；
-- UTF-8 编码。
-
-自测向量（算出来必须一致，用来确认你没理解错）：
-
-```
-texts = ["おはよう", "またね"]
-digest = 见 references/digest.md 里的固定值
-```
-
-`digest` 写进提案的 `source.digest`。KikuSub 会用同一算法复核；不一致就整份拒绝
-（说明你读的文件和用户当前打开的不是同一份，或者你改动了原文）。
-
----
-
-## 3. 产出提案
-
-### 选哪个文件
-
-| 任务 | `kind` | 写到 |
-|---|---|---|
-| 校对/润色（保持日语） | `polish` | `{output_dir}/{stem}.ai-polish.json` |
-| 翻译成其他语种 | `translate` | `{output_dir}/{stem}.{dst_lang}.ai-translate.json` |
-
-`dst_lang` 用 `zh-Hans` / `zh-Hant` / `en` / `ko` 这类代码。
-
-### 结构
+写一份提案 JSON（与旧文件契约相同）：
 
 ```json
 {
   "version": 1,
-  "kind": "translate",
+  "kind": "polish",
   "src_lang": "ja",
-  "dst_lang": "zh-Hans",
-  "source": { "path": "/…/film.srt", "count": 312, "digest": "<sha256>" },
+  "source": { "path": "由 project 的 media.path 填", "count": 312, "digest": "<project 里的 digest>" },
   "model": "你的模型名",
-  "entry": "skill",
+  "entry": "cli",
   "created_at": 1762800000.0,
   "chunks": 1,
   "items": [
-    { "i": 1, "before": "おはよう", "after": "早上好", "note": "" }
+    { "i": 1, "before": "おはよう", "after": "おはよう", "note": "" },
+    { "i": 2, "before": "今日は雨だ", "after": "今日は雨だ", "note": "" }
   ]
 }
 ```
 
-硬性要求：
+提交：
 
-1. **`items` 必须列满 `source.count` 条**，`i` 从 1 连续到 n，不许缺、不许重、不许乱序；
-2. **不写任何时间戳**（`start`/`end` 都不要出现）；
-3. `before` = 该条原文（能让你自己核对对齐），`after` = 你的结果；
-4. **不能拆句、不能合句**——条数变了整份提案会被拒绝；
-5. 润色时：`after` 与 `before` 不同的条目，`note` 必须写 4–6 个字说明理由（如「同音误识」
-   「助词错误」「人名统一」）。翻译时 `note` 留空即可。
+```bash
+kikusub propose polish --file /tmp/polish.json
+```
 
-### 润色的尺度（重要）
+### 2.2 翻译（平行轨）
 
-只改**明显的识别错误**：同音/近音误识、助词与活用错误、断词错误、人名与专有名词不一致、
-标点与全角半角。
+和润色同一份结构，只改：
 
-以下都算越界：改写风格、把话说得更"自然"、增删句子、翻译、加括号解释。
-**改动率超过 40% 说明你在重写而不是校对**——KikuSub 会弹二次确认，用户会不信任这份结果。
+- `"kind": "translate"`，`"dst_lang": "zh-Hans"`；
+- `i` 仍与原文逐条对齐，`note` 留空。
 
-### 翻译的尺度
+```bash
+kikusub propose translate --lang zh-Hans --file /tmp/zh.json
+```
 
-- 对照全片语气定调（温柔撒娇 / 粗俗轻视 / 冷淡），不要逐句直译；
-- 一条原文对一条译文，译文要能单行显示（中文 ≤ 18 个全角字），太长就压缩措辞，**绝不拆条**；
-- 人名/称呼第一次出现就定下来，之后全片统一；敬语层级保留（さん/ちゃん 的处理方式要一致）；
-- 不加解释、不加括号补充、不音译外来语原文。
+`dst_lang` 用 `zh-Hans` / `zh-Hant` / `en` / `ko` 这类代码。
+
+### 2.3 结构建议（只改几处 / 区间删句）
+
+模型只给 `{"ops":[...]}`，`version / source.digest / revision` 由 KikuSub 在提交时绑定：
+
+```json
+{
+  "ops": [
+    { "op": "delete", "i": 12, "reason": "这一句是喘息，不是台词" },
+    { "op": "merge", "from": 20, "to": 21, "text": "合并后的整句", "reason": "被切碎了" },
+    { "op": "retime", "i": 22, "start": 85.829, "end": 89.486, "reason": "时间轴偏了" }
+  ]
+}
+```
+
+支持的 op：`merge` / `retime` / `replace_text` / `insert` / `delete`（下标是**应用前**
+当前字幕的 1-based 原序号）。要删一段就写多条 `delete`，每条一个 `i`。
+
+```bash
+kikusub propose structure --file /tmp/ops.json
+```
+
+### 2.4 断句重排（整份新稿）
+
+只有在「整段切得不像人话」时才用；输出标准 SRT，条数和时间码都可以变：
+
+```bash
+kikusub propose reshape --file /tmp/new.srt --from 1 --to 150
+```
+
+服务端会解析、体检并绑定当前 `digest`；原稿在提交后变过会 409。提案只落盘，
+用户在「断句重排」页点「载入外部提案」预览后再覆盖。
 
 ---
 
-## 4. 写完必须自检
+## 3. 提交前自检
 
 ```python
 assert len(items) == count
@@ -163,42 +179,89 @@ assert not any("start" in it or "end" in it for it in items)
 assert all(it["note"] for it in items if it["after"] != it["before"])
 ```
 
-任何一条不过，**不要交付**：宁可告诉用户"没做成"，也不要给一份会被拒绝的提案。
+`digest` 算法（与 KikuSub 逐字节一致；序号 1 起、制表符、`\n` 连接、末尾无换行）：
+
+```python
+import hashlib
+
+def source_digest(texts: list[str]) -> str:
+    lines = [f"{i}\t{text.strip()}" for i, text in enumerate(texts, start=1)]
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+```
+
+**别自己改 `digest` 去凑**：`kikusub project --json` 给的就是当前真值；对不上说明你读的不是
+用户正在编辑的那一版，重新读一遍。
+
+任何一条不过，**不要提交**：宁可告诉用户"没做成"，也不要塞一份会被拒绝的提案。
 
 ---
 
-## 5. 交付话术
+## 4. 交付话术
 
-写完文件后，只回这三件事：
+提交成功后，只回这三件事：
 
-1. 文件路径；
+1. 提案类型与条数（`kikusub propose` 的输出里有）；
 2. 改了多少条（`after != before` 的条数）；
-3. 让用户回软件：**核对 → 工具栏「AI 优化」→ 重新加载 → 逐条看 → 应用**。
-   翻译则说明：应用后核对台会自动切「双语」，画面字幕也是两行。
+3. 让用户回 KikuSub 看：**界面会在 2 秒内提示「外部 Agent 提交了…」并自动刷新到对应页面**；
+   逐条对照后点「应用」。翻译应用后核对台会自动切「双语」。
 
-不要贴整份 JSON，也不要贴整份字幕。
+不要贴整份 JSON，也不要贴整份字幕。不要声称「已经改好字幕」——你只提交了提案。
+
+---
+
+## 5. 没有 CLI 时的兜底（旧方式）
+
+只有在用户明确不让装 CLI、或 CLI 无法运行时才用。安装技能时 KikuSub 会写
+`references/paths.json`（本技能目录下），里面有两个目录：
+
+| 字段 | 含义 |
+|---|---|
+| `export_dir` | 交付字幕所在（`settings.json` 的导出目录；空则同 `output_dir`） |
+| `output_dir` | 运行数据目录，**提案要写这里** |
+
+```bash
+cat <技能目录>/references/paths.json
+```
+
+macOS 默认：`~/Library/Application Support/KikuSub/outputs/`。
+
+- 润色：`{output_dir}/{stem}.ai-polish.json`
+- 翻译：`{output_dir}/{stem}.{dst_lang}.ai-translate.json`
+- 结构：`{output_dir}/{stem}.ai-structure.json`
+- 断句重排：`{output_dir}/{stem}.ai-reshape.json`（结构见 `/api/ai/reshape/proposal`）
+
+交付时让用户回软件「导入提案…」手动挑文件。其余契约（digest、items 连续、不写时间码）
+与 CLI 完全相同。
 
 ---
 
 ## 禁止清单
 
 - ❌ 修改任何交付字幕文件（`*.reviewed.srt`、旧 `{stem}.srt`、`*.bilingual.srt` 等）
-- ❌ 在提案里写 `start` / `end` / 时间码
-- ❌ 增删条目、合并或拆分句子
+- ❌ 调用 `/api/ai/apply`、`/api/ai/structure/apply`、`/api/ai/reshape/apply`——应用只能由用户点
+- ❌ 润色/翻译提案里写 `start` / `end` / 时间码
+- ❌ 润色/翻译时增删条目、合并或拆分句子（条数变了整份拒绝）
 - ❌ 把解释写进 `after`
 - ❌ 编造人名/术语的"官方译名"
-- ❌ 用 `entry` 冒充别的东西（这个字段应填 `skill`）
+- ❌ 用 `entry` 冒充别的东西（CLI 提交时填 `cli`，旧文件方式填 `skill`）
 
 ---
 
 ## 常见问题
 
-**KikuSub 报 409「源文本已变化」**
-你读的 SRT 与用户当前核对台不是同一份。让用户在核对台「导出」一次，再重新读新文件。
+**`kikusub` 找不到命令**
+先看 `~/.local/bin/kikusub` 是否存在；没有就用 `/Applications/KikuSub.app/Contents/MacOS/kikusub`。
+PATH 问题在设置页「命令行工具」里有可复制的 `.zshrc` 命令。
+
+**报「没有找到正在运行的 KikuSub」**
+App 没开，或刚重启还没建会话。让用户先打开主窗口；CLI 不会新建会话。
+
+**报 409「源文本已变化 / 字幕已变化」**
+你读的原文与用户当前核对台不是同一份。重新 `kikusub project/cues`，用新 `digest` 重做。
 
 **报 422「条数不符」**
-你合并/漏掉了条目。逐条对照原 SRT 重新生成，不要"顺手"合并短句。
+你合并/漏掉了条目。逐条对照 `kikusub cues --json` 重新生成，不要"顺手"合并短句。
 
 **用户说看不到提案**
-文件要写在 `output_dir`（不是 `export_dir`）。写错目录时，用户在 AI 优化台点
-「导入提案…」手动挑文件也能用。
+CLI 提交成功时界面会在 2 秒内提示；没看到就让用户看设置页「命令行工具」是否装好，
+或 `kikusub status` 确认提案文件版本。旧文件方式则检查是否写在 `output_dir`（不是 `export_dir`）。

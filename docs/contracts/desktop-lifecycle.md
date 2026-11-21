@@ -210,3 +210,26 @@ Homebrew 的 `/opt/homebrew/bin` 不在里面。所以在 Step 7 之前，「下
   `/usr/bin:/bin:/usr/sbin:/sbin`、直接起 `.app` 里的 sidecar，断言
   `/api/settings` 的 `ffmpeg.source == "bundled"`，并真跑一次 ffprobe（探时长）与
   ffmpeg（生成缩略图）。**pytest 只能证明解析顺序，证明不了冻结后的布局**，两者都要有。
+
+### 3.9 外部 CLI（`kikusub`）与 runtime.json（2026-11-21 新增）
+
+- **发现通道**：sidecar 启动、bind 端口后把 `<output_dir>/runtime.json`（**0600**、原子替换）
+  写成 `{app, runtime_version, api_version, port, token, pid, started_at, output_dir, session_id}`。
+  端口由 OS 分配、token 每次随机，CLI 没有别的可靠办法拿到它们；不要改成让 CLI 扫描端口或读进程环境。
+- **session_id 的写入规则**：只有客户端**带着已有会话 id** 回来（渲染层的 `X-Kikusub-Session`）
+  才会更新。CLI 自己会新建空会话；如果那个 id 也被记下，下一次 CLI 就会读到空工程而不是
+  界面上正在编辑的字幕。没有 session_id 时 CLI 必须报「界面还没建立会话」，不许自己建。
+- **崩溃残留**：优雅退出删文件；强杀/崩溃留下的旧文件由 CLI 用 `pid` 探活识别（`os.kill(pid, 0)`），
+  pid 不存在就报「旧文件」并继续找下一个候选，不把旧 token 当可用实例。
+- **CLI 产物**：`tools/kikusub/` 是纯 stdlib（urllib/json/pathlib）客户端，PyInstaller onefile
+  打进 `Contents/MacOS/kikusub`；设置页「AI 与技能 → 命令行工具」把它软链到
+  `~/.local/bin/kikusub`（**不覆盖同名普通文件**）。macOS 默认 PATH 不含该目录，设置页同时给
+  可复制的 `~/.zshrc` 命令；兜底是 app 内绝对路径。
+- **CLI 只读 + 只提交提案**：`project / cues / cue / qa / listen` 不写会话；
+  `propose` 只调 `POST /api/ai/proposal`、`/api/ai/structure/from-json`、`/api/ai/reshape/proposal`，
+  应用接口一个都不碰。`listen` 走 `kind=compare`，`--separate` 时窗口先分离人声再送识别。
+- **开发模式路径**：`build/pack/dist/kikusub`；runtime 文件在仓库 `outputs/runtime.json`。
+  打包后是 `~/Library/Application Support/KikuSub/outputs/runtime.json`。
+- **验证**：`tests/test_runtime_file.py`、`tests/test_server_evidence.py`、
+  `tests/test_server_compare_separate.py`、`tests/test_kikusub_cli.py`；
+  UI 侧 `tools/shots/verify_external_proposals.mjs`（无窗口截图，断言提示 + 自动载入）。

@@ -64,11 +64,11 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `desktop/main/windowmode.cjs` | **窗口可见性判定（纯函数）**：截图 / `KIKUSUB_NO_WINDOW` / 开发模式默认拒绝 / 显式允许 / 打包版；单测在 `desktop/test/window-mode.test.cjs`。 |
 | `core/` | **算法内核包**（无 UI 依赖）。`paths.py` 是运行期路径中枢；`python -m core.smoke` 与 `tests/test_core_boundary.py` 看守边界。**禁止在 `core/` 内 import gradio / fastapi。** |
 | `server/` | **服务层（FastAPI）**。`/api/*` 走 Bearer token，`/media/*` 走 `?token=`。**禁止在 server/ 内 import UI 代码。** |
-| `server/routes_ai.py` | 提案接口：proposal / apply / prompt / from-srt / import；单句判定 `/api/ai/arbitrate`、本地档位 `/api/ai/local-model/*`；结构建议在 `routes_structure.py`。 |
+| `server/routes_ai.py` | 提案接口与单句判定 `/api/ai/arbitrate`、本地档位；结构建议在 `routes_structure.py`，证据/提案状态在 `routes_evidence.py` / `routes_proposals.py`。 |
 | `core/ai_arbitrate.py` / `core/ai_local_model.py` | 单句 AI 判定（第三版）：dual / same / single / blind 提示词、2048 预算、`{text, note}` 校验；本地 LM Studio 档位 2048 / 4096 / 8192 自动校准。 |
 | `server/routes_alt_review.py` / `core/dual_review.py` | 第二版接口（GET / 导入 / DELETE / 整列覆盖）与实时对齐 diff。 |
 | `server/routes_translations.py` | 译文平行轨：`/api/translations`（整版应用、撤销、过期检测）。 |
-| `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 克隆、音色仓库、懒加载 / 空闲卸载、权重下载。**不 import fastapi / gradio**；torch 只在 `load()` 延迟导入。 |
+| `core/tts/` | 本地 TTS：`say` 兜底、OmniVoice 克隆、音色仓库、懒加载 / 空闲卸载、权重下载。不 import fastapi/gradio；torch 延迟导入。 |
 | `server/routes_tts.py` | 本地日语 TTS：音色列表、合成缓存、切片建音色、增删改、模型下载、`/media/tts/*`。 |
 | `core/ai_proposal.py` | 提案契约的**唯一实现**：源指纹 digest、结构校验、`apply_polish()`；结构建议在 `ai_structure.py`。 |
 | `core/ai_client.py` | OpenAI 兼容 urllib 客户端；本地空 Key；判定/重载在 `ai_arbitrate.py` / `ai_local_model.py`。 |
@@ -83,7 +83,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | `core/logging_setup.py` | 日志落盘（`outputs/logs/kikusub.log`，5MB × 3 轮转）、14 天 / 64MB 保留清理、后台 excepthook。 |
 | `tests/` | pytest 回归；重依赖用例在轻量 CI 中自动 skip。 |
 | `tools/eval/` | 评测台：`score_srt.py` 打分（CER / 块准确率 / 劈词数）、`run_clip.py` 跑片出 scorecard、`probe_window.py` 逐窗直探、`baseline.json` 基线。改断句 / VAD 前后必须跑同一区间；素材用 `--fixtures`。 |
-| `tools/pack/` | `build_sidecar.sh`（PyInstaller）+ `build_app.sh`（手工装配 .app）+ `rebuild.sh`（按需重打 sidecar → 构建渲染层 → 装配；默认不打开，`--open` 才打开）+ `fetch_ffmpeg.sh`（sha256 钉死的静态 ffmpeg/ffprobe，不入库）。改 Python 后必须先重打 sidecar。 |
+| `tools/kikusub/` | 外部 CLI：读工程/证据、提交提案；打包进 .app，设置页软链 `~/.local/bin`。 |
+| `tools/pack/` | `build_sidecar.sh` + `build_cli.sh` + `build_app.sh` + `rebuild.sh`（重打/构建/装配）+ `fetch_ffmpeg.sh`（sha256 钉死的静态 ffmpeg）。改 Python 先重打 sidecar。 |
 | `core/presets.py` | `presets.json` 的校验、兼容读取与原子写入。 |
 | `core/engines.py` | **引擎注册表**（无 torch 依赖）：名称、语种、用途、HF 仓库、体积、安装检测、`family`、`reviewable`、`file_tag` / `legacy_tags`；设置页与命名都读这张表。 |
 | `core/sherpa_asr.py` | 两个中文引擎推理外壳（sherpa-onnx · ONNX · CPU）。**顶层不 import sherpa_onnx**，只在 `load()` 延迟导入；权重不随包，`ensure_model()` 只下 int8 与 tokens。 |
@@ -137,7 +138,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    setExportQuality / setExportSrt / setExportOutDir / updateExportStyle / applyExportStylePreset /
    resetExportStyle`，禁止直接写 `exporter.*`。
 9. **改 Python 就先重打 sidecar**：`bash tools/pack/build_sidecar.sh`（或 `tools/pack/rebuild.sh`）；
-   `build_app.sh` 会因为 sidecar 比源码旧直接退出，这是有意的。
+   `build_app.sh` 会因为 sidecar 比源码旧直接退出，这是有意的。改 `tools/kikusub/` 后重打 `build_cli.sh`。
 10. **改前端必须真验证，但不许开窗**：`cd desktop && npm run build && npm run check:svelte`，
     再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
     或跑 `node tools/shots/verify_reshape_flow.mjs` / `verify_review_transport.mjs`；
