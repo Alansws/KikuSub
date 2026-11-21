@@ -137,9 +137,9 @@
   let scrollTop = $state(0);
   let viewH = $state(0);
   let waveW = $state(0);
-  // 波形高度：默认 88 = 原来的 80 + 字幕轨道新增的 7px，波形本身的可视高度不变。
+  // 波形高度：默认 80（D 稿），拖底部把手可调并记住。2026-11-21 曾随字幕轨道抬到 88，轨道回到 17 后一并回到 80。
   const savedHeight = Number(localStorage.getItem('kikusub.waveHeight') || 0);
-  let waveHeight = $state(Math.max(80, Math.min(300, savedHeight || 88)));
+  let waveHeight = $state(Math.max(72, Math.min(300, savedHeight || 80)));
 
   // 波形视窗（秒）。duration 来自媒体元数据。
   const duration = $derived(app.media?.duration ?? 0);
@@ -175,10 +175,9 @@
 
   // 时间轴三条竖带。绘制与命中判定共用同一组常量，避免“看到的”和“点到的”错位。
   const RULER_H = 17; // 顶部刻度条：按住拖动 = 擦洗播放头
-  // 底部字幕轨道：拖块体移动整句，拖两端改时间戳。块高 = LANE_H - 6，
-  // 2026-11-21 从 17 提到 24（块 11 → 18px）：11px 的块在缩放后只有几像素宽，
-  // 抓两端改时间又要点得准，热区太小。
-  const LANE_H = 24;
+  // 底部字幕轨道：块高 = LANE_H - 6（11px）。2026-11-21 曾提到 24 想放大抓取热区，用户当天报
+  // 「太高、上下太宽」后回到 17；抓取不靠块高，命中判定用整条轨道（`h - RESIZE_H - LANE_H` 往上）。
+  const LANE_H = 17;
   const RESIZE_H = 6; // 最底部的波形高度把手
   const EDGE = 6; // 字幕块左右端的抓取宽度（px）
   const PLAYHEAD_GRAB = 8; // 播放头两侧的抓取宽度（px）

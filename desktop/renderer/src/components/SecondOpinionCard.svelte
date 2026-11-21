@@ -46,6 +46,7 @@
     arbitration,
     hasArbitration,
     loadArbitrationConfig,
+    openArbitrationDialog,
     runArbitration,
     takeAutoArbitrationKey,
   } from '../lib/arbitration.svelte';
@@ -145,6 +146,11 @@
     void runSecondOpinion([index]);
   }
 
+  /** 「展开对话」原来在 ArbitrationCard 的标题行里；三版合流后标题行只有一个。 */
+  function expandDialog() {
+    openArbitrationDialog(index);
+  }
+
   function retry() {
     retrySecondOpinion();
   }
@@ -170,12 +176,10 @@
   }
 </script>
 
-<section class="second-opinion" aria-label="另一引擎复核">
+<section class="second-opinion" aria-label="三版对照">
   <div class="so-head">
-    <b>另一引擎复核</b>
+    <b>三版对照</b>
     <div class="so-pick">
-      <span class="so-from" title="当前稿的引擎">{currentEngineShortLabel()}</span>
-      <span class="so-arrow" aria-hidden="true">→</span>
       {#if candidates.length}
         <label
           class="so-select-wrap"
@@ -208,6 +212,15 @@
         <span class="so-none" title="没有与当前稿同语种、且支持窗口复核的引擎">无可用引擎</span>
       {/if}
     </div>
+    <button
+      class="so-expand arb-expand"
+      type="button"
+      onclick={expandDialog}
+      title="展开多轮对话浮窗：完整历史、每轮朗读与采用"
+    >
+      <Icon name="display" size={11} />
+      <span>展开对话</span>
+    </button>
   </div>
 
   {#if running}
@@ -232,7 +245,9 @@
       <article class="so-card current">
         <div class="so-card-head">
           <span class="so-engine" title={currentLabel}>
-            <i class="so-dot" aria-hidden="true"></i>{currentLabel}
+            <i class="so-dot" aria-hidden="true"></i>
+            <b class="so-role">当前稿</b>
+            <span class="so-name">{currentEngineShortLabel()}</span>
           </span>
           <button
             class="so-tts"
@@ -270,7 +285,9 @@
       <article class="so-card alt">
         <div class="so-card-head">
           <span class="so-engine alt" title={altLabel}>
-            <i class="so-dot" aria-hidden="true"></i>{altLabel}
+            <i class="so-dot" aria-hidden="true"></i>
+            <b class="so-role">另一引擎</b>
+            <span class="so-name">{readyShort}</span>
           </span>
           {#if !text.trim() && !altText.trim()}
             <span class="so-badge same">两版均无内容</span>
@@ -369,10 +386,18 @@
 </section>
 
 <style>
+  /* 三版对照：整块是一张卡，A / B / AI 各占一行。行内不再各套一圈边框——
+     348px 宽的右栏里，三张卡 + 两个标题行光边框和内边距就要 ~90px（见契约
+     「右侧检查器预算」）。 */
   .second-opinion {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--sp-1);
+    padding: 5px var(--sp-2) 3px;
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    background: var(--raise);
+    box-shadow: 0 1px 1px rgba(27, 39, 64, 0.03);
   }
 
   .so-head {
@@ -382,8 +407,7 @@
     min-width: 0;
   }
   .so-head b {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 0 0 auto;
     font-size: 12px;
     line-height: 16px;
     font-weight: 600;
@@ -392,24 +416,35 @@
   }
   .so-pick {
     flex: 0 0 auto;
+    margin-left: auto;
     display: flex;
     align-items: center;
     gap: var(--sp-1);
     min-width: 0;
   }
-  .so-from {
-    max-width: 92px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 11px;
-    line-height: 15px;
-    color: var(--text-3);
-  }
-  .so-arrow {
-    color: var(--text-3);
-    font-size: 10px;
+  /* 和 A/B 行里的引擎名同一套手感：22px 高的幽灵按钮，不抢标题的注意力 */
+  .so-expand {
+    appearance: none;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 10.5px;
     line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .so-expand:hover {
+    color: var(--accent-hover);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
   }
   .so-none {
     display: inline-flex;
@@ -498,26 +533,30 @@
   .so-pair {
     display: flex;
     flex-direction: column;
-    gap: 6px;
   }
+  /* 一行 = 标签行 + 文本行；行与行之间只用一条 1px 分隔线 */
   .so-card {
-    padding: 7px 9px var(--sp-2);
-    border: 1px solid var(--line-2);
-    border-radius: 8px;
-    background: var(--raise);
-    box-shadow: 0 1px 1px rgba(27, 39, 64, 0.03);
+    padding: 2px 0 3px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     min-width: 0;
   }
+  .so-card + .so-card {
+    border-top: 1px solid var(--line-2);
+    padding-top: var(--sp-1);
+  }
   .so-card.alt {
-    border-color: var(--accent-line);
-    background: color-mix(in srgb, var(--accent-soft) 40%, var(--raise));
+    border-color: var(--line-2);
+    background: transparent;
   }
   .so-card-head {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
-    margin-bottom: var(--sp-1);
+    margin-bottom: 1px;
   }
   .so-engine {
     flex: 1 1 auto;
@@ -526,13 +565,25 @@
     align-items: center;
     gap: 5px;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 10.5px;
     line-height: 14px;
     color: var(--text-3);
   }
-  .so-engine.alt {
+  /* 「当前稿 / 另一引擎」是角色，引擎名是值：角色加粗一点，值可以截断 */
+  .so-role {
+    flex: 0 0 auto;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+  .so-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .so-engine.alt .so-role {
     color: var(--accent-hover);
   }
   .so-dot {
@@ -606,10 +657,11 @@
     border-width: 1.4px;
   }
 
+  /* 文本行：15px / 1.5，短句一行、长句两行，整块卡的高度才不会随句子抖动 */
   .so-text {
     font-family: var(--font-cue);
     font-size: 15px;
-    line-height: 1.6;
+    line-height: 1.5;
     font-weight: 500;
     color: var(--ink);
     white-space: pre-wrap;

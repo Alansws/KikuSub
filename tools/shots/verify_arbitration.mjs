@@ -49,6 +49,22 @@ const EVAL = String.raw`
     await sleep(350);
     await waitFor(card);
     const out = { hasCard: Boolean(card()) };
+    // 三版对照的几何：结果行必须整条落在可视区内（用户报障：点完重新判定还要往下滑）
+    const scroller = document.querySelector('.ins-scroll');
+    const top0 = scroller.getBoundingClientRect().top;
+    const box = (sel) => {
+      const node = document.querySelector(sel);
+      if (!node) return null;
+      const r = node.getBoundingClientRect();
+      return { top: Math.round(r.top - top0), bottom: Math.round(r.bottom - top0) };
+    };
+    out.geometry = {
+      clientH: scroller.clientHeight,
+      a: box('.so-card.current'),
+      b: box('.so-card.alt'),
+      ai: box('.arb-card'),
+      adopt: box('.arb-actions'),
+    };
     out.head = text(document.querySelector('.arb-head b'));
     out.badge = text(document.querySelector('.arb-badge'));
     out.text = text(document.querySelector('.arb-text'));
@@ -158,6 +174,19 @@ function main() {
     SAME_B ? '同 B 版仍保留采用按钮' : '有采用 AI 版按钮',
     data.hasAdopt === true,
     JSON.stringify(data.buttons),
+  );
+
+  // ---- 三版对照：结果在可视区内、三行顺序正确（2026-11-21 合流）----
+  const g = data.geometry || {};
+  check(
+    '三行顺序：当前稿 → 另一引擎 → AI 判定',
+    g.a && g.b && g.ai && g.a.top < g.b.top && g.b.top < g.ai.top,
+    JSON.stringify(g),
+  );
+  check(
+    'AI 结果行整条在可视区内（无需滚动）',
+    g.ai && g.ai.bottom <= g.clientH,
+    JSON.stringify({ ai: g.ai, clientH: g.clientH }),
   );
 
   const shot = path.join(BASE, 'arbitration.png');

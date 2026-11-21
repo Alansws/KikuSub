@@ -142,19 +142,31 @@
         onclick={() => setTrackMode('both')}>双语</button
       >
     </div>
-    <select
-      class="lang-sel"
-      value={app.trackLang}
-      title="译文语种"
-      onchange={(e) => setTrackLang(e.currentTarget.value)}
-    >
-      {#each trackLangs as lang (lang)}
-        <option value={lang}>{lang}</option>
-      {/each}
-      {#if !trackLangs.length}
-        <option value={app.trackLang}>{app.trackLang}</option>
+    <div class="row-end">
+      {#if !hasTrack}
+        <!-- 没有译文轨时不再单独占一行说「还没有译文字幕」：译文 / 双语两个按钮本来就
+             是灰的，导入入口就放在这一行右端（省下一条 24px 的空态行）。 -->
+        <button
+          class="link import-link"
+          onclick={() => importTranslationFromExport()}
+          disabled={!app.cues.length}
+          title="选择与当前原文逐条对齐的译文 SRT / VTT"
+        >导入译文…</button>
       {/if}
-    </select>
+      <select
+        class="lang-sel"
+        value={app.trackLang}
+        title="译文语种"
+        onchange={(e) => setTrackLang(e.currentTarget.value)}
+      >
+        {#each trackLangs as lang (lang)}
+          <option value={lang}>{lang}</option>
+        {/each}
+        {#if !trackLangs.length}
+          <option value={app.trackLang}>{app.trackLang}</option>
+        {/if}
+      </select>
+    </div>
   </div>
   {#if hasTrack}
     <div class="track-meta">
@@ -167,18 +179,6 @@
       <button class="link" onclick={() => importTranslationFromExport()}>导入译文</button>
       <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
       <button class="link danger" onclick={removeTranslation}>删除译文</button>
-    </div>
-  {:else}
-    <div class="track-meta empty">
-      <span>还没有译文字幕</span>
-      <button
-        class="link"
-        onclick={() => importTranslationFromExport()}
-        disabled={!app.cues.length}
-        title="选择与当前原文逐条对齐的译文 SRT / VTT"
-      >
-        导入译文…
-      </button>
     </div>
   {/if}
 
@@ -333,8 +333,30 @@
     font-size: 12px;
     border-radius: 4px;
   }
-  .lang-sel {
+  .row-end {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .import-link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    padding: 0;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .import-link:disabled {
+    color: var(--text-3);
+    opacity: 0.55;
+    cursor: default;
+  }
+  .lang-sel {
     height: 26px;
     border: 1px solid var(--line);
     border-radius: 4px;
