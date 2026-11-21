@@ -218,18 +218,29 @@ class JobManager:
         media_id: str = "",
         session_id: str = "",
         loop: asyncio.AbstractEventLoop | None = None,
+        separate_vocals: bool = False,
     ) -> JobRecord:
         """用另一个引擎把若干字幕窗口各听一遍；只回文本，不落盘、不写回会话。
 
         与转写共用单槽：它同样要吃满 GPU。结果不进 `session.cues`——采用哪一份是
         用户在核对台的决定，服务端不替用户改字幕。
+
+        ``separate_vocals=True`` 时每个窗口先跑 Demucs，只用分离人声送识别
+        （CLI `kikusub listen --separate`）。分离缓存按窗口区间复用。
         """
         from core import engines as engine_registry
 
         name = engine_registry.get(engine_key).label
         job = self._launch("compare", f"{name} × {len(windows)} 条", session_id, loop)
         self._spawn(
-            self._run_compare, job, Path(media_path), engine_key, engine_config, windows, media_id
+            self._run_compare,
+            job,
+            Path(media_path),
+            engine_key,
+            engine_config,
+            windows,
+            media_id,
+            separate_vocals,
         )
         return job
 
@@ -758,6 +769,7 @@ class JobManager:
         engine_config,
         windows: list[dict],
         media_id: str = "",
+        separate_vocals: bool = False,
     ) -> None:
         from core import engines as engine_registry
         from core.second_opinion import transcribe_windows
@@ -776,14 +788,19 @@ class JobManager:
                 ratio = 0.05 + 0.93 * (done / max(1, total))
                 self._progress(job, ratio, f"正在用 {name} 复核第 {done}/{total} 条…")
 
-            texts = transcribe_windows(
-                self._resolve_engine(engine_key),
-                windows,
-                media_path=media_path,
-                config=engine_config,
-                progress_cb=on_window,
-                cancel_event=job.token,
-            )
+            if separate_vocals:
+                texts = self._transcribe_windows_separated(
+                    job, media_path, engine_key, engine_config, windows, on_window
+                )
+            else:
+                texts = transcribe_windows(
+                    self._resolve_engine(engine_key),
+                    windows,
+                    media_path=media_path,
+                    config=engine_config,
+                    progress_cb=on_window,
+                    cancel_event=job.token,
+                )
             job.status = "done"
             job.ratio = 1.0
             job.percent = 100
@@ -794,6 +811,7 @@ class JobManager:
                 "engine_name": name,
                 "media_id": media_id,
                 "elapsed": round(time.time() - started, 2),
+                "separate": bool(separate_vocals),
                 "texts": texts,
             }
             job.finished_at = time.time()
@@ -814,6 +832,64 @@ class JobManager:
             # 留着别立刻卸：用户很可能接着复核下一条。空闲超时由 EngineIdleReleaser 负责。
             self._idle.touch(engine_key)
             self._registry.finish(job.token)
+
+    def _transcribe_windows_separated(
+        self,
+        job: JobRecord,
+        media_path: Path,
+        engine_key: str,
+        engine_config,
+        windows: list[dict],
+        on_window,
+    ) -> list[dict]:
+        """先分离每个窗口的人声，再把分离轨送引擎（`listen --separate`）。
+
+        分离与 ASR 不同时常驻：先把当前 ASR 引擎的显存让出来，分离完再按需加载。
+        缓存键是窗口区间，所以同一句反复「重听」不会反复跑 Demucs。
+        """
+        from core import audio_cache, separate as separate_mod
+        from core.transcribe import load_audio_for_transcription
+
+        if not separate_mod.available():
+            raise RuntimeError("人声分离依赖未安装（缺少 demucs）。")
+        self._idle.release_now("人声分离前让出显存")
+        self._progress(job, 0.04, "正在准备人声分离（Demucs htdemucs）…")
+        engine = self._resolve_engine(engine_key)
+        loudnorm = bool(getattr(engine_config, "enable_loudnorm", True))
+        results: list[dict] = []
+        total = len(windows)
+        for position, window in enumerate(windows):
+            if job.token is not None and job.token.is_set():
+                from core.procutil import CommandCancelled
+
+                raise CommandCancelled("复核已取消")
+            start = float(window["start"])
+            end = float(window["end"])
+            ratio = 0.06 + 0.9 * (position / max(1, total))
+
+            def _progress(part: float, message: str) -> None:
+                self._progress(job, ratio + 0.9 / total * max(0.0, min(1.0, part)), message)
+
+            vocals = audio_cache.ensure_vocals_wav(
+                media_path,
+                start=start,
+                end=end,
+                separator=separate_mod.separate_to_wav,
+                cancel_event=job.token,
+                progress_cb=_progress,
+            )
+            audio = load_audio_for_transcription(vocals, enable_loudnorm=loudnorm)
+            text = engine.transcribe_window(audio, config=engine_config)
+            results.append(
+                {
+                    "index": int(window.get("index", position)),
+                    "start": round(start, 3),
+                    "end": round(end, 3),
+                    "text": (text or "").strip(),
+                }
+            )
+            on_window(position + 1, total)
+        return results
 
     def _resolve_engine(self, engine_key: str):
         if self._engine_resolver is not None:
