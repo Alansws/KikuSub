@@ -13,7 +13,7 @@
 import { api } from './api';
 import { ai, loadAiProposal } from './aiWorkspace.svelte';
 import { loadStructure, structure } from './structure.svelte';
-import { reshape } from './reshape.svelte';
+import { reshape, setReshapeBatch } from './reshape.svelte';
 import { app, toast } from './store.svelte';
 
 export const externalProposals = $state({
@@ -141,6 +141,11 @@ export async function loadExternalReshape(): Promise<boolean> {
     if (payload.stale) {
       toast('这份断句重排提案是旧字幕的（digest 对不上），已拒绝载入', 'warn');
       return false;
+    }
+    // 先对准提案覆盖的条号区间，再填文本：parseReshapeText 用当前批次范围解析，
+    // 不对准就会把整份新稿套到用户此刻停留的另一段上。
+    if (payload.range?.from && payload.range?.to) {
+      setReshapeBatch(payload.range.from, payload.range.to);
     }
     reshape.text = payload.text;
     reshape.pasteOpen = true;
