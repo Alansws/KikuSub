@@ -204,12 +204,20 @@
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--sp-2) 18px;
   }
 
-  /* 放在 .grid 之后：容器查询不提升优先级，写前面会被上面的两列定义盖掉。 */
-  @container (max-width: 520px) {
+  /* 抽屉拉满时 1040px 宽，三列能把 18 个参数压到 8 行、不再需要额外滚动；
+     窗口变窄时退回两列 / 单列，选择器与滑块始终完整可读。 */
+  @container (max-width: 900px) {
+    .grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  /* 放在 .grid 之后：容器查询不提升优先级，写前面会被上面的列定义盖掉。 */
+  @container (max-width: 620px) {
     .grid {
       grid-template-columns: minmax(0, 1fr);
     }

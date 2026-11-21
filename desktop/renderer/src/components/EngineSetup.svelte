@@ -9,7 +9,9 @@
    *   OmniVoice 走自己的后台下载线程；两者都轮询状态，进度只展示当前这一项。
    * - 已安装的项不重复下载；OmniVoice 依赖缺失时（打包漏了 omnivoice）会禁用并提示。
    */
+  import Icon from './Icon.svelte';
   import { formatBytes } from '../lib/time';
+  import { setupSummary } from '../lib/engineSetup';
   import {
     app,
     loadSettings,
@@ -46,6 +48,8 @@
   let percent = $state(0);
   let stage = $state('');
   let error = $state('');
+  /** 中文识别 / 音色克隆是可选项：默认收起，不抢日语主力的视线。 */
+  let optionalOpen = $state(false);
 
   const selectedItems = $derived(
     items.filter((item) => selected[item.key] && !item.installed && !item.packageMissing),
@@ -53,6 +57,14 @@
   const selectedCount = $derived(selectedItems.length);
   const selectedBytes = $derived(selectedItems.reduce((sum, item) => sum + item.approxBytes, 0));
   const activeItem = $derived(items.find((item) => item.key === activeKey) ?? null);
+  const primaryItems = $derived(items.filter((item) => !item.optional));
+  const optionalItems = $derived(items.filter((item) => item.optional));
+  const primaryInstalled = $derived(primaryItems.filter((item) => item.installed).length);
+  const installedCount = $derived(items.filter((item) => item.installed).length);
+  const optionalInstalled = $derived(optionalItems.filter((item) => item.installed).length);
+  const summaryText = $derived(
+    setupSummary(items, selectedCount, formatBytes(selectedBytes)),
+  );
 
   $effect(() => {
     if (!app.connected || loaded) return;
@@ -88,7 +100,8 @@
         installed: engine.installed,
         sizeBytes: engine.size_bytes,
         packageMissing: false,
-        recommended: engine.key === 'whisper',
+        // 两个日语主力都值得推荐：一个自然对话，一个逐字时间轴。
+        recommended: engine.family === 'whisper' || engine.family === 'qwen',
         optional: engine.family === 'sherpa',
       }));
       const ttsEngine = voices.engine;
@@ -108,8 +121,15 @@
         optional: true,
       });
       items = next;
+      // 默认只勾 1 个日语主力（优先 Whisper）；另一个日语引擎仍是一键可勾，
+      // 不默认把两份 3 GB 一起下载。全装好时自然一个都不勾——底部文案会说明
+      // 「全部模型都已安装，无需再下载」。
+      const defaultPick =
+        next.find(
+          (item) => item.recommended && !item.installed && !item.packageMissing,
+        ) ?? null;
       selected = Object.fromEntries(
-        next.map((item) => [item.key, item.recommended && !item.installed && !item.packageMissing]),
+        next.map((item) => [item.key, defaultPick ? item.key === defaultPick.key : false]),
       );
     } catch (err) {
       loadError = `读取模型配置失败：${(err as Error).message}`;
@@ -196,9 +216,48 @@
     <div class="logo">KikuSub</div>
     <h1>配置本地模型</h1>
     <p class="lead">
-      按需勾选要下载的模型。转写引擎负责识别人声；OmniVoice 只用于克隆音色。
+      先装日语主力：日常对话选 Anime Whisper，需要逐字精确时间轴选 Qwen3-ASR；
+      两个都装也能随时切换。中文识别与音色克隆收在下方「更多可选扩展」里，按需展开。
       不选任何一项也能启动——系统语音（Kyoko 等）和已安装的模型照常可用。
     </p>
+
+    {#snippet setupRow(item: SetupItem)}
+      <label
+        class="engine-row"
+        class:disabled={item.installed || item.packageMissing}
+        class:active={running && activeKey === item.key}
+        class:featured={item.recommended && !item.installed}
+      >
+        <input
+          type="checkbox"
+          checked={selected[item.key] ?? false}
+          disabled={running || item.installed || item.packageMissing}
+          onchange={() => toggle(item.key)}
+        />
+        <div class="engine-main">
+          <div class="engine-title">
+            <b>{item.label}</b>
+            {#if item.recommended}
+              <span class="tag rec">推荐</span>
+            {/if}
+            {#if item.optional}
+              <span class="tag opt">可选</span>
+            {/if}
+            {#if item.installed}
+              <span class="tag ok">已安装</span>
+            {/if}
+            {#if item.packageMissing}
+              <span class="tag bad">依赖缺失</span>
+            {/if}
+          </div>
+          <div class="engine-desc">{item.description}</div>
+          {#if item.notes}
+            <div class="engine-note">{item.notes}</div>
+          {/if}
+        </div>
+        <div class="engine-size">{sizeText(item)}</div>
+      </label>
+    {/snippet}
 
     {#if loading}
       <div class="loading">
@@ -208,47 +267,48 @@
     {:else if loadError}
       <div class="error-box">
         读取失败：{loadError}
-        <button class="btn tiny" onclick={load}>重试</button>
+        <button class="btn tiny" type="button" onclick={load}>重试</button>
       </div>
     {:else}
+      <div class="group-head">
+        <div class="group-copy">
+          <h2>日语主力引擎</h2>
+          <p>日常对话走 Anime Whisper；需要逐字对齐时间轴走 Qwen3-ASR。任选一个，或两个都装。</p>
+        </div>
+        <span class="group-meta">{primaryInstalled}/{primaryItems.length} 已安装</span>
+      </div>
+
       <div class="engine-list">
-        {#each items as item (item.key)}
-          <label
-            class="engine-row"
-            class:disabled={item.installed || item.packageMissing}
-            class:active={running && activeKey === item.key}
-          >
-            <input
-              type="checkbox"
-              checked={selected[item.key] ?? false}
-              disabled={running || item.installed || item.packageMissing}
-              onchange={() => toggle(item.key)}
-            />
-            <div class="engine-main">
-              <div class="engine-title">
-                <b>{item.label}</b>
-                {#if item.recommended && !item.installed}
-                  <span class="tag rec">推荐</span>
-                {/if}
-                {#if item.optional}
-                  <span class="tag opt">可选</span>
-                {/if}
-                {#if item.installed}
-                  <span class="tag ok">已安装</span>
-                {/if}
-                {#if item.packageMissing}
-                  <span class="tag bad">依赖缺失</span>
-                {/if}
-              </div>
-              <div class="engine-desc">{item.description}</div>
-              {#if item.notes}
-                <div class="engine-note">{item.notes}</div>
-              {/if}
-            </div>
-            <div class="engine-size">{sizeText(item)}</div>
-          </label>
+        {#each primaryItems as item (item.key)}
+          {@render setupRow(item)}
         {/each}
       </div>
+
+      {#if optionalItems.length}
+        <button
+          type="button"
+          class="more-toggle"
+          aria-expanded={optionalOpen}
+          aria-controls="optional-engines"
+          onclick={() => (optionalOpen = !optionalOpen)}
+        >
+          <span class="more-main">
+            <span class="more-title">更多可选扩展</span>
+            <span class="more-sub">中文识别 / 音色克隆</span>
+          </span>
+          <span class="more-meta">{optionalInstalled}/{optionalItems.length} 已安装</span>
+          <span class="more-chev" class:open aria-hidden="true">
+            <Icon name="chevron-right" size={12} />
+          </span>
+        </button>
+        {#if optionalOpen}
+          <div class="engine-list optional-list" id="optional-engines">
+            {#each optionalItems as item (item.key)}
+              {@render setupRow(item)}
+            {/each}
+          </div>
+        {/if}
+      {/if}
     {/if}
 
     {#if running}
@@ -265,18 +325,15 @@
       <div class="error-box">{error}</div>
     {/if}
 
-    <div class="summary">
-      {#if selectedCount}
-        已选 {selectedCount} 项 · {formatBytes(selectedBytes)}
-      {:else}
-        未选择任何要下载的模型
-      {/if}
+    <div class="summary" class:summary-ok={!selectedCount && installedCount === items.length}>
+      {summaryText}
     </div>
 
     <div class="actions">
-      <button class="btn ghost" onclick={ondone} disabled={running}>稍后再说</button>
+      <button class="btn ghost" type="button" onclick={ondone} disabled={running}>稍后再说</button>
       <button
         class="btn primary"
+        type="button"
         onclick={run}
         disabled={running || loading || Boolean(loadError) || !app.connected}
       >
@@ -355,6 +412,97 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
+  }
+  .group-head {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-2);
+  }
+  .group-copy {
+    min-width: 0;
+  }
+  .group-copy h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 18px;
+    color: var(--text);
+  }
+  .group-copy p {
+    margin: 2px 0 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-3);
+    text-wrap: pretty;
+  }
+  .group-meta {
+    margin-left: auto;
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .engine-row.featured {
+    border-color: var(--accent-line);
+  }
+  .more-toggle {
+    appearance: none;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+    padding: 9px var(--sp-3);
+    border: 1px dashed var(--separator);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .more-toggle:hover {
+    border-color: var(--accent-line);
+    background: var(--fill);
+  }
+  .more-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .more-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .more-sub {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .more-meta {
+    margin-left: auto;
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .more-chev {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    color: var(--text-3);
+    transition: transform 160ms var(--ease);
+  }
+  .more-chev.open {
+    transform: rotate(90deg);
+    color: var(--accent);
+  }
+  .optional-list {
+    margin-top: var(--sp-2);
   }
   .engine-row {
     display: flex;
@@ -487,6 +635,9 @@
     font-size: 12px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+  .summary.summary-ok {
+    color: var(--success);
   }
   .actions {
     display: flex;
