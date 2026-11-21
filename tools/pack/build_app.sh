@@ -12,6 +12,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+source tools/pack/_rmtree.sh
+
 APP="build/pack/KikuSub.app"
 ELECTRON_APP="desktop/node_modules/electron/dist/Electron.app"
 SIDECAR="build/pack/dist/sidecar"
@@ -47,7 +49,7 @@ if [ ! -f "docs/app-icon.png" ]; then
   echo "❌ 缺少 docs/app-icon.png（应用图标唯一源）；没有它不允许继续装配" >&2
   exit 1
 fi
-rm -rf "build/pack/icon.iconset"
+rm_tree "build/pack/icon.iconset"
 swift tools/pack/make_icon.swift docs/app-icon.png "build/pack/icon.iconset"
 mkdir -p desktop/build
 iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
@@ -83,7 +85,7 @@ if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
   sleep 1
 fi
 
-rm -rf "$APP"
+rm_tree "$APP"
 mkdir -p "$(dirname "$APP")"
 # default_app.asar 是 Electron 的占位应用，会被我们自己的 app 取代；
 # 本机策略可能拒绝复制它，允许失败。
