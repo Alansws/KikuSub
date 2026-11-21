@@ -32,7 +32,7 @@ command -v kikusub || ls -l ~/.local/bin/kikusub
 没有软链时用包内兜底路径（两者等价）：
 
 ```bash
-/Applications/KikuSub.app/Contents/MacOS/kikusub --help
+/Applications/KikuSub.app/Contents/Resources/bin/kikusub --help
 # 开发机可能是：
 ~/Downloads/Kikusub/repo/build/pack/dist/kikusub --help
 ```
@@ -250,7 +250,7 @@ macOS 默认：`~/Library/Application Support/KikuSub/outputs/`。
 ## 常见问题
 
 **`kikusub` 找不到命令**
-先看 `~/.local/bin/kikusub` 是否存在；没有就用 `/Applications/KikuSub.app/Contents/MacOS/kikusub`。
+先看 `~/.local/bin/kikusub` 是否存在；没有就用 `/Applications/KikuSub.app/Contents/Resources/bin/kikusub`。
 PATH 问题在设置页「命令行工具」里有可复制的 `.zshrc` 命令。
 
 **报「没有找到正在运行的 KikuSub」**

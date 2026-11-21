@@ -222,7 +222,7 @@ Homebrew 的 `/opt/homebrew/bin` 不在里面。所以在 Step 7 之前，「下
 - **崩溃残留**：优雅退出删文件；强杀/崩溃留下的旧文件由 CLI 用 `pid` 探活识别（`os.kill(pid, 0)`），
   pid 不存在就报「旧文件」并继续找下一个候选，不把旧 token 当可用实例。
 - **CLI 产物**：`tools/kikusub/` 是纯 stdlib（urllib/json/pathlib）客户端，PyInstaller onefile
-  打进 `Contents/MacOS/kikusub`；设置页「AI 与技能 → 命令行工具」把它软链到
+  打进 `Contents/Resources/bin/kikusub`（**不能**放 `Contents/MacOS`：APFS 默认大小写不敏感，`MacOS/kikusub` 会解析到主可执行文件 `KikuSub`，装配时会把 Electron 主二进制覆盖成 CLI——`build_app.sh` 现在用「主可执行文件 < 20MB 即失败」硬断言拦住）；设置页「AI 与技能 → 命令行工具」把它软链到
   `~/.local/bin/kikusub`（**不覆盖同名普通文件**）。macOS 默认 PATH 不含该目录，设置页同时给
   可复制的 `~/.zshrc` 命令；兜底是 app 内绝对路径。
 - **CLI 只读 + 只提交提案**：`project / cues / cue / qa / listen` 不写会话；

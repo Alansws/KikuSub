@@ -2,7 +2,7 @@
 # 打 `kikusub` 外部 CLI（PyInstaller onefile）。
 #
 # 为什么单独打：CLI 必须能脱离仓库与系统 Python 运行（macOS 自带没有 python3）。
-# 它只依赖 stdlib，所以 onefile 产物只有 ~10MB；打进 .app 的 Contents/MacOS/kikusub。
+# 它只依赖 stdlib，所以 onefile 产物只有 ~10MB；打进 .app 的 Contents/Resources/bin/kikusub（避开 MacOS/KikuSub 大小写冲突）。
 #
 #   bash tools/pack/build_cli.sh
 #   PYTHON=python3.12 bash tools/pack/build_cli.sh

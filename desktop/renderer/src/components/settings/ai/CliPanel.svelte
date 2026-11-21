@@ -97,7 +97,7 @@
       <span class="set-row-title">兜底路径</span>
       <span class="set-row-desc">
         没装软链或 PATH 不可用时，直接用
-        <code>{cliState.info?.target || '/Applications/KikuSub.app/Contents/MacOS/kikusub'}</code>
+        <code>{cliState.info?.target || '/Applications/KikuSub.app/Contents/Resources/bin/kikusub'}</code>
         也能运行。
       </span>
     </div>

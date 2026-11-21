@@ -192,12 +192,15 @@ echo "== 5/8 放入 Python sidecar（$(du -sh "$SIDECAR" | cut -f1)，慢）=="
 cp -R "$SIDECAR" "$APP/Contents/Resources/python"
 cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || true
 
-# 外部 CLI：`kikusub` 放在 Contents/MacOS（与主可执行文件同级），设置页会把它
-# 软链到 ~/.local/bin/kikusub。先单独签名，理由同下面的 ffmpeg。
-cp "$CLI" "$APP/Contents/MacOS/kikusub"
-chmod 755 "$APP/Contents/MacOS/kikusub"
-codesign --force --sign - "$APP/Contents/MacOS/kikusub" >/dev/null 2>&1 || true
-echo "已内置 CLI：$(du -h "$APP/Contents/MacOS/kikusub" | cut -f1)"
+# 外部 CLI：**不能放在 Contents/MacOS**。macOS 默认 APFS 大小写不敏感，
+# `Contents/MacOS/kikusub` 会解析到主可执行文件 `KikuSub`，`cp` 直接把 Electron
+# 主二进制覆盖成 7.8MB 的 CLI（2026-11-21 实际踩到：装配“成功”、签名通过，
+# 但双击启动的是 CLI）。放在 Resources/bin，和 ffmpeg 同一层；设置页负责软链。
+mkdir -p "$APP/Contents/Resources/bin"
+cp "$CLI" "$APP/Contents/Resources/bin/kikusub"
+chmod 755 "$APP/Contents/Resources/bin/kikusub"
+codesign --force --sign - "$APP/Contents/Resources/bin/kikusub" >/dev/null 2>&1 || true
+echo "已内置 CLI：$(du -h "$APP/Contents/Resources/bin/kikusub" | cut -f1)"
 
 echo "== 6/8 放入内置 ffmpeg / ffprobe（没有 Homebrew 也能导入视频）=="
 # 为什么要随包：macOS 不自带 ffmpeg，而从访达启动的 .app 只拿到
@@ -241,6 +244,16 @@ elif [ -e "$APPSUP/models" ]; then
 else
   echo "⚠️ 仓库里没有 models/，首次转写会触发下载"
 fi
+
+# 硬断言：主可执行文件必须还是 Electron 那一份。Electron 的主二进制只有 33KB
+# （真正的框架在 Frameworks/），所以不能按体积判断；用逐字节比较最可靠。
+# 放在 MacOS 下的 CLI 会被大小写不敏感文件系统当成同一个文件，把 App 静默换成
+# 7.8MB 的 CLI——这里必须在签名前拦住。
+if ! cmp -s "$APP/Contents/MacOS/KikuSub" "$ELECTRON_APP/Contents/MacOS/Electron"; then
+  echo "❌ 主可执行文件与 Electron 不一致，疑似被覆盖（大小写冲突）" >&2
+  exit 1
+fi
+[ -x "$APP/Contents/Resources/bin/kikusub" ] || { echo "❌ 缺少包内 CLI" >&2; exit 1; }
 
 echo "== 8/8 自签 =="
 # 用 ad-hoc 签名即可：AI 密钥走本机加密（见 desktop/main/aikey.cjs），**不依赖钥匙串**，

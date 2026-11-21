@@ -34,9 +34,18 @@ function linkPath(home) {
   return path.join(binDir(home), COMMAND);
 }
 
-/** app 内 CLI 的真实路径：打包态与主可执行文件同级；开发态用 build/pack/dist。 */
-function targetPath({ isPackaged, execPath, repoRoot }) {
-  if (isPackaged) return path.join(path.dirname(execPath), COMMAND);
+/**
+ * app 内 CLI 的真实路径。
+ *
+ * 打包态在 `Contents/Resources/bin/kikusub`——**不能**放 `Contents/MacOS`：
+ * macOS 默认 APFS 大小写不敏感，`MacOS/kikusub` 会解析到主可执行文件 `KikuSub`。
+ * 开发态用 `build/pack/dist/kikusub`。
+ */
+function targetPath({ isPackaged, execPath, resourcesPath, repoRoot }) {
+  if (isPackaged) {
+    const resources = resourcesPath || path.join(path.dirname(execPath), '..', 'Resources');
+    return path.join(resources, 'bin', COMMAND);
+  }
   return path.join(repoRoot || process.cwd(), 'build', 'pack', 'dist', COMMAND);
 }
 

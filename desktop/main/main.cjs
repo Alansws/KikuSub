@@ -1342,6 +1342,7 @@ function cliTarget() {
   return cli.targetPath({
     isPackaged: app.isPackaged,
     execPath: process.execPath,
+    resourcesPath: process.resourcesPath,
     repoRoot: REPO_ROOT,
   });
 }

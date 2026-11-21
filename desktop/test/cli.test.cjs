@@ -20,10 +20,10 @@ function sandbox() {
   return { root, home, target };
 }
 
-test('targetPath: packaged 与主可执行文件同级', () => {
+test('targetPath: packaged 在 Resources/bin（避开 MacOS/KikuSub 大小写冲突）', () => {
   assert.equal(
     cli.targetPath({ isPackaged: true, execPath: '/Applications/KikuSub.app/Contents/MacOS/KikuSub' }),
-    '/Applications/KikuSub.app/Contents/MacOS/kikusub',
+    '/Applications/KikuSub.app/Contents/Resources/bin/kikusub',
   );
   assert.equal(
     cli.targetPath({ isPackaged: false, execPath: '/x/y', repoRoot: '/repo' }),
