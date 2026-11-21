@@ -87,3 +87,18 @@ export function proxyReasonLabel(reason: string): string {
       return '这个视频的画面无法加载';
   }
 }
+
+/**
+ * 这个媒体**在不压代理的前提下**能不能播（容器 / 编码不支持就是不能）。
+ *
+ * 与 `needsBlankFrameWatch` 同源但用途不同：那条是「等多久没出首帧就提示压代理」，
+ * 这条是「别试了，直接告诉用户为什么」。复核页的行内试听用它提前拦截——
+ * MKV / HEVC 喂给 `<video>` 时 Chromium 常常既不 `error` 也不推进时间轴，
+ * 让用户点一下只得到一个「停止中」的按钮比直接说清楚更糟。
+ */
+export function mediaUnplayable(
+  media: { proxy_reason?: string; proxy_ready?: boolean } | null | undefined,
+): boolean {
+  if (!media) return false;
+  return !media.proxy_ready && isUnplayableReason(String(media.proxy_reason ?? ''));
+}

@@ -1,13 +1,15 @@
 /**
  * 双引擎复核的前端状态。
  *
- * 第二版是只读参考：页面只做对齐展示与两种兜底操作（丢弃 / 整列覆盖）。
+ * 第二版仍是只读参考：页面只做对齐展示，加上三种写回（整列覆盖、单句采用 B、
+ * 丢弃）。**单句采用不新增写接口**：它把 B 那一行的文本走 `updateCue()` 写回核对台
+ * （统一 50 步历史、带 label、⌘Z 一次撤回），所以永远不会出现两套可编辑字幕。
  * 对齐与 diff **每次都由服务端按当前两份字幕现算**，这里只缓存结果——用户在
  * 核对台改一句后切回来，重新拉一次就是最新的。
  */
 
 import { api, type Cue, type DualRow, type DualStats } from './api';
-import { app, applyCueSnapshot, scheduleDraftSave, toast } from './store.svelte';
+import { app, applyCueSnapshot, scheduleDraftSave, toast, updateCue } from './store.svelte';
 
 export const dual = $state({
   exists: false,
@@ -24,6 +26,13 @@ export const dual = $state({
   error: '',
   /** 只看差异（= / ~ / + / − 里只留 ~ + −）。 */
   onlyDiff: true,
+  /**
+   * 忽略标点与空格（默认开）：只有标点 / 空白不同的行由服务端判为一致，
+   * 不再计入「~ 文本不同」与侧栏徽标。关掉就回到逐字严格比对。
+   */
+  ignorePunct: true,
+  /** 正在「采用 B」的那条 A 下标；-1 = 空闲。防连点压出两步历史。 */
+  adopting: -1,
   /**
    * 刚从对照表点走的那一行（`a-b` 索引）。回来后高亮它，让用户一眼看到
    * 「刚才看的就是这一句」；B 版换了就没有意义了，重新拉取时清掉。
@@ -91,7 +100,7 @@ export async function refreshAltReview() {
   dual.loading = true;
   dual.error = '';
   try {
-    const data = await api.getAltReview(false);
+    const data = await api.getAltReview(false, dual.ignorePunct);
     dual.exists = data.exists;
     dual.engine = data.engine;
     dual.count = data.count;
@@ -119,7 +128,7 @@ export async function loadAltDiff() {
   dual.loading = true;
   dual.error = '';
   try {
-    const data = await api.getAltReview(true);
+    const data = await api.getAltReview(true, dual.ignorePunct);
     dual.exists = data.exists;
     dual.engine = data.engine;
     dual.count = data.count;
@@ -207,5 +216,45 @@ export async function replacePrimaryWithAlt(clearAlt = true) {
     return false;
   } finally {
     dual.replacing = false;
+  }
+}
+
+/**
+ * 切换「忽略标点与空格」并重拉 diff。
+ *
+ * 过滤在服务端做（`core/dual_review.build_review`），所以必须重拉而不是本地过滤：
+ * 本地过滤只能隐掉行，改不了「~ 文本不同」与徽标的口径。
+ */
+export async function setIgnorePunct(value: boolean) {
+  if (dual.ignorePunct === value) return;
+  dual.ignorePunct = value;
+  await loadAltDiff();
+}
+
+/**
+ * 单句「采用 B」：把 B 这一行的文本写回核对台的同一条字幕。
+ *
+ * 只换文本，**不动时间轴**——B 的时间和 A 是两套断句，混着改会让时间码悄悄漂移；
+ * 需要 B 的时间就整列覆盖（或回核对台手改）。
+ * 走的仍是 `updateCue()`：一步统一历史、带 label、⌘Z 一次撤回。
+ */
+export async function adoptAltText(index: number, text: string): Promise<boolean> {
+  if (dual.adopting >= 0) return false;
+  const cue = app.cues[index];
+  if (!cue) {
+    toast('这一句在核对台已经不存在了，刷新对照再试', 'warn');
+    return false;
+  }
+  if (!text.trim()) {
+    toast('B 这一行是空的，没有可采用的文本', 'warn');
+    return false;
+  }
+  if (cue.text === text) return false;
+  dual.adopting = index;
+  try {
+    await updateCue(index, { text }, `采用第二版：第 ${index + 1} 条`);
+    return true;
+  } finally {
+    dual.adopting = -1;
   }
 }

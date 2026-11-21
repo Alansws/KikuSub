@@ -2204,9 +2204,9 @@ export async function redo() {
   }
 }
 
-export async function updateCue(index: number, patch: Partial<Cue>) {
+export async function updateCue(index: number, patch: Partial<Cue>, label = '') {
   try {
-    applyCueSnapshot(await api.patchCue(index, patch));
+    applyCueSnapshot(await api.patchCue(index, patch, label));
     scheduleDraftSave();
   } catch (err) {
     toast((err as Error).message, 'error');

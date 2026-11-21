@@ -4,11 +4,16 @@
    *
    * 对齐与逐字 diff 由服务端 `core.dual_review` 按**当前两份字幕**实时计算。
    * 对齐是纯 1:1：绝不把多条字幕合并成一行，B 多出来的句子一定以独立 `+` 行出现。
-   * 页面不维护静态下标映射，所有编辑仍回核对台。
+   * 页面不维护静态下标映射；**单句采用**只把 B 的文本走统一历史写回核对台
+   * （见 `lib/dualReview.svelte.ts` 的 `adoptAltText`），断句与时间轴不合并。
    */
   import Icon from '../components/Icon.svelte';
   import { app, focusRange, jumpToCue, setView, toast } from '../lib/store.svelte';
+  import { mediaUrl } from '../lib/api';
+  import { audition, auditionRange, stopAudition } from '../lib/audition.svelte';
+  import { mediaUnplayable } from '../lib/videoFallback';
   import {
+    adoptAltText,
     altEngineLabel,
     altParamsLabel,
     altIsImported,
@@ -18,6 +23,7 @@
     loadAltDiff,
     refreshAltReview,
     replacePrimaryWithAlt,
+    setIgnorePunct,
   } from '../lib/dualReview.svelte';
   import { tcShort } from '../lib/time';
   import { recallScroll, rememberScroll } from '../lib/scrollMemory';
@@ -26,6 +32,11 @@
   let moreOpen = $state(false);
   /** 对照表的滚动容器：去核对台看完一句再回来要停在同一句，而不是回到第 0 行。 */
   let listEl = $state<HTMLDivElement | null>(null);
+
+  // 行内试听与核对台用同一份流：有代理走代理（Chromium 解不开 MKV / HEVC）。
+  const mediaSrc = $derived(
+    app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready)) : '',
+  );
 
   const rows = $derived(
     dual.onlyDiff ? dual.rows.filter((row) => row.kind !== 'same') : dual.rows,
@@ -65,7 +76,9 @@
    * 行集合就变了，沿用旧偏移只会停在无关的位置。
    */
   const listKey = $derived(
-    `dual:${dual.mediaId}:${dual.createdAt}:${dual.onlyDiff ? 'diff' : 'all'}`,
+    `dual:${dual.mediaId}:${dual.createdAt}:${dual.onlyDiff ? 'diff' : 'all'}:${
+      dual.ignorePunct ? 'punct' : 'strict'
+    }`,
   );
   let restoredKey = '';
 
@@ -88,6 +101,9 @@
     if (listEl) rememberScroll(listKey, listEl.scrollTop);
   }
 
+  // 离开这一页必须收掉试听：内嵌媒体元素不在界面上，不能留后台声音。
+  $effect(() => () => stopAudition());
+
   function goto(row: DualRow) {
     const index = row.a_indices[0];
     if (index === undefined) {
@@ -98,6 +114,31 @@
     setView('review');
     jumpToCue(index, { seek: false });
     focusRange(row.start, row.end);
+  }
+
+  /** 行内试听：只播这一行的时间窗（A 的入出点），再点一次停。 */
+  function auditionRow(row: DualRow) {
+    auditionRange(rowKey(row), row.start, row.end, mediaSrc, {
+      unplayable: mediaUnplayable(app.media),
+    });
+  }
+
+  /**
+   * 采用 B 句：只把文本写回核对台的同一条字幕。
+   *
+   * 时间轴保持核对台当前值——两套断句的时间不能混着改，否则时间码会悄悄漂移。
+   * 一步统一历史、带 label、⌘Z 一次撤回（`adoptAltText` 走的是 `updateCue`）。
+   */
+  async function adopt(row: DualRow) {
+    const index = row.a_indices[0];
+    if (index === undefined) {
+      toast('这一行只有第二版有，先在核对台插入对应句子再采用', 'warn');
+      return;
+    }
+    if (dual.adopting >= 0) return;
+    if (await adoptAltText(index, row.b_text)) {
+      toast(`已采用第二版：第 ${index + 1} 条（⌘Z 可撤回）`);
+    }
   }
 
   async function refresh() {
@@ -202,6 +243,12 @@
           <span class="chip diff">~ 文本不同 <b>{stats?.diff ?? 0}</b></span>
           <span class="chip only-a">− 仅 A <b>{stats?.only_a ?? 0}</b></span>
           <span class="chip only-b">+ 仅 B <b>{stats?.only_b ?? 0}</b></span>
+          {#if dual.ignorePunct && (stats?.punct_only ?? 0) > 0}
+            <span
+              class="punct-note"
+              title="这些行两边只有标点 / 空白不同（、。…「」），是排版分歧不是听写分歧；取消「忽略标点与空格」可以逐条看"
+            >已忽略 {stats?.punct_only} 处仅标点差异</span>
+          {/if}
         </div>
         <span
           class="legend"
@@ -211,6 +258,17 @@
           <i class="sw ins"></i>本行 B 独有
         </span>
         <div class="head-end">
+          <label
+            class="chk"
+            title="两个引擎对同一句的句读常常不同（、。，…！？「」『』 与空格）。勾选时这些不算文本差异；取消就回到逐字严格比对"
+          >
+            <input
+              type="checkbox"
+              checked={dual.ignorePunct}
+              onchange={(e) => void setIgnorePunct(e.currentTarget.checked)}
+            />
+            忽略标点与空格
+          </label>
           <label class="chk">
             <input type="checkbox" bind:checked={dual.onlyDiff} />
             只看差异
@@ -254,6 +312,7 @@
       <span class="c-side">A · 核对台当前版本（只读）</span>
       <span class="c-mark">对照</span>
       <span class="c-side">B · {altEngineLabel()}（只读参考）</span>
+      <span class="c-act">听 / 采纳</span>
     </div>
 
     {#if !rows.length}
@@ -321,6 +380,31 @@
                 {/if}
               {:else}
                 <span class="placeholder">—</span>
+              {/if}
+            </div>
+
+            <div class="c-act">
+              {#if row.kind === 'diff'}
+                <button
+                  class="act-btn"
+                  class:on={audition.key === rowKey(row)}
+                  onclick={() => auditionRow(row)}
+                  title={audition.key === rowKey(row) ? '停止试听' : '试听这一句（A 的入出点，原声）'}
+                  aria-label={audition.key === rowKey(row) ? '停止试听这一句' : '试听这一句'}
+                >
+                  <Icon name={audition.key === rowKey(row) ? 'pause' : 'play'} size={10} />
+                  <span class="act-t">{audition.key === rowKey(row) ? '停止' : '试听'}</span>
+                </button>
+                <button
+                  class="act-btn adopt"
+                  onclick={() => void adopt(row)}
+                  disabled={dual.adopting >= 0}
+                  title="把 A 这一句换成 B 的措辞（只换文本，时间轴保持核对台；一步历史，⌘Z 可撤回）"
+                  aria-label={`采用第二句：第 ${(row.a_indices[0] ?? 0) + 1} 条`}
+                >
+                  <Icon name="check" size={10} />
+                  <span class="act-t">{dual.adopting === row.a_indices[0] ? '采用中…' : '采用 B'}</span>
+                </button>
               {/if}
             </div>
           </div>
@@ -597,10 +681,13 @@
     border-color: var(--danger);
     color: var(--danger);
   }
+  /* 第 5 列是行内「试听 / 采用 B」：固定 118px，两枚 20px 高的轻按钮并排。
+     宽度是按 11px 字号量出来的（试听 ≈47 + 采用 B ≈59 + gap 4），
+     不再从文本列里抠——A/B 各留 minmax(0,1fr)，窗口变小先压文字换行。 */
   .cols,
   .row {
     display: grid;
-    grid-template-columns: 92px minmax(0, 1fr) 46px minmax(0, 1fr);
+    grid-template-columns: 92px minmax(0, 1fr) 46px minmax(0, 1fr) 118px;
     gap: 10px;
     align-items: start;
     padding: 6px 14px;
@@ -686,6 +773,58 @@
   .c-mark {
     display: grid;
     place-items: center;
+  }
+  .c-act {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--sp-1);
+    min-width: 0;
+  }
+  /* 行内动作刻意做小：它们服务于「这一句」，不该比正文更抢眼。 */
+  .act-btn {
+    appearance: none;
+    height: 20px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: 1px solid var(--separator-soft);
+    border-radius: 5px;
+    background: var(--raise);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+      border-color var(--dur) var(--ease);
+  }
+  .act-btn:hover:not(:disabled) {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent);
+  }
+  .act-btn.on {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent);
+  }
+  .act-btn:disabled {
+    opacity: 0.45;
+  }
+  .act-btn.adopt {
+    color: var(--text);
+    font-weight: 500;
+  }
+  /* 「已忽略 N 处仅标点差异」：解释性文字，跟 4 个统计片同一行但明显更淡。 */
+  .punct-note {
+    font-size: 11px;
+    line-height: 22px;
+    color: var(--text-3);
+    white-space: nowrap;
   }
   .mark {
     width: 20px;
@@ -784,9 +923,25 @@
   @media (max-width: 900px) {
     .cols,
     .row {
-      grid-template-columns: 74px minmax(0, 1fr) 34px minmax(0, 1fr);
+      grid-template-columns: 74px minmax(0, 1fr) 34px minmax(0, 1fr) 26px;
       gap: 6px;
       padding: 6px 10px;
+    }
+    /* 紧凑模式只留图标（title / aria-label 仍在），把宽度还给文本列。 */
+    .c-act {
+      flex-direction: column;
+      gap: 3px;
+    }
+    /* 26px 装不下「听 / 采纳」，表头这一格整格收起（按钮自己的 aria-label 仍在）。 */
+    .cols .c-act {
+      display: none;
+    }
+    .act-btn {
+      width: 24px;
+      padding: 0;
+    }
+    .act-t {
+      display: none;
     }
     .source-line {
       display: none;
