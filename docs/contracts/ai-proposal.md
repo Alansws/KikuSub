@@ -501,3 +501,34 @@
 - **回归**：`tests/test_reshape.py`（尾部译文平移 / 只动本段）、
   `tools/shots/verify_batch_and_align.mjs`（选择范围 → 越界警告 → 覆盖 → 条数 6→5、
   尾部译文平移 toast）。
+
+#### 3.7.12 三页统一工作条与「执行通道」（2026-11-21）
+
+翻译 / 润色 / 断句重排共用 `components/ai/AiBatchToolbar.svelte`，头部固定**两行**：
+
+- 第 1 行「处理什么」：标题 + 页内模式（断句重排的做法 / 翻译的目标语种）+ 模板 +
+  处理范围 + 右侧状态（来源徽标、⋯ 菜单、提示词库入口）。
+- 第 2 行「怎么跑」：`[ 自动 API | 外部手动 ]` **二选一分段开关** + 该通道的动作链 + 本次批次。
+- 长片的智能分段轨只在**多段**时以紧凑单行（`SegmentRail compact`）出现，已覆盖计数挂在轨头；
+  单段不额外占一行。
+- 模板 / 范围 / 批次仍复用既有组件，状态仍由 `aiWorkspace` / `reshape` 持有；低频的
+  重新加载 / 另存 / 丢弃收进 `components/ai/ProposalMenu.svelte`，两页不再各写一份。
+
+「自动 API」与「外部手动」是两条**互斥**的工作流：切换后只显示选中通道的动作，不再把
+「生成建议」和「复制提示词」并排挤在同一行。断句重排没有 in-app 生成接口，它的「自动 API」
+明确置灰并给说明，只能走外部手动。
+
+- **通道状态**：`lib/aiWorkspace.svelte.ts` 的 `ai.channel` / `setAiChannel()`。
+  `loadAiSetup()` 探到本机 AI 没启用 / 没 Key 时默认落在**能用**的外部手动；用户自己切过
+  （`channelTouched`）之后不再自动改写。
+- **来源徽标**：不再用「外部粘贴」（和按钮「粘贴回复」撞语义），统一 `aiEntryLabel()`：
+  本机生成 / Agent 文件 / 外部回复。
+- **digest 失效禁用应用**：`ai.digestMatch === false` 时，`components/ai/AiApplyBar.svelte`
+  的主按钮与「更多应用」一律禁用，告警与按钮旁都写「请先重新生成」。禁止一边红字告警、
+  一边留着可点的红色主提交键。
+- **空态引导**：无提案时按当前通道给 1–2 步引导卡（`.aiw-blank-*`），翻译页不再是一片空白；
+  本机 API 未就绪时柔和引导「去设置」或「改用外部手动」。断句重排的「只改几处」在粘稿前
+  也用同一套引导块说明第 3 步，而不是一行小字。
+- **回归**：`tools/shots/capture_ai_toolbar.mjs`（三页两行头 / 第 1 行不折行 / 翻译模板
+  单一入口 / 失效禁用 / 空态卡）、`tools/shots/verify_reshape_flow.mjs`（分段计划冻结）、
+  `tools/shots/verify_batch_and_align.mjs`（批次与时间轴对齐）。
