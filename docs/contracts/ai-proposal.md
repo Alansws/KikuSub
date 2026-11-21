@@ -385,6 +385,18 @@
   `AbortController` 中断在途请求。不做提示词库第六类，也不做 QaPanel 入口。
 - **取消**：前端用 `AbortController` 真正中断 fetch；服务端那条短请求会自行结束，
   结果被丢弃。判定请求**不占** `JobManager` 单槽，转写进行中也能用。
+- **设置页分级（2026-11-21，界面重构 Step 6）**：设置 → AI 与技能顶层只留
+  「启用 AI 优化 / 服务地址 / 模型 / API Key / 连接测试」与底部「Agent 技能」；
+  单句判定覆盖、自动判定、本地上下文档位与分块参数都收进
+  `components/settings/ai/AiAdvancedFold.svelte`（标题
+  「进阶：单句判定独立模型与本地部署」）。默认开合由纯函数
+  `lib/settings/aiFold.ts` 的 `advancedAiInUse()` 决定：判定服务地址 / 判定模型 /
+  判定 Key 任一已填（含解不开待重填）或 `ai_auto_arbitrate` 已开就默认展开——既有高级
+  配置不会因为折叠而消失。它要等两把 Key 的「有没有」都问过主进程（`aiState.keyChecked`）
+  才生效，否则「只存过判定 Key」的配置会被异步返回前的空状态误判；用户点过折叠区之后
+  以用户为准，保存 / 清 Key 引起的配置刷新不会把面板弹回去。收起时摘要仍写明
+  「跟随全局 / 已单独配置 / 本机 LM Studio · 自动判定开/关」。
+  单测在 `desktop/test/settings-ai-fold.test.mjs`。
 - **回归**：`tests/test_ai_arbitrate.py`（提示词无时间码 / 分语种 / 动态模式 / 预算 /
   结果校验）、`tests/test_ai_local_model.py`（loopback 限制 / 卸载后重载 / 同档位 no-op）、
   `tests/test_server_ai.py`（本地无 Key、覆盖 Key、502 重问一次、422 放宽、
@@ -395,7 +407,9 @@
   `tools/shots/verify_arbitration.mjs`（第三版真实界面）、
   `tools/shots/verify_arbitration_dialog.mjs`（常驻区 / 空识别提示 / 草稿持久 / 浮窗
   拖动缩放 / Esc / 发送追问与清空重判分离 / 请求体无旧 history / 撤销同步结果卡 /
-  复制反馈 / 文本可选中 / 单一对话入口）。
+  复制反馈 / 文本可选中 / 单一对话入口）、
+  `tools/shots/verify_settings_ai_fold.mjs`（进阶折叠默认收起 / 已配置默认展开 /
+  手动开合 / 摘要文案 / 导出页无译文引导 —— 见 §3.8.2 末条）。
 
 #### 3.7.8 片段范围：局部润色 / 局部翻译（2026-11-20）
 

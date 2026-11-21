@@ -108,6 +108,11 @@
   改样式字段时同步 `desktop/renderer/src/lib/api.ts` 的 `SubtitleStylePayload`。
 - 目录：设置里的 `video_export_dir`，空值跟随 `export_dir`；所有路径统一在
   设置页「运行环境」的 `.path-row` 列表中展示/更改。
+- **交付页收尾（2026-11-21，界面重构 Step 6）**：底部操作栏只留「开始导出」，
+  不再放「为什么在 KikuSub 里导出」这类宣传性说明；没有译文轨时，字幕文件与
+  成片「字幕轨」两处置灰的「译文 / 双语」旁边各跟一句轻量引导
+  （`.trk-hint`：「暂无译文轨，可在 AI 处理 → 翻译生成后导出双语」，有译文轨即消失）。
+  回归：`tools/shots/verify_settings_ai_fold.mjs`（含导出页两处 hint 与底部只剩一个按钮）。
 - 依赖：`Pillow>=10` 必须进 `requirements.txt`；`plan_export` 在缺 Pillow 时
   直接给「改用软字幕」的可读错误。`tests/test_export.py` 覆盖 burn/soft/copy。
 

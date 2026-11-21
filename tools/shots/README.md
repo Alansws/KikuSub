@@ -183,6 +183,26 @@ bash tools/shots/capture_settings_matrix.sh --only light-engines,dark-env
 （体积约 1/3），转换命令与当次结论见
 `docs/sprints/2026-11-settings-redesign/落地记录.md`。
 
+## 设置 AI「进阶」折叠 + 导出页收尾回归
+
+2026-11-21（界面重构 Step 6）新增。四件在真实界面里断言：
+
+- 全新配置时「进阶：单句判定独立模型与本地部署」默认收起，顶层只剩核心配置；
+- 预置判定地址 / 模型 + 自动判定时默认展开（既有高级配置不会因为折叠而消失）；
+- 点开 / 收起都生效，收起后摘要是「跟随全局 / 已单独配置 / 本机 LM Studio · 自动判定开/关」；
+- 导出页底部不再有「为什么在 KikuSub 里导出」，无译文轨时置灰的「译文 / 双语」旁有引导。
+
+```bash
+node tools/shots/verify_settings_ai_fold.mjs
+# 沙箱 / CI
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_ai_fold.mjs
+```
+
+截图落在系统临时目录的 `kikusub-settings-ai-fold/`：`settings-ai-fold-collapsed.png`、
+`settings-ai-fold-configured.png`、`export-track-hint.png`、`export-bottom.png`。
+契约口径见 [ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.7 与
+[export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
+
 ## 基线
 
 `docs/images/shots/baseline/` 现在有两组基线：
