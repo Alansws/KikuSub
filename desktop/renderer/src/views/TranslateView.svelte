@@ -2,28 +2,41 @@
   /**
    * 翻译页（原「AI 优化」的翻译半边）。
    *
+   * 版式（2026-11-21 Step 5 起与润色 / 断句重排共用顶部工作条）：
+   *   第 1 行「处理什么」= 标题 + 目标语种 + 模板 + 处理范围 + 状态；
+   *   第 2 行「怎么跑」= 执行通道二选一（自动 API / 外部手动）+ 该通道动作 + 批次。
+   * 模板只有一个入口（下拉框）：以前「模板：AV专用版_V2」的静态文字和下拉框
+   * 并排出现，看起来像两个同名下拉框。
+   *
    * 翻译永远只吃「定稿后的原文一列」，不参与双引擎比较（D-3/D-4）。应用后
    * 写进译文平行轨，核对台可切到双语；原文与时间轴一个字节都不改。
    */
   import Icon from '../components/Icon.svelte';
-  import ClipScopePicker from '../components/ClipScopePicker.svelte';
-  import BatchRangeBar from '../components/ai/BatchRangeBar.svelte';
+  import AiBatchToolbar from '../components/ai/AiBatchToolbar.svelte';
+  import AiApplyBar from '../components/ai/AiApplyBar.svelte';
+  import ProposalMenu from '../components/ai/ProposalMenu.svelte';
+  import '../components/ai/ai-workbench.css';
   import { untrack } from 'svelte';
   import {
     ai,
+    aiApiReady,
     aiBatchActive,
     aiBatchSpan,
+    aiEntryLabel,
+    aiSetup,
     applyAiProposal,
     cancelAiPolish,
     copyAiPrompt,
     discardAiProposal,
     importAiProposal,
     loadAiProposal,
+    loadAiSetup,
     parseAiPastedSrt,
     resetAiBatch,
     saveAiProposalAs,
     setAiBatch,
     setAiBatchSize,
+    setAiChannel,
     setAiEdit,
     setAiKind,
     setAiLang,
@@ -38,10 +51,9 @@
     prompts,
     promptItemsFor,
     selectPromptTemplate,
-    selectedPromptTemplate,
   } from '../lib/promptStore.svelte';
-  import { clipSpan, formatRange } from '../lib/clipRange';
-  import { app, exporter, focusRange, jumpToCue, setExportClip, setView } from '../lib/store.svelte';
+  import { clipSpan } from '../lib/clipRange';
+  import { app, exporter, focusRange, jumpToCue, setView } from '../lib/store.svelte';
   import { tcShort } from '../lib/time';
 
   let editing = $state(0);
@@ -77,9 +89,6 @@
   const scoped = $derived(exporter.clip.end > 0);
   const restricted = $derived(scoped || aiBatchActive());
   const batch = $derived(aiBatchSpan());
-  const scopeTitle = $derived(
-    scoped ? `${exporter.clip.label ? `${exporter.clip.label} · ` : ''}${formatRange(exporter.clip)}` : '',
-  );
   /** 表格 / 复制 / 回填只作用于当前批次（实时索引切片，改文字不会让批次失效）。 */
   const scopedRows = $derived(
     batch.count > 0 ? rows.slice(batch.from - 1, batch.to) : [],
@@ -111,6 +120,15 @@
     return parts.join(' · ');
   });
 
+  const apiReady = $derived(aiSetup.loaded && aiApiReady());
+  /**
+   * 源文本已变化（digest 不符）：应用一定会被 409 拒绝。底部主按钮必须禁用，
+   * 不能一边亮着红字告警一边留着可点的红色提交键。
+   */
+  const invalid = $derived(Boolean(ai.proposal) && !ai.digestMatch);
+  /** 空态引导跟着执行通道走：自动 API 不通时给外部手动一条明路。 */
+  const channel = $derived(ai.channel);
+
   $effect(() => {
     void app.connected;
     void app.media?.id;
@@ -119,6 +137,7 @@
     if (app.connected) {
       void loadAiProposal();
       void loadPrompts();
+      void loadAiSetup(true);
     }
   });
 
@@ -166,164 +185,157 @@
     node.focus();
     node.select();
   }
+
+  function togglePaste() {
+    ai.pasteOpen = !ai.pasteOpen;
+  }
+
+  async function parsePaste() {
+    await parseAiPastedSrt();
+    if (!ai.pasteText.trim()) ai.pasteOpen = false;
+  }
 </script>
 
-<div class="ai">
-  <div class="head">
-    <span class="title">翻译</span>
-    <span class="dim" title="翻译只读取 translate 分类的模板">
-      模板：{selectedPromptTemplate('translate')?.name ?? '—'}
-    </span>
-    <select
-      class="lang"
-      value={ai.lang}
-      onchange={(e) => setAiLang(e.currentTarget.value)}
-      title="目标语种"
-    >
-      <option value="zh-Hans">简体中文</option>
-      <option value="zh-Hant">繁體中文</option>
-      <option value="en">English</option>
-    </select>
-    <ClipScopePicker compact label="处理范围" disabled={ai.generating} />
-    <BatchRangeBar
-      from={batch.from}
-      to={batch.to}
-      spanFrom={scopeSpan.from}
-      spanTo={scopeSpan.to}
-      count={batch.count}
-      total={app.cues.length}
-      size={ai.batchSize}
-      manual={aiBatchActive()}
-      disabled={ai.generating || ai.applying}
-      onApply={setAiBatch}
-      onStep={stepAiBatch}
-      onSize={setAiBatchSize}
-      onReset={resetAiBatch}
-    />
-    {#if translateTemplates.length}
-      <select
-        class="lang"
-        value={prompts.selected}
-        onchange={(e) => void selectPromptTemplate(e.currentTarget.value, 'translate')}
-        title="翻译提示词模板（在提示词库的「翻译」页签里编辑）"
-      >
-        {#each translateTemplates as item (item.id)}
-          <option value={item.id}>{item.name}</option>
-        {/each}
-      </select>
-    {/if}
+<div class="ai aiw-page">
+  <AiBatchToolbar
+    title="翻译"
+    channel={ai.channel}
+    channels={['api', 'manual']}
+    apiNote="设置 → AI 优化里启用并填写 API Key；也可以直接用「外部手动」"
+    onChannel={(next) => setAiChannel(next)}
+    templates={{
+      items: translateTemplates,
+      value: prompts.selected,
+      title: '翻译提示词模板（在提示词库的「翻译」页签里编辑）',
+      onchange: (id) => void selectPromptTemplate(id, 'translate'),
+    }}
+    busy={ai.generating || ai.applying}
+    actionsVisible={Boolean(ai.proposal)}
+    batch={{
+      from: batch.from,
+      to: batch.to,
+      spanFrom: scopeSpan.from,
+      spanTo: scopeSpan.to,
+      count: batch.count,
+      total: app.cues.length,
+      size: ai.batchSize,
+      manual: aiBatchActive(),
+      disabled: ai.generating || ai.applying,
+      onApply: setAiBatch,
+      onStep: stepAiBatch,
+      onSize: setAiBatchSize,
+      onReset: resetAiBatch,
+    }}
+    progress={ai.generating ? ai.progress : null}
+  >
+    {#snippet modeConfig()}
+      <label class="lang-pick" title="目标语种">
+        <span class="aiw-label">译为</span>
+        <select
+          class="aiw-select"
+          value={ai.lang}
+          onchange={(e) => setAiLang(e.currentTarget.value)}
+        >
+          <option value="zh-Hans">简体中文</option>
+          <option value="zh-Hant">繁體中文</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+    {/snippet}
 
-    {#if ai.proposal}
-      <span class="badge" title={ai.proposal.entry === 'manual'
-        ? '从外部模型（网页版 / 聊天窗）复制提示词、再把回复粘回来的结果'
-        : ai.proposal.entry === 'skill'
-          ? '由随包 Agent 技能写出的提案文件'
-          : '在本机「生成建议」里调用模型得到的结果'}>
-        {ai.proposal.entry === 'skill' ? '外部 Agent' : ai.proposal.entry === 'manual' ? '外部粘贴' : '本机生成'}
-      </span>
-      {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
-        <span class="dim">{ai.proposal.model}</span>
-      {/if}
-    {/if}
-
-    <div class="spacer"></div>
-
-    <button
-      class="btn ghost"
-      onclick={copyAiPrompt}
-      disabled={!app.cues.length}
-      title="用当前 translate 模板生成提示词；可粘到任意网页版模型，再把回复粘回来"
-    >
-      复制提示词
-    </button>
-    <button
-      class="btn ghost"
-      onclick={() => setView('prompts')}
-      title="打开提示词库：翻译模板在「翻译」页签"
-    >
-      提示词库
-    </button>
-    <button
-      class="btn ghost"
-      onclick={() => (ai.pasteOpen = !ai.pasteOpen)}
-      disabled={!app.cues.length}
-      title="粘贴模型返回的 SRT，解析后走同一套双栏对照"
-    >
-      粘贴结果…
-    </button>
-    {#if ai.proposal}<div class="tb-div"></div>{/if}
-    {#if ai.proposal}
-      <button
-        class="btn ghost"
-        onclick={startAiTranslate}
-        disabled={ai.generating || !app.cues.length}
-        title="把原文字幕翻译成所选语种（只生成建议）"
-      >
-        生成建议
-      </button>
-      <button class="btn ghost" onclick={importAiProposal} title="导入一份外部生成的 proposal.json">
-        导入建议…
-      </button>
-      <div class="tb-div"></div>
-      <button class="btn ghost" onclick={() => void loadAiProposal(true)} disabled={ai.loading || ai.generating}>
-        重新加载
-      </button>
-      <button class="btn ghost" onclick={saveAiProposalAs} disabled={ai.saving}>另存</button>
-      <button class="btn ghost danger" onclick={discardAiProposal}>丢弃</button>
-      <div class="tb-div"></div>
+    {#snippet laneApi()}
       <button
         class="btn primary"
-        onclick={applyAiProposal}
-        disabled={ai.applying || acceptedCount === 0}
-        title="写进译文轨并把核对台切到双语（不改动原文与时间轴）"
+        onclick={startAiTranslate}
+        disabled={ai.generating || !app.cues.length || !apiReady}
+        title={apiReady
+          ? '把原文字幕翻译成所选语种（只生成建议，不改原文）'
+          : '先在设置 → AI 优化里启用并配置 API Key'}
       >
-        {ai.applying ? '应用中…' : '应用'}
+        {ai.generating ? `生成中 ${ai.progress}%` : '生成译文建议'}
       </button>
-    {/if}
-  </div>
-
-  {#if ai.proposal}
-    <div class="bar">
-      {#if aiBatchActive()}
-        <span class="scope-chip" title="只写回这一批；范围外与批次外译文原样保留">
-          本批 · 第 <b>{batch.from}–{batch.to}</b> 条 · {batch.count} / {app.cues.length} 条
-        </span>
-        <button class="link" onclick={resetAiBatch}>整段</button>
-        <span class="sep"></span>
-      {:else if scoped}
-        <span class="scope-chip" title="只处理这一段；范围外译文原样保留">
-          片段 · {scopeTitle} · <b>{scopeSpan.count}</b> / {app.cues.length} 条
-        </span>
-        <button class="link" onclick={() => setExportClip({ start: 0, end: 0, label: '' })}>
-          全片
+      {#if ai.generating}
+        <button class="aiw-link" onclick={cancelAiPolish}>取消</button>
+        <span class="aiw-hint">{ai.stage || '准备中'}</span>
+      {:else if !aiSetup.loaded}
+        <span class="aiw-hint">读取配置…</span>
+      {:else if !apiReady}
+        <span class="aiw-hint">未启用 / 未配置 Key</span>
+        <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里打开">
+          去设置
         </button>
-        <span class="sep"></span>
       {:else}
-        <span>共 <b>{app.cues.length}</b> 条</span>
+        <span class="aiw-mono" title={aiSetup.baseUrl}>{aiSetup.model || '未指定模型'}</span>
       {/if}
-      <span class="sep"></span>
-      <span>AI 改动 <b class="warn">{changedCount}</b> 处</span>
-      <span class="sep"></span>
-      <span>已采纳 <b>{acceptedCount}</b></span>
-      <div class="spacer"></div>
-      <label class="chk">
-        <input type="checkbox" bind:checked={ai.changedOnly} />
-        只看改动
-      </label>
-      <button class="link" onclick={() => setAllAiAccept(true)} disabled={!ai.proposal}>全选</button>
-      <button class="link" onclick={() => setAllAiAccept(false)} disabled={!ai.proposal}>全不选</button>
-    </div>
-  {/if}
+    {/snippet}
 
-  {#if ai.proposal && visibleErrors.length}
+    {#snippet laneManual()}
+      <button
+        class="btn"
+        onclick={() => void copyAiPrompt()}
+        disabled={!app.cues.length}
+        title={aiBatchActive()
+          ? '复制本批的提示词；只包含这一批的条目'
+          : '复制提示词；可粘到任意网页版模型，再把回复粘回来'}
+      >{aiBatchActive() ? '复制本批提示词' : '复制提示词'}</button>
+      <span class="aiw-arrow" aria-hidden="true">→</span>
+      <button
+        class="btn ghost"
+        onclick={togglePaste}
+        disabled={!app.cues.length}
+        title="粘贴模型返回的 SRT，按时间轴对齐原句"
+      >{ai.pasteOpen ? '收起粘贴' : '粘贴结果…'}</button>
+      <button class="btn ghost" onclick={importAiProposal} title="导入一份外部生成的提案文件">
+        导入建议…
+      </button>
+    {/snippet}
+
+    {#snippet statusExtra()}
+      {#if ai.proposal}
+        <span
+          class="aiw-chip accent"
+          title={ai.proposal.entry === 'manual'
+            ? '从外部模型复制提示词、再把回复粘回来的结果'
+            : ai.proposal.entry === 'skill'
+              ? '由随包 Agent 技能写出的提案文件'
+              : '在本机「生成译文建议」里调用模型得到的结果'}
+        >{aiEntryLabel()}</span>
+        {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}
+          <span class="aiw-mono">{ai.proposal.model}</span>
+        {/if}
+        <ProposalMenu
+          loading={ai.loading}
+          generating={ai.generating}
+          saving={ai.saving}
+          onReload={() => void loadAiProposal(true)}
+          onSaveAs={() => void saveAiProposalAs()}
+          onDiscard={() => void discardAiProposal()}
+        />
+      {:else if ai.loading}
+        <span class="aiw-hint">正在读取建议…</span>
+      {/if}
+    {/snippet}
+  </AiBatchToolbar>
+
+  {#if invalid}
+    <div class="note err">
+      <Icon name="warn" size={11} />
+      <span>
+        源文本已变化：这份译文是针对另一版字幕生成的，应用会被拒绝。
+        请重新生成（或重新粘贴）一份建议后再应用。
+      </span>
+      <button
+        class="aiw-link"
+        onclick={() => {
+          setAiChannel('api');
+          void startAiTranslate();
+        }}
+      >重新生成</button>
+    </div>
+  {:else if ai.proposal && visibleErrors.length}
     <div class="note err">
       <Icon name="warn" size={11} />
       <span>{visibleErrors[0]}</span>
-    </div>
-  {:else if ai.proposal && !ai.digestMatch}
-    <div class="note err">
-      <Icon name="warn" size={11} />
-      <span>源文本已变化：这份建议是针对另一版字幕生成的，应用会被拒绝。</span>
     </div>
   {:else if rangeMismatch && proposalRange}
     <div class="note warn">
@@ -367,10 +379,11 @@
         class="paste-box"
         bind:value={ai.pasteText}
         spellcheck="false"
+        aria-label="粘贴模型返回的译文 SRT"
         placeholder={'1\n00:00:00,500 --> 00:00:01,500\n早上好\n\n2\n…'}
       ></textarea>
       <div class="paste-actions">
-        <button class="btn primary" onclick={parseAiPastedSrt} disabled={ai.parsing || !ai.pasteText.trim()}>
+        <button class="btn primary" onclick={parsePaste} disabled={ai.parsing || !ai.pasteText.trim()}>
           {ai.parsing ? '解析中…' : aiBatchActive() ? '解析并回填本批' : '解析成建议'}
         </button>
         <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
@@ -387,37 +400,105 @@
     </div>
   {/if}
 
-  {#if ai.generating}
-    <div class="note busy">
-      <Icon name="wave" size={11} />
-      <span>正在生成建议：{ai.stage || '准备中'}</span>
-      <b class="pct">{ai.progress}%</b>
-      <button class="link" onclick={cancelAiPolish}>取消</button>
-    </div>
-  {/if}
-
   {#if ai.loading}
-    <div class="blank"><div class="et">正在读取建议…</div></div>
+    <div class="aiw-blank">
+      <div class="aiw-blank-card">
+        <div class="aiw-blank-head">
+          <span class="aiw-blank-icon"><Icon name="doc" size={18} /></span>
+          <div class="aiw-blank-title">正在读取建议…</div>
+        </div>
+      </div>
+    </div>
+  {:else if !app.cues.length}
+    <div class="aiw-blank">
+      <div class="aiw-blank-card">
+        <div class="aiw-blank-head">
+          <span class="aiw-blank-icon"><Icon name="doc" size={18} /></span>
+          <div class="aiw-blank-title">还没有字幕</div>
+        </div>
+        <p class="aiw-blank-sub">先转写或导入一份日文字幕，翻译只读取核对台里的原文一列。</p>
+        <div class="aiw-blank-actions">
+          <button class="btn primary" onclick={() => setView('transcribe')}>去转写页</button>
+          <button class="btn ghost" onclick={() => setView('import')}>导入字幕</button>
+        </div>
+      </div>
+    </div>
   {:else if !ai.proposal}
-    <div class="blank">
-      <span class="blank-icon"><Icon name="doc" size={24} /></span>
-      <div class="et">还没有译文建议</div>
-      <div class="es">点「生成建议」，或导入外部工具写好的建议；时间码保持不变。</div>
-      {#if visibleErrors.length}
-        <div class="blank-err"><Icon name="warn" size={11} />{visibleErrors[0]}</div>
-      {/if}
-      <div class="ea">
-        <button class="btn primary" onclick={startAiTranslate} disabled={ai.generating || !app.cues.length}>
-          生成建议
-        </button>
-        <button class="btn ghost" onclick={importAiProposal}>导入建议…</button>
+    <div class="aiw-blank">
+      <div class="aiw-blank-card">
+        <div class="aiw-blank-head">
+          <span class="aiw-blank-icon">
+            <Icon name={channel === 'api' ? 'sparkle' : 'paste'} size={18} />
+          </span>
+          <div class="aiw-blank-title">还没有译文建议</div>
+        </div>
+        {#if channel === 'api'}
+          <p class="aiw-blank-sub">
+            用设置里配置的模型把原文翻译成「{ai.lang === 'en' ? 'English' : ai.lang === 'zh-Hant' ? '繁體中文' : '简体中文'}」，
+            生成后只写进译文轨，原文与时间轴一个字节都不动。
+          </p>
+          <ol class="aiw-blank-steps">
+            {#if apiReady}
+              <li><i>1</i><span>点下面的 <b>生成译文建议</b>，等本机模型跑完。</span></li>
+            {:else}
+              <li><i>1</i><span>先按下方提示启用 AI 并填好 API Key，或切到 <b>外部手动</b>。</span></li>
+            {/if}
+            <li><i>2</i><span>逐条检查右侧表格，再点底部 <b>应用译文</b> 写入译文轨。</span></li>
+          </ol>
+          {#if !apiReady && aiSetup.loaded}
+            <div class="aiw-blank-note">
+              <Icon name="warn" size={11} />
+              <span>
+                本机 API 还没启用或没填 Key。去
+                <button class="aiw-link" onclick={() => setView('settings')}>设置 → AI 优化</button>
+                配好后回到本页重试；也可以直接切到上方的「外部手动」。
+              </span>
+            </div>
+          {/if}
+          <div class="aiw-blank-actions">
+            <button
+              class="btn primary"
+              onclick={startAiTranslate}
+              disabled={ai.generating || !apiReady}
+            >{ai.generating ? `生成中 ${ai.progress}%` : '生成译文建议'}</button>
+            <button class="aiw-link" onclick={importAiProposal}>导入建议文件…</button>
+            {#if visibleErrors.length}
+              <span class="aiw-blank-note"><Icon name="warn" size={11} />{visibleErrors[0]}</span>
+            {/if}
+          </div>
+        {:else}
+          <p class="aiw-blank-sub">
+            自动 API 是可选的。把提示词复制到任意网页版 / 聊天模型（ChatGPT、Claude…），
+            再把回复整段粘回来，一样能写进译文轨。
+          </p>
+          <ol class="aiw-blank-steps">
+            <li><i>1</i><span>点 <b>复制提示词</b>，粘到外部模型，让它按模板返回 SRT。</span></li>
+            <li><i>2</i><span>把回复粘进 <b>粘贴结果</b>，条数不同也能按时间轴自动对齐。</span></li>
+          </ol>
+          <div class="aiw-blank-actions">
+            <button class="btn primary" onclick={() => void copyAiPrompt()} disabled={!app.cues.length}>
+              复制提示词
+            </button>
+            <button class="btn ghost" onclick={togglePaste}>粘贴结果…</button>
+            <button class="aiw-link" onclick={importAiProposal}>导入建议文件…</button>
+            {#if visibleErrors.length}
+              <span class="aiw-blank-note"><Icon name="warn" size={11} />{visibleErrors[0]}</span>
+            {/if}
+          </div>
+        {/if}
       </div>
     </div>
   {:else if !visible.length}
-    <div class="blank">
-      <Icon name="check" size={22} />
-      <div class="et">这一栏没有内容</div>
-      <div class="es">{ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}</div>
+    <div class="aiw-blank">
+      <div class="aiw-blank-card">
+        <div class="aiw-blank-head">
+          <span class="aiw-blank-icon"><Icon name="check" size={18} /></span>
+          <div class="aiw-blank-title">这一栏没有内容</div>
+        </div>
+        <p class="aiw-blank-sub">
+          {ai.changedOnly ? '这一栏没有改动；取消「只看改动」可以看全量。' : '当前没有字幕。'}
+        </p>
+      </div>
     </div>
   {:else}
     <div class="cols" class:no-notes={!hasNotes}>
@@ -485,6 +566,18 @@
         </div>
       {/each}
     </div>
+
+    <AiApplyBar
+      applyLabel="应用译文"
+      accepted={acceptedCount}
+      requireAccepted={false}
+      busy={ai.applying}
+      invalid={invalid}
+      changedOnly={ai.changedOnly}
+      onChangedOnly={(value) => (ai.changedOnly = value)}
+      onAll={setAllAiAccept}
+      onApply={applyAiProposal}
+    />
   {/if}
 </div>
 
@@ -494,73 +587,11 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--paper);
   }
-  .head,
-  .bar {
-    display: flex;
+  .lang-pick {
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
-    padding: var(--sp-2) 14px;
-    border-bottom: 1px solid var(--separator);
-  }
-  .head {
-    flex-wrap: wrap;
-  }
-  .title {
-    font-size: 13px;
-    font-weight: 600;
-  }
-  .bar {
-    gap: var(--sp-2);
-    font-size: 12px;
-    color: var(--text-2);
-    background: var(--bg-inspector);
-  }
-  .bar b {
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
-  }
-  .scope-chip {
-    color: var(--accent);
-  }
-  .bar b.warn {
-    color: var(--warn);
-  }
-  .sep {
-    width: 1px;
-    height: 11px;
-    background: var(--separator);
-  }
-  .spacer {
-    flex: 1;
-  }
-  .tb-div {
-    width: 1px;
-    height: 16px;
-    background: var(--separator);
-    flex: 0 0 1px;
-  }
-  .lang {
-    font: inherit;
-    font-size: 12px;
-    padding: 3px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
-  }
-  .badge {
-    font-size: 12px;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .dim {
-    font-size: 12px;
-    color: var(--text-3);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    gap: 6px;
   }
   .note {
     display: flex;
@@ -570,6 +601,7 @@
     font-size: 12px;
     line-height: 1.5;
     border-bottom: 1px solid var(--separator-soft);
+    flex: 0 0 auto;
   }
   .note.err {
     background: var(--danger-soft);
@@ -586,6 +618,7 @@
     padding: 10px 14px;
     border-bottom: 1px solid var(--separator);
     background: var(--bg-inspector);
+    flex: 0 0 auto;
   }
   .paste-head {
     font-size: 12px;
@@ -597,11 +630,11 @@
     min-height: 130px;
     max-height: 40vh;
     resize: vertical;
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
     padding: var(--sp-2) 10px;
-    border-radius: 8px;
+    border-radius: var(--rad-card);
     border: 1px solid var(--separator);
     background: var(--bg-content);
     color: var(--text);
@@ -615,19 +648,12 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
+    flex-wrap: wrap;
   }
   .paste-hint {
     margin-left: auto;
     font-size: 12px;
     color: var(--text-3);
-  }
-  .note.busy {
-    background: var(--accent-soft);
-    color: var(--text);
-  }
-  .note.busy .pct {
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
   }
   .chk {
     display: inline-flex;
@@ -635,19 +661,6 @@
     gap: 5px;
     cursor: pointer;
     user-select: none;
-  }
-  .link {
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    padding: 2px var(--sp-1);
-  }
-  .link:disabled {
-    color: var(--text-3);
-    cursor: default;
   }
   .cols,
   .row {
@@ -700,7 +713,7 @@
     background: transparent;
     padding: 0;
     color: var(--accent);
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-mono);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     cursor: pointer;
@@ -786,11 +799,11 @@
   }
   .align-tag.missing {
     background: var(--danger);
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
   }
   .align-tag.drift {
     background: var(--warn);
-    color: var(--on-accent, #fff);
+    color: var(--on-accent);
   }
   .align-empty {
     color: var(--text-3);
@@ -814,49 +827,5 @@
     border-color: transparent;
     background: var(--accent);
     color: var(--on-accent);
-  }
-  .blank {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    padding: var(--sp-10) var(--sp-6);
-    text-align: center;
-    color: var(--text-2);
-  }
-  .blank-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-    background: var(--accent-soft);
-    color: var(--accent);
-    margin-bottom: var(--sp-1);
-  }
-  .et {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .es {
-    font-size: 13px;
-    line-height: 1.7;
-    max-width: 440px;
-  }
-  .blank-err {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--warn);
-    max-width: 460px;
-  }
-  .ea {
-    display: flex;
-    gap: var(--sp-2);
-    margin-top: 6px;
   }
 </style>

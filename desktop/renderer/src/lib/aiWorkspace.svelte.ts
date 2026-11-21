@@ -45,6 +45,15 @@ import { promptSelectedId, type PromptCategory } from './promptStore.svelte';
 export type AiMode = 'single' | 'dual';
 
 /**
+ * 执行通道：`api` = 本机调用已配置的模型生成建议；`manual` = 复制提示词给外部
+ * 网页版 / 聊天模型，再把回复粘回来。
+ *
+ * 这两条是**一选一**的工作流，不是同一条工具栏上并排的两组按钮（2026-11-21
+ * 界面重构 Step 5）：顶部工作条按通道只显示一条动作链，空态引导也按通道给。
+ */
+export type AiChannel = 'api' | 'manual';
+
+/**
  * 当前这轮提案的上下文。
  *
  * `accept` / `edits` 用普通对象而不是 Set/Map：Svelte 5 的 runes 只追踪对象属性
@@ -95,7 +104,75 @@ export const ai = $state({
   batchSize: DEFAULT_BATCH_SIZE,
   /** 翻译页：严格要求粘贴条数与复制出去的一致；默认关闭（按时间轴对齐）。 */
   strictCount: false,
+  /**
+   * 当前执行通道；`channelTouched` 记住用户是否自己选过（不再被自动改写）。
+   * 初值取**永远可用**的外部手动：`loadAiSetup()` 探到本机 API 就绪时才切到自动。
+   */
+  channel: 'manual' as AiChannel,
+  channelTouched: false,
 });
+
+/**
+ * 本机 AI 配置的就绪状态（润色 / 翻译两页共用）。
+ *
+ * 之前两页各写一份「有没有 Key」的探测，顶栏、空态和按钮的禁用条件很容易
+ * 各自漂移；这里只留一份，页面与工作条都读它。
+ */
+export const aiSetup = $state({
+  loaded: false,
+  enabled: false,
+  keyReady: false,
+  keyOptional: false,
+  model: '',
+  baseUrl: '',
+});
+
+export function aiApiReady(): boolean {
+  return aiSetup.enabled && aiSetup.keyReady;
+}
+
+export async function loadAiSetup(force = false): Promise<void> {
+  if (aiSetup.loaded && !force) return;
+  try {
+    const cfg = await api.getAiConfig();
+    aiSetup.enabled = Boolean(cfg.enabled);
+    aiSetup.keyOptional = Boolean(cfg.key_optional);
+    aiSetup.model = cfg.model || '';
+    aiSetup.baseUrl = cfg.base_url || '';
+    let keyReady = Boolean(cfg.key_optional);
+    try {
+      const state = await window.kikusub?.aiKey?.status?.();
+      keyReady = keyReady || Boolean(state?.has);
+    } catch {
+      /* 主进程没暴露 Key 状态时按「没有」处理；本地服务（key_optional）不受影响 */
+    }
+    aiSetup.keyReady = keyReady;
+  } catch {
+    aiSetup.enabled = false;
+    aiSetup.keyReady = false;
+  } finally {
+    aiSetup.loaded = true;
+  }
+  // 第一次进页时默认落在能用的通道上；用户自己切过就不再动它。
+  if (!ai.channelTouched) ai.channel = aiApiReady() ? 'api' : 'manual';
+}
+
+/** 顶栏的分段开关：显式选择后不再被 `loadAiSetup` 改写。 */
+export function setAiChannel(channel: AiChannel) {
+  ai.channel = channel;
+  ai.channelTouched = true;
+}
+
+/**
+ * 提案来源的文案：`manual` 以前叫「外部粘贴」，和旁边的「粘贴回复」撞语义，
+ * 让人以为是两个不同入口。现在统一说「回复来自外部模型」，动词留给按钮。
+ */
+export function aiEntryLabel(): string {
+  const entry = ai.proposal?.entry;
+  if (entry === 'manual') return '外部回复';
+  if (entry === 'skill') return 'Agent 文件';
+  return '本机生成';
+}
 
 function aiContextKey(): string {
   return `${app.media?.id ?? ''}:${ai.kind}:${ai.lang}:${ai.mode}`;
