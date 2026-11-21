@@ -374,6 +374,8 @@ def run_transcription(
         else:
             # ASR 路径与未开分离**完全一致**：同一个媒体、同一组 start/end、
             # 同一个 loudnorm 档位（audio_cache 会命中同一份 16k wav）。
+            # VAD 检测仍用 dynaudnorm 档位；引擎侧另解一份未归一化的真实电平，
+            # 只给绝对能量门控用（避免近静音串音被放大后送进 ASR）。
             vad_audio_path = vocals_path
         log.info(
             "人声分离就绪 | mode=%s | %s | %.1fs-%.1fs | asr=%s",

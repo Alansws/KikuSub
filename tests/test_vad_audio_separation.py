@@ -130,12 +130,49 @@ def test_transcribe_file_decodes_same_asr_audio_with_and_without_vad_path(
     assert asr_call["path"] == str(media)
     assert asr_call["start_time_s"] == 1.0
     assert asr_call["end_time_s"] == 3.0
-    # 第二段才是分离人声，而且不带切片（它本身就是本次分离范围）。
-    assert calls[1]["path"] == str(vocals)
-    assert calls[1].get("start_time_s") is None
-    assert calls[1].get("end_time_s") is None
+    assert asr_call["enable_loudnorm"] is True
+    # 后两段都是分离人声，而且不带切片（它本身就是本次分离范围）。
+    assert [call["path"] for call in calls[1:]] == [str(vocals), str(vocals)]
+    for call in calls[1:]:
+        assert call.get("start_time_s") is None
+        assert call.get("end_time_s") is None
+    # VAD 检测仍走 dynaudnorm 档位；另解一份未归一化的真实电平做能量门控。
+    assert calls[1]["enable_loudnorm"] is True
+    assert calls[2]["enable_loudnorm"] is False
     # 两次送进 _transcribe_array 的 ASR 数组是同一个对象/同一份缓存内容。
     assert np.array_equal(captured[0], captured[1])
+
+
+def test_vad_only_energy_gate_drops_silent_vad_segments(monkeypatch):
+    """VAD 在静音 vocals 上切出的段会被绝对能量门控拦下，不送识别。"""
+    engine = _engine()
+    audio = np.full(SR * 2, 0.01, dtype=np.float32)
+    vad_audio = np.zeros(SR * 2, dtype=np.float32)
+    vad_level_audio = np.zeros(SR * 2, dtype=np.float32)
+
+    from core import vad as vad_module
+
+    monkeypatch.setattr(
+        vad_module,
+        "_silero_detect",
+        lambda *args, **kwargs: [{"start": 0, "end": SR}],
+    )
+    decoded: list[np.ndarray] = []
+    engine._decode_chunk = lambda buf, kwargs, timestamps=False: decoded.append(buf) or ""
+
+    cues = engine._transcribe_array(
+        audio,
+        config=engine.config,
+        vad_audio=vad_audio,
+        vad_level_audio=vad_level_audio,
+    )
+
+    assert cues == []
+    assert decoded == []
+    gate = engine.last_segment_stats["vocal_gate"]
+    assert gate["dropped"] == 1
+    assert gate["kept"] == 0
+    assert engine.last_segment_stats["vad_audio"] == "vocals"
 
 
 def test_onset_pad_is_ignored_for_whisperseg_and_reported(monkeypatch):

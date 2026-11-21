@@ -47,7 +47,9 @@ from silero_vad import load_silero_vad
 from . import audio_cache
 from . import timing_repair
 from .vad import (  # noqa: F401 - re-export for sherpa_asr
+    VOCAL_GATE_DBFS,
     detect_speech_stamps,
+    gate_stamps_by_energy,
     resolve_backend,
     vad_neg_threshold,
 )
@@ -365,6 +367,9 @@ class WhisperVadConfig:
     # P0：纯喘息/笑声/拟声不再静默删除，而是进质检队列（`nonverbal` kind）。
     # 只影响队列可见性，不影响字幕文本。
     nonverbal_qa: bool = True
+    # 分离人声作为 VAD 参考时的绝对能量门控（RMS dBFS）。只在该次转写真的
+    # 带 `vad_audio` 时生效；原声路径逐字节不变。`None` = 关闭门控。
+    vocal_gate_dbfs: float | None = VOCAL_GATE_DBFS
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -599,8 +604,13 @@ def load_audio_for_transcription(
     end_time_s: float | None = None,
     tmp_prefix: str = "kikusub-",
     cancel_event=None,
+    peak_gain_out: list[float] | None = None,
 ) -> np.ndarray:
-    """取送模用的 16k 单声道数组：缓存开启时直接读缓存，关闭时走临时目录。"""
+    """取送模用的 16k 单声道数组：缓存开启时直接读缓存，关闭时走临时目录。
+
+    ``peak_gain_out``：可选，把 `load_wav_mono` 的峰值归一化增益追加进去。
+    VAD 参考用它把「归一化后的 dBFS」还原成真实电平，供人声能量门控使用。
+    """
     if audio_cache.enabled():
         wav_path = extract_audio_16k(
             media_path,
@@ -610,7 +620,7 @@ def load_audio_for_transcription(
             end_time_s=end_time_s,
             cancel_event=cancel_event,
         )
-        return load_wav_mono(wav_path)
+        return load_wav_mono(wav_path, peak_gain_out=peak_gain_out)
 
     with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmp:
         wav_path = extract_audio_16k(
@@ -621,7 +631,7 @@ def load_audio_for_transcription(
             end_time_s=end_time_s,
             cancel_event=cancel_event,
         )
-        return load_wav_mono(wav_path)
+        return load_wav_mono(wav_path, peak_gain_out=peak_gain_out)
 
 
 def clamp_stamps_to_audio(stamps: list[dict], total_samples: int) -> list[dict]:
@@ -642,7 +652,12 @@ def clamp_stamps_to_audio(stamps: list[dict], total_samples: int) -> list[dict]:
     return out
 
 
-def load_wav_mono(path: str | Path) -> np.ndarray:
+def load_wav_mono(
+    path: str | Path,
+    *,
+    normalize_peak: bool = True,
+    peak_gain_out: list[float] | None = None,
+) -> np.ndarray:
     audio, sr = sf.read(str(path), always_2d=False)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
@@ -653,9 +668,13 @@ def load_wav_mono(path: str | Path) -> np.ndarray:
     if audio.size == 0:
         return np.zeros(0, dtype=np.float32)
 
+    gain = 1.0
     max_amp = float(np.max(np.abs(audio)))
-    if 1e-4 < max_amp < 0.4:
-        audio = audio * (0.85 / max_amp)
+    if normalize_peak and 1e-4 < max_amp < 0.4:
+        gain = 0.85 / max_amp
+        audio = audio * gain
+    if peak_gain_out is not None:
+        peak_gain_out.append(gain)
 
     return audio
 
@@ -1655,9 +1674,14 @@ class AnimeWhisperEngine:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
         vad_audio = None
+        vad_level_audio = None
         if vad_audio_path is not None:
             # 只解码给人声分离的 VAD 用；ASR 的 audio 已经按完全相同的参数读过，
             # 两者各自走 audio_cache，未开分离的那条路径不会多一次解码。
+            # **VAD 检测仍用原来的 dynaudnorm 档位**：直接换成未归一化音频会改变
+            # 切分边界（言叶之庭歌曲段 CER 21.32→25.74），违反红线 4。
+            # 真正要修的是「归一化把近静音串音抬成语音」：另解一份**不归一化**
+            # 的真实电平音频，只给绝对能量门控用（峰值归一化增益需要还原）。
             if progress_cb:
                 progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
             try:
@@ -1667,6 +1691,18 @@ class AnimeWhisperEngine:
                     tmp_prefix="kikusub-vad-only-",
                     cancel_event=cancel_event,
                 )
+                gains: list[float] = []
+                level = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=False,
+                    tmp_prefix="kikusub-vad-level-",
+                    cancel_event=cancel_event,
+                    peak_gain_out=gains,
+                )
+                gain = float(gains[0]) if gains else 1.0
+                if gain not in (0.0, 1.0):
+                    level = level / gain
+                vad_level_audio = level
             except CommandCancelled:
                 self.last_interrupted = True
                 if progress_cb:
@@ -1681,6 +1717,7 @@ class AnimeWhisperEngine:
             cancel_event=cancel_event,
             time_offset=time_offset,
             vad_audio=vad_audio,
+            vad_level_audio=vad_level_audio,
         )
 
     def _transcribe_array(
@@ -1694,6 +1731,7 @@ class AnimeWhisperEngine:
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
         vad_audio: np.ndarray | None = None,
+        vad_level_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         if progress_cb:
             progress_cb(0.08, "正在用 VAD 精确定位语音边界…")
@@ -1728,6 +1766,20 @@ class AnimeWhisperEngine:
             ),
         )
         self.last_segment_stats["vad_backend"] = vad_meta
+        # 只有分离人声做 VAD 参考时才做能量门控；原声路径不传 level 音频，
+        # 行为与旧版逐字节一致。门控看的是**未归一化**的真实电平，
+        # 所以 dynaudnorm 放大出来的近静音段会被丢掉，正常对白不受影响。
+        if vad_ref is not audio and vad_level_audio is not None:
+            gate_dbfs = getattr(cfg, "vocal_gate_dbfs", VOCAL_GATE_DBFS)
+            if gate_dbfs is not None:
+                gate_stats: dict = {}
+                stamps = gate_stamps_by_energy(
+                    stamps,
+                    vad_level_audio,
+                    floor_dbfs=float(gate_dbfs),
+                    stats=gate_stats,
+                )
+                self.last_segment_stats["vocal_gate"] = gate_stats
         if vad_ref is not audio:
             stamps = clamp_stamps_to_audio(stamps, len(audio))
             mismatch = abs(len(vad_ref) - len(audio)) / SAMPLE_RATE
