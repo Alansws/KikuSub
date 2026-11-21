@@ -56,6 +56,9 @@ class CuePatch(BaseModel):
     start: float | None = None
     end: float | None = None
     text: str | None = None
+    # 历史列表里显示的操作说明。留空回落到「修改第 N 条文本/时间」；
+    # 双引擎复核的「采用 B 句」会传「采用第二版：第 N 条」，⌘Z 的提示才说得清。
+    label: str = ""
 
 
 class InsertTranslation(BaseModel):
@@ -586,7 +589,7 @@ def patch_cue(index: int, payload: CuePatch, session: Session = Depends(get_sess
         parts.append("文本")
     if start != current.start or end != current.end:
         parts.append("时间")
-    label = f"修改第 {index + 1} 条{'与'.join(parts)}"
+    label = (payload.label or "").strip()[:120] or f"修改第 {index + 1} 条{'与'.join(parts)}"
     session.update_cue(index, start, end, text, label=label)
     return _snapshot(session)
 

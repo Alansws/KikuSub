@@ -1,12 +1,16 @@
 """第二版本（双引擎复核）路由。
 
-第二版是**参考文档**：读取、删除、整列替换核对台。逐句采用不做——复核页只做
-只读对照，真正的编辑仍回核对台（避免断句/时间戳不一致带来的合并 Bug）。
+第二版是**参考文档**：读取、删除、整列替换核对台。2026-11-21（界面重构 Step 2）
+起复核页多了「单句采用 B」的页内闭环，但它**没有**在本模块新增写接口：前端只是
+把 B 那一行的文本走 ``PATCH /api/cues/{index}``（带 ``label``）写回核对台，因此
+仍然是一步统一历史、⌘Z 一次撤回，也不会出现「两套可编辑字幕」。断句与时间戳
+不做合并——采纳只换文本，时间轴保持核对台当前值。
 
 四个接口：
 
 - ``GET /api/alt-review``：第二版摘要 + 全量 cues；``diff=1`` 时附上按当前两份
   字幕**实时计算**的对齐行与统计（``core.dual_review``，不持久化下标）。
+  ``ignore_punct``（默认 ``1``）只把「标点 / 空白不同」判为一致，不计入差异数。
 - ``POST /api/alt-review/import``：把工作流里已经做好的另一版字幕直接导入第二列
   （与转写产出的 B 版同构：同一份 ``AltReview``、同一份边车、同样的 diff/润色链路）。
 - ``DELETE /api/alt-review``：丢弃第二版，同时删内存与磁盘边车。
@@ -161,6 +165,7 @@ def _duration_warning(request: Request, session: Session, cues) -> str:
 def get_alt_review(
     request: Request,
     diff: bool = False,
+    ignore_punct: bool = True,
     session: Session = Depends(get_session),
 ) -> dict:
     _ensure_synced(request, session)
@@ -180,15 +185,15 @@ def get_alt_review(
     data["cues"] = _cues_payload(alt)
     data["media_path"] = alt.media_path
     data["params"] = dict(alt.params)
-    if diff:
-        review = dual_review.build_review(session.review_cues, alt.cues)
-        data["rows"] = review["rows"]
-        data["stats"] = review["stats"]
-    else:
-        # 徽标只需要差异行数：仍然实时算一份统计（O(n)，不返回 rows，省传输）。
-        review = dual_review.build_review(session.review_cues, alt.cues)
-        data["rows"] = []
-        data["stats"] = review["stats"]
+    # 2026-11-21（Step 2）：``ignore_punct`` 默认开——只有标点 / 空白不同的行
+    # 判为一致，不计入 ``~ 文本不同`` 与侧栏徽标；``?ignore_punct=0`` 回到严格比对。
+    review = dual_review.build_review(
+        session.review_cues, alt.cues, ignore_punct=ignore_punct
+    )
+    data["stats"] = review["stats"]
+    data["ignore_punct"] = bool(ignore_punct)
+    # diff 模式返回全量行；否则只要统计（O(n)，不返回 rows，省传输）。
+    data["rows"] = review["rows"] if diff else []
     return data
 
 
