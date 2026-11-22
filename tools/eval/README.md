@@ -11,6 +11,7 @@
 | 文件 | 干什么 | 会加载模型吗 |
 | --- | --- | --- |
 | `score_srt.py` | 两份 SRT 打分：CER、块均准确率、漏块、可疑切分 | 否（只依赖标准库） |
+| `score_partial.py` | **稀疏参考**专用：只在参考覆盖到的区间上比 CER/块准确率（口径不同，数字不可与 `score_srt.py` 混用） | 否（可选 `--media` 算段内静音） |
 | `run_clip.py` | 跑「一个引擎 × 一支片 × 一组参数」，出一条 scorecard | 是（whisper / qwen） |
 | `ab_onset.py` | 跑 P0-1 的 A0–A3 矩阵（起点提前 × 能量闸门），拼成一张对比表 | 是（whisper / qwen） |
 | `qwen_confidence_diag.py` | P0-3a：置信度特征 × 对/错句标签，打印每个特征的 AUC | 是（qwen） |
@@ -47,6 +48,36 @@ python tools/eval/score_srt.py \
 | `--ref-lang` | `ja`（默认）/ `zh` / `all` |
 | `--hyp-lang` | `all`（默认）/ `ja` / `zh` |
 | `--json` | 额外写出机器可读结果 |
+
+## score_partial.py：稀疏参考字幕打分
+
+当参考字幕**本身就不完整**（ASMR 类素材常见：人工只标了台词、把喘息与留白留空）
+时，`score_srt.py` 会把参考窗口之外的合法字幕全算成插入。实测一支 320s 片子的参考
+只覆盖 92.7s / 355 字，整片拼接 CER 会报到 160%，而只看覆盖区间是 15% 量级——
+**两个数字都对，但它们回答的不是一个问题**。
+
+```bash
+../.venv/bin/python tools/eval/score_partial.py \
+    --reference 测试/01_…_reference.srt \
+    --hypothesis outputs/eval/xxx/01_….srt \
+    --media /tmp/asmr16k.wav \
+    --json outputs/eval/partial.json
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `--reference` | 参考 SRT（可以是不完整的稀疏参考） |
+| `--hypothesis` | 待评测的 SRT |
+| `--media` | 16k 单声道 wav；给了才计算段内静音占比 |
+| `--pad` | 参考每条的扩张量，默认 0.6s（容忍人工打轴误差） |
+| `--json` | 写出机器可读结果（带 `method` 字段） |
+
+口径（写死，别各自改）：覆盖区间 = 参考每条 ±`pad` 的并集；归一化 = NFKC +
+去中日标点空白、**保留 `ー`**；漏块门槛与 `score_srt.py` 一致（acc<35% 且 ≥3 字）。
+结果里的 `method: "partial-reference-v1"` 就是「别和 `score_srt.py` 的数字混用」的标记。
+
+**选择建议**：参考覆盖了全片就先用 `score_srt.py`；参考是稀疏的（覆盖不到全片一半）
+就用本脚本，并在结论里写明「口径 + 覆盖率」，否则同一个引擎会被报出两个 CER。
 
 ## run_clip.py：跑一次，出一条 scorecard
 
