@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -257,9 +258,12 @@ def test_propose_rejection_surfaces_errors(server, tmp_path, capsys):
     assert "digest 不匹配" in err
 
 
-def test_connect_rejects_dead_pid(tmp_path, capsys):
+def test_connect_rejects_dead_pid(tmp_path, capsys, monkeypatch):
     path = tmp_path / "runtime.json"
     path.write_text(json.dumps({"port": 1, "token": "t", "pid": 999999, "session_id": "x"}), "utf-8")
+    # 只留显式候选：本机若真开着 KikuSub，connect 会按设计回退到运行中的实例，
+    # 让这条「旧 pid」断言失效（测试不该依赖用户桌面上有没有开 App）。
+    monkeypatch.setattr(kikusub, "runtime_candidates", lambda explicit=None: [path])
     code = kikusub.main(["project", "--runtime", str(path)])
     assert code == 3
     assert "已退出" in capsys.readouterr().err
@@ -268,6 +272,29 @@ def test_connect_rejects_dead_pid(tmp_path, capsys):
 def test_runtime_candidates_put_explicit_first(tmp_path):
     candidates = kikusub.runtime_candidates(str(tmp_path / "x.json"))
     assert candidates[0] == tmp_path / "x.json"
+
+
+def test_default_runtime_path_matches_packaged_app(monkeypatch):
+    """打包态写入的 runtime.json 必须就是终端默认查找的第一个候选。
+
+    主进程（desktop/main/main.cjs）打包后把 KIKUSUB_OUTPUT_DIR 设为
+    `<appData>/KikuSub/outputs`；macOS 的 appData 是 `~/Library/Application Support`。
+    这里锁死那条路径与排列顺序：用户直接敲 `kikusub` 时不需要再传 --runtime。
+    """
+    if sys.platform != "darwin":
+        pytest.skip("runtime.json 的打包路径是 macOS 约定")
+    monkeypatch.delenv("KIKUSUB_RUNTIME", raising=False)
+    packed = (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / "KikuSub"
+        / "outputs"
+        / "runtime.json"
+    )
+    candidates = kikusub.runtime_candidates()
+    assert packed in candidates
+    assert candidates[0] == packed
 
 
 def test_table_truncates_cjk_by_display_width():

@@ -52,6 +52,11 @@ def runtime_candidates(explicit: str | None = None) -> list[Path]:
     if env:
         candidates.append(Path(env).expanduser())
     home = Path.home()
+    # 打包态：主进程（desktop/main/main.cjs，非开发模式）把 KIKUSUB_OUTPUT_DIR 设成
+    # `~/Library/Application Support/KikuSub/outputs`，sidecar 就把 runtime.json 写在这里。
+    # 这个候选必须排在第一个，终端直接敲 `kikusub` 才不需要 --runtime。
+    # 改动路径时同步 `desktop/main/main.cjs` 的 dataDir()/baseDir() 与
+    # tests/test_kikusub_cli.py::test_default_runtime_path_matches_packaged_app。
     candidates.append(home / "Library" / "Application Support" / "KikuSub" / "outputs" / "runtime.json")
     candidates.append(home / "Library" / "Application Support" / "KikuSub" / "runtime.json")
     # 源码仓库里跑：tools/kikusub/kikusub.py → 仓库根 / outputs

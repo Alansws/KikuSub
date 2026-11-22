@@ -221,10 +221,19 @@ Homebrew 的 `/opt/homebrew/bin` 不在里面。所以在 Step 7 之前，「下
   界面上正在编辑的字幕。没有 session_id 时 CLI 必须报「界面还没建立会话」，不许自己建。
 - **崩溃残留**：优雅退出删文件；强杀/崩溃留下的旧文件由 CLI 用 `pid` 探活识别（`os.kill(pid, 0)`），
   pid 不存在就报「旧文件」并继续找下一个候选，不把旧 token 当可用实例。
-- **CLI 产物**：`tools/kikusub/` 是纯 stdlib（urllib/json/pathlib）客户端，PyInstaller onefile
-  打进 `Contents/Resources/bin/kikusub`（**不能**放 `Contents/MacOS`：APFS 默认大小写不敏感，`MacOS/kikusub` 会解析到主可执行文件 `KikuSub`，装配时会把 Electron 主二进制覆盖成 CLI——`build_app.sh` 现在用「主可执行文件 < 20MB 即失败」硬断言拦住）；设置页「AI 与技能 → 命令行工具」把它软链到
+- **CLI 产物**：`tools/kikusub/` 是纯 stdlib（urllib/json/pathlib）客户端，PyInstaller **onedir**
+  产出 `kikusub` + `kikusub-internal/`（免解压的 CPython 运行时），两者一起装进
+  `Contents/Resources/bin/`（**不能**放 `Contents/MacOS`：APFS 默认大小写不敏感，`MacOS/kikusub` 会解析到主可执行文件 `KikuSub`，装配时会把 Electron 主二进制覆盖成 CLI——`build_app.sh` 现在用「主可执行文件逐字节等于 Electron」硬断言拦住）；设置页「AI 与技能 → 命令行工具」把 `kikusub` 软链到
   `~/.local/bin/kikusub`（**不覆盖同名普通文件**）。macOS 默认 PATH 不含该目录，设置页同时给
   可复制的 `~/.zshrc` 命令；兜底是 app 内绝对路径。
+  **绝不用 onefile**：onefile 每次启动都要把运行时解压到临时目录并重新做签名校验，实测
+  `kikusub --help` 4.5–9.6 s；onedir 免解压后是毫秒级（`build_cli.sh` 构建完会打印实测值）。
+- **runtime.json 路径一致性**：打包态 sidecar 写
+  `~/Library/Application Support/KikuSub/outputs/runtime.json`（主进程把
+  `KIKUSUB_OUTPUT_DIR` 设为 `<appData>/KikuSub/outputs`）。这是 CLI 默认候选列表的第一项，
+  所以终端直接敲 `kikusub project` 即可，**不需要** `--runtime`；源码仓库里跑才落到
+  `<repo>/outputs/runtime.json`。路径口径由
+  `tests/test_kikusub_cli.py::test_default_runtime_path_matches_packaged_app` 看守。
 - **CLI 只读 + 只提交提案**：`project / cues / cue / qa / listen` 不写会话；
   `propose` 只调 `POST /api/ai/proposal`、`/api/ai/structure/from-json`、`/api/ai/reshape/proposal`，
   应用接口一个都不碰。`listen` 走 `kind=compare`，`--separate` 时窗口先分离人声再送识别。

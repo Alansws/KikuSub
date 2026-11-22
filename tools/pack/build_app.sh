@@ -18,10 +18,13 @@ APP="build/pack/KikuSub.app"
 ELECTRON_APP="desktop/node_modules/electron/dist/Electron.app"
 SIDECAR="build/pack/dist/sidecar"
 CLI="build/pack/dist/kikusub"
+# onedir CLI 的免解压运行时；必须和可执行文件成对装配，否则启动会找不到 Python。
+CLI_LIB="build/pack/dist/kikusub-internal"
 
 [ -d "$ELECTRON_APP" ] || { echo "缺少 Electron：cd desktop && npm install" >&2; exit 1; }
 [ -d "$SIDECAR" ] || { echo "缺少 sidecar：先跑 build_sidecar.sh" >&2; exit 1; }
 [ -x "$CLI" ] || { echo "缺少 kikusub CLI：先跑 build_cli.sh" >&2; exit 1; }
+[ -d "$CLI_LIB" ] || { echo "缺少 kikusub 运行时目录 ${CLI_LIB}：先跑 build_cli.sh" >&2; exit 1; }
 [ -d "desktop/renderer/dist" ] || { echo "缺少渲染层构建：cd desktop && npx vite build" >&2; exit 1; }
 
 # 防止“只重打了 app、没有重打 sidecar”：渲染层会出现新按钮，而 Python 侧还是旧接口
@@ -194,13 +197,20 @@ cp presets.json "$APP/Contents/Resources/python/presets.json" 2>/dev/null || tru
 
 # 外部 CLI：**不能放在 Contents/MacOS**。macOS 默认 APFS 大小写不敏感，
 # `Contents/MacOS/kikusub` 会解析到主可执行文件 `KikuSub`，`cp` 直接把 Electron
-# 主二进制覆盖成 7.8MB 的 CLI（2026-11-21 实际踩到：装配“成功”、签名通过，
+# 主二进制覆盖成 CLI（2026-11-21 实际踩到：装配“成功”、签名通过，
 # 但双击启动的是 CLI）。放在 Resources/bin，和 ffmpeg 同一层；设置页负责软链。
+#
+# onedir 产物是「可执行文件 + kikusub-internal/ 免解压运行时」一对。onefile 会把
+# 运行时塞进单文件、每次启动再解压到临时目录，实测 --help 要 4.5–9.6s；这里必须
+# 两个一起复制，否则 `~/.local/bin/kikusub` 启动会找不到 libpython。
 mkdir -p "$APP/Contents/Resources/bin"
 cp "$CLI" "$APP/Contents/Resources/bin/kikusub"
+rm_tree "$APP/Contents/Resources/bin/kikusub-internal"
+cp -R "$CLI_LIB" "$APP/Contents/Resources/bin/kikusub-internal"
 chmod 755 "$APP/Contents/Resources/bin/kikusub"
+# 运行时里的 dylib/.so 已由 PyInstaller 自签；主可执行文件单独补签。
 codesign --force --sign - "$APP/Contents/Resources/bin/kikusub" >/dev/null 2>&1 || true
-echo "已内置 CLI：$(du -h "$APP/Contents/Resources/bin/kikusub" | cut -f1)"
+echo "已内置 CLI：$(du -h "$APP/Contents/Resources/bin/kikusub" | cut -f1) + 运行时 $(du -sh "$APP/Contents/Resources/bin/kikusub-internal" | cut -f1)"
 
 echo "== 6/8 放入内置 ffmpeg / ffprobe（没有 Homebrew 也能导入视频）=="
 # 为什么要随包：macOS 不自带 ffmpeg，而从访达启动的 .app 只拿到
@@ -248,12 +258,13 @@ fi
 # 硬断言：主可执行文件必须还是 Electron 那一份。Electron 的主二进制只有 33KB
 # （真正的框架在 Frameworks/），所以不能按体积判断；用逐字节比较最可靠。
 # 放在 MacOS 下的 CLI 会被大小写不敏感文件系统当成同一个文件，把 App 静默换成
-# 7.8MB 的 CLI——这里必须在签名前拦住。
+# CLI——这里必须在签名前拦住。
 if ! cmp -s "$APP/Contents/MacOS/KikuSub" "$ELECTRON_APP/Contents/MacOS/Electron"; then
   echo "❌ 主可执行文件与 Electron 不一致，疑似被覆盖（大小写冲突）" >&2
   exit 1
 fi
 [ -x "$APP/Contents/Resources/bin/kikusub" ] || { echo "❌ 缺少包内 CLI" >&2; exit 1; }
+[ -d "$APP/Contents/Resources/bin/kikusub-internal" ] || { echo "❌ 缺少包内 CLI 运行时" >&2; exit 1; }
 
 echo "== 8/8 自签 =="
 # 用 ad-hoc 签名即可：AI 密钥走本机加密（见 desktop/main/aikey.cjs），**不依赖钥匙串**，

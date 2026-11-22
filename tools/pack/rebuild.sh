@@ -35,6 +35,7 @@ done
 
 SIDECAR_BIN="build/pack/dist/sidecar/sidecar"
 CLI_BIN="build/pack/dist/kikusub"
+CLI_LIB="build/pack/dist/kikusub-internal"
 APP="build/pack/KikuSub.app"
 
 need_sidecar=0
@@ -56,7 +57,8 @@ else
 fi
 
 need_cli=0
-if [ ! -x "$CLI_BIN" ]; then
+if [ ! -x "$CLI_BIN" ] || [ ! -d "$CLI_LIB" ]; then
+  # 旧版本留下的 onefile 只有可执行文件、没有 kikusub-internal；必须重打。
   need_cli=1
 elif [ -n "$(find tools/kikusub -name '*.py' -newer "$CLI_BIN" -print -quit 2>/dev/null || true)" ]; then
   need_cli=1
