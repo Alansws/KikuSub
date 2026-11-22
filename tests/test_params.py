@@ -116,14 +116,19 @@ def test_every_preset_key_exists_in_specs():
         assert not unknown, f"预设「{name}」里有规格表不认识的键：{unknown}"
 
 
+ASMR_PRESET = "日语 ASMR：轻声耳语·Silero 切分"
+
+
 def test_shipped_presets_cover_every_engine_with_its_defaults():
     """仓库里的种子预设 = 每个引擎一份「当前默认参数」快照，且都绑定到该引擎。
 
     这条守住 2026-11-14 的约定：四个引擎各有一份标定后的默认预设；
     预设不能跨引擎混用，也不允许把别的引擎的键混进来。
 
-    2026-11-15 起 Whisper 额外带一份「歌曲」变体（强 BGM / 歌曲区间用），
-    它不是默认快照，只是同引擎的第二个命名方案；除此之外仍只允许每引擎一份默认值。
+    2026-11-15 起 Whisper 额外带一份「歌曲」变体（强 BGM / 歌曲区间用，
+    `max_segment_s=15 / merge_gap_s=0.5 / min_silence_ms=300`）；2026-11-22 起再加一份
+    「日语 ASMR：轻声耳语·Silero 切分」（Silero 0.25 + 上一句文本提示），两者都不是
+    默认快照，只是同引擎的命名方案；除此之外仍只允许每引擎一份默认值。
     """
     store = PresetStore(Path(__file__).resolve().parent.parent / "presets.json")
     assert not store.load_error, store.load_error
@@ -139,12 +144,21 @@ def test_shipped_presets_cover_every_engine_with_its_defaults():
     )
 
     extras = [name for name, _bound in listed if name not in defaults]
-    assert set(extras) == {"歌曲"}, f"除每引擎默认预设外只允许「歌曲」变体：{extras}"
+    assert set(extras) == {"歌曲", ASMR_PRESET}, (
+        f"除每引擎默认预设外只允许「歌曲」与 ASMR 轻声耳语变体：{extras}"
+    )
     assert store.get("歌曲")["引擎"] == "whisper"
     song = store.get("歌曲")["参数"]
     assert song["whisper.vad_max_segment_s"] == 15.0
     assert song["whisper.vad_merge_gap_s"] == 0.5
     assert song["whisper.vad_min_silence_ms"] == 300
+
+    assert store.get(ASMR_PRESET)["引擎"] == "whisper"
+    asmr = store.get(ASMR_PRESET)["参数"]
+    # 这三条就是这份预设存在的原因，改预设时不许把它们「调回默认」。
+    assert asmr["whisper.vad_backend"] == "silero"
+    assert asmr["whisper.vad_threshold"] == 0.25
+    assert asmr["whisper.use_prev_text_prompt"] is True
 
 
 def test_schema_shape():
@@ -191,11 +205,38 @@ def test_vad_backend_scoped_metadata():
     threshold = params.BY_KEY["whisper.vad_threshold"]
     assert threshold.to_dict()["backend_only"] is None
     notes = threshold.to_dict()["backend_notes"]
-    assert "0.35" in notes["whisperseg"]
+    assert "0.45" in notes["whisperseg"]
     assert "0.25" in notes["silero"]
+    # 2026-11-22：WhisperSeg 的标定推荐由 0.35 上调到 0.45（ASMR 320s 上 0.35 是
+    # 拐点：18.59% → 12.11%；0.25 与 0.45 同为 12.11% 但块准确率 65.4% → 75.7%）。
     assert threshold.to_dict()["backend_recommended"] == {
-        "whisperseg": 0.35,
+        "whisperseg": 0.45,
         "silero": 0.25,
     }
     # 其余参数不带后端限定，避免前端误置灰。
     assert params.BY_KEY["whisper.vad_min_silence_ms"].backend_only == ""
+
+
+def test_prev_text_prompt_is_opt_in():
+    """反幻觉开关 `use_prev_text_prompt`：默认关，打开才落到引擎配置上。
+
+    ASMR 实测它把 CER 从 15.49% 降到 11.55%，但会改变解码结果（个别短句换一种错法），
+    所以必须是显式开启；这条守住「默认路径逐字节不变」。
+    """
+    from core import transcribe
+
+    spec = params.BY_KEY["whisper.use_prev_text_prompt"]
+    assert spec.default is False
+    assert spec.config_field == "use_prev_text_prompt"
+    # 只在 Silero 上验证过：WhisperSeg 打开提示会从 12.11% 退化到 26.76%。
+    # 面板按同一口径置灰，代码里的门在 `prev_text_prompt_enabled`。
+    assert spec.backend_only == "silero"
+    assert params.config_kwargs("whisper", {})["use_prev_text_prompt"] is False
+    assert (
+        params.config_kwargs("whisper", {"whisper.use_prev_text_prompt": True})[
+            "use_prev_text_prompt"
+        ]
+        is True
+    )
+    assert transcribe.build_whisper_config().use_prev_text_prompt is False
+    assert transcribe.build_whisper_config(use_prev_text_prompt=True).use_prev_text_prompt is True

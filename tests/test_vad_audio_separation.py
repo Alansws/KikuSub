@@ -65,7 +65,7 @@ def test_vad_only_uses_clean_audio_for_vad_and_original_for_recognition(monkeypa
 
     decoded: list[np.ndarray] = []
 
-    def fake_decode(buf, kwargs, timestamps=False):
+    def fake_decode(buf, kwargs, timestamps=False, prompt_text=""):
         decoded.append(np.array(buf, copy=True))
         return ""
 
@@ -158,7 +158,9 @@ def test_vad_only_energy_gate_drops_silent_vad_segments(monkeypatch):
         lambda *args, **kwargs: [{"start": 0, "end": SR}],
     )
     decoded: list[np.ndarray] = []
-    engine._decode_chunk = lambda buf, kwargs, timestamps=False: decoded.append(buf) or ""
+    engine._decode_chunk = (
+        lambda buf, kwargs, timestamps=False, prompt_text="": decoded.append(buf) or ""
+    )
 
     cues = engine._transcribe_array(
         audio,
@@ -201,7 +203,7 @@ def test_onset_pad_is_ignored_for_whisperseg_and_reported(monkeypatch):
             or [{"start": SR // 2, "end": SR}]
         ),
     )
-    engine._decode_chunk = lambda buf, kwargs, timestamps=False: ""
+    engine._decode_chunk = lambda buf, kwargs, timestamps=False, prompt_text="": ""
 
     engine._transcribe_array(audio, config=engine.config)
 

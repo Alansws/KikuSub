@@ -210,6 +210,33 @@ def test_refine_bounds_uses_the_pause_between_laughter_and_speech():
     ) == (0.0, 4.0)
 
 
+class _StatefulFakeVad(_FakeVad):
+    """模拟 Silero 的隐藏状态：不 reset 的话下一次调用会从上一段的帧号继续。"""
+
+    def __init__(self, probs):
+        super().__init__(probs)
+        self.resets = 0
+
+    def reset_states(self):
+        self.resets += 1
+        self.i = 0
+
+
+def test_refine_bounds_resets_stateful_vad_before_probing():
+    """Silero 是带状态的 RNN：逐帧直调前必须复位，否则边界会跟着上一段的历史漂。"""
+    import numpy as np
+
+    from core.transcribe import _refine_bounds_by_pauses
+
+    chunk = np.zeros(16000 * 4, dtype=np.float32)
+    probs = [0.9] * 31 + [0.01] * 31 + [0.9] * 63
+    vad = _StatefulFakeVad(probs)
+    first = _refine_bounds_by_pauses(chunk, vad, head_removed=True, tail_removed=False)
+    second = _refine_bounds_by_pauses(chunk, vad, head_removed=True, tail_removed=False)
+    assert vad.resets == 2, vad.resets
+    assert first == second
+
+
 def test_merge_fragmented_cues_joins_half_sentences_only():
     cues = [
         SubtitleCue(0.0, 2.0, "いつも見たそうに"),
