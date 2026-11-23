@@ -79,6 +79,10 @@
   /* 2026-11-23：4.18 → 4.7（on --canvas）。只做「标签/计数/单位/快捷键」，
      解释性正文一律用 --ink-2 —— 两者必须成对使用，否则正文与标签同重，灰阶会变紧。 */
   --ink-3: #5f6d84;
+  /* G14：禁用 / 不可用专用。与 --ink-3（标签）语义分开：
+     标签是「次要但有效」，muted 是「此刻不生效」。对比度刻意低（2.6:1），
+     因为它本来就该弱到不像可读内容，但仍高于纯装饰。 */
+  --ink-muted: #99a3b3;
   --line: rgba(27, 39, 64, 0.12);
   --line-2: rgba(27, 39, 64, 0.06);
 
@@ -190,6 +194,7 @@ html[data-theme='dark'] {
   /* 深色下已是 5.79（on --paper），本来就达标，不动。
      浅色的 #5F6D84 是冷蓝灰，拿到深色会变暗、失去层次。 */
   --ink-3: #8591a5;
+  --ink-muted: #5c6675;
   --line: rgba(236, 241, 250, 0.13);
   --line-2: rgba(236, 241, 250, 0.07);
 
@@ -297,6 +302,7 @@ html[data-theme='mincho'] {
   /* 明抄是暖色主题：#666c70 已是 5.1（on --paper），本来就达标；
      浅色的冷蓝灰 #5F6D84 会毁掉这套暖调，所以这里不动。 */
   --ink-3: #666c70;
+  --ink-muted: #a3a8ab;
   --line: rgba(21, 24, 27, 0.12);
   --line-2: rgba(21, 24, 27, 0.06);
 
@@ -493,16 +499,18 @@ body {
 .btn:disabled {
   opacity: 0.45;
 }
+/* G14：禁用态用 --ink-muted（"此刻不生效"），与 --ink-3（"次要但有效"）分开。
+   原来两者都走 --text-3，导致「置灰的按钮」和「次要标签」看起来是同一档语义。 */
 /* 禁用态不要留一层淡 accent：主操作要么是实心蓝，要么明确退成灰 */
 .btn.primary:disabled {
   background: var(--fill);
   border-color: transparent;
-  color: var(--text-3);
+  color: var(--ink-muted);
   box-shadow: none;
   opacity: 1;
 }
 .btn.ghost:disabled {
-  color: var(--text-3);
+  color: var(--ink-muted);
 }
 .btn.primary {
   background: var(--btn-primary-bg);
@@ -667,9 +675,13 @@ html[data-theme='dark'] .seg button.on {
   letter-spacing: -0.02em;
 }
 
+/* G10：浅色下 --paper(#F9FBFE) 与 --raise(#FFF) 只差 1.04，卡片边界几乎全靠这一条线。
+   原来用 --separator-soft（.06），比 bento 卡片用的 --bento-border（.075）还淡一档，
+   于是同一屏里两种卡片边界深浅不一。统一到 .075 这一档，边界看得清又不过重。
+   （深色与明抄不动：深色 paper→raise 是 1.08，本来就分得开；明抄另有自己的暖色边框值。） */
 .card {
   background: var(--raise);
-  border: 1px solid var(--separator-soft);
+  border: 1px solid var(--bento-border);
   border-radius: var(--rad-card);
   padding: 14px 16px;
 }
@@ -974,9 +986,44 @@ progress {
   }
 }
 
+/* ============================================================
+   G8：减少动态效果
+
+   原来的写法是 `* { animation-duration: .01ms }`，把 spinner 也一起停掉 ——
+   开了这个偏好的用户会看到一个「不转的转圈图标」，比转圈更困惑：
+   看不出是「正在加载」还是「已经卡死」。
+
+   新写法不再全局压动画，而是**只关引起前庭不适的那几类**（位移 / 缩放 / 淡入）：
+   过渡时长统一压到 0.01ms，入场类 keyframes 直接 `animation: none`；
+   其余动画（spinner、进度条微光）保持原速 —— 它们表达的是「还在处理」。
+   ============================================================ */
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
+  /* 过渡（hover / 展开 / 抽屉 / 主题切换）全部即时完成 */
+  *,
+  *::before,
+  *::after {
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+
+  /* 入场类动画：位移与淡入一律关掉，元素直接停在终态 */
+  .view-enter.animated,
+  .toast,
+  .ins-scrim,
+  .ec-menu,
+  .menu,
+  .hist-panel,
+  .sel-bar,
+  .meta-sec,
+  .card-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /*
+     有意保留：spinner 与进度条、以及它们的关键帧时长。
+     本规则**不再声明任何全局 animation-duration**，所以这些组件的动画
+     保持各自 <style> 里写的原速 —— 这是与旧写法的关键区别。
+  */
 }
