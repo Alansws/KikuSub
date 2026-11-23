@@ -201,10 +201,12 @@
     font-weight: 600;
     line-height: var(--lh-heading);
   }
+  /* 「对话通稿 · 自然断句」这类用途说明决定用户选哪个引擎 → 13/19 + --ink-2。 */
   .card-purpose {
     margin-top: 3px;
-    font-size: var(--fs-label);
-    color: var(--text-3);
+    font-size: var(--fs-ui);
+    line-height: 19px;
+    color: var(--ink-2);
   }
   .state-dot {
     width: 6px;
@@ -247,14 +249,15 @@
     gap: var(--sp-2);
     margin-top: var(--sp-4);
   }
+  /* 引擎说明（适用场景）：提到 13/19，clamp 放宽到 3 行避免裁字。 */
   .card-note {
     margin: var(--sp-3) 0 0;
-    font-size: var(--fs-label);
-    color: var(--text-3);
-    line-height: 1.5;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

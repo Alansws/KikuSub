@@ -60,11 +60,12 @@
     line-height: var(--lh-heading);
     font-weight: 600;
   }
+  /* 分区说明：解释这一块是干什么的，属于解释性正文 → 13/19 + --ink-2。 */
   .set-section-caption {
     margin: 2px 0 0;
-    font-size: var(--fs-label);
-    line-height: 1.55;
-    color: var(--text-2);
+    font-size: var(--fs-ui);
+    line-height: 19px;
+    color: var(--ink-2);
     max-width: 620px;
   }
   .set-section-meta {

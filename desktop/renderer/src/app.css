@@ -531,9 +531,10 @@ body {
   justify-content: center;
 }
 /* 设置页大量使用的小号按钮（Inline 行内动作） */
+/* 操作文字按规则不低于 13px；小号按钮只缩高度与内边距，不缩字号。 */
 .btn.sm {
   height: 24px;
-  font-size: var(--fs-label);
+  font-size: var(--fs-ui);
   padding: 0 var(--sp-2);
 }
 .btn.danger {
@@ -734,15 +735,17 @@ html[data-theme='dark'] .card {
 }
 
 /* ---------- 设置页：说明 / 警示条 ---------- */
+/* 说明 / 警示条：内容多为「Key 会不会上传」「失败原因」这类读了才能正确操作的话，
+   按 G3 规则用 13/19；颜色沿用各态（warn 态继续走 --warn，不迁 --ink-2）。 */
 .note-box {
   display: flex;
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--rad-card);
   background: var(--fill);
-  color: var(--text-2);
-  font-size: var(--fs-label);
-  line-height: 1.55;
+  color: var(--ink-2);
+  font-size: var(--fs-ui);
+  line-height: 19px;
 }
 .note-box.warn {
   background: var(--warn-soft);
@@ -788,10 +791,12 @@ html[data-theme='dark'] .card {
   font-size: var(--fs-ui);
   font-weight: 500;
 }
+/* 设置页每行的说明是「不看会选错」的文字（例：系统语音 vs 克隆音色的差别），
+   按 G3 规则提到 13/19 并迁到 --ink-2；--ink-3 只留给计数、单位、快捷键。 */
 .set-row-desc {
-  font-size: var(--fs-label);
-  color: var(--text-3);
-  line-height: 1.45;
+  font-size: var(--fs-ui);
+  color: var(--ink-2);
+  line-height: 19px;
 }
 .set-row-ctl {
   flex: 0 0 auto;
