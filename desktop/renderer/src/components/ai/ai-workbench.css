@@ -133,10 +133,10 @@
 }
 .aiw-chip.accent {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-chip.accent b {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 button.aiw-chip {
   border: 0;
@@ -184,7 +184,7 @@ button.aiw-count:hover {
   appearance: none;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   font: inherit;
   font-size: 12px;
   line-height: 18px;
@@ -424,7 +424,7 @@ html[data-theme='dark'] .aiw-lane button.on {
   font-variant-numeric: tabular-nums;
 }
 .aiw-rail-item.on .aiw-rail-no {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-rail-item.done .aiw-rail-no {
   color: var(--success);
@@ -469,7 +469,7 @@ html[data-theme='dark'] .aiw-lane button.on {
 }
 .aiw-rail-flag.ready {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-rail-flag.todo {
   background: var(--fill);
@@ -517,7 +517,7 @@ html[data-theme='dark'] .aiw-lane button.on {
 }
 .aiw-card-title b {
   font-family: var(--font-mono);
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 .aiw-card-sub {
@@ -773,19 +773,28 @@ button.aiw-tc {
   text-align: left;
 }
 button.aiw-tc:hover {
-  color: var(--accent-hover);
+  color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* 时间码是「参照信息」，不是动作：整列刷强调色会让一屏出现十几个"重点"
+   （断句重排实测 17 个强调文字节点里有 13 个是它），真正的差异反而沉下去。
+   常态用 --ink-2，hover 才上强调。
+
+   这里没有"当前行"：AI 三页是批量处理表，不与播放头同步（当前句只在核对台）。
+   所以强调只在 hover / 键盘聚焦时出现，不另造一个不存在的选中态。 */
 .aiw-tc {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 17px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: -0.01em;
-  color: var(--accent);
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+button.aiw-tc:focus-visible {
+  color: var(--accent-text);
 }
 .aiw-idx {
   font-size: 10.5px;
@@ -839,7 +848,7 @@ button.aiw-tc:hover {
   background: var(--danger-soft);
 }
 .aiw-mark .new {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
 }
 .aiw-row.changed {
@@ -930,7 +939,7 @@ button.aiw-tc:hover {
   place-items: center;
   border-radius: var(--rad-card);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-blank-title {
   font-size: 15px;
@@ -971,7 +980,7 @@ button.aiw-tc:hover {
   font-size: 10.5px;
   font-weight: 600;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-blank-steps b {
   color: var(--text);
@@ -1018,7 +1027,7 @@ button.aiw-tc:hover {
   place-items: center;
   border-radius: 6px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-guide-title {
   font-size: 12px;

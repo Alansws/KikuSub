@@ -76,12 +76,17 @@
   --raise: #ffffff;
   --ink: #1b2740;
   --ink-2: #5a6780;
-  --ink-3: #68758a;
+  /* 2026-11-23：4.18 → 4.7（on --canvas）。只做「标签/计数/单位/快捷键」，
+     解释性正文一律用 --ink-2 —— 两者必须成对使用，否则正文与标签同重，灰阶会变紧。 */
+  --ink-3: #5f6d84;
   --line: rgba(27, 39, 64, 0.12);
   --line-2: rgba(27, 39, 64, 0.06);
 
   --accent: #4f6bff;
   --accent-hover: #3d57e6;
+  /* 文字/图标形式的强调。--accent 在小字上只有 4.15（on --paper），
+     所以「填充底」与「文字色」用两个令牌分开算：这里 5.47/5.08。 */
+  --accent-text: #3d57e6;
   --accent-soft: rgba(79, 107, 255, 0.08);
   --accent-ring: rgba(79, 107, 255, 0.35);
   --accent-line: rgba(79, 107, 255, 0.35);
@@ -182,12 +187,16 @@ html[data-theme='dark'] {
   --raise: #181c23;
   --ink: #ecf1fa;
   --ink-2: #a9b4c6;
+  /* 深色下已是 5.79（on --paper），本来就达标，不动。
+     浅色的 #5F6D84 是冷蓝灰，拿到深色会变暗、失去层次。 */
   --ink-3: #8591a5;
   --line: rgba(236, 241, 250, 0.13);
   --line-2: rgba(236, 241, 250, 0.07);
 
   --accent: #7d93ff;
   --accent-hover: #94a6ff;
+  /* 文字/图标形式的强调：深色保持高亮蓝（6.58），不用浅色的 #3D57E6。 */
+  --accent-text: #7d93ff;
   --accent-soft: rgba(125, 147, 255, 0.16);
   --accent-ring: rgba(125, 147, 255, 0.42);
   --accent-line: rgba(125, 147, 255, 0.42);
@@ -285,12 +294,16 @@ html[data-theme='mincho'] {
   --raise: #ffffff;
   --ink: #15181b;
   --ink-2: #5e6468;
+  /* 明抄是暖色主题：#666c70 已是 5.1（on --paper），本来就达标；
+     浅色的冷蓝灰 #5F6D84 会毁掉这套暖调，所以这里不动。 */
   --ink-3: #666c70;
   --line: rgba(21, 24, 27, 0.12);
   --line-2: rgba(21, 24, 27, 0.06);
 
   --accent: #c8412d;
   --accent-hover: #b03524;
+  /* 文字/图标形式的强调：朱红本身 4.73（on --paper）已达标，用同一色不另调。 */
+  --accent-text: #c8412d;
   --accent-soft: rgba(200, 65, 45, 0.07);
   --accent-ring: rgba(200, 65, 45, 0.32);
   --accent-line: rgba(200, 65, 45, 0.35);

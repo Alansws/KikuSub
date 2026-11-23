@@ -325,8 +325,11 @@
           {/each}
         </select>
       {/if}
+      <!-- 主操作：字幕和成片是两条独立导出路径，各自有一个主按钮。
+           「导出字幕」此前是白底普通按钮，和旁边的选择器挤在一起，
+           成了全页强调色面积只有 0.08% 的原因之一。 -->
       <button
-        class="btn"
+        class="btn primary"
         onclick={exportSubtitle}
         disabled={!app.cues.length || subBusy || (scoped && !scopeSpan.count)}
       >
