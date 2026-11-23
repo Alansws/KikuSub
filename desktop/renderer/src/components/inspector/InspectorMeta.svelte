@@ -126,18 +126,22 @@
 
 
 <style>
+  /* G16：检查器三层信息的层级原来几乎是平的 ——
+     分区标题 12/600、字段键 12.5/400、值 12/400，键比标题还大。
+     现在把三层拉开：标题 12.5/600 + 字距（像小标题）往下靠上，键降为 12/400/ink-3 退后，
+     值 12.5/500/ink 作为可读内容。分区线保留并稍微拉开，让「参数块」有起点。 */
   .meta-sec {
-    margin-top: var(--sp-3);
+    margin-top: var(--sp-4);
     padding: var(--sp-3) 0 0;
     border-top: 1px solid var(--line-2);
   }
   .meta-h {
-    font-size: 12px;
-    line-height: 16px;
+    font-size: 12.5px;
+    line-height: 17px;
     font-weight: 600;
     color: var(--ink-2);
-    letter-spacing: 0.01em;
-    margin-bottom: 5px;
+    letter-spacing: 0.03em;
+    margin-bottom: 6px;
   }
   .source-row {
     display: flex;

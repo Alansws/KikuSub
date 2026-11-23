@@ -322,6 +322,9 @@
     /* 页签底边已经是一条分隔线，这里不再叠一层 12px 的空白。 */
     margin-top: 0;
   }
+  /* G15：与上方页签（.insp-tab.on）统一成一套语法 ——
+     选中态 = accent-soft 底 + accent-text 字，不再用「白底 + 阴影」那套。
+     只作用于检查器内的这个 .seg，全局 .seg 不动（20+ 处复用，改动面太大）。 */
   .seg {
     height: 26px;
     padding: 2px;
@@ -332,6 +335,12 @@
     padding: 0 9px;
     font-size: 12px;
     border-radius: 4px;
+  }
+  .seg button.on {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    box-shadow: none;
+    font-weight: 600;
   }
   .row-end {
     margin-left: auto;

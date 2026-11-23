@@ -684,8 +684,11 @@
 </div>
 
 <style>
+  /* 上缘与其余表单页对齐到 --sp-8（32px）：标题 top 68 → 84，
+     切页时不再上下跳 16px。实测「开始转写」下移到 679–715，
+     在 1360×838 下仍完整落在首屏内。 */
   .pane {
-    padding: var(--sp-4) var(--sp-6) var(--sp-6);
+    padding: var(--sp-8) var(--sp-6) var(--sp-6);
     overflow: hidden;
     flex: 1;
     min-height: 0;

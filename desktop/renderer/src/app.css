@@ -635,6 +635,9 @@ html[data-theme='dark'] .seg button.on {
   font-size: 12px;
 }
 
+/* G16 检查器的「键 / 值」两层：
+   键是标签，退后（12/400/--ink-3）；值是可读内容，抬上来（12.5/500/--text）。
+   原来键 12.5、值 12 —— 标签比值还重，扫读时先看到标签而不是数据。 */
 .kv {
   display: flex;
   justify-content: space-between;
@@ -645,11 +648,13 @@ html[data-theme='dark'] .seg button.on {
   line-height: 18px; /* 12.5/18：整行 24px，和 4px 的间距网格对齐 */
 }
 .kv .k {
-  color: var(--text-2);
+  color: var(--ink-3);
+  font-size: 12px;
   flex: 0 0 auto;
 }
 .kv .v {
   color: var(--text);
+  font-weight: 500;
   text-align: right;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
