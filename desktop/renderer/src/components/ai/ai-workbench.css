@@ -32,12 +32,15 @@
   min-width: 0;
 }
 
+/* 与 PageHeader 的 .page-title 同一套规格（22 / 30 / 600 / -0.015em）。
+   原来这里是 20/26，和标准页头只差 2px —— 差 2px 最贵：肉眼分不出"两种系统"，
+   只会觉得切页时标题轻轻跳了一下。AI 四页标题在工具条内，结构不同但规格必须一致。 */
 .aiw-title {
   margin: 0;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--text);
   white-space: nowrap;
 }

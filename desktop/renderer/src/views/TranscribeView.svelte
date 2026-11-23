@@ -1181,8 +1181,10 @@
   }
 
   @media (max-width: 900px) {
+    /* 紧凑模式只收上下留白，左右必须与其余三页保持一致（G5），
+       否则 200% 缩放下这一页会比别的页多顶出 8px。 */
     .pane {
-      padding: var(--sp-4);
+      padding: var(--sp-4) var(--sp-6);
     }
     .card-head {
       flex-wrap: wrap;

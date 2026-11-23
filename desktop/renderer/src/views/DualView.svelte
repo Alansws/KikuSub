@@ -528,11 +528,14 @@
     gap: 14px;
     flex-wrap: wrap;
   }
+  /* 与 PageHeader / .aiw-title 同一套标题规格（22 / 30 / 600 / -0.015em）。
+     这一页原来自己写了 20px 且没有 line-height，是四页里唯一的例外。 */
   h1 {
     margin: 0;
-    font-size: 20px;
+    font-size: var(--fs-display);
+    line-height: var(--lh-display);
     font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
     white-space: nowrap;
   }
   .versions {
@@ -1054,8 +1057,10 @@
     .source-line {
       display: none;
     }
+    /* 标题不再随窄屏缩小：22px 是与其余页共用的规格（G4），
+       紧凑模式下这页的标题行本来就换行放下了，不需要靠减字号让位。 */
     h1 {
-      font-size: 17px;
+      font-size: var(--fs-display);
     }
   }
 </style>

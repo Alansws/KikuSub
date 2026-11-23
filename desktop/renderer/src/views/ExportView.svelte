@@ -787,10 +787,12 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--sp-8) var(--sp-10) var(--sp-12);
+    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
+       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
+    padding: var(--sp-8) var(--sp-6) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 1120px);
-    justify-content: center;
+    grid-template-columns: minmax(0, 1040px);
+    justify-content: start;
     align-content: start;
   }
   .range-row {
