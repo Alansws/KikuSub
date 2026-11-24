@@ -180,6 +180,18 @@ node tools/shots/verify_chapter_draft.mjs
 截图落在系统临时目录的 `kikusub-chapter-draft/chapter-draft.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.9「章节草稿」。
 
+## 章节页（自动命名 / 加入转写选区）回归
+
+章节页重做后的回归：新建区与行内操作、时刻点补成区间时的自动命名（章节二 / 章节三）、
+「加入转写选区」跳到转写页并填好起止、设置里改模板后新章节按新模板命名（场景四）。
+
+```bash
+node tools/shots/verify_chapter_panel.mjs
+```
+
+截图落在系统临时目录的 `kikusub-chapter-panel/chapter-panel.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.9「自动命名 / 加入转写选区」。
+
 ## 章节区间端点拖动回归
 
 区间章节两端直接在 6px 色条上拖：旗标拖过 4px 改起点（单击仍是跳转），右端抓手改终点；
