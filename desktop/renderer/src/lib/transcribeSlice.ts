@@ -13,6 +13,9 @@ export interface SliceRequest {
   start: string;
   end: string;
   nonce: number;
+  /** 来源：章节行 / 核对台选区；转写页据此显示「来源」而不是两个裸时间。 */
+  origin?: 'chapter' | 'review';
+  label?: string;
 }
 
 export interface SliceHolder {
