@@ -54,9 +54,11 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 # 2026-11-24（Phase 2 暗底舞台）：加「可拖高的监看区」时先抽 lib/stagePrefs.ts
 #              （高度偏好 + 上限 + 状态条文案，三条纯函数），再接线的；净 +30 行
 #              是舞台状态条与分隔条接线本身，预算按实测值 2645 记。
+# 2026-11-24（当日收口）：撤销表格「状态」列与舞台状态条，ReviewView 2645 → 2619；
+#              lib/reviewRowStatus.ts 与其 18 条单测一并删除（不留半套实现）。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 2645,
+    "views/ReviewView.svelte": 2619,
 }
 
 

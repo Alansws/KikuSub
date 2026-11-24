@@ -16,10 +16,6 @@
     captionLines = [],
     stageHeight = 0,
     maxStageHeight = 0,
-    proxyLabel = '',
-    resolution = '',
-    fps = 0,
-    bDiff = null as number | null,
     ondragbar,
     gate = null,
     proxyReason = '',
@@ -46,11 +42,6 @@
     stageHeight?: number;
     /** 拖高的上限（窗口可用高度的一半），由父组件按视口算。 */
     maxStageHeight?: number;
-    proxyLabel?: string;
-    resolution?: string;
-    fps?: number;
-    /** B 稿（另一引擎）差异条数；null = 没有 B 稿。 */
-    bDiff?: number | null;
     ondragbar?: (height: number) => void;
   } = $props();
 
@@ -98,25 +89,6 @@
       onstart={onstartproxy}
       onimport={onimportproxy}
     />
-  </div>
-
-  <!-- 监看区底部的媒体状态条（28px）：代理 / 分辨率 / 帧率 / B 稿差异。
-       状态不再压在画面四角上——那样既挡字幕，又在窄窗口盖住人脸。 -->
-  <div class="pinfo">
-    <span class="pi-dot" class:ready={Boolean(proxyLabel.includes('就绪'))}></span>
-    <span>{proxyLabel || '原始画面'}</span>
-    {#if resolution}
-      <span class="pi-sep">·</span>
-      <span>{resolution}</span>
-    {/if}
-    {#if fps > 0}
-      <span class="pi-sep">·</span>
-      <span>{fps.toFixed(3)} fps</span>
-    {/if}
-    <span class="pi-grow"></span>
-    {#if bDiff !== null}
-      <span class="pi-b">B 稿 {bDiff} 处差异</span>
-    {/if}
   </div>
 
   <!-- 可拖的高度分隔条：向下拉 = 画面变高、时间轴与表格让位。
@@ -224,43 +196,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  /* 媒体状态条：28px 暗色，压在画面下方而不是四角 */
-  .pinfo {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 28px;
-    flex: 0 0 28px;
-    padding: 0 var(--sp-3);
-    font-size: 11.5px;
-    line-height: 16px;
-    color: var(--stage-ink);
-    background: var(--stage-bar);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-  .pi-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    flex: 0 0 5px;
-    background: var(--stage-ink-dim);
-  }
-  .pi-dot.ready {
-    background: var(--success);
-  }
-  .pi-sep {
-    color: var(--stage-ink-dim);
-  }
-  .pi-grow {
-    flex: 1;
-  }
-  .pi-b {
-    color: var(--stage-ink);
-    opacity: 0.82;
   }
 
   /* 高度分隔条：6px 命中区 + 1px 视觉线；hover / 拖动时亮起来 */

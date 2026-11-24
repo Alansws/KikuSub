@@ -156,6 +156,34 @@
   <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>
   <div class="tb-sub">{sub}</div>
 
+  <!-- 监看代理状态与切换入口（2026-11-24：从舞台状态条搬来）。
+       轻量、只在核对屏出现；压制中显示百分比，就绪后可点开「⋯ → 压制代理」，
+       需要代理时给的是同一个入口的快捷方式。 -->
+  {#if app.view === 'review' && app.media}
+    <button
+      class="proxy-state"
+      class:busy={proxyBusy}
+      class:ready={!proxyBusy && app.media.proxy_ready}
+      class:warn={!proxyBusy && !app.media.proxy_ready && app.media.needs_proxy}
+      onclick={() => {
+        moreOpen = true;
+      }}
+      title={proxyHint}
+      aria-label={proxyLabel}
+    >
+      <i class="ps-dot" aria-hidden="true"></i>
+      {#if proxyBusy}
+        <span>代理 {proxyPct}%</span>
+      {:else if app.media.proxy_ready}
+        <span>监看代理</span>
+      {:else if app.media.needs_proxy}
+        <span>需代理</span>
+      {:else}
+        <span>原始画面</span>
+      {/if}
+    </button>
+  {/if}
+
   {#if engineVisible}
     <div class="tb-sep tb-sep-lead"></div>
 
@@ -765,5 +793,54 @@
     .tb-sep-lead {
       display: none;
     }
+  }
+
+  /* 监看代理状态：22px 高的小胶囊，和文件名同一行；不抢引擎胶囊的注意力 */
+  .proxy-state {
+    appearance: none;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 var(--sp-2);
+    border: 1px solid var(--line-2);
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text-3);
+    font: inherit;
+    font-size: 11.5px;
+    line-height: 1;
+    white-space: nowrap;
+    transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .proxy-state:hover {
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+  .proxy-state:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
+  }
+  .ps-dot {
+    width: 5px;
+    height: 5px;
+    flex: 0 0 5px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.55;
+  }
+  .proxy-state.ready {
+    color: var(--success);
+  }
+  .proxy-state.ready .ps-dot {
+    opacity: 1;
+  }
+  .proxy-state.warn {
+    color: var(--warn);
+  }
+  .proxy-state.busy {
+    color: var(--accent-text);
+    border-color: var(--accent-line);
   }
 </style>

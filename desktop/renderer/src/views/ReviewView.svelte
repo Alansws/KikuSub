@@ -122,11 +122,8 @@
   } from '../lib/reviewViewport';
   import { claimTranslationDefault, planInitialReviewView } from '../lib/reviewStart';
   import { revealScrollTop, rowHeightFor, virtualWindow } from '../lib/reviewTable';
-  import { pendingItems, rowStatuses } from '../lib/reviewRowStatus';
   import {
     clampStageHeight,
-    mediaResolution,
-    proxyLabel,
     readStageHeight,
     saveStageHeight,
     stageMaxHeight,
@@ -162,9 +159,6 @@
     stageHeight = next;
     saveStageHeight(next);
   }
-
-  const stageProxyLabel = $derived(proxyLabel(app.media));
-  const stageResolution = $derived(mediaResolution(app.media));
 
   const savedHeight = Number(localStorage.getItem('kikusub.waveHeight') || 0);
   let waveHeight = $state(Math.max(72, Math.min(300, savedHeight || 80)));
@@ -394,21 +388,6 @@
   const rowStart = $derived(vwin.start);
   const rowEnd = $derived(vwin.end);
   const visibleCues = $derived(app.cues.slice(rowStart, rowEnd));
-
-  /**
-   * 表格「状态」列：从质检队列按时间窗落到行上（纯函数在 lib/reviewRowStatus.ts）。
-   * 已核对 / 已跳过的项不算待核——否则用户确认完还在报红。
-   */
-  const rowStatus = $derived(
-    rowStatuses(
-      app.cues,
-      pendingItems(
-        (qa.payload?.items ?? []) as never[],
-        qa.payload?.statuses as never,
-      ),
-      new Set(app.cues.map((_, i) => i).filter((i) => isTranslationStale(i))),
-    ),
-  );
 
   const zoomX = $derived(duration > 0 ? Math.max(1, duration / Math.max(viewSpan, 0.001)) : 1);
   const progressPct = $derived(
@@ -2108,10 +2087,6 @@
       {captionLines}
       {stageHeight}
       maxStageHeight={maxStageHeight}
-      proxyLabel={stageProxyLabel}
-      resolution={stageResolution}
-      fps={app.media?.video_fps ?? 0}
-      bDiff={dual.exists ? (dual.stats?.badge ?? 0) : null}
       ondragbar={(h) => setStageHeight(h)}
       gate={videoGate}
       proxyReason={app.media?.proxy_reason ?? ''}
@@ -2247,7 +2222,6 @@
       matchedSet: matchedCueSet,
       findCue: currentFind?.cue ?? -1,
       busy,
-      statuses: rowStatus,
       displayText: cueDisplayText,
       translationAt,
       isStale: isTranslationStale,

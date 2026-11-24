@@ -14,11 +14,6 @@
    */
   import Icon from '../Icon.svelte';
   import { tcShort } from '../../lib/time';
-  import {
-    ROW_STATUS_LABEL,
-    rowStatusTitle,
-    type RowStatus,
-  } from '../../lib/reviewRowStatus';
   import type { Cue } from '../../lib/api';
 
   /** 查找栏要用的一整组状态与动作（父组件持有）。 */
@@ -60,8 +55,6 @@
     matchedSet: Set<number>;
     findCue: number;
     busy: boolean;
-    /** 每行的状态徽标（lib/reviewRowStatus 算出，null = 无需提醒）。 */
-    statuses: (RowStatus | null)[];
     /** 每行 / 每轨的高亮切分与译文取值（由父组件的查找上下文决定）。 */
     displayText: (text: string) => string;
     translationAt: (index: number) => string;
@@ -251,7 +244,6 @@
     <div class="c-t">结束</div>
     <div class="c-dur">时长</div>
     <div class="c-text">字幕文本</div>
-    <div class="c-state">状态</div>
     <div class="c-acts"></div>
   </div>
 
@@ -352,16 +344,6 @@
               </span>
             {/if}
           </div>
-          <div class="c-state">
-            {#if view.statuses[i]}
-              <span
-                class="badge s-{view.statuses[i].kind}"
-                title={rowStatusTitle(view.statuses[i])}
-              >
-                {ROW_STATUS_LABEL[view.statuses[i].kind]}
-              </span>
-            {/if}
-          </div>
           <div class="c-acts">
             <button
               class="row-btn"
@@ -404,7 +386,7 @@
   }
   .thead {
     display: grid;
-    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 62px 44px;
+    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 44px;
     column-gap: 6px;
     align-items: center;
     height: 30px;
@@ -428,7 +410,7 @@
 
   .row {
     display: grid;
-    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 62px 44px;
+    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 44px;
     column-gap: 6px;
     align-items: center;
     height: 30px;
@@ -476,7 +458,7 @@
     /* 1360 默认窗口：给字幕文本多 16px，当前句不要被时间码/图标挤掉尾巴 */
     .thead,
     .row {
-      grid-template-columns: 34px 94px 94px 54px minmax(0, 1fr) 58px 42px;
+      grid-template-columns: 34px 94px 94px 54px minmax(0, 1fr) 42px;
     }
   }
 
@@ -487,7 +469,7 @@
     }
     .thead,
     .row {
-      grid-template-columns: 30px 88px 88px 48px minmax(0, 1fr) 52px 38px;
+      grid-template-columns: 30px 88px 88px 48px minmax(0, 1fr) 38px;
       column-gap: var(--sp-1);
     }
     .thead {
@@ -742,40 +724,4 @@
     }
   }
 
-  /* ---------------- 状态列 ---------------- */
-  /* 一行只出一个徽标：漏句 > 待核 > 译文过期（口径在 lib/reviewRowStatus.ts）。
-     颜色只用来分层，文字始终在——色盲用户靠字也能读懂。 */
-  .c-state {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    overflow: hidden;
-  }
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    height: 17px;
-    padding: 0 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    line-height: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-  }
-  /* 漏句是「可能有整句没被转出来」：用 danger 系，和待核区分开 */
-  .badge.s-miss {
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-  .badge.s-low {
-    background: var(--warn-soft);
-    color: var(--warn);
-  }
-  /* 译文过期是「结构对不上」而不是识别问题：用中性填充，不抢上面的注意力 */
-  .badge.s-stale {
-    background: var(--fill);
-    color: var(--ink-3);
-  }
 </style>

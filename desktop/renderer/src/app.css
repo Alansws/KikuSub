@@ -143,11 +143,8 @@
   --hit-row: rgba(255, 214, 10, 0.16);
   --caption-bg: rgba(13, 20, 36, 0.62);
   /* 监看舞台（2026-11-24 Phase 2）：接近纯黑但不取 #000，免得视频黑边与舞台
-     连成一片、看不出画面边界。状态条比舞台再亮一档，1px 分割线在它上面可见。 */
+     连成一片、看不出画面边界。舞台自己的状态条已撤销，1px 分割线直接压在舞台上。 */
   --stage-bg: #111214;
-  --stage-bar: #191a1d;
-  --stage-ink: rgba(255, 255, 255, 0.82);
-  --stage-ink-dim: rgba(255, 255, 255, 0.42);
   --stage-line: rgba(255, 255, 255, 0.34);
   --wave: #a3adbe;
 
@@ -250,12 +247,9 @@ html[data-theme='dark'] {
   --hit: rgba(255, 214, 10, 0.3);
   --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
-  /* 深色主题里舞台要比页面更暗，才能读成「监看区」；状态条留一档抬升，
-     1px 分割线用 0.16 白（比 5% 灰清楚）。 */
+  /* 深色主题里舞台要比页面更暗，才能读成「监看区」；1px 分割线用 0.34 白
+     （0.14 实测只有 1.48:1，等于看不见）。 */
   --stage-bg: #08090b;
-  --stage-bar: #121416;
-  --stage-ink: rgba(255, 255, 255, 0.86);
-  --stage-ink-dim: rgba(255, 255, 255, 0.44);
   --stage-line: rgba(255, 255, 255, 0.34);
   --wave: #8f9db5;
 
@@ -362,9 +356,6 @@ html[data-theme='mincho'] {
   --scroll-thumb-hover: rgba(21, 24, 27, 0.3);
   --caption-bg: rgba(18, 20, 22, 0.66);
   --stage-bg: #101112;
-  --stage-bar: #17181a;
-  --stage-ink: rgba(255, 255, 255, 0.84);
-  --stage-ink-dim: rgba(255, 255, 255, 0.44);
   --stage-line: rgba(255, 255, 255, 0.33);
   --wave: #9aa0a0;
 

@@ -91,8 +91,8 @@ const EVAL = String.raw`
       playerW: Math.round(pr.width),
       playerH: Math.round(pr.height),
       ratio: Math.round((pr.width / pr.height) * 1000) / 1000,
+      // 舞台上不该再有自己的状态条（2026-11-24 撤销：规格并入底栏、代理进顶栏）
       hasPinfo: Boolean(document.querySelector('.pinfo')),
-      pinfoH: rect('.pinfo')?.h ?? null,
       hasSplitter: Boolean(document.querySelector('.splitter')),
       splitterH: rect('.splitter')?.h ?? null,
     };
@@ -128,19 +128,27 @@ const EVAL = String.raw`
       const toHex = (c) => Math.round(c).toString(16).padStart(2, '0');
       return '#' + [0, 1, 2].map((i) => toHex(parts[i] * a + bg[i] * (1 - a))).join('');
     };
+    // 舞台状态条已撤销（2026-11-24），只剩舞台底色与 1px 分割线这两个真存在的令牌
     const stageBg = token('--stage-bg');
-    const barBg = token('--stage-bar');
-    const ink = over(token('--stage-ink'), barBg);
     const line = over(token('--stage-line'), stageBg);
+    // 规格与代理状态的新位置
+    // 规格与代理状态的新位置；顺带量底栏文字的对比度（舞台状态条撤掉后
+    // 「状态条文字对条底」这条断言失去对象，改成量真正承载它的底栏）。
+    const bar = document.querySelector('.statusbar');
+    const barBg = bar ? getComputedStyle(bar).backgroundColor : '';
+    const specNode = document.querySelector('.statusbar .sb-spec');
+    const specInk = specNode ? getComputedStyle(specNode).color : '';
+    const relocated = {
+      statusSpec: (specNode?.textContent || '').trim(),
+      toolbarProxy: (document.querySelector('.toolbar .proxy-state')?.textContent || '').trim(),
+      statusInk: barBg && specInk ? ratio(over(specInk, token('--paper')), token('--paper')) : 0,
+    };
     const themes = {
       stageBg,
-      barBg,
       lineContrast: ratio(line, stageBg),
-      inkContrast: ratio(ink, barBg),
-      stageVsBar: ratio(stageBg, barBg),
     };
 
-    return JSON.stringify({ expanded, collapsed, stage, themes });
+    return JSON.stringify({ expanded, collapsed, stage, themes, relocated });
   })()
 `;
 
@@ -227,24 +235,25 @@ check('顶栏是单行 40px', light.expanded.toolbarH === 40, light.expanded.too
 
 // ---- 3) 舞台 ----
 check('舞台画面是真 16:9（不拉伸）', Math.abs(light.stage.ratio - 16 / 9) < 0.02, light.stage);
-check('舞台有 28px 媒体状态条', light.stage.pinfoH === 28, light.stage);
+check('舞台上不再有自己的状态条', light.stage.hasPinfo === false, light.stage);
+check(
+  '媒体规格并入底栏（分辨率 · 编码 · fps）',
+  /\d+×\d+/.test(light.relocated.statusSpec) && /fps/i.test(light.relocated.statusSpec),
+  light.relocated,
+);
+check('代理状态在顶栏文件信息旁', light.relocated.toolbarProxy.length > 0, light.relocated);
 check('舞台有可拖高度分隔条（6px 命中区）', light.stage.splitterH === 6, light.stage);
 
 // ---- 4) 亮色主题对比度 ----
 check('亮色：1px 分割线对舞台 ≥3:1（不退回看不见的灰线）', light.themes.lineContrast >= 3, light.themes);
-check('亮色：状态条文字对条底 ≥4.5:1', light.themes.inkContrast >= 4.5, light.themes);
+check('亮色：底栏文字对底栏底色 ≥4.5:1', light.relocated.statusInk >= 4.5, light.relocated);
 
 // ---- 5) 暗色主题 ----
 const dark = run(seed, 'profile-dark', path.join(BASE, 'dark.png'));
 check('暗色：开关同样不在左栏', dark.collapsed.sidebarToggle === null, dark.collapsed);
 check('暗色：舞台保持 16:9', Math.abs(dark.stage.ratio - 16 / 9) < 0.02, dark.stage);
 check('暗色：1px 分割线对舞台 ≥3:1', dark.themes.lineContrast >= 3, dark.themes);
-check('暗色：状态条文字对条底 ≥4.5:1', dark.themes.inkContrast >= 4.5, dark.themes);
-check(
-  '暗色：舞台比状态条更暗（读得出「这是监看区」）',
-  dark.themes.stageVsBar >= 1.0,
-  dark.themes,
-);
+check('暗色：底栏文字对底栏底色 ≥4.5:1', dark.relocated.statusInk >= 4.5, dark.relocated);
 
 console.log(`\n截图：${SHOT}`);
 if (failed) {
