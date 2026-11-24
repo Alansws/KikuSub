@@ -20,7 +20,9 @@
   import { tick as nextTick, untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import ProxyGate from '../components/ProxyGate.svelte';
-  import SelectionBar from '../components/SelectionBar.svelte';
+  import ReviewTransport from '../components/review/ReviewTransport.svelte';
+  import ReviewWaveTrack from '../components/review/ReviewWaveTrack.svelte';
+  import ReviewStage from '../components/review/ReviewStage.svelte';
   import ChapterTrack from '../components/ChapterTrack.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
@@ -2063,169 +2065,102 @@
 
 <div class="review">
   <div class="stage">
-    <div class="player">
-      {#if src}
-        <video
-          {@attach bindVideo}
-          {src}
-          preload="auto"
-          playsinline
-          onerror={(e) => {
-            videoFailed = true;
-            if (blankTimer !== undefined) {
-              clearTimeout(blankTimer);
-              blankTimer = undefined;
-            }
-            const el = e.currentTarget as HTMLVideoElement;
-            logEvent('warn', 'video-error', `code=${el.error?.code ?? '?'} src=${el.currentSrc.slice(0, 160)}`);
-          }}
-          onloadedmetadata={(e) => {
-            videoFailed = false;
-            play.duration = e.currentTarget.duration || duration;
-            const t = play.time;
-            if (t > 0.2) e.currentTarget.currentTime = t;
-            // 现场的恢复 effect 等这个开关：metadata 之前 seek 会被浏览器丢掉
-            videoMetaReady = true;
-          }}
-          onloadeddata={(e) => {
-            // 首帧真正出来：兜底计时与提示都作废（慢盘误判最多闪一下）。
-            // videoWidth 为 0 说明容器读到了但视频轨道解不出来，仍要按黑屏处理。
-            if (!hasDecodedFrame(e.currentTarget.readyState, e.currentTarget.videoWidth)) return;
-            videoDecoded = true;
-            videoFailed = false;
-            blankTimedOut = false;
-            if (blankTimer !== undefined) {
-              clearTimeout(blankTimer);
-              blankTimer = undefined;
-            }
-          }}
-        ></video>
-      {:else}
-        <div class="empty">还没有导入媒体</div>
-      {/if}
+    <ReviewStage
+      {src}
+      {captionLines}
+      gate={videoGate}
+      proxyReason={app.media?.proxy_reason ?? ''}
+      onvideo={(node) => (video = node)}
+      attach={bindVideo}
+      onerror={(el) => {
+        videoFailed = true;
+        if (blankTimer !== undefined) {
+          clearTimeout(blankTimer);
+          blankTimer = undefined;
+        }
+        logEvent('warn', 'video-error', `code=${el.error?.code ?? '?'} src=${el.currentSrc.slice(0, 160)}`);
+      }}
+      onloadedmetadata={(el) => {
+        videoFailed = false;
+        play.duration = el.duration || duration;
+        const t = play.time;
+        if (t > 0.2) el.currentTime = t;
+        // 现场的恢复 effect 等这个开关：metadata 之前 seek 会被浏览器丢掉
+        videoMetaReady = true;
+      }}
+      onloadeddata={(el) => {
+        // 首帧真正出来：兜底计时与提示都作废（慢盘误判最多闪一下）。
+        // videoWidth 为 0 说明容器读到了但视频轨道解不出来，仍要按黑屏处理。
+        if (!hasDecodedFrame(el.readyState, el.videoWidth)) return;
+        videoDecoded = true;
+        videoFailed = false;
+        blankTimedOut = false;
+        if (blankTimer !== undefined) {
+          clearTimeout(blankTimer);
+          blankTimer = undefined;
+        }
+      }}
+      onstartproxy={() => void startProxyJob()}
+      onimportproxy={() => void importProxyFromFile()}
+    />
 
-      {#if captionLines.length}
-        <div class="caption">
-          {#each captionLines as line, i (i)}
-            <span>{line}</span>
-          {/each}
-        </div>
-      {/if}
-
-      <ProxyGate
-        state={videoGate}
-        reason={app.media?.proxy_reason ?? ''}
-        onstart={() => void startProxyJob()}
-        onimport={() => void importProxyFromFile()}
-      />
-    </div>
-
-    <div class="transport">
-      <button
-        class="playbtn"
-        onclick={togglePlay}
-        title="播放 / 暂停（空格）"
-        aria-label={play.playing ? '暂停' : '播放'}
-      >
-        <Icon name={play.playing ? 'pause' : 'play'} size={11} />
-      </button>
-      <span class="tp-time" title={app.media?.video_fps ? `${app.media.video_fps.toFixed(3)} fps` : '未探测到帧率，逐帧按 30fps 步进'}>{tc(play.time)}</span>
-      {#if transport.rate !== 1}
-        <button class="mini-text tp-rate" onclick={() => resetRate()} title="恢复 1×（⇧2）">{transport.rate}×</button>
-      {/if}
-      <div
-        class="tp-track"
-        class:dragging={trackDrag}
-        role="slider"
-        tabindex="-1"
-        aria-label="播放进度"
-        aria-valuemin="0"
-        aria-valuemax={duration}
-        aria-valuenow={play.time}
-        onpointerdown={onTrackPointerDown}
-        onpointermove={onTrackPointerMove}
-        onpointerup={onTrackPointerUp}
-        onpointercancel={onTrackPointerUp}
-        title="拖动逐帧预览画面"
-      >
-        <div class="tp-rail">
-          <div class="tp-fill" style="width:{progressPct}%"></div>
-        </div>
-        <div class="tp-knob" style="left:{progressPct}%"></div>
-      </div>
-      <span class="tp-dur">{formatDuration(duration)}</span>
-    </div>
-
-    <!-- 第二行只放「看时间轴」的工具：缩放、全景、聚焦、跟随。
-         润色 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
-    <div class="tl-tools">
-      <div class="zoom-group">
-        <button class="zbtn" onclick={() => zoomAt(play.time, 1.5)} title="缩小波形" aria-label="缩小波形">
-          <Icon name="minus" size={12} />
-        </button>
-        <input
-          class="zoom-slider"
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          value={sliderValue}
-          style="--zoom-pct:{sliderValue}%"
-          oninput={zoomSliderInput}
-          title="波形缩放"
-          aria-label="波形缩放"
-        />
-        <button
-          class="zbtn"
-          onclick={() => zoomAt(play.time, 1 / 1.5)}
-          title="放大波形（滚轮 / 捏合同效）"
-          aria-label="放大波形"
-        >
-          <Icon name="plus" size={12} />
-        </button>
-        <span class="zoom-x">{zoomX >= 10 ? Math.round(zoomX) : zoomX.toFixed(1)}×</span>
-      </div>
-      <button class="mini-text" onclick={fit} title="显示全片">全景</button>
-      <button class="mini-text" onclick={focusPlayhead} title="聚焦到播放头并放大">聚焦</button>
-      <div class="grow"></div>
-      <button
-        class="follow-pill"
-        class:on={follow}
-        aria-pressed={follow}
-        onclick={toggleFollow}
-        title={follow
-          ? '跟随中：播放与跳转时保持播放头在视窗内；缩放/平移不会关闭它'
-          : '开启后，播放或跳转字幕时波形会跟随播放头'}
-      >
-        <i></i>{follow ? '跟随中' : '跟随'}
-      </button>
-
-      <SelectionBar
-        {selection}
-        laneSelection={multiKeys}
-        {rangeBusy}
-        onDelete={deleteSelectedNow}
-        onTranscribe={transcribeSelection}
-        onFocus={focusSelection}
-        onSendSelection={sendSelectionToTranscribe}
-        onSeekSelection={() => selection && seekTo(selection.start, { stopAt: selection.end, play: true })}
-        onClearLane={() => (laneSelection = [])}
-        onClearSelection={clearSelection}
-      />
-    </div>
+    <ReviewTransport
+      playing={play.playing}
+      time={play.time}
+      {duration}
+      {progressPct}
+      fps={app.media?.video_fps ?? null}
+      rate={transport.rate}
+      {trackDrag}
+      {zoomX}
+      {sliderValue}
+      {follow}
+      {selection}
+      laneSelection={multiKeys}
+      {rangeBusy}
+      ontogglePlay={togglePlay}
+      onresetRate={() => resetRate()}
+      onTrackDown={onTrackPointerDown}
+      onTrackMove={onTrackPointerMove}
+      onTrackUp={onTrackPointerUp}
+      onZoomAt={zoomAt}
+      onZoomSlider={zoomSliderInput}
+      onFit={fit}
+      onFocusPlayhead={focusPlayhead}
+      onToggleFollow={toggleFollow}
+      onDelete={deleteSelectedNow}
+      onTranscribe={transcribeSelection}
+      onFocusSelection={focusSelection}
+      onSendSelection={sendSelectionToTranscribe}
+      onSeekSelection={() => selection && seekTo(selection.start, { stopAt: selection.end, play: true })}
+      onClearLane={() => (laneSelection = [])}
+      onClearSelection={clearSelection}
+    />
   </div>
 
   <div class="timeline">
-    <div
-      class="wave-wrap"
-      bind:this={waveWrap}
-      role="group"
-      aria-label="波形时间轴与字幕轨道"
-      style="height:{waveHeight}px;cursor:{waveCursor}"
+    <ReviewWaveTrack
+      height={waveHeight}
+      cursor={waveCursor}
+      dragging={dragMode !== 'none'}
+      marks={chapters.marks}
+      {duration}
+      {viewStart}
+      {viewSpan}
+      rulerH={RULER_H}
+      playTime={play.time}
+      playheadX={xPlayhead()}
+      {waveW}
+      selectionLeft={selection ? xOf(selection.start) : null}
+      selectionWidth={selection ? xOf(selection.end) - xOf(selection.start) : 0}
+      {cueTip}
+      {loadingPeaks}
+      hasPeaks={peaks.length > 0}
+      onwrap={(node) => (waveWrap = node)}
+      oncanvas={(node) => (canvas = node)}
       onpointerdown={onWavePointerDown}
       onpointermove={onWavePointerMove}
       onpointerup={onWavePointerUp}
-      onpointercancel={onWavePointerUp}
       onpointerleave={(e) => {
         if (dragMode === 'none') {
           hoverKey = '';
@@ -2239,82 +2174,16 @@
         const span = Math.max(1.5, Math.min(10, viewSpan / 5 || 5));
         setView(t - span / 2, span);
       }}
-      class:dragging={dragMode !== 'none'}
-    >
-      <canvas bind:this={canvas}></canvas>
-      <ChapterTrack
-        marks={chapters.marks}
-        {duration}
-        {viewStart}
-        {viewSpan}
-        rulerH={RULER_H}
-        onseek={(id) => seekToMark(id)}
-      />
-
-      {#if cueTip}
-        <div class="cue-tip" style="left:{cueTip.x}px">{cueTip.label}</div>
-      {/if}
-
-      {#if selection}
-        <div
-          class="sel"
-          style="left:{xOf(selection.start)}px;width:{Math.max(1, xOf(selection.end) - xOf(selection.start))}px"
-        >
-          <div
-            class="sel-handle l"
-            onpointerdown={(e) => {
-              e.stopPropagation();
-              dragMode = 'resize-l';
-            }}
-          ></div>
-          <div
-            class="sel-handle r"
-            onpointerdown={(e) => {
-              e.stopPropagation();
-              dragMode = 'resize-r';
-            }}
-          ></div>
-        </div>
-      {/if}
-
-      {#if play.time < viewStart - 0.02 || play.time > viewStart + viewSpan + 0.02}
-        <button
-          class="ph-off"
-          class:right={play.time > viewStart}
-          onclick={() => focusPlayhead()}
-          onpointerdown={(e) => e.stopPropagation()}
-          title="播放头在视窗外"
-        >
-          <Icon name={play.time > viewStart ? 'chevron-right' : 'chevron-left'} size={11} />
-        </button>
-      {:else}
-        <div class="ph" style="left:{Math.max(0, Math.min(waveW, xPlayhead()))}px">
-          <div
-            class="ph-flag"
-            style="transform:translateX({Math.max(0, Math.min(waveW, xPlayhead())) < 26
-              ? '0'
-              : Math.max(0, Math.min(waveW, xPlayhead())) > waveW - 26
-                ? '-100%'
-                : '-50%'})"
-          >
-            {tcShort(play.time)}
-          </div>
-        </div>
-      {/if}
-
-      {#if loadingPeaks && !peaks.length}
-        <div class="wave-loading">正在解码波形…</div>
-      {/if}
-
-      <div
-        class="wave-resize"
-        onpointerdown={onResizeDown}
-        onpointermove={onResizeMove}
-        onpointerup={onResizeUp}
-        onpointercancel={onResizeUp}
-        title="拖动调整波形高度"
-      ></div>
-    </div>
+      onseekmark={(id) => seekToMark(id)}
+      onselectionresize={(edge, e) => {
+        e.stopPropagation();
+        dragMode = edge === 'l' ? 'resize-l' : 'resize-r';
+      }}
+      onfocusplayhead={focusPlayhead}
+      onresizedown={onResizeDown}
+      onresizemove={onResizeMove}
+      onresizeup={onResizeUp}
+    />
   </div>
 
   <div class="table-area">
@@ -2714,506 +2583,16 @@
     flex-direction: column;
   }
 
-  .stage {
-    padding: 18px 26px 0;
-    display: flex;
-    flex-direction: column;
-    flex: 0 0 auto;
-  }
-
-  /* 画面固定在 640×360 的 16:9 框里（窗口更窄时等比缩），只留阴影，不要光晕 */
-  .player {
-    position: relative;
-    width: min(640px, 100%);
-    aspect-ratio: 16 / 9;
-    margin: 0 auto;
-    background: #000;
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: var(--shadow-video);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  :global(html[data-theme='dark']) .player {
-    box-shadow: var(--shadow-video), 0 0 0 1px rgba(236, 241, 250, 0.06);
-  }
-  video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    background: #000;
-    display: block;
-  }
-  .empty {
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 12.5px;
-  }
-
-  .caption {
-    position: absolute;
-    left: 50%;
-    bottom: 14px;
-    transform: translateX(-50%);
-    max-width: 84%;
-    background: var(--caption-bg);
-    backdrop-filter: blur(6px);
-    color: #fff;
-    /* 与表格、检查器同一条字幕字体角色：主题换的是「字幕」，不是「界面」 */
-    font-family: var(--font-cue);
-    font-size: 14px;
-    line-height: 1.5;
-    padding: 5px 13px;
-    border-radius: 4px;
-    text-align: center;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-    pointer-events: none;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .caption span {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .transport {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    height: 32px;
-    flex: 0 0 32px;
-    margin-top: 10px;
-  }
-  .playbtn {
-    width: 24px;
-    height: 24px;
-    flex: 0 0 24px;
-    padding: 0;
-    border-radius: 50%;
-    border: 1px solid var(--line);
-    background: var(--raise);
-    color: var(--ink);
-    display: grid;
-    place-items: center;
-    cursor: default;
-    transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
-  }
-  .playbtn:hover {
-    border-color: var(--accent-line);
-    color: var(--accent);
-  }
-  .tp-time {
-    font-size: 12px;
-    line-height: 16px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
-    font-family: var(--font-mono);
-    letter-spacing: -0.01em;
-    white-space: nowrap;
-    min-width: 84px;
-  }
-  .tp-dur {
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    font-family: var(--font-mono);
-    min-width: 38px;
-    text-align: right;
-  }
-  .tp-rate {
-    height: 18px;
-    padding: 0 var(--sp-1);
-    color: var(--accent);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-  .tp-track {
-    flex: 1;
-    height: 16px; /* 比视觉轨道高：4px 的细线根本捏不住 */
-    position: relative;
-    cursor: pointer;
-    touch-action: none;
-    display: flex;
-    align-items: center;
-  }
-  .tp-track::before {
-    /* 悬停时给一条淡淡的底，提示这里可拖动 */
-    content: '';
-    position: absolute;
-    inset: -2px -4px;
-    border-radius: 4px;
-    background: transparent;
-    transition: background 120ms var(--ease);
-  }
-  .tp-track:hover::before,
-  .tp-track.dragging::before {
-    background: var(--accent-soft);
-  }
-  .tp-rail {
-    position: relative;
-    width: 100%;
-    height: 3px;
-    border-radius: 2px;
-    background: var(--line);
-    transition: height var(--dur-fast) var(--ease);
-  }
-  .tp-track:hover .tp-rail,
-  .tp-track.dragging .tp-rail {
-    height: 5px;
-  }
-  .tp-fill {
-    position: absolute;
-    inset: 0 auto 0 0;
-    border-radius: 2px;
-    background: var(--accent);
-  }
-  .tp-knob {
-    position: absolute;
-    top: 50%;
-    width: 9px;
-    height: 9px;
-    margin-left: -4.5px;
-    border-radius: 50%;
-    background: var(--raise);
-    border: 1px solid var(--accent);
-    box-shadow: 0 1px 2px rgba(27, 39, 64, 0.18);
-    transform: translateY(-50%);
-    transition: transform var(--dur-fast) var(--ease);
-  }
-  .tp-track:hover .tp-knob,
-  .tp-track.dragging .tp-knob {
-    transform: translateY(-50%) scale(1.18);
-  }
-
-  /* ---------------- 波形区 ---------------- */
   .timeline {
     padding: 6px 26px 0;
     flex: 0 0 auto;
   }
 
-  /* 时间线第二行：只放时间轴工具 */
-  .tl-tools {
-    position: relative;
+  .stage {
+    padding: 18px 26px 0;
     display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    height: 30px;
-    flex: 0 0 30px;
-    margin-top: 3px;
-  }
-  .zoom-group {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-1);
-  }
-  .zbtn {
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--ink-2);
-    font-size: 14px;
-    line-height: 1;
-    display: grid;
-    place-items: center;
-    cursor: default;
-    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-  }
-  .zbtn:hover {
-    background: var(--line-2);
-    color: var(--ink);
-  }
-  .zoom-slider {
-    appearance: none;
-    width: 64px;
-    height: 14px;
-    background: transparent;
-    cursor: default;
-  }
-  /* 和播放进度同一种滑块语言：已选段实心 accent + 实心拇指 */
-  .zoom-slider::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 2px;
-    background: linear-gradient(
-      to right,
-      var(--accent) var(--zoom-pct, 0%),
-      var(--line) var(--zoom-pct, 0%)
-    );
-  }
-  .zoom-slider::-webkit-slider-thumb {
-    appearance: none;
-    width: 10px;
-    height: 10px;
-    margin-top: -3px;
-    border-radius: 50%;
-    background: var(--accent);
-    border: 0;
-    box-shadow: 0 1px 2px rgba(27, 39, 64, 0.28);
-  }
-  .zoom-slider:hover::-webkit-slider-thumb {
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-  .zoom-x {
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    min-width: 32px;
-    text-align: right;
-    font-family: var(--font-mono);
-  }
-  .mini-text {
-    height: 24px;
-    padding: 0 7px;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 12px;
-    cursor: default;
-    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-  }
-  .mini-text:hover {
-    background: var(--line-2);
-    color: var(--ink);
-  }
-  .grow {
-    flex: 1;
-  }
-  .follow-pill {
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 0 var(--sp-2);
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: default;
-  }
-  .follow-pill i {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--ink-3);
-  }
-  .follow-pill.on {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .follow-pill.on i {
-    background: var(--accent);
-  }
-  .follow-pill:hover {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .tl-spacer {
-    flex: 1;
-  }
-
-  .sel-bar {
-    animation: selIn 140ms var(--ease);
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    /* 悬浮在工具行上层：出现/消失不能让波形上下跳，
-       否则刚拖完选区的下一次点击会落到别的位置。 */
-    position: absolute;
-    inset: 0;
-    z-index: 2;
-    background: color-mix(in srgb, var(--accent) 8%, var(--paper));
-    box-shadow: inset 0 0 0 1px var(--accent-ring);
-    border-radius: 4px;
-    padding: 0 6px 0 9px;
-    height: 30px;
-  }
-  @keyframes selIn {
-    from {
-      opacity: 0;
-    }
-  }
-  .sel-info {
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    white-space: nowrap;
-  }
-  .sel-info b {
-    color: var(--accent);
-    font-weight: 600;
-    margin-left: 3px;
-  }
-  .spin {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    border: 1.5px solid currentColor;
-    border-top-color: transparent;
-    animation: spin 650ms linear infinite;
-  }
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .wave-wrap {
-    position: relative;
-    border-radius: 8px;
-    background: transparent;
-    overflow: hidden;
-    touch-action: none;
-    /* 具体光标由脚本按命中区域切换（刻度/播放头/字幕块/波形） */
-    cursor: crosshair;
-  }
-  canvas {
-    display: block;
-    width: 100%;
-    height: 100%;
-  }
-
-  .cue-tip {
-    position: absolute;
-    bottom: 26px;
-    transform: translateX(-50%);
-    background: var(--accent);
-    color: var(--on-accent);
-    font-size: 12px;
-    line-height: 16px;
-    height: 16px;
-    padding: 0 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    pointer-events: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
-    z-index: 3;
-  }
-
-  .wave-resize {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 6px;
-    cursor: ns-resize;
-    touch-action: none;
-  }
-  .wave-resize::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    bottom: 2px;
-    width: 34px;
-    height: 2px;
-    margin-left: -17px;
-    border-radius: 1px;
-    background: var(--separator);
-  }
-  .wave-resize:hover {
-    background: var(--accent-soft);
-  }
-  .wave-resize:hover::after {
-    background: var(--accent);
-  }
-
-  .sel {
-    position: absolute;
-    top: 17px;
-    bottom: 0;
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
-    border-left: 1px solid var(--accent);
-    border-right: 1px solid var(--accent);
-    pointer-events: none;
-  }
-  .sel-handle {
-    position: absolute;
-    top: 0;
-    /* 留出底部字幕轨道：选区的把手不能挡住字幕块的左右端拖动 */
-    bottom: 23px;
-    width: 8px;
-    pointer-events: auto;
-    cursor: ew-resize;
-  }
-  .sel-handle.l {
-    left: -4px;
-  }
-  .sel-handle.r {
-    right: -4px;
-  }
-
-  .ph {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 1.5px;
-    background: var(--accent);
-    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.55);
-    pointer-events: none;
-    will-change: left;
-  }
-  .ph-off {
-    position: absolute;
-    top: 21px;
-    width: 15px;
-    height: 15px;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    display: grid;
-    place-items: center;
-    left: 3px;
-    z-index: 2;
-  }
-  .ph-off.right {
-    left: auto;
-    right: 3px;
-  }
-  .ph-off:hover {
-    background: var(--accent);
-    color: var(--on-accent);
-  }
-  .ph-flag {
-    position: absolute;
-    top: 2px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--accent);
-    color: var(--on-accent);
-    font-size: 12px;
-    line-height: 13px;
-    padding: 0 var(--sp-1);
-    height: 13px;
-    border-radius: 3px;
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    white-space: nowrap;
-  }
-
-  .wave-loading {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    font-size: 12px;
-    color: var(--text-3);
-    background: color-mix(in srgb, var(--bg-inspector) 74%, transparent);
+    flex-direction: column;
+    flex: 0 0 auto;
   }
 
   /* ---------------- 表格 ---------------- */

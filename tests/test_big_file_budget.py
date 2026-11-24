@@ -40,9 +40,16 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              ReviewView 3787 → 3748；再用腾出的行数接线「默认打开态」
 #              （`lib/reviewStart.ts`：长片 50× 视野 + 第 1 条 + 有译文轨默认双语）
 #              与字幕轨道 17 → 24px（连线后 3780）。净预算 3787 → 3780。
+# 2026-11-24（界面原生化 Phase 0）：核对台按「纯搬运、视觉零变化」拆出三个组件——
+#              走带 + 缩放行 → components/review/ReviewTransport.svelte，
+#              视频监看 → ReviewStage.svelte，波形/字幕轨道 → ReviewWaveTrack.svelte；
+#              同时删掉已被 SelectionBar 接管、在本文件里早已没有使用者的
+#              .sel-bar / .sel-info / .spin 死样式。每一步都用无窗口截图做像素比对
+#              （0.0000% 差异）后才继续。3780 → 3158。字幕表格与查找栏是 Phase 2
+#              真正要改列的地方，等那时连同纯逻辑一起抽（红线 11 的「先抽再改」）。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 3780,
+    "views/ReviewView.svelte": 3158,
 }
 
 
