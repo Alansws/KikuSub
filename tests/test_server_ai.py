@@ -937,3 +937,88 @@ def test_local_load_route(ctx, monkeypatch):
 
     bad = client.post("/api/ai/local-model/load", headers=AUTH, json={"context": 1234})
     assert bad.status_code == 422
+
+
+# --------------------------------------------------------------------------- 单句补译
+
+
+def _enable_ai_with_model(client):
+    res = client.patch(
+        "/api/ai/config",
+        headers=AUTH,
+        json={
+            "enabled": True,
+            "base_url": "https://api.example.com/v1",
+            "model": "m",
+            "arbitrate_base_url": "http://127.0.0.1:1234/v1",
+            "arbitrate_model": "qwen-local",
+        },
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_translate_cue_returns_text_and_writes_nothing(ctx, monkeypatch):
+    from core import ai_client
+
+    seen = {}
+
+    def fake_chat_json(config, system, user, **kwargs):
+        seen["model"] = config.model
+        seen["user"] = user
+        return {"text": "今天下雨", "note": ""}
+
+    monkeypatch.setattr(ai_client, "chat_json", fake_chat_json)
+    client, _ = ctx
+    _enable_ai_with_model(client)
+
+    before = client.get("/api/cues", headers=AUTH).json()["cues"]
+    res = client.post(
+        "/api/ai/translate-cue",
+        headers={**AUTH, "X-AI-Arbitrate-Key": ""},
+        json={"index": 1, "lang": "zh-Hans"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["text"] == "今天下雨"
+    assert body["lang"] == "zh-Hans"
+    assert body["model"] == "qwen-local"
+    # 上下文里有前后原文；只读：字幕一个字节都没动
+    assert "おはよう" in seen["user"] and "行ってきます" in seen["user"]
+    assert client.get("/api/cues", headers=AUTH).json()["cues"] == before
+    assert client.get("/api/translations", headers=AUTH).json()["count"] == 0
+
+
+def test_translate_cue_rejects_unknown_index_and_blank_text(ctx, monkeypatch):
+    from core import ai_client
+
+    monkeypatch.setattr(
+        ai_client, "chat_json", lambda *a, **k: pytest.fail("不该调用模型")
+    )
+    client, _ = ctx
+    _enable_ai_with_model(client)
+    assert (
+        client.post("/api/ai/translate-cue", headers=AUTH, json={"index": 9}).status_code
+        == 404
+    )
+    client.patch("/api/cues/0", headers=AUTH, json={"text": ""})
+    res = client.post("/api/ai/translate-cue", headers=AUTH, json={"index": 0})
+    assert res.status_code == 422
+
+
+def test_translate_cue_requires_ai_enabled(ctx):
+    client, _ = ctx
+    res = client.post("/api/ai/translate-cue", headers=AUTH, json={"index": 0})
+    assert res.status_code == 503
+
+
+def test_translate_cue_maps_upstream_error_to_502(ctx, monkeypatch):
+    from core import ai_client
+
+    def boom(*args, **kwargs):
+        raise ai_client.AiError("模型服务暂时不可用（503）", status=503)
+
+    monkeypatch.setattr(ai_client, "chat_json", boom)
+    client, _ = ctx
+    _enable_ai_with_model(client)
+    res = client.post("/api/ai/translate-cue", headers=AUTH, json={"index": 0})
+    assert res.status_code == 502

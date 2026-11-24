@@ -27,6 +27,7 @@ from core import ai_local_model
 from core import ai_polish
 from core import ai_proposal as proposals
 from core import ai_translate
+from core import ai_translate_cue
 from core import prompts as prompt_store
 from core import settings as settings_store
 from core.subtitles import cues_to_srt
@@ -85,6 +86,13 @@ class ArbitrateRequest(BaseModel):
     hint: str = Field(default="", max_length=ai_arbitrate.MAX_HINT_CHARS)
     # 多轮追问记录；角色只认 user / assistant，具体轮数与字符预算由 core 裁剪。
     history: list[ArbitrateHistoryItem] = Field(default_factory=list)
+
+
+class TranslateCueRequest(BaseModel):
+    """单句补译：索引 + 目标语种；材料（原文 / 上下文 / 已有译文）由服务端取。"""
+
+    index: int = Field(ge=0)
+    lang: str = ""
 
 
 class AiJobRequest(BaseModel):
@@ -476,6 +484,99 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
 
     return {
         **result,
+        "model": config.model,
+        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+    }
+
+
+@router.post("/api/ai/translate-cue")
+def translate_cue(payload: TranslateCueRequest, request: Request, session: Session = Depends(get_session)) -> dict:
+    """把核对台第 ``index`` 条原文交给**单句判定模型**翻一句，只回文本。
+
+    与 ``/api/ai/arbitrate`` 同一约束：不落盘、不改字幕、不进历史。用户在检查器里
+    看一眼（可改）点「采纳」，才走既有的 ``updateTranslation()`` 压一步历史。
+
+    刻意默认走本地 LM Studio（``ai_arbitrate_base_url``）：这类片源云端模型会拒，
+    而本地那份已经为逐句复核加载着，不存在额外下载 / 计费。
+    """
+    settings = _ai_settings(request)
+    if not settings.get("ai_enabled"):
+        raise HTTPException(status_code=503, detail="AI 优化未启用：设置 → 实验功能里打开它")
+    cues = session.review_cues
+    if not 0 <= payload.index < len(cues):
+        raise HTTPException(status_code=404, detail=f"第 {payload.index + 1} 条不存在")
+    text = cues[payload.index].text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="这一句原文是空的，没有可翻译的内容")
+
+    lang = (payload.lang or "").strip()
+    if not lang:
+        lang = sorted(session.translations)[0] if session.translations else "zh-Hans"
+    track = session.translations.get(lang)
+
+    base_url, model, override = _arbitrate_target(settings)
+    key = (
+        request.headers.get("x-ai-arbitrate-key" if override else "x-ai-key") or ""
+    ).strip()
+    if override and not key and not ai_client.is_local_url(base_url):
+        key = (request.headers.get("x-ai-key") or "").strip()
+    config = ai_client.AiConfig(
+        base_url=base_url,
+        model=model,
+        api_key=key,
+        timeout_s=120.0,
+        allow_no_key=ai_client.is_local_url(base_url),
+    )
+    if not key and not config.allow_no_key:
+        raise HTTPException(
+            status_code=401,
+            detail="单句判定模型还没有配置 API Key" if override else "还没有配置 API Key",
+        )
+    try:
+        config.ensure_ready()
+    except ai_client.AiError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+    # 上下文只给这一句的邻居：前面的取最近 4 条，后面的取最近 4 条；已有译文当参考。
+    radius = ai_translate_cue.MAX_CONTEXT_CUES
+    start = max(0, payload.index - radius)
+    stop = min(len(cues), payload.index + radius + 1)
+    before = [cues[i].text for i in range(start, payload.index)]
+    after = [cues[i].text for i in range(payload.index + 1, stop)]
+    refs = []
+    if track is not None:
+        for i in range(start, stop):
+            if i == payload.index:
+                continue
+            dst = track.texts[i].strip() if i < len(track.texts) else ""
+            if dst:
+                refs.append({"src": cues[i].text, "dst": dst})
+
+    started = time.perf_counter()
+    try:
+        result = ai_translate_cue.translate_cue(
+            text,
+            config,
+            dst_lang=lang,
+            before=before,
+            after=after,
+            refs=refs,
+        )
+    except ai_client.AiError as exc:
+        detail = (
+            f"模型服务拒绝鉴权（{exc.status}）：检查 API Key"
+            if exc.status in (401, 403)
+            else exc.message
+        )
+        raise HTTPException(
+            status_code=424 if exc.status in (401, 403) else 502, detail=detail
+        ) from exc
+    except ai_translate_cue.CueTranslateError as exc:
+        raise HTTPException(status_code=502, detail=f"模型返回格式不正确：{exc}") from exc
+
+    return {
+        **result,
+        "lang": lang,
         "model": config.model,
         "elapsed_ms": int((time.perf_counter() - started) * 1000),
     }
