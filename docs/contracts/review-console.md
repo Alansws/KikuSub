@@ -634,6 +634,22 @@
   既有 `verify_review_viewport.mjs` / `verify_cue_clipboard.mjs` /
   `verify_review_transport.mjs` / `verify_arbitration*.mjs` 同轮全绿。
 
+#### 3.4.14 设置页：类别列表 + 分组列表（2026-11-24）
+
+对齐 macOS 设置窗格的形状，**只改界面层**：路由、页签记忆、四个页面内容与所有控件
+行为都不动。
+
+- `components/settings/SettingsNav.svelte`（取代 `SettingsTabs`）：顶部横向分段控件
+  → 左侧竖向类别列表。30px 行高、6px 圆角、选中用柔和填充；每类一枚 22px 彩色圆角
+  小图标，**颜色只用来「分得开」，不承载状态语义**（不要按选中/告警去换色）。
+- 键盘方向跟着形状走：横向分段控件用 ←/→，竖向列表用 ↑/↓；`aria-orientation`
+  必须同步改成 `vertical`，否则读屏会按横向念。
+- `SettingsView` 改成 `176px | 1fr` 两列（≤1120px 收 148px，≤900px 堆叠）。
+  设置项本身是 `.set-group` + `.set-row` 的 Inset 分组（1px 行内分割线、左标题右控件），
+  这次只是让它拿到整条内容宽度，不再被顶部一排胶囊压窄。
+- **保留全部既有 id**（`set-tab-*` / `set-pane-*`）：三个截图脚本与两个回归脚本
+  （`verify_settings_ai_fold` / `verify_cli_settings`）都靠它们定位，改名等于把验证一起改坏。
+
 #### 3.4.13 监看舞台 · 检查器去卡片（2026-11-24，Phase 2）
 
 > 各自独立提交，都按「先抽纯逻辑、再改界面」做（红线 11）。
