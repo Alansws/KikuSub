@@ -76,12 +76,21 @@
   --raise: #ffffff;
   --ink: #1b2740;
   --ink-2: #5a6780;
-  --ink-3: #68758a;
+  /* 2026-11-23：4.18 → 4.7（on --canvas）。只做「标签/计数/单位/快捷键」，
+     解释性正文一律用 --ink-2 —— 两者必须成对使用，否则正文与标签同重，灰阶会变紧。 */
+  --ink-3: #5f6d84;
+  /* G14：禁用 / 不可用专用。与 --ink-3（标签）语义分开：
+     标签是「次要但有效」，muted 是「此刻不生效」。对比度刻意低（2.6:1），
+     因为它本来就该弱到不像可读内容，但仍高于纯装饰。 */
+  --ink-muted: #99a3b3;
   --line: rgba(27, 39, 64, 0.12);
   --line-2: rgba(27, 39, 64, 0.06);
 
   --accent: #4f6bff;
   --accent-hover: #3d57e6;
+  /* 文字/图标形式的强调。--accent 在小字上只有 4.15（on --paper），
+     所以「填充底」与「文字色」用两个令牌分开算：这里 5.47/5.08。 */
+  --accent-text: #3d57e6;
   --accent-soft: rgba(79, 107, 255, 0.08);
   --accent-ring: rgba(79, 107, 255, 0.35);
   --accent-line: rgba(79, 107, 255, 0.35);
@@ -182,12 +191,17 @@ html[data-theme='dark'] {
   --raise: #181c23;
   --ink: #ecf1fa;
   --ink-2: #a9b4c6;
+  /* 深色下已是 5.79（on --paper），本来就达标，不动。
+     浅色的 #5F6D84 是冷蓝灰，拿到深色会变暗、失去层次。 */
   --ink-3: #8591a5;
+  --ink-muted: #5c6675;
   --line: rgba(236, 241, 250, 0.13);
   --line-2: rgba(236, 241, 250, 0.07);
 
   --accent: #7d93ff;
   --accent-hover: #94a6ff;
+  /* 文字/图标形式的强调：深色保持高亮蓝（6.58），不用浅色的 #3D57E6。 */
+  --accent-text: #7d93ff;
   --accent-soft: rgba(125, 147, 255, 0.16);
   --accent-ring: rgba(125, 147, 255, 0.42);
   --accent-line: rgba(125, 147, 255, 0.42);
@@ -285,12 +299,17 @@ html[data-theme='mincho'] {
   --raise: #ffffff;
   --ink: #15181b;
   --ink-2: #5e6468;
+  /* 明抄是暖色主题：#666c70 已是 5.1（on --paper），本来就达标；
+     浅色的冷蓝灰 #5F6D84 会毁掉这套暖调，所以这里不动。 */
   --ink-3: #666c70;
+  --ink-muted: #a3a8ab;
   --line: rgba(21, 24, 27, 0.12);
   --line-2: rgba(21, 24, 27, 0.06);
 
   --accent: #c8412d;
   --accent-hover: #b03524;
+  /* 文字/图标形式的强调：朱红本身 4.73（on --paper）已达标，用同一色不另调。 */
+  --accent-text: #c8412d;
   --accent-soft: rgba(200, 65, 45, 0.07);
   --accent-ring: rgba(200, 65, 45, 0.32);
   --accent-line: rgba(200, 65, 45, 0.35);
@@ -480,16 +499,18 @@ body {
 .btn:disabled {
   opacity: 0.45;
 }
+/* G14：禁用态用 --ink-muted（"此刻不生效"），与 --ink-3（"次要但有效"）分开。
+   原来两者都走 --text-3，导致「置灰的按钮」和「次要标签」看起来是同一档语义。 */
 /* 禁用态不要留一层淡 accent：主操作要么是实心蓝，要么明确退成灰 */
 .btn.primary:disabled {
   background: var(--fill);
   border-color: transparent;
-  color: var(--text-3);
+  color: var(--ink-muted);
   box-shadow: none;
   opacity: 1;
 }
 .btn.ghost:disabled {
-  color: var(--text-3);
+  color: var(--ink-muted);
 }
 .btn.primary {
   background: var(--btn-primary-bg);
@@ -518,9 +539,10 @@ body {
   justify-content: center;
 }
 /* 设置页大量使用的小号按钮（Inline 行内动作） */
+/* 操作文字按规则不低于 13px；小号按钮只缩高度与内边距，不缩字号。 */
 .btn.sm {
   height: 24px;
-  font-size: var(--fs-label);
+  font-size: var(--fs-ui);
   padding: 0 var(--sp-2);
 }
 .btn.danger {
@@ -621,6 +643,9 @@ html[data-theme='dark'] .seg button.on {
   font-size: 12px;
 }
 
+/* G16 检查器的「键 / 值」两层：
+   键是标签，退后（12/400/--ink-3）；值是可读内容，抬上来（12.5/500/--text）。
+   原来键 12.5、值 12 —— 标签比值还重，扫读时先看到标签而不是数据。 */
 .kv {
   display: flex;
   justify-content: space-between;
@@ -631,11 +656,13 @@ html[data-theme='dark'] .seg button.on {
   line-height: 18px; /* 12.5/18：整行 24px，和 4px 的间距网格对齐 */
 }
 .kv .k {
-  color: var(--text-2);
+  color: var(--ink-3);
+  font-size: 12px;
   flex: 0 0 auto;
 }
 .kv .v {
   color: var(--text);
+  font-weight: 500;
   text-align: right;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
@@ -648,9 +675,13 @@ html[data-theme='dark'] .seg button.on {
   letter-spacing: -0.02em;
 }
 
+/* G10：浅色下 --paper(#F9FBFE) 与 --raise(#FFF) 只差 1.04，卡片边界几乎全靠这一条线。
+   原来用 --separator-soft（.06），比 bento 卡片用的 --bento-border（.075）还淡一档，
+   于是同一屏里两种卡片边界深浅不一。统一到 .075 这一档，边界看得清又不过重。
+   （深色与明抄不动：深色 paper→raise 是 1.08，本来就分得开；明抄另有自己的暖色边框值。） */
 .card {
   background: var(--raise);
-  border: 1px solid var(--separator-soft);
+  border: 1px solid var(--bento-border);
   border-radius: var(--rad-card);
   padding: 14px 16px;
 }
@@ -721,15 +752,17 @@ html[data-theme='dark'] .card {
 }
 
 /* ---------- 设置页：说明 / 警示条 ---------- */
+/* 说明 / 警示条：内容多为「Key 会不会上传」「失败原因」这类读了才能正确操作的话，
+   按 G3 规则用 13/19；颜色沿用各态（warn 态继续走 --warn，不迁 --ink-2）。 */
 .note-box {
   display: flex;
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--rad-card);
   background: var(--fill);
-  color: var(--text-2);
-  font-size: var(--fs-label);
-  line-height: 1.55;
+  color: var(--ink-2);
+  font-size: var(--fs-ui);
+  line-height: 19px;
 }
 .note-box.warn {
   background: var(--warn-soft);
@@ -775,10 +808,12 @@ html[data-theme='dark'] .card {
   font-size: var(--fs-ui);
   font-weight: 500;
 }
+/* 设置页每行的说明是「不看会选错」的文字（例：系统语音 vs 克隆音色的差别），
+   按 G3 规则提到 13/19 并迁到 --ink-2；--ink-3 只留给计数、单位、快捷键。 */
 .set-row-desc {
-  font-size: var(--fs-label);
-  color: var(--text-3);
-  line-height: 1.45;
+  font-size: var(--fs-ui);
+  color: var(--ink-2);
+  line-height: 19px;
 }
 .set-row-ctl {
   flex: 0 0 auto;
@@ -951,9 +986,44 @@ progress {
   }
 }
 
+/* ============================================================
+   G8：减少动态效果
+
+   原来的写法是 `* { animation-duration: .01ms }`，把 spinner 也一起停掉 ——
+   开了这个偏好的用户会看到一个「不转的转圈图标」，比转圈更困惑：
+   看不出是「正在加载」还是「已经卡死」。
+
+   新写法不再全局压动画，而是**只关引起前庭不适的那几类**（位移 / 缩放 / 淡入）：
+   过渡时长统一压到 0.01ms，入场类 keyframes 直接 `animation: none`；
+   其余动画（spinner、进度条微光）保持原速 —— 它们表达的是「还在处理」。
+   ============================================================ */
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
+  /* 过渡（hover / 展开 / 抽屉 / 主题切换）全部即时完成 */
+  *,
+  *::before,
+  *::after {
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+
+  /* 入场类动画：位移与淡入一律关掉，元素直接停在终态 */
+  .view-enter.animated,
+  .toast,
+  .ins-scrim,
+  .ec-menu,
+  .menu,
+  .hist-panel,
+  .sel-bar,
+  .meta-sec,
+  .card-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /*
+     有意保留：spinner 与进度条、以及它们的关键帧时长。
+     本规则**不再声明任何全局 animation-duration**，所以这些组件的动画
+     保持各自 <style> 里写的原速 —— 这是与旧写法的关键区别。
+  */
 }

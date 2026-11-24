@@ -222,3 +222,4 @@ CI 的 `release-tag` job 才是硬约束；钩子只是让本地早点发现。
 | 下载后打不开 | Gatekeeper（未公证） | Release notes 写清右键「打开」 |
 | 用户报「导入视频 Internal Server Error」 | 包内没有 ffmpeg，且对方没装 Homebrew | 确认 `Contents/Resources/bin/ffmpeg` 存在；重新 `fetch_ffmpeg.sh` 后重装配 |
 | 用户升级后 AI Key 失效 | 千万别改成 `safeStorage`（见 `docs/contracts/ai-proposal.md`） | 保持 `aikey.cjs` 方案 |
+| `rebuild.sh` 只打一行 `rm: build/pack/dist/sidecar/_internal: Directory not empty` 就退出 | Finder 显示过 `build/pack` 里的目录，正往 `_internal` 写 `.DS_Store`，`rm -rf` 在 rmdir 时撞上 | 已由 `tools/pack/_rmtree.sh` 的 `rm_tree` 兜住（先 rename 再删 + 重试）；仍失败就关掉那个 Finder 窗口，删掉报错的目录再重跑 |

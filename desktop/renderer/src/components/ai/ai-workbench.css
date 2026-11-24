@@ -32,12 +32,15 @@
   min-width: 0;
 }
 
+/* 与 PageHeader 的 .page-title 同一套规格（22 / 30 / 600 / -0.015em）。
+   原来这里是 20/26，和标准页头只差 2px —— 差 2px 最贵：肉眼分不出"两种系统"，
+   只会觉得切页时标题轻轻跳了一下。AI 四页标题在工具条内，结构不同但规格必须一致。 */
 .aiw-title {
   margin: 0;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--text);
   white-space: nowrap;
 }
@@ -133,10 +136,10 @@
 }
 .aiw-chip.accent {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-chip.accent b {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 button.aiw-chip {
   border: 0;
@@ -184,7 +187,7 @@ button.aiw-count:hover {
   appearance: none;
   border: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   font: inherit;
   font-size: 12px;
   line-height: 18px;
@@ -424,7 +427,7 @@ html[data-theme='dark'] .aiw-lane button.on {
   font-variant-numeric: tabular-nums;
 }
 .aiw-rail-item.on .aiw-rail-no {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-rail-item.done .aiw-rail-no {
   color: var(--success);
@@ -469,7 +472,7 @@ html[data-theme='dark'] .aiw-lane button.on {
 }
 .aiw-rail-flag.ready {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-rail-flag.todo {
   background: var(--fill);
@@ -517,7 +520,7 @@ html[data-theme='dark'] .aiw-lane button.on {
 }
 .aiw-card-title b {
   font-family: var(--font-mono);
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 .aiw-card-sub {
@@ -773,19 +776,28 @@ button.aiw-tc {
   text-align: left;
 }
 button.aiw-tc:hover {
-  color: var(--accent-hover);
+  color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* 时间码是「参照信息」，不是动作：整列刷强调色会让一屏出现十几个"重点"
+   （断句重排实测 17 个强调文字节点里有 13 个是它），真正的差异反而沉下去。
+   常态用 --ink-2，hover 才上强调。
+
+   这里没有"当前行"：AI 三页是批量处理表，不与播放头同步（当前句只在核对台）。
+   所以强调只在 hover / 键盘聚焦时出现，不另造一个不存在的选中态。 */
 .aiw-tc {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 17px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: -0.01em;
-  color: var(--accent);
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+button.aiw-tc:focus-visible {
+  color: var(--accent-text);
 }
 .aiw-idx {
   font-size: 10.5px;
@@ -839,7 +851,7 @@ button.aiw-tc:hover {
   background: var(--danger-soft);
 }
 .aiw-mark .new {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
 }
 .aiw-row.changed {
@@ -930,7 +942,7 @@ button.aiw-tc:hover {
   place-items: center;
   border-radius: var(--rad-card);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-blank-title {
   font-size: 15px;
@@ -971,7 +983,7 @@ button.aiw-tc:hover {
   font-size: 10.5px;
   font-weight: 600;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-blank-steps b {
   color: var(--text);
@@ -1018,7 +1030,7 @@ button.aiw-tc:hover {
   place-items: center;
   border-radius: 6px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .aiw-guide-title {
   font-size: 12px;
@@ -1026,10 +1038,11 @@ button.aiw-tc:hover {
   font-weight: 600;
   color: var(--text);
 }
+/* 操作引导句：告诉用户「粘回什么、会看到什么」，不看就会操作错 → 13/19 + --ink-2。 */
 .aiw-guide-text {
-  font-size: 11.5px;
-  line-height: 17px;
-  color: var(--text-3);
+  font-size: var(--fs-ui);
+  line-height: 19px;
+  color: var(--ink-2);
 }
 
 /* ---------- 紧凑分段轨：多段时才出现，只占一条细带 ---------- */
@@ -1148,10 +1161,11 @@ button.aiw-tc:hover {
 
 /* ---------- 统计 / 过滤器：挂在表头或底栏，不再单独占一行 ---------- */
 
+/* 校验提示（如「必须带时间码」）：属于会让人做错事的说明 → 13/19 + --ink-2。 */
 .aiw-hint {
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--text-3);
+  font-size: var(--fs-ui);
+  line-height: 19px;
+  color: var(--ink-2);
   white-space: nowrap;
 }
 .aiw-check {

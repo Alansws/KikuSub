@@ -29,6 +29,7 @@ const path = require('node:path');
 const aikey = require('./aikey.cjs');
 const launchguard = require('./launchguard.cjs');
 const skill = require('./skill.cjs');
+const cli = require('./cli.cjs');
 const windowmode = require('./windowmode.cjs');
 const {
   deleteCleanupCandidates,
@@ -1336,6 +1337,46 @@ ipcMain.handle('dialog:pick-proposal', (_e, defaultDir) => pickProposal(defaultD
 ipcMain.handle('ai-key:set', (_e, text, scope) => setAiKey(text, scope));
 ipcMain.handle('ai-key:get', (_e, scope) => getAiKey(scope));
 ipcMain.handle('ai-key:clear', (_e, scope) => clearAiKey(scope));
+// ---- 外部 CLI（kikusub）----
+function cliTarget() {
+  return cli.targetPath({
+    isPackaged: app.isPackaged,
+    execPath: process.execPath,
+    resourcesPath: process.resourcesPath,
+    repoRoot: REPO_ROOT,
+  });
+}
+
+ipcMain.handle('cli:status', () => {
+  try {
+    return {
+      ok: true,
+      ...cli.status({ home: app.getPath('home'), target: cliTarget(), pathEnv: process.env.PATH }),
+      hint: cli.pathHint({ home: app.getPath('home') }),
+    };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('cli:install', () => {
+  try {
+    const result = cli.install({ home: app.getPath('home'), target: cliTarget() });
+    return { ...result, ...cli.status({ home: app.getPath('home'), target: cliTarget() }) };
+  } catch (err) {
+    mainLog(`[cli] 安装失败：${err && err.message ? err.message : err}`);
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('cli:uninstall', () => {
+  try {
+    return cli.uninstall({ home: app.getPath('home'), target: cliTarget() });
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 ipcMain.handle('skill:status', () => {
   try {
     return { ok: true, ...skill.status({ sourceDir: skillSourceDir(), targetDir: skillTargetDir() }) };

@@ -50,7 +50,8 @@ def _fmt_stamp(stamp: dict) -> str:
     return f"{stamp['start'] / 16000:.2f}-{stamp['end'] / 16000:.2f}"
 
 
-def _vad_view(audio, cfg) -> dict:
+def _vad_view(audio, cfg, *, gate_audio=None) -> dict:
+    stats: dict = {}
     stamps = transcribe.detect_speech_stamps(
         audio,
         None,
@@ -61,10 +62,18 @@ def _vad_view(audio, cfg) -> dict:
         backend=str(cfg.vad_backend),
         fallback_backend="silero",
     )
+    if gate_audio is not None:
+        stamps = transcribe.gate_stamps_by_energy(
+            stamps,
+            gate_audio,
+            floor_dbfs=transcribe.VOCAL_GATE_DBFS,
+            stats=stats,
+        )
     return {
         "audio_s": round(len(audio) / 16000, 2),
         "stamps": len(stamps),
         "speech_s": round(sum(s["end"] - s["start"] for s in stamps) / 16000, 2),
+        "gate": stats or None,
         "items": stamps,
     }
 
@@ -167,9 +176,20 @@ def main(argv: list[str] | None = None) -> int:
         media, enable_loudnorm=True, start_time_s=args.start, end_time_s=args.end
     )
     vocals_path = audio_cache.vocals_wav_path(media, start=args.start, end=args.end)
-    vocals_audio = transcribe.load_audio_for_transcription(vocals_path, enable_loudnorm=True)
+    # 产品路径（2026-11-21 起）：VAD 检测仍用 dynaudnorm 档位；绝对能量门控
+    # 另读一份未归一化的真实电平，避免把放大后的近静音串音送进 ASR。
+    vocals_audio = transcribe.load_audio_for_transcription(
+        vocals_path, enable_loudnorm=True
+    )
+    gains: list[float] = []
+    vocals_level = transcribe.load_audio_for_transcription(
+        vocals_path, enable_loudnorm=False, peak_gain_out=gains
+    )
+    gain = float(gains[0]) if gains else 1.0
+    if gain not in (0.0, 1.0):
+        vocals_level = vocals_level / gain
     vad_plain = _vad_view(plain_audio, cfg)
-    vad_vocals = _vad_view(vocals_audio, cfg)
+    vad_vocals = _vad_view(vocals_audio, cfg, gate_audio=vocals_level)
     # 100ms 容差下「同一个边界」的个数：回答差异是整体重切还是只挪了几段。
     tol = 1600
     matched = 0
@@ -188,7 +208,10 @@ def main(argv: list[str] | None = None) -> int:
             "items_s": [_fmt_stamp(item) for item in vad_plain["items"]],
         },
         "vocals": {
-            **{k: vad_vocals[k] for k in ("audio_s", "stamps", "speech_s")},
+            **{
+                k: vad_vocals[k]
+                for k in ("audio_s", "stamps", "speech_s", "gate")
+            },
             "items_s": [_fmt_stamp(item) for item in vad_vocals["items"]],
         },
         "matched_within_100ms": matched,
@@ -199,6 +222,14 @@ def main(argv: list[str] | None = None) -> int:
         f"±100ms 内同边界 {matched} 段",
         flush=True,
     )
+    gate = vad_vocals.get("gate")
+    if gate:
+        print(
+            f"[VAD] 人声能量门控 {gate['floor_dbfs']} dBFS："
+            f"{gate['input']} → {gate['kept']} 段，丢弃 {gate['dropped']} 段 / "
+            f"{gate['dropped_s']:.1f}s",
+            flush=True,
+        )
 
     identical = results["plain"]["asr_sha256"] == results["vad_only"]["asr_sha256"]
     print()

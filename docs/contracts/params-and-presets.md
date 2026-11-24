@@ -74,11 +74,13 @@ updated: 2026-11-14 20:05
 | 中文短视频：快节奏·带 BGM（SenseVoice 默认） | `sensevoice` | `中文_test_1.mp4`：345s 科技口播短视频，作者剪掉气口、语速快，**持续底噪/BGM**；画面烧字幕 OCR 后人工核对作参照 |
 | 中文短视频：快节奏·带 BGM（FireRed 默认） | `firered` | 同上 |
 | 歌曲 | `whisper` | 40:20–44:24 的强 BGM 歌曲段；`max_segment_s=15 / merge_gap_s=0.5 / min_silence_ms=300`，配合「人声分离」勾选使用 |
+| 日语 ASMR：轻声耳语·Silero 切分 | `whisper` | 同一支耳语素材的「Silero 切分 + 上一句提示」专项：`vad_backend=silero / vad_threshold=0.25 / use_prev_text_prompt=true`（见 §8.1），配合**关闭人声分离**使用。同进程对照：**11.55%**（同配置关提示 15.49%；WhisperSeg 0.45 是 12.11%）。**定位：不宣称 CER 最低**，选它的理由是**时间轴更贴发声**——但要说清来源：紧的是 Silero 的 20s 分窗机制，**不是** `use_prev_text_prompt`（后者只改文本、不动边界，段内静音 4.5% → 4.5% 不变）。实测段内静音 4.5%（WhisperSeg 12.4%）、劈词 11（19）、最长条 4.22s（WhisperSeg 4.48s）；追求字面 CER 最低请直接用默认的 WhisperSeg 0.45（12.11%） |
 
-前四个预设的参数值都等于 `core/params.py` 的当前默认值；「歌曲」是 Whisper 的
-同引擎第二方案（不是默认快照）。由
-`tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` 看守：
-每个引擎恰好一份默认快照，另允许 Whisper 的「歌曲」变体。
+前四个预设的参数值都等于 `core/params.py` 的当前默认值；「歌曲」与
+「日语 ASMR：轻声耳语·Silero 切分」是 Whisper 的同引擎命名方案（不是默认快照）。
+由 `tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` 看守：
+每个引擎恰好一份默认快照，另允许 Whisper 这两个变体，且 ASMR 变体的三个关键值
+（`vad_backend=silero` / `vad_threshold=0.25` / `use_prev_text_prompt=true`）不许被调回默认。
 素材、数字与结论分别在
 [转录标定-AnimeWhisper-2026-11.md](../转录标定-AnimeWhisper-2026-11.md)、
 [转录标定-Qwen-2026-11.md](../转录标定-Qwen-2026-11.md)、
@@ -130,6 +132,17 @@ song.update({
     "whisper.vad_min_silence_ms": 300,
 })
 payload["预设"]["歌曲"] = {"引擎": "whisper", "参数": song}
+# Whisper 的「轻声耳语」变体：默认值 + Silero 切分 + 上一句文本提示。
+whisper_asmr = params.defaults_for("whisper")
+whisper_asmr.update({
+    "whisper.vad_backend": "silero",
+    "whisper.vad_threshold": 0.25,
+    "whisper.use_prev_text_prompt": True,
+})
+payload["预设"]["日语 ASMR：轻声耳语·Silero 切分"] = {
+    "引擎": "whisper",
+    "参数": params.normalize("whisper", whisper_asmr),
+}
 with open("presets.json", "w", encoding="utf-8") as fh:
     json.dump(payload, fh, ensure_ascii=False, indent=2)
     fh.write("\n")
@@ -147,7 +160,7 @@ PY
 | 测试 | 守什么 |
 | --- | --- |
 | `tests/test_params.py::test_every_preset_key_exists_in_specs` | 种子文件里的键都在规格表里 |
-| `tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` | 四个引擎各恰好一份默认快照；额外只允许 Whisper「歌曲」变体 |
+| `tests/test_params.py::test_shipped_presets_cover_every_engine_with_its_defaults` | 四个引擎各恰好一份默认快照；额外只允许 Whisper「歌曲」与「轻声耳语·Silero 切分」两个变体 |
 | `tests/test_presets.py::test_save_requires_engine` | 无引擎/非法引擎不能保存 |
 | `tests/test_presets.py::test_resolve_rejects_cross_engine_load` | 跨引擎载入被拒 |
 | `tests/test_presets.py::test_cannot_overwrite_another_engines_preset` | 同名跨引擎覆盖被拒 |
@@ -166,6 +179,52 @@ PY
 老预设没有这三个键时，`params.normalize()` 补当前默认值；保存时写完整快照。
 它们都不改变引擎绑定、不新增引擎 key，因此不触发跨引擎 409 规则。
 
+## 8.1 反幻觉开关：`whisper.use_prev_text_prompt`（2026-11-22）
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `whisper.use_prev_text_prompt` | false | 把**上一条已定稿字幕**的文本作为 Whisper 的 `prompt_ids` 送给下一条：只补语义上下文，**不改字幕边界** |
+
+存在的理由与边界：
+
+- 「Silero 切得紧但短段会幻觉」是这条素材上的主要病（1.2s 的 `当店、` 被解成 `だーてん`）。
+  曾考虑「多截 0.3–0.5s 音频再按原边界裁回」，但 Anime Whisper 没有 CTC 对齐头，
+  裁不回去，会串句——所以改成只喂文本。
+- 实测（日语 ASMR 单人女声耳语，320s，36 条人工参考 / 355 字）：
+  Silero 0.25 **CER 15.49% → 11.55%**（劈词 11 → 11，段内静音 4.5% 不变，
+  最长条 4.22s 不变）；WhisperSeg 0.45 **12.11% → 26.76%**（反而差 14.6pt，见下一条）。
+  **这组 15.49/11.55 是修完 `_refine_bounds_by_pauses` 的 `vad.reset_states()` 之后
+  重跑的数字**（2026-11-22 当天两跑逐条一致，仅 1 处句尾差 32ms）。历史值 17.46/13.80
+  来自修复前的 `runs3/`，是带状态 Silero 探针造成的漂移产物，**不再引用**。
+  WhisperSeg 两轮数字逐位可复现，说明漂移只在 Silero 的 VAD 边界上。
+- **只对 Silero 有效**：同一支素材上 WhisperSeg 0.45 打开它是 **12.11% → 26.76%**
+  （WhisperSeg 的段更短，上一句容易被整段复述进下一段）。因此
+  `backend_only="silero"`：面板按后端置灰，代码里
+  `prev_text_prompt_enabled(开关, 实际使用的后端)` 是唯一的门——只置灰不改行为属于欺骗（§9）。
+  用户勾了但后端不生效时，`segment_stats["prev_text_prompt_ignored_backend"]` 留痕。
+- 代价：个别短句会**换一种错法**（`だーてん` → `0点`），并偶发 `♡`、片假名等杂讯。
+  因此默认关；对白/动画片应 A/B 后再决定。产品里以预设
+  「日语 ASMR：轻声耳语·Silero 切分」提供（见 §4）。
+
+实现约束（改之前先看这几条，它们都是实测踩出来的）：
+
+1. **上下文只走显式参数**。`_decode_chunk(..., prompt_text=...)` 不读实例状态：
+   `ENGINE` 是模块级单例，整片转写、核对台单句重转（`core.short_clip`）、
+   「另一引擎听一遍」（`transcribe_window`）共用同一个实例；把「上一句是什么」存在
+   实例上，上一次整片任务的尾巴会污染下一次单句重转，取消/异常退出还会留下旧上下文。
+   守卫是 `tests/test_prompt_ids.py::test_no_prompt_text_means_no_prompt`。
+2. **四道闸门在 `prompt_text_for()`**（唯一判断处，纯函数、有单测）：
+   ① 上一句被幻觉门控判为可疑 `suspicious` → 不传；② 与上一句间隔
+   `> PROMPT_MAX_GAP_S`（3.0s，换场/长停顿）→ 不传；③ 去掉装饰符号后没有实义字符
+   （`♪♡…`）→ 不传；④ 病理性复读（与幻觉门控同一条 `REPEATED_CHUNK_RE`）→ 不传。
+   装饰符号（`♡♪☆` 等）一律先剥掉：它们不发音，留着会被模型照抄。
+3. **设备**：`get_prompt_ids()` 返回 CPU 张量，必须 `.to(pipe.device)`——MPS 上漏掉
+   直接 `Passed CPU tensor to MPS op`。
+4. **失败熔断**：`tokenizer.get_prompt_ids()` 抛错时只把本轮
+   `last_prompt_ids_stats["enabled"]` 置 False（`failed` 计数 +1），字幕照出、
+   后续段落不再重试；下一次整片转写重新武装。熔断只影响本次任务，不影响别的调用方
+   （它们本来就不传 `prompt_text`）。
+
 ## 9. 后端限定参数与标定推荐（2026-11-20）
 
 VAD 切分器有两个后端，参数面板里有一部分微调只对其中一个有意义。这类关系写在
@@ -173,9 +232,9 @@ VAD 切分器有两个后端，参数面板里有一部分微调只对其中一�
 
 | 字段 | 含义 | 现在的用法 |
 | --- | --- | --- |
-| `backend_only` | 只对某个兄弟枚举值生效（值是那个枚举的 value） | `whisper.vad_onset_pad_ms` → `silero`：它补偿的是 Silero 的起点系统性偏晚；WhisperSeg 的帧级概率已贴合句首，`core/transcribe.py` 按**实际使用的后端**把它置 0，并在 `segment_stats["onset_pad_ignored_backend"]` 留痕（报告显示「仅 Silero 生效」） |
-| `backend_notes` | 按兄弟枚举值给出的校准文案 | `whisper.vad_threshold`：WhisperSeg 0.35 / Silero 0.25 |
-| `backend_recommended` | 按兄弟枚举值给出的推荐数值，前端提供「用 0.35」一击校准 | 同上 |
+| `backend_only` | 只对某个兄弟枚举值生效（值是那个枚举的 value） | `whisper.vad_onset_pad_ms` → `silero`：它补偿的是 Silero 的起点系统性偏晚；WhisperSeg 的帧级概率已贴合句首，`core/transcribe.py` 按**实际使用的后端**把它置 0，并在 `segment_stats["onset_pad_ignored_backend"]` 留痕（报告显示「仅 Silero 生效」）。`whisper.use_prev_text_prompt` → `silero`：WhisperSeg 上会明显退化（§8.1），门在 `prev_text_prompt_enabled()` |
+| `backend_notes` | 按兄弟枚举值给出的校准文案 | `whisper.vad_threshold`：WhisperSeg 0.45 / Silero 0.25（2026-11-22 由 0.35 上调，见 §8.1） |
+| `backend_recommended` | 按兄弟枚举值给出的推荐数值，前端提供「用 0.45」一击校准 | 同上；WhisperSeg 也已随默认值上调到 0.45 |
 
 约束：
 

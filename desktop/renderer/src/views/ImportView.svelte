@@ -295,11 +295,13 @@
     max-width: 640px;
   }
 
+  /* 本页的主操作就是这个拖入区，但它是一整块画布而不是按钮：
+     给实心填充会压过内容，所以用「描边 + 浅蓝底 + 强调图标」表达焦点。 */
   .dropzone {
     appearance: none;
     display: block;
     width: 100%;
-    border: 1.5px dashed var(--separator);
+    border: 1.5px dashed var(--accent-line);
     border-radius: var(--rad-panel);
     padding: var(--sp-12) var(--sp-5);
     margin-top: var(--sp-1);
@@ -318,10 +320,10 @@
     height: 40px;
     margin: 0 auto 10px;
     border-radius: 8px;
-    background: var(--fill);
+    background: var(--accent-soft);
     display: grid;
     place-items: center;
-    color: var(--text-2);
+    color: var(--accent-text);
   }
   .dz-title {
     display: block;

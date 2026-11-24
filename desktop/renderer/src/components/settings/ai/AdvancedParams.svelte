@@ -133,9 +133,11 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
+  /* 分块参数直接决定「会不会超出模型上限、失败重试有多贵」，属于不看会填错的说明。 */
   .adv-hint {
-    font-size: 11px;
-    color: var(--text-3);
+    font-size: var(--fs-ui);
+    line-height: 19px;
+    color: var(--ink-2);
   }
   .adv-foot {
     display: flex;
@@ -145,8 +147,9 @@
   }
   .adv-note {
     margin-left: auto;
-    font-size: 11px;
-    color: var(--text-3);
+    font-size: var(--fs-ui);
+    line-height: 19px;
+    color: var(--ink-2);
   }
   @media (max-width: 1120px) {
     .adv-fields {

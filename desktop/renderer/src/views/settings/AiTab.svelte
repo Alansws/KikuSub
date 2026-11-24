@@ -8,13 +8,16 @@
   import SettingsSection from '../../components/settings/SettingsSection.svelte';
   import AiPanel from '../../components/settings/ai/AiPanel.svelte';
   import SkillPanel from '../../components/settings/ai/SkillPanel.svelte';
+  import CliPanel from '../../components/settings/ai/CliPanel.svelte';
   import { aiState } from '../../lib/settings/aiConfig.svelte';
   import { skillState, skillStatusLabel } from '../../lib/settings/skill.svelte';
+  import { cliState, cliStatusLabel } from '../../lib/settings/cli.svelte';
 
   const keyState = $derived(
     aiState.hasKey ? '已配置 Key' : aiState.cfg?.key_optional ? '本地可留空' : '未配置 Key',
   );
   const skillMeta = $derived(skillStatusLabel(skillState.info));
+  const cliMeta = $derived(cliStatusLabel(cliState.info));
 </script>
 
 <div class="sections">
@@ -32,6 +35,14 @@
     meta={skillMeta}
   >
     <SkillPanel />
+  </SettingsSection>
+
+  <SettingsSection
+    title="命令行工具"
+    caption="把 kikusub 装到 ~/.local/bin：agent 用 CLI 读工程证据、提交审阅提案。"
+    meta={cliMeta}
+  >
+    <CliPanel />
   </SettingsSection>
 </div>
 

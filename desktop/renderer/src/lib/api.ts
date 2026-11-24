@@ -1889,6 +1889,35 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /** 四类提案文件的存在性/版本（2 秒轮询用；只 stat，不拉正文）。 */
+  proposalStatus: () =>
+    req<{
+      media_stem: string;
+      revision: string;
+      items: {
+        kind: 'polish' | 'translate' | 'structure' | 'reshape';
+        lang: string;
+        path: string;
+        name: string;
+        mtime: number;
+        mtime_ns: number;
+        size: number;
+      }[];
+    }>('/api/proposals/status'),
+
+  /** 外部 agent 落盘的断句重排提案（只读预览；应用仍走 /apply）。 */
+  getReshapeProposal: () =>
+    req<{
+      path: string;
+      stale: boolean;
+      source: Record<string, any>;
+      cues: Cue[];
+      text: string;
+      diagnostics: Record<string, any>;
+      notes: string[];
+      range: { from: number; to: number; total: number };
+    }>('/api/ai/reshape/proposal'),
+
   qaAction: (cmd: { id: string; action: string; status?: string; resolution?: string }) =>
     req<{
       ok: boolean;

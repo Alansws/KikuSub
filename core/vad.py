@@ -40,6 +40,16 @@ VAD_WINDOW_OVERLAP_S = 1.0
 # 与 Silero 默认迟滞一致：退出阈值 = 进入阈值 - 0.15，且不低于 0.02。
 VAD_NEG_THRESHOLD_FLOOR = 0.02
 
+#: 分离人声作为 VAD 参考时的绝对能量门控（RMS dBFS）。
+#:
+#: 为什么需要：Demucs 的人声轨在纯音乐/环境音段并不是「绝对零」，WhisperSeg
+#: 会把残响/串音判成语音；这些段送进 ASR 就变成「ちゅぅ…」这类幻觉字幕。
+#: 2026-11-21 在 dpmx-014（2h48m）上标定：幻觉段 -76～-85 dBFS，真实对白
+#: 中位数 -33.8 dBFS；-65 只丢 57/1101 段（128.5s），既覆盖明显静音幻觉，
+#: 又不会碰到 -60.3 dBFS 的轻声句（-60 会误删 3 条）。
+#: **只在有分离人声参考时启用**，原声 VAD 路径保持逐字节不变。
+VOCAL_GATE_DBFS = -65.0
+
 BACKENDS = ("silero", "whisperseg")
 DEFAULT_BACKEND = "whisperseg"
 ENV_BACKEND = "KIKUSUB_VAD_BACKEND"
@@ -163,6 +173,75 @@ def _silero_detect(
         else:
             merged.append(dict(stamp))
     return merged
+
+
+def gate_stamps_by_energy(
+    stamps: list[dict],
+    audio: np.ndarray,
+    *,
+    floor_dbfs: float,
+    stats: dict | None = None,
+) -> list[dict]:
+    """按段内 RMS 能量丢弃「没有人声」的 VAD 段（dBFS 门控）。
+
+    只用于**分离人声**做 VAD 参考的场景：Demucs 的 vocals 在纯音乐/环境音段
+    仍有串音，WhisperSeg 会把它们判成语音；ASR 拿到这些段就会产生
+    「ちゅぅ…」这类幻觉。门控在 VAD 之后、合并之前执行，所以不会改变
+    原声路径，也不改任何 VAD 参数。
+
+    判据用段内整体 RMS 而不是峰值：瞬态（关门、鼓点）会让峰值很高，但整段
+    能量仍然接近静音；用 RMS 才能把「一声响」和「一段持续人声」分开。
+    """
+    data = np.asarray(audio, dtype=np.float32).reshape(-1)
+    total = len(data)
+    floor = float(floor_dbfs)
+    kept: list[dict] = []
+    dropped = 0
+    dropped_s = 0.0
+    kept_s = 0.0
+    min_kept = float("inf")
+    max_dropped = float("-inf")
+
+    for stamp in stamps:
+        start = max(0, int(stamp.get("start", 0)))
+        end = min(total, int(stamp.get("end", 0)))
+        if end <= start:
+            continue
+        chunk = data[start:end].astype(np.float64)
+        rms = float(np.sqrt(np.mean(chunk * chunk)))
+        dbfs = 20.0 * float(np.log10(max(rms, 1e-9)))
+        duration = (end - start) / SAMPLE_RATE
+        if dbfs < floor:
+            dropped += 1
+            dropped_s += duration
+            max_dropped = max(max_dropped, dbfs)
+            continue
+        kept.append(stamp)
+        kept_s += duration
+        min_kept = min(min_kept, dbfs)
+
+    if stats is not None:
+        stats.update(
+            {
+                "floor_dbfs": round(floor, 1),
+                "input": len(stamps),
+                "kept": len(kept),
+                "dropped": dropped,
+                "kept_s": round(kept_s, 1),
+                "dropped_s": round(dropped_s, 1),
+                "min_kept_dbfs": round(min_kept, 1) if kept else None,
+                "max_dropped_dbfs": round(max_dropped, 1) if dropped else None,
+            }
+        )
+    if dropped:
+        log.debug(
+            "人声能量门控 | floor=%.1f dBFS | 丢弃 %d/%d 段 / %.1fs",
+            floor,
+            dropped,
+            len(stamps),
+            dropped_s,
+        )
+    return kept
 
 
 def _frames_to_stamps(
@@ -431,6 +510,8 @@ def detect_speech_stamps(
     progress_cb=None,
     fallback_backend: str | None = None,
     backend_stats: dict | None = None,
+    energy_gate_dbfs: float | None = None,
+    energy_gate_stats: dict | None = None,
 ) -> list[dict]:
     """按后端产出统一 stamps；默认路径与旧 Silero 实现完全一致。
 
@@ -488,4 +569,11 @@ def detect_speech_stamps(
             "fallback": used != name,
             "reason": reason,
         })
+    if energy_gate_dbfs is not None:
+        stamps = gate_stamps_by_energy(
+            stamps,
+            audio,
+            floor_dbfs=float(energy_gate_dbfs),
+            stats=energy_gate_stats,
+        )
     return stamps

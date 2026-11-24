@@ -47,6 +47,7 @@
   import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
   import { loadChapters } from './lib/chapters.svelte';
+  import { startProposalWatcher } from './lib/externalProposals.svelte';
   import { applyDevSeed } from './lib/devSeed';
   import { arbitration, closeArbitrationDialog } from './lib/arbitration.svelte';
   import { copySelectedCue, pasteCueAtPlayhead } from './lib/cueClipboard.svelte';
@@ -196,6 +197,8 @@
           // 有种子（开发截图）或双击文件启动（openMedia 已绑定）时不会走到这里。
           await restoreLastSession();
         }
+        // 外部 CLI 提交提案后，界面自己发现并刷新（2 秒轮询 + 聚焦即刷）。
+        startProposalWatcher();
       } finally {
         booting = false;
       }

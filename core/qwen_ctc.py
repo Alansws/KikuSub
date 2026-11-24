@@ -75,9 +75,11 @@ from .transcribe import (
     detect_speech_stamps,
     extend_segment_onsets,
     forbidden_cut_positions,
+    gate_stamps_by_energy,
     load_audio_for_transcription,
     merge_vad_segments,
     split_text_into_cues,
+    VOCAL_GATE_DBFS,
 )
 
 REPO_ID = "jaykwok/Qwen3-ASR-1.7B-JA-Anime-Galgame-hf"
@@ -671,6 +673,9 @@ class QwenCtcConfig:
     vad_onset_pad_ms: int = 400
     # 闸门只在 A/B 里切换（不入参数面板）：none / snr / snr_cap。
     onset_gate: str = "none"
+    # 分离人声做 VAD 参考时的绝对能量门控（RMS dBFS）。只在该次转写真的带
+    # `vad_audio` 时生效；原声路径逐字节不变。`None` = 关闭。
+    vocal_gate_dbfs: float | None = VOCAL_GATE_DBFS
 
 
 def _char_times_in_span(
@@ -1112,6 +1117,7 @@ class QwenCtcEngine:
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
         vad_audio: np.ndarray | None = None,
+        vad_level_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         self.load(progress_cb=progress_cb)
         self.last_interrupted = False
@@ -1143,6 +1149,18 @@ class QwenCtcEngine:
             speech_pad_ms=speech_pad_ms,
             backend=str(getattr(cfg, "vad_backend", "silero") or "silero"),
         )
+        # 门控看未归一化的真实电平；原声路径不传 level 音频，行为不变。
+        if vad_ref is not audio and vad_level_audio is not None:
+            gate_dbfs = getattr(cfg, "vocal_gate_dbfs", VOCAL_GATE_DBFS)
+            if gate_dbfs is not None:
+                gate_stats: dict = {}
+                stamps = gate_stamps_by_energy(
+                    stamps,
+                    vad_level_audio,
+                    floor_dbfs=float(gate_dbfs),
+                    stats=gate_stats,
+                )
+                self.last_segment_stats["vocal_gate"] = gate_stats
         if vad_ref is not audio:
             stamps = clamp_stamps_to_audio(stamps, len(audio))
         self.last_segment_stats["vad_audio"] = (
@@ -1448,8 +1466,11 @@ class QwenCtcEngine:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
         vad_audio = None
+        vad_level_audio = None
         if vad_audio_path is not None:
             # 与 Whisper 同一条 P3 路径：VAD 看分离人声，识别仍用上面的原声。
+            # VAD 检测保持原来的 dynaudnorm 档位；另解一份未归一化的真实电平
+            # 只给绝对能量门控用，避免把近静音串音送进 ASR。
             if progress_cb:
                 progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
             try:
@@ -1459,6 +1480,18 @@ class QwenCtcEngine:
                     tmp_prefix="kikusub-vad-only-",
                     cancel_event=cancel_event,
                 )
+                gains: list[float] = []
+                level = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=False,
+                    tmp_prefix="kikusub-vad-level-",
+                    cancel_event=cancel_event,
+                    peak_gain_out=gains,
+                )
+                gain = float(gains[0]) if gains else 1.0
+                if gain not in (0.0, 1.0):
+                    level = level / gain
+                vad_level_audio = level
             except CommandCancelled:
                 self.last_interrupted = True
                 if progress_cb:
@@ -1472,6 +1505,7 @@ class QwenCtcEngine:
             cancel_event=cancel_event,
             time_offset=time_offset,
             vad_audio=vad_audio,
+            vad_level_audio=vad_level_audio,
         )
 
 

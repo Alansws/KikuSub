@@ -12,6 +12,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Finder 可能在 build/pack 里写 `.DS_Store`，`rm -rf` 会因此在 rmdir 时失败
+# （见 _rmtree.sh 顶部注释）。所有大目录清理都走 rm_tree。
+source tools/pack/_rmtree.sh
+
 PYTHON="${PYTHON:-../.venv/bin/python}"
 NAME="sidecar"
 OUT="build/pack"
@@ -26,7 +30,7 @@ OUT="build/pack"
 export PYINSTALLER_CONFIG_DIR="$REPO_ROOT/$OUT/.pyinstaller"
 mkdir -p "$PYINSTALLER_CONFIG_DIR"
 
-rm -rf "$OUT/dist/$NAME" "$OUT/work/$NAME"
+rm_tree "$OUT/dist/$NAME" "$OUT/work/$NAME"
 
 # 人声分离只用 demucs.pretrained/apply；--collect-data 带 remote 权重索引。
 # torchvision/onnx/ml_dtypes/Cython 是实验环境的可选包，运行时不参与；

@@ -96,16 +96,17 @@ SPECS: tuple[ParamSpec, ...] = (
         "Silero 20s 不需要额外权重，适合离线或想保持旧行为的场景。",
     ),
     ParamSpec(
-        "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.25,
+        "whisper.vad_threshold", "VAD 判定阈值", WHISPER, "float", 0.45,
         group="VAD", minimum=0.05, maximum=0.80, step=0.01, config_field="threshold",
         help="调小对耳语更灵敏；调大抗噪更强、能过滤背景音乐。两个切分器的概率刻度"
-        "不同：WhisperSeg 标定推荐 0.35，Silero 20s 推荐 0.25。旧预设里的 0.25 "
-        "带进 WhisperSeg 会让切分偏碎（P1 实测 CER 0.25→0.35 由 10.78% 降到 10.67%）。",
+        "不同：WhisperSeg 标定推荐 0.45，Silero 20s 推荐 0.25。旧预设里的 0.25 在 "
+        "WhisperSeg 上偏松（ASMR 实测 0.25/0.35/0.45 为 12.11%/18.59%/12.11%，0.25 的"
+        "块准确率更低；对话动画 0.25 → 0.45 为 10.78% → 7.68%）。",
         backend_notes={
-            "whisperseg": "WhisperSeg 标定推荐 0.35",
+            "whisperseg": "WhisperSeg 标定推荐 0.45",
             "silero": "Silero 20s 推荐 0.25",
         },
-        backend_recommended={"whisperseg": 0.35, "silero": 0.25},
+        backend_recommended={"whisperseg": 0.45, "silero": 0.25},
     ),
     ParamSpec(
         "whisper.vad_speech_pad_ms", "首尾留白 (ms)", WHISPER, "int", 250,
@@ -156,6 +157,15 @@ SPECS: tuple[ParamSpec, ...] = (
         "whisper.cue_pad_s", "字幕外扩留白 (s)", WHISPER, "float", 0.02,
         group="字幕", minimum=0.0, maximum=0.3, step=0.01, config_field="cue_pad_s",
         help="调大让字幕提前出现、滞后消失，观影更舒适。",
+    ),
+    ParamSpec(
+        "whisper.use_prev_text_prompt", "用上一句文本做提示", WHISPER, "bool", False,
+        group="字幕", config_field="use_prev_text_prompt", backend_only="silero",
+        help="把上一条已定稿字幕的文本作为 Whisper 的 prompt_ids 送给下一条，只补语义上下文、"
+        "不动字幕边界。实测只对 Silero 有效（ASMR CER 15.49% → 11.55%，"
+        "修完 vad.reset_states() 后两次重跑一致）；WhisperSeg 上反而退化"
+        "（12.11% → 26.76%），因此仅 Silero 生效。"
+        "代价是个别短句会换一种错法，配音/对白片建议 A/B 后再开。",
     ),
     ParamSpec(
         "whisper.strip_nonverbal_edges", "剔除句首尾喘气/笑声", WHISPER, "bool", True,

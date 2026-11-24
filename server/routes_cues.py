@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from core import ai_proposal as proposals
 from core import export_naming
 from core import settings as settings_store
 from core.audit import load_audit_payload
@@ -150,6 +151,13 @@ def _snapshot(session: Session, *, include_client_state: bool = False) -> dict:
     data = {
         "cues": _to_dicts(session.review_cues),
         "count": len(session.review_cues),
+        # 供 CLI / 外部 agent 自检：与提案里的 source.digest 必须是同一个算法。
+        # 空表不给 digest，避免出现一个「空字符串的 sha256」被误当成有效指纹。
+        "digest": (
+            proposals.source_digest([cue.text for cue in session.review_cues])
+            if session.review_cues
+            else None
+        ),
         "can_undo": session.can_undo,
         "can_redo": session.can_redo,
         # 工具栏按钮的 title 直接显示「下一步会撤回/重做什么」

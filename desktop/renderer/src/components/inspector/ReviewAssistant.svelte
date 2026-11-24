@@ -18,10 +18,8 @@
 </div>
 
 <style>
-  /* 复核 / AI 判定是「同一件事的两层」，整块上沿一条分隔线把它们和编辑区分开 */
+  /* 三版对照自己就是一张卡（边框在 SecondOpinionCard 里），这里只留和编辑区的间距 */
   .assistant {
-    margin-top: var(--sp-3);
-    padding-top: var(--sp-2);
-    border-top: 1px solid var(--line-2);
+    margin-top: 6px;
   }
 </style>

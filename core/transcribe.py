@@ -47,7 +47,9 @@ from silero_vad import load_silero_vad
 from . import audio_cache
 from . import timing_repair
 from .vad import (  # noqa: F401 - re-export for sherpa_asr
+    VOCAL_GATE_DBFS,
     detect_speech_stamps,
+    gate_stamps_by_energy,
     resolve_backend,
     vad_neg_threshold,
 )
@@ -146,7 +148,19 @@ VAD_NEG_THRESHOLD_FLOOR = 0.02
 # 2026-11-13 改成**分窗检测 + 句首尾非台词发声剔除**之后，这个权衡被拆掉了：
 # 830s 耳语素材上阈值 0.25 的 CER 反而最低（0.20 = 8.06%、0.25 = 8.22%、0.30 = 9.3%），
 # 且插入量已由发声剔除压住。默认因此下调到 0.25。
-VAD_THRESHOLD = 0.25
+#
+# 2026-11-22 再调整：上面那条 0.25 的结论是**Silero** 时代的（WhisperSeg 2026-11-20 才
+# 成为默认切分器，阈值默认值没跟着改）。WhisperSeg 的帧级概率刻度更高，同一个阈值在
+# 它上面切得比 Silero 松，两份素材的实测（Whisper × WhisperSeg，其余参数取默认）：
+#   - 日语 ASMR 耳语 320s（36 条 / 355 字参考）：0.25 = 12.11%、0.35 = 18.59%、
+#     0.45 = 12.11%。0.25 与 0.45 的 CER 打平，但 0.45 块准确率 75.7%（0.25 是 65.4%）、
+#     漏块 5（9）、条数 96（100）；0.35 是这条素材上的拐点（相邻语句被并成一段）。
+#   - Jap_test 对话动画 918s（79 条 / 872 字参考）：0.25 = 10.78%（插入 74）→
+#     0.45 = 7.68%（插入 42），块均 77.6% → 79.2%。工件在 `outputs/eval/asmr-gate/`。
+# 因此默认取 0.45：两份素材都不劣于旧默认 0.25。
+# 注意这条只对默认切分器（WhisperSeg）成立；Silero 仍推荐 0.25，面板按
+# `backend_recommended` 显示「用 0.25」并可一键回填。
+VAD_THRESHOLD = 0.45
 VAD_MIN_SPEECH_MS = 80
 VAD_MIN_SILENCE_MS = 200
 # 留白给到 250ms：耳语的开头很容易被判成静音（吞头音），句尾多带的气声由
@@ -365,6 +379,13 @@ class WhisperVadConfig:
     # P0：纯喘息/笑声/拟声不再静默删除，而是进质检队列（`nonverbal` kind）。
     # 只影响队列可见性，不影响字幕文本。
     nonverbal_qa: bool = True
+    # 反幻觉：把上一条已定稿字幕的文本作为 `prompt_ids` 送给下一条。
+    # 只补语义上下文，不改音频边界（对比「多截一段音频再裁回」那条路：没有对齐头
+    # 就裁不回来，会串句）。默认关：它改变解码结果，需要按素材 A/B 后再开。
+    use_prev_text_prompt: bool = False
+    # 分离人声作为 VAD 参考时的绝对能量门控（RMS dBFS）。只在该次转写真的
+    # 带 `vad_audio` 时生效；原声路径逐字节不变。`None` = 关闭门控。
+    vocal_gate_dbfs: float | None = VOCAL_GATE_DBFS
 
 
 def build_whisper_config(**overrides) -> WhisperVadConfig:
@@ -599,8 +620,13 @@ def load_audio_for_transcription(
     end_time_s: float | None = None,
     tmp_prefix: str = "kikusub-",
     cancel_event=None,
+    peak_gain_out: list[float] | None = None,
 ) -> np.ndarray:
-    """取送模用的 16k 单声道数组：缓存开启时直接读缓存，关闭时走临时目录。"""
+    """取送模用的 16k 单声道数组：缓存开启时直接读缓存，关闭时走临时目录。
+
+    ``peak_gain_out``：可选，把 `load_wav_mono` 的峰值归一化增益追加进去。
+    VAD 参考用它把「归一化后的 dBFS」还原成真实电平，供人声能量门控使用。
+    """
     if audio_cache.enabled():
         wav_path = extract_audio_16k(
             media_path,
@@ -610,7 +636,7 @@ def load_audio_for_transcription(
             end_time_s=end_time_s,
             cancel_event=cancel_event,
         )
-        return load_wav_mono(wav_path)
+        return load_wav_mono(wav_path, peak_gain_out=peak_gain_out)
 
     with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmp:
         wav_path = extract_audio_16k(
@@ -621,7 +647,7 @@ def load_audio_for_transcription(
             end_time_s=end_time_s,
             cancel_event=cancel_event,
         )
-        return load_wav_mono(wav_path)
+        return load_wav_mono(wav_path, peak_gain_out=peak_gain_out)
 
 
 def clamp_stamps_to_audio(stamps: list[dict], total_samples: int) -> list[dict]:
@@ -642,7 +668,12 @@ def clamp_stamps_to_audio(stamps: list[dict], total_samples: int) -> list[dict]:
     return out
 
 
-def load_wav_mono(path: str | Path) -> np.ndarray:
+def load_wav_mono(
+    path: str | Path,
+    *,
+    normalize_peak: bool = True,
+    peak_gain_out: list[float] | None = None,
+) -> np.ndarray:
     audio, sr = sf.read(str(path), always_2d=False)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
@@ -653,9 +684,13 @@ def load_wav_mono(path: str | Path) -> np.ndarray:
     if audio.size == 0:
         return np.zeros(0, dtype=np.float32)
 
+    gain = 1.0
     max_amp = float(np.max(np.abs(audio)))
-    if 1e-4 < max_amp < 0.4:
-        audio = audio * (0.85 / max_amp)
+    if normalize_peak and 1e-4 < max_amp < 0.4:
+        gain = 0.85 / max_amp
+        audio = audio * gain
+    if peak_gain_out is not None:
+        peak_gain_out.append(gain)
 
     return audio
 
@@ -1013,6 +1048,13 @@ def _refine_bounds_by_pauses(
     if dur <= 0:
         return head, tail
     window = 512
+    # Silero 是**带隐藏状态**的 RNN：这里逐帧直接调 `vad(...)`，库里的
+    # `get_speech_timestamps` 不会介入，所以状态会从上一次调用（上一段/上一支片）
+    # 留下来，让同一段音频的首帧概率跟着历史变——实测字幕边界抖动 0.1s 量级，
+    # 同一套参数在不同进程里能差两条字幕。进来先复位，结果只由本段音频决定。
+    reset = getattr(vad, "reset_states", None)
+    if callable(reset):
+        reset()
     probs = [
         float(vad(torch.from_numpy(chunk[i : i + window]), sample_rate))
         for i in range(0, chunk.size - window + 1, window)
@@ -1070,6 +1112,63 @@ def _retry_gain(chunk: np.ndarray) -> np.ndarray:
         return chunk
     gain = min(max(RETRY_TARGET_PEAK / peak, RETRY_GAIN_RANGE[0]), RETRY_GAIN_RANGE[1])
     return np.clip(chunk * gain, -1.0, 1.0)
+
+
+#: `use_prev_text_prompt` 的静音闸门：上一句收尾到本句开头超过这么多秒就当作
+#: 换场/长停顿，不再把上一句的语义当上下文带过来。ASMR 长片里翻页、换角色、走动
+#: 都会造出 3s 以上的空白，这时上一句和本句通常不是同一段对话。
+PROMPT_MAX_GAP_S = 3.0
+#: 送进 `get_prompt_ids` 的上下文最多这么多字：Whisper 的提示段上限 224 token，
+#: 日文字符基本 1 字 1 token，留出 <|startofprev|> 等特殊符的余量。
+PROMPT_MAX_CHARS = 160
+#: 装饰符号不发音。留在上下文里只会被模型照抄，把 `♡` `♪` 传染给下一条字幕
+#: （D2 实测出现过 `だーてん→0点`、`♡` 顺着提示串到别的句尾）。
+_PROMPT_DECOR_RE = re.compile("[♡♥♪♫♬☆★✧✿❀※]+")
+
+
+def prompt_text_for(
+    text: str,
+    *,
+    gap_s: float | None = None,
+    suspicious: bool = False,
+) -> str:
+    """把「上一句已定稿字幕」裁成可安全送进 `prompt_ids` 的上下文。
+
+    返回空串表示这一句不该当上下文。四道闸门，都是 D2 那轮实测踩出来的：
+
+    - ``suspicious``：上一句刚被幻觉门控判为可疑（保留待复核），把它的文本
+      当上下文等于把幻觉坐实成下一句的提示，宁可不传；
+    - ``gap_s > PROMPT_MAX_GAP_S``：中间隔了长停顿，多半已经换场景/换人；
+    - 去掉装饰符号后为空（「……」「♪♡」这类纯装饰）：没有语义可补；
+    - 病理性复读（与幻觉门控同一条 :data:`REPEATED_CHUNK_RE`）：把复读当提示
+      会让下一句也复读。
+    """
+    if suspicious:
+        return ""
+    if gap_s is not None and gap_s > PROMPT_MAX_GAP_S:
+        return ""
+    compact = _PROMPT_DECOR_RE.sub("", str(text or ""))
+    compact = re.sub(r"\s+", " ", compact).strip()
+    # 没有字母/数字（「♪♡…」「……♪」）就只是装饰，不当上下文。
+    if not re.search(r"[^\W_]", compact) or REPEATED_CHUNK_RE.search(compact):
+        return ""
+    return compact[-PROMPT_MAX_CHARS:]
+
+
+def prev_text_prompt_enabled(use_prev_text_prompt: bool, used_backend: str) -> bool:
+    """`use_prev_text_prompt` 按**实际使用的切分器**门控：只在 Silero 上生效。
+
+    同一条 320s 耳语素材、同一份 355 字参考、**同一个进程**里四格对照
+    （见 `docs/contracts/params-and-presets.md` §8.1）：
+
+    - Silero 0.25：CER 15.49% → **11.55%**（打开提示；修完 `reset_states()` 后两次重跑一致）；
+    - WhisperSeg 0.45：CER 12.11% → **26.76%**（打开提示，反而更差）。
+
+    WhisperSeg 的段更短，上一句文本很容易被整段复述进下一段，所以按后端门控；
+    参数面板用 `backend_only` 按同一口径置灰，但**真正的门在这里**——只置灰不改行为
+    等于欺骗（见 §9）。
+    """
+    return bool(use_prev_text_prompt) and str(used_backend or "") == "silero"
 
 
 def _retry_suspicious(text: str, dur_s: float, prev_text: str) -> bool:
@@ -1423,6 +1522,10 @@ class AnimeWhisperEngine:
         self.last_segment_stats: dict = {}
         self._pipe = None
         self._vad = None
+        # `prompt_ids` 的**遥测**，不是开关：`enabled` 由每次整片转写重置（失败时
+        # 当轮置 False 作为熔断），上下文本身一律由调用方显式传参——引擎是模块级
+        # 单例，把「上一句是什么」留在实例上会让整片任务的尾巴污染下一次单句重转。
+        self.last_prompt_ids_stats: dict = {"enabled": False, "applied": 0, "failed": 0}
 
     @property
     def ready(self) -> bool:
@@ -1560,13 +1663,57 @@ class AnimeWhisperEngine:
         return kwargs
 
     def _decode_chunk(
-        self, buf: np.ndarray, generate_kwargs: dict, *, timestamps: bool = False
+        self,
+        buf: np.ndarray,
+        generate_kwargs: dict,
+        *,
+        timestamps: bool = False,
+        prompt_text: str = "",
     ) -> str:
+        """解一段音频。
+
+        `prompt_text`（上一条已定稿字幕、已过 :func:`prompt_text_for` 的闸门）作为
+        Whisper 的 `prompt_ids` 一起送进去：只补语义上下文，**不改音频边界**，因此
+        不会像「多截 0.3–0.5s 音频再裁回」那样污染起止时间。
+
+        **上下文一律显式传参，不读实例状态**：`ENGINE` 是模块级单例，整片转写、
+        核对台单句重转（`core.short_clip`）与「另一引擎听一遍」（`transcribe_window`）
+        共用同一个实例；把「上一句是什么」存在实例上，上一次整片任务的尾巴会污染
+        下一次单句重转，取消/异常退出时还会把旧上下文留在里面。
+
+        失败熔断：`last_prompt_ids_stats["enabled"]` 由每次整片转写重置为本次开关，
+        这里一旦抛错就把它置 False，本轮后续段落不再重复踩同一个坑（例如权重与设备
+        不匹配），但**不影响**别的调用方——它们本来就不会传 `prompt_text`。
+        """
+        stats = dict(getattr(self, "last_prompt_ids_stats", {}) or {})
+        kwargs = generate_kwargs
+        if prompt_text and not timestamps and stats.get("enabled"):
+            try:
+                tokenizer = getattr(self._pipe, "tokenizer", None)
+                if tokenizer is None:
+                    raise RuntimeError("pipeline 没有 tokenizer")
+                ids = tokenizer.get_prompt_ids(
+                    prompt_text[-PROMPT_MAX_CHARS:], return_tensors="pt"
+                )
+                device = getattr(self._pipe, "device", None)
+                if device is not None:
+                    ids = ids.to(device)
+                kwargs = {**generate_kwargs, "prompt_ids": ids}
+            except Exception as exc:  # noqa: BLE001 - 上下文只是增益，失败要能继续
+                log.warning("prompt_ids 不可用，本轮关闭该开关：%s", exc)
+                stats["enabled"] = False
+                stats["failed"] = int(stats.get("failed", 0)) + 1
+                self.last_prompt_ids_stats = stats
+                kwargs = generate_kwargs
         res = self._pipe(
             {"array": buf, "sampling_rate": SAMPLE_RATE},
-            generate_kwargs=generate_kwargs,
+            generate_kwargs=kwargs,
             return_timestamps=bool(timestamps),
         )
+        if kwargs is not generate_kwargs:
+            stats = dict(getattr(self, "last_prompt_ids_stats", {}) or {})
+            stats["applied"] = int(stats.get("applied", 0)) + 1
+            self.last_prompt_ids_stats = stats
         return (res.get("text") or "").strip()
 
     def transcribe_window(
@@ -1655,9 +1802,14 @@ class AnimeWhisperEngine:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
         vad_audio = None
+        vad_level_audio = None
         if vad_audio_path is not None:
             # 只解码给人声分离的 VAD 用；ASR 的 audio 已经按完全相同的参数读过，
             # 两者各自走 audio_cache，未开分离的那条路径不会多一次解码。
+            # **VAD 检测仍用原来的 dynaudnorm 档位**：直接换成未归一化音频会改变
+            # 切分边界（言叶之庭歌曲段 CER 21.32→25.74），违反红线 4。
+            # 真正要修的是「归一化把近静音串音抬成语音」：另解一份**不归一化**
+            # 的真实电平音频，只给绝对能量门控用（峰值归一化增益需要还原）。
             if progress_cb:
                 progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
             try:
@@ -1667,6 +1819,18 @@ class AnimeWhisperEngine:
                     tmp_prefix="kikusub-vad-only-",
                     cancel_event=cancel_event,
                 )
+                gains: list[float] = []
+                level = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=False,
+                    tmp_prefix="kikusub-vad-level-",
+                    cancel_event=cancel_event,
+                    peak_gain_out=gains,
+                )
+                gain = float(gains[0]) if gains else 1.0
+                if gain not in (0.0, 1.0):
+                    level = level / gain
+                vad_level_audio = level
             except CommandCancelled:
                 self.last_interrupted = True
                 if progress_cb:
@@ -1681,6 +1845,7 @@ class AnimeWhisperEngine:
             cancel_event=cancel_event,
             time_offset=time_offset,
             vad_audio=vad_audio,
+            vad_level_audio=vad_level_audio,
         )
 
     def _transcribe_array(
@@ -1694,6 +1859,7 @@ class AnimeWhisperEngine:
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
         vad_audio: np.ndarray | None = None,
+        vad_level_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         if progress_cb:
             progress_cb(0.08, "正在用 VAD 精确定位语音边界…")
@@ -1728,6 +1894,20 @@ class AnimeWhisperEngine:
             ),
         )
         self.last_segment_stats["vad_backend"] = vad_meta
+        # 只有分离人声做 VAD 参考时才做能量门控；原声路径不传 level 音频，
+        # 行为与旧版逐字节一致。门控看的是**未归一化**的真实电平，
+        # 所以 dynaudnorm 放大出来的近静音段会被丢掉，正常对白不受影响。
+        if vad_ref is not audio and vad_level_audio is not None:
+            gate_dbfs = getattr(cfg, "vocal_gate_dbfs", VOCAL_GATE_DBFS)
+            if gate_dbfs is not None:
+                gate_stats: dict = {}
+                stamps = gate_stamps_by_energy(
+                    stamps,
+                    vad_level_audio,
+                    floor_dbfs=float(gate_dbfs),
+                    stats=gate_stats,
+                )
+                self.last_segment_stats["vocal_gate"] = gate_stats
         if vad_ref is not audio:
             stamps = clamp_stamps_to_audio(stamps, len(audio))
             mismatch = abs(len(vad_ref) - len(audio)) / SAMPLE_RATE
@@ -1794,9 +1974,35 @@ class AnimeWhisperEngine:
         cues: list[SubtitleCue] = []
         total = len(segments)
         prev_text = ""
+        # 上一句的收尾时间与「是否可疑」，只用于 `use_prev_text_prompt` 的两道闸门；
+        # 上下文本身通过 `prompt_now` 显式传给 `_decode_chunk`，不落实例属性。
+        prompt_on = prev_text_prompt_enabled(
+            bool(getattr(cfg, "use_prev_text_prompt", False)), used_backend
+        )
+        if getattr(cfg, "use_prev_text_prompt", False) and not prompt_on:
+            # 显式留痕：用户勾了但后端不生效，统计里能查到原因（不影响字幕）。
+            self.last_segment_stats["prev_text_prompt_ignored_backend"] = used_backend
+        prev_seg_end_s: float | None = None
+        prev_suspicious = False
+        prompt_now = [""]
 
         def _decode(buf: np.ndarray, *, timestamps: bool = False) -> str:
-            return self._decode_chunk(buf, generate_kwargs, timestamps=timestamps)
+            # 「上一段文本」原本只给幻觉复核用，现在同时当 prompt_ids 的上下文。
+            return self._decode_chunk(
+                buf,
+                generate_kwargs,
+                timestamps=timestamps,
+                prompt_text=prompt_now[0],
+            )
+
+        # 引擎是模块级单例（`ENGINE = AnimeWhisperEngine()`），self.config 是一份
+        # 默认值快照；本次运行的 cfg 走参数传进来，所以开关从这里落到遥测上，
+        # 再由 `prompt_now` 逐段显式下发。
+        self.last_prompt_ids_stats = {
+            "enabled": prompt_on,
+            "applied": 0,
+            "failed": 0,
+        }
 
         hallucination_drops = 0
         suspect_cues = 0
@@ -1827,6 +2033,20 @@ class AnimeWhisperEngine:
             seg_start_s = (start / SAMPLE_RATE) + time_offset
             seg_end_s = (end / SAMPLE_RATE) + time_offset
             seg_dur_s = (end - start) / SAMPLE_RATE
+
+            # 上一句能不能当上下文：长停顿 / 可疑幻觉 / 纯装饰一律不传
+            # （`prompt_text_for` 是唯一判断处，单测在 tests/test_params.py）。
+            prompt_now[0] = (
+                prompt_text_for(
+                    prev_text,
+                    gap_s=(
+                        None if prev_seg_end_s is None else seg_start_s - prev_seg_end_s
+                    ),
+                    suspicious=prev_suspicious,
+                )
+                if prompt_on
+                else ""
+            )
 
             text = _decode(chunk)
             head_removed = tail_removed = False
@@ -1932,6 +2152,9 @@ class AnimeWhisperEngine:
                 })
                 continue
             prev_text = text
+            prev_seg_end_s = seg_end_s
+            # 可疑但保留待复核的句子不当下一句的上下文：那等于把幻觉坐实成提示。
+            prev_suspicious = bool(rule)
 
             # P0：保留 end，只把段首静音拉掉。CTC 对齐路径不做——
             # 对齐层会自己给出逐字时间，改 offset 反而会破坏对齐。

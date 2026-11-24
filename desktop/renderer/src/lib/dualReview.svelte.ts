@@ -34,6 +34,13 @@ export const dual = $state({
   /** 正在「采用 B」的那条 A 下标；-1 = 空闲。防连点压出两步历史。 */
   adopting: -1,
   /**
+   * 差异排序（默认按时间）。`ratio-asc` = 相似度最低的排最前：专名被听错、
+   * 整句幻觉这类差异的相似度往往接近 0，混在时间序里根本看不见
+   * （实测 `だーてん` vs `当店、魔族` 的 ratio 就是 0.000）。
+   * 只在「只看差异」的思路下有意义，但也允许在全量视图里用。
+   */
+  sort: 'time' as 'time' | 'ratio-asc',
+  /**
    * 刚从对照表点走的那一行（`a-b` 索引）。回来后高亮它，让用户一眼看到
    * 「刚才看的就是这一句」；B 版换了就没有意义了，重新拉取时清掉。
    */
@@ -229,6 +236,17 @@ export async function setIgnorePunct(value: boolean) {
   if (dual.ignorePunct === value) return;
   dual.ignorePunct = value;
   await loadAltDiff();
+}
+
+/**
+ * 切换对照表的排序。纯前端视图状态，不重拉、不改服务端的对齐结果。
+ *
+ * 排序只影响**行的呈现顺序**，不影响 `a_indices` / `b_indices` 与「采用 B」的
+ * 写回目标——那一行仍然指回核对台原来那条。
+ */
+export function setDualSort(value: 'time' | 'ratio-asc') {
+  if (dual.sort === value) return;
+  dual.sort = value;
 }
 
 /**

@@ -48,9 +48,11 @@ from .text_cues_zh import (
 from .transcribe import (
     SAMPLE_RATE,
     SubtitleCue,
+    VOCAL_GATE_DBFS,
     _is_blank,
     chunk_level_stats,
     clamp_stamps_to_audio,
+    gate_stamps_by_energy,
     load_audio_for_transcription,
     merge_vad_segments,
     vad_neg_threshold,
@@ -108,6 +110,9 @@ class SherpaAsrConfig:
     use_punc: bool = True
     # 没有 token 时间戳时，用能量把字铺在「有声区间」上，而不是整段均分。
     energy_align: bool = True
+    # 分离人声做 VAD 参考时的绝对能量门控（RMS dBFS）。只在该次转写真的带
+    # `vad_audio` 时生效；原声路径逐字节不变。`None` = 关闭。
+    vocal_gate_dbfs: float | None = VOCAL_GATE_DBFS
 
 
 class _SherpaEngine:
@@ -263,6 +268,7 @@ class _SherpaEngine:
         cancel_event: threading.Event | None = None,
         time_offset: float = 0.0,
         vad_audio: np.ndarray | None = None,
+        vad_level_audio: np.ndarray | None = None,
     ) -> list[SubtitleCue]:
         cfg = config or self.config
         self.load(progress_cb=progress_cb, config=cfg)
@@ -296,6 +302,17 @@ class _SherpaEngine:
             neg_threshold=vad_neg_threshold(cfg.vad_threshold),
         )
         if vad_ref is not audio:
+            if vad_level_audio is not None:
+                gate_dbfs = getattr(cfg, "vocal_gate_dbfs", VOCAL_GATE_DBFS)
+                if gate_dbfs is not None:
+                    gate_stats: dict = {}
+                    stamps = gate_stamps_by_energy(
+                        stamps,
+                        vad_level_audio,
+                        floor_dbfs=float(gate_dbfs),
+                        stats=gate_stats,
+                    )
+                    self.last_segment_stats["vocal_gate"] = gate_stats
             stamps = clamp_stamps_to_audio(stamps, len(audio))
         self.last_segment_stats["vad_audio"] = (
             "vocals" if vad_ref is not audio else "original"
@@ -485,6 +502,7 @@ class _SherpaEngine:
                 progress_cb(0.99, "🛑 已取消音频解码…")
             return []
         vad_audio = None
+        vad_level_audio = None
         if vad_audio_path is not None:
             if progress_cb:
                 progress_cb(0.06, "正在准备人声分离后的 VAD 参考音频（识别仍用原声）…")
@@ -495,6 +513,18 @@ class _SherpaEngine:
                     tmp_prefix="kikusub-vad-only-",
                     cancel_event=cancel_event,
                 )
+                gains: list[float] = []
+                level = load_audio_for_transcription(
+                    Path(vad_audio_path),
+                    enable_loudnorm=False,
+                    tmp_prefix="kikusub-vad-level-",
+                    cancel_event=cancel_event,
+                    peak_gain_out=gains,
+                )
+                gain = float(gains[0]) if gains else 1.0
+                if gain not in (0.0, 1.0):
+                    level = level / gain
+                vad_level_audio = level
             except CommandCancelled:
                 self.last_interrupted = True
                 if progress_cb:
@@ -507,6 +537,7 @@ class _SherpaEngine:
             cancel_event=cancel_event,
             time_offset=time_offset,
             vad_audio=vad_audio,
+            vad_level_audio=vad_level_audio,
         )
 
     def transcribe_window(self, audio: np.ndarray, *, config: SherpaAsrConfig | None = None) -> str:

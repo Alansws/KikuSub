@@ -170,6 +170,7 @@ export function setAiChannel(channel: AiChannel) {
 export function aiEntryLabel(): string {
   const entry = ai.proposal?.entry;
   if (entry === 'manual') return '外部回复';
+  if (entry === 'cli') return '命令行 Agent';
   if (entry === 'skill') return 'Agent 文件';
   return '本机生成';
 }

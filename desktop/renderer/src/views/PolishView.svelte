@@ -395,9 +395,11 @@
           class="aiw-chip accent"
           title={ai.proposal.entry === 'manual'
             ? '从外部模型复制提示词、再把回复粘回来的结果'
-            : ai.proposal.entry === 'skill'
-              ? '由随包 Agent 技能写出的提案文件'
-              : '在本机「生成润色建议」里调用模型得到的结果'}
+            : ai.proposal.entry === 'cli'
+              ? '外部 Agent 通过 kikusub CLI 提交的提案'
+              : ai.proposal.entry === 'skill'
+                ? '由随包 Agent 技能写出的提案文件'
+                : '在本机「生成润色建议」里调用模型得到的结果'}
         >{aiEntryLabel()}</span>
         {#if ai.proposal.source.digest_b}<span class="aiw-chip">双源</span>{/if}
         {#if ai.proposal.model && ai.proposal.model !== 'manual-paste'}

@@ -206,14 +206,20 @@
     color: var(--accent);
     font-weight: 500;
   }
+  /* 这张卡要回答「两个日语主力分别擅长什么」，所以描述是「不看会选错引擎」的说明文字，
+     按规则提到 13/19 并迁到 --ink-2。
+     原来 clamp 在 1 行：Anime Whisper 那条 49 字在 11.5px 下就要两行，一直是被裁的
+     （实测 clientHeight 19 / scrollHeight 38）。改 2 行 + 固定最小高度，
+     两张卡描述块等高，卡脚才对得齐；整句仍可通过 title 看到。 */
   .ec-desc {
     display: -webkit-box;
-    -webkit-line-clamp: 1;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    font-size: 11.5px;
-    line-height: 1.5;
-    color: var(--text-3);
+    font-size: var(--fs-ui);
+    line-height: 19px;
+    min-height: 38px;
+    color: var(--ink-2);
   }
   .ec-foot {
     display: flex;

@@ -160,8 +160,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* G17：「尚未暂存」是常规状态，不是风险 —— 原来用 --warn 金，
+     会和「改动率 100%」这类真警告撞色。改为静默灰 + 一个小圆点，
+     仍能看出「有未存的状态」，但不靠颜色报警。 */
   .sd-state.warn {
-    color: var(--warn);
+    color: var(--ink-3);
+  }
+  .sd-state.warn::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: 1px;
   }
   .sd-row {
     display: flex;

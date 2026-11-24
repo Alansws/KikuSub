@@ -23,6 +23,7 @@
     loadAltDiff,
     refreshAltReview,
     replacePrimaryWithAlt,
+    setDualSort,
     setIgnorePunct,
   } from '../lib/dualReview.svelte';
   import { tcShort } from '../lib/time';
@@ -38,8 +39,24 @@
     app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready)) : '',
   );
 
-  const rows = $derived(
+  const filteredRows = $derived(
     dual.onlyDiff ? dual.rows.filter((row) => row.kind !== 'same') : dual.rows,
+  );
+  /**
+   * 呈现顺序。`ratio-asc` 把相似度最低的排在最前——专名听错 / 整句幻觉这类
+   * 差异的 ratio 往往接近 0，在 100+ 行的时间序里根本看不到。
+   * 只重排呈现，不动 `a_indices` / `b_indices`：「采用 B」写的仍是那一行。
+   */
+  const rows = $derived(
+    dual.sort === 'ratio-asc'
+      ? [...filteredRows].sort((a, b) => {
+          // 只有 diff 行有「两份文本都在」的可比性；only_a / only_b 的 ratio
+          // 恒为 0，直接按 ratio 排会把它们全堆到最上面、把真正的替换挤走。
+          const rank = (row: (typeof filteredRows)[number]) =>
+            row.kind === 'diff' ? (row.ratio < CHAR_HIGHLIGHT_MIN_RATIO ? 0 : 1) : 2;
+          return rank(a) - rank(b) || a.ratio - b.ratio || a.start - b.start;
+        })
+      : filteredRows,
   );
   const stats = $derived(dual.stats);
   const aCount = $derived(stats?.a_count ?? app.cues.length);
@@ -78,7 +95,7 @@
   const listKey = $derived(
     `dual:${dual.mediaId}:${dual.createdAt}:${dual.onlyDiff ? 'diff' : 'all'}:${
       dual.ignorePunct ? 'punct' : 'strict'
-    }`,
+    }:${dual.sort}`,
   );
   let restoredKey = '';
 
@@ -168,14 +185,65 @@
    *
    * 两个引擎断句不同时，1:1 配对可能把 A 的整句和 B 的另半句放在一行；
    * 此时逐字 diff 会把大半行都染成红色，看起来像“这些字要被删掉”，
-   * 反而盖住了真正的差异。相似度低于这个阈值就只保留整行 `~`，不做逐字染色。
+   * 反而盖住了真正的差异。相似度低于这个阈值就不再逐字染色。
+   *
+   * 但**完全不着色也是错的**：专名被听错、整句幻觉这两类最该被看见的差异，
+   * 相似度恰恰接近 0（实测 `だーてん` vs `当店、魔族` 是 0.000），
+   * 整行只留一个 `~` 等于把它藏起来。所以低相似度改成「整行短语高亮」：
+   * 不做逐字着色，而是把 B 里「A 完全没有的连续片段」标成 ins，反之标成 del，
+   * 并给这一行打「整句不同」徽标——既保持“别把整行染红”的原意，
+   * 又让 0% 相似度的替换一眼可辨。
    */
   const CHAR_HIGHLIGHT_MIN_RATIO = 0.35;
 
+  /** 这一行是不是「相似度低到不适合逐字高亮」，需要对侧做整段短语标记。 */
+  function isLowSimilarity(row: (typeof dual.rows)[number]): boolean {
+    return Boolean(row.char_ops) && row.ratio < CHAR_HIGHLIGHT_MIN_RATIO;
+  }
+
+  /**
+   * 低相似度行的短语级标记：把**对侧完全没有**的连续片段挑出来。
+   *
+   * 与逐字 diff 的区别是“取舍”：逐字 diff 把每次替换都拆成 del+ins，
+   * 一行能染十几段；这里先把相邻的同类片段合并成一段，再整段标出来。
+   *
+   * 不做「最短长度」过滤：整句被替换时 A 侧可能只剩一个字（`…` vs `少し顔が赤いね`），
+   * 那一个字恰恰就是该被看见的差异，按长度丢掉等于又把它藏起来。
+   */
+  function phraseOps(
+    row: (typeof dual.rows)[number],
+    side: 'a' | 'b',
+  ): { op: string; text: string }[] {
+    const ops = row.char_ops ?? [];
+    // 这一侧「对侧没有」的片段：A 列是 del，B 列是 ins。
+    const want = side === 'a' ? 'del' : 'ins';
+    const out: { op: string; text: string }[] = [];
+    let buffer = '';
+    const flush = () => {
+      if (!buffer) return;
+      out.push({ op: want, text: buffer });
+      buffer = '';
+    };
+    for (const op of ops) {
+      if (op.op === want) {
+        buffer += op.text;
+      } else if (op.op === 'eq') {
+        flush();
+        out.push({ op: 'eq', text: op.text });
+      } else {
+        // 对侧独有的片段在这一侧没有字，忽略（它只影响另一列）。
+        continue;
+      }
+    }
+    flush();
+    return out.length ? out : [{ op: 'eq', text: side === 'a' ? row.a_text : row.b_text }];
+  }
+
   function opText(row: (typeof dual.rows)[number], side: 'a' | 'b'): { op: string; text: string }[] {
-    if (!row.char_ops || row.ratio < CHAR_HIGHLIGHT_MIN_RATIO) {
+    if (!row.char_ops) {
       return [{ op: 'eq', text: side === 'a' ? row.a_text : row.b_text }];
     }
+    if (row.ratio < CHAR_HIGHLIGHT_MIN_RATIO) return phraseOps(row, side);
     return row.char_ops
       .filter((op) => (side === 'a' ? op.op !== 'ins' : op.op !== 'del'))
       .map((op) => ({ op: op.op, text: op.text }));
@@ -273,6 +341,17 @@
             <input type="checkbox" bind:checked={dual.onlyDiff} />
             只看差异
           </label>
+          <label
+            class="chk"
+            title="相似度最低的排最前：专名被听错、整句幻觉这类差异的相似度往往接近 0，按时间序很容易被埋掉"
+          >
+            <input
+              type="checkbox"
+              checked={dual.sort === 'ratio-asc'}
+              onchange={(e) => setDualSort(e.currentTarget.checked ? 'ratio-asc' : 'time')}
+            />
+            按差异大小排
+          </label>
           <button
             class="btn ghost danger overwrite"
             onclick={replaceAll}
@@ -357,19 +436,26 @@
                 class:diff={row.kind === 'diff'}
                 class:only-a={row.kind === 'only_a'}
                 class:only-b={row.kind === 'only_b'}
+                class:low={isLowSimilarity(row)}
                 title={row.kind === 'same'
                   ? '文本一致'
                   : row.kind === 'diff'
-                    ? `文本不同（相似度 ${(row.ratio * 100).toFixed(0)}%）`
+                    ? isLowSimilarity(row)
+                      ? `文本几乎完全不同（相似度 ${(row.ratio * 100).toFixed(0)}%）：专名听错或整句幻觉多落在这一档，彩色片段是对侧完全没有的字`
+                      : `文本不同（相似度 ${(row.ratio * 100).toFixed(0)}%）`
                     : row.kind === 'only_a'
                       ? '仅 A 有（B 漏句）'
                       : '仅 B 有（A 漏句）'}
               >
                 {row.kind === 'same' ? '=' : row.kind === 'diff' ? '~' : row.kind === 'only_a' ? '−' : '+'}
               </span>
+
             </div>
 
             <div class="c-side b">
+              {#if isLowSimilarity(row)}
+                <span class="low-tag" title="相似度低于逐字高亮阈值（{CHAR_HIGHLIGHT_MIN_RATIO}）：彩色片段是对侧完全没有的字，多半是专名听错或整句幻觉">整句不同 · 看彩色片段</span>
+              {/if}
               {#if row.b_indices.length}
                 {#if row.char_ops}
                   {#each opText(row, 'b') as op}
@@ -442,11 +528,14 @@
     gap: 14px;
     flex-wrap: wrap;
   }
+  /* 与 PageHeader / .aiw-title 同一套标题规格（22 / 30 / 600 / -0.015em）。
+     这一页原来自己写了 20px 且没有 line-height，是四页里唯一的例外。 */
   h1 {
     margin: 0;
-    font-size: 20px;
+    font-size: var(--fs-display);
+    line-height: var(--lh-display);
     font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
     white-space: nowrap;
   }
   .versions {
@@ -774,6 +863,28 @@
     display: grid;
     place-items: center;
   }
+  /* 「整句不同」提示挂在 B 列文本上方：低相似度行的逐字高亮已关掉，
+     需要一个文字提示解释「为什么这一行有五颜六色的片段」。 */
+  .low-tag {
+    display: inline-block;
+    margin-bottom: 2px;
+    padding: 0 5px;
+    height: 15px;
+    line-height: 15px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: color-mix(in srgb, var(--danger) 88%, var(--text));
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 26%, transparent);
+  }
+  /* 低相似度的对照标记加一圈描边，扫视时不至于和普通 ~ 混掉。 */
+  .mark.low {
+    outline: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+    outline-offset: 1px;
+    font-weight: 700;
+  }
   .c-act {
     display: flex;
     align-items: center;
@@ -946,8 +1057,10 @@
     .source-line {
       display: none;
     }
+    /* 标题不再随窄屏缩小：22px 是与其余页共用的规格（G4），
+       紧凑模式下这页的标题行本来就换行放下了，不需要靠减字号让位。 */
     h1 {
-      font-size: 17px;
+      font-size: var(--fs-display);
     }
   }
 </style>

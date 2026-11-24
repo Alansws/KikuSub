@@ -333,6 +333,7 @@ async def create_job(
                 media_id=info.id,
                 session_id=session.id,
                 loop=loop,
+                separate_vocals=bool(payload.separate_vocals),
             )
         elif payload.kind == "proxy":
             try:

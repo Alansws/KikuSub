@@ -142,13 +142,15 @@
     gap: 5px;
     white-space: nowrap;
   }
+  /* G15：这是检查器里的「第一套语法」，下方 CuePane 的 .seg 已向它对齐。
+     两者现在都是「选中 = accent-soft 底 + accent-text 字 + 600」。 */
   .insp-tab:hover {
     background: var(--fill);
     color: var(--ink-2);
   }
   .insp-tab.on {
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
     font-weight: 600;
   }
   .insp-tab b {

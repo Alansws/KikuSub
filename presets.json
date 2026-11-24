@@ -6,7 +6,7 @@
       "参数": {
         "whisper.enable_sentence_split": true,
         "whisper.enable_loudnorm": true,
-        "whisper.vad_threshold": 0.25,
+        "whisper.vad_threshold": 0.45,
         "whisper.vad_speech_pad_ms": 250,
         "whisper.vad_onset_pad_ms": 0,
         "whisper.vad_min_silence_ms": 200,
@@ -93,6 +93,30 @@
         "whisper.vad_min_speech_s": 0.08,
         "whisper.cue_pad_s": 0.02,
         "whisper.strip_nonverbal_edges": true,
+        "whisper.use_ctc_alignment": false,
+        "whisper.no_repeat_ngram_size": 5,
+        "whisper.repetition_penalty": 1.15
+      }
+    },
+    "日语 ASMR：轻声耳语·Silero 切分": {
+      "引擎": "whisper",
+      "参数": {
+        "whisper.enable_sentence_split": true,
+        "whisper.enable_loudnorm": true,
+        "whisper.vad_backend": "silero",
+        "whisper.vad_threshold": 0.25,
+        "whisper.vad_speech_pad_ms": 250,
+        "whisper.vad_onset_pad_ms": 0,
+        "whisper.vad_min_silence_ms": 200,
+        "whisper.vad_min_speech_ms": 80,
+        "whisper.vad_merge_gap_s": 0.3,
+        "whisper.vad_max_segment_s": 9.0,
+        "whisper.vad_min_speech_s": 0.08,
+        "whisper.cue_pad_s": 0.02,
+        "whisper.use_prev_text_prompt": true,
+        "whisper.strip_nonverbal_edges": true,
+        "whisper.enable_start_repair": true,
+        "whisper.nonverbal_qa": true,
         "whisper.use_ctc_alignment": false,
         "whisper.no_repeat_ngram_size": 5,
         "whisper.repetition_penalty": 1.15

@@ -325,8 +325,11 @@
           {/each}
         </select>
       {/if}
+      <!-- 主操作：字幕和成片是两条独立导出路径，各自有一个主按钮。
+           「导出字幕」此前是白底普通按钮，和旁边的选择器挤在一起，
+           成了全页强调色面积只有 0.08% 的原因之一。 -->
       <button
-        class="btn"
+        class="btn primary"
         onclick={exportSubtitle}
         disabled={!app.cues.length || subBusy || (scoped && !scopeSpan.count)}
       >
@@ -784,10 +787,12 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--sp-8) var(--sp-10) var(--sp-12);
+    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
+       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
+    padding: var(--sp-8) var(--sp-6) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 1120px);
-    justify-content: center;
+    grid-template-columns: minmax(0, 1040px);
+    justify-content: start;
     align-content: start;
   }
   .range-row {
@@ -801,9 +806,9 @@
     background: var(--bg-content);
   }
   .range-hint {
-    font-size: 12px;
-    line-height: 1.55;
-    color: var(--text-3);
+    font-size: var(--fs-ui);
+    line-height: 19px;
+    color: var(--ink-2);
     min-width: 0;
     flex: 1 1 320px;
   }
@@ -816,8 +821,8 @@
     border-radius: 6px;
     background: var(--warn-soft);
     color: var(--warn);
-    font-size: 12px;
-    line-height: 1.55;
+    font-size: var(--fs-ui);
+    line-height: 19px;
   }
   .sec {
     border-top: 1px solid var(--separator-soft);
@@ -835,9 +840,9 @@
     margin-bottom: 3px;
   }
   .sec-desc {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.55;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
     max-width: 700px;
   }
   .cue-count,
@@ -856,9 +861,9 @@
     flex-wrap: wrap;
   }
   .trk-hint {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.5;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
   }
   .seg {
     display: inline-flex;
@@ -973,21 +978,23 @@
     min-width: 0;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
+  /* 三种导出方式的说明是「选错要重编码几十分钟」的文字，必须可读：13/19 + --ink-2。 */
   .mode b {
-    font-size: 12px;
+    font-size: 13.5px;
+    line-height: 18px;
     font-weight: 600;
   }
   .mode span {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.45;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
   }
   .mode.on {
     border-color: var(--accent);
     background: var(--accent-soft);
   }
   .mode.on span {
-    color: var(--text-2);
+    color: var(--ink-2);
   }
   .mode:disabled {
     opacity: 0.55;
@@ -1017,16 +1024,18 @@
     min-width: 0;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
+  /* 码率预设的 hint 解释「这条在什么场景下更合适」，与样式预设同一套规则。 */
   .preset b {
-    font-size: 12px;
+    font-size: 13.5px;
+    line-height: 18px;
     font-weight: 600;
   }
   .preset span {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.4;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
@@ -1058,9 +1067,10 @@
     padding-top: 3px;
   }
   .hint-text {
-    font-size: 12px;
-    color: var(--text-3);
-    padding-top: 5px;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
+    padding-top: var(--sp-1);
   }
   .metrics {
     display: flex;
@@ -1220,8 +1230,8 @@
     border-radius: 4px;
     background: var(--danger-soft);
     color: var(--danger);
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: var(--fs-ui);
+    line-height: 19px;
   }
   .actions {
     display: flex;
@@ -1249,9 +1259,9 @@
     margin-bottom: 10px;
   }
   .style-head .hint-text {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.5;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
   }
   .style-body {
     display: grid;
@@ -1284,16 +1294,19 @@
     cursor: pointer;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
+  /* 「标题 ≥ 正文」：标题 13.5 略高于正文 13，正文用 --ink-2。
+     6 张卡在 13/19 下仍是 2 行、不裁字（实测卡高 67 → 74），clamp 放到 3 行留余量。 */
   .style-preset b {
-    font-size: 12px;
+    font-size: 13.5px;
+    line-height: 18px;
     font-weight: 600;
   }
   .style-preset span {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.35;
+    font-size: var(--fs-ui);
+    color: var(--ink-2);
+    line-height: 19px;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

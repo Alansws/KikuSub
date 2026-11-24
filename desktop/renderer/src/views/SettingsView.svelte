@@ -20,6 +20,7 @@
   import { loadAiConfig } from '../lib/settings/aiConfig.svelte';
   import { loadDiagnostics } from '../lib/settings/diagnostics.svelte';
   import { loadSkill } from '../lib/settings/skill.svelte';
+  import { loadCli } from '../lib/settings/cli.svelte';
   import { loadHardware } from '../lib/settings/hardware.svelte';
   import { clearTtsTimer, syncTtsDownloadState } from '../lib/settings/ttsPrefs.svelte';
   import { onDestroy } from 'svelte';
@@ -43,6 +44,7 @@
     void loadDiagnostics(120);
     void loadAiConfig();
     void loadSkill();
+    void loadCli();
     void loadTtsVoices();
     void loadHardware(true);
   });
@@ -104,10 +106,12 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--sp-8) var(--sp-10) var(--sp-12);
+    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
+       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
+    padding: var(--sp-8) var(--sp-6) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 1000px);
-    justify-content: center;
+    grid-template-columns: minmax(0, 1040px);
+    justify-content: start;
     align-content: start;
   }
   .head-meta {
