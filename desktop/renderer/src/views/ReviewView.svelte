@@ -118,6 +118,7 @@
     takeExplicitJump,
   } from '../lib/reviewViewport';
   import { claimTranslationDefault, planInitialReviewView } from '../lib/reviewStart';
+  import { revealScrollTop, rowHeightFor, virtualWindow } from '../lib/reviewTable';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -220,9 +221,6 @@
   // 最近一次自动滚到/选中过的字幕行，避免同一句反复滚动
   let lastRevealed = -1;
 
-  // 虚拟列表：行高固定 30px（双语 60px），只渲染可视区 ± OVERSCAN 行。
-  const ROW_H = 30;
-  const OVERSCAN = 7;
 
   // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
   const src = $derived(
@@ -362,15 +360,14 @@
     return c ? `${c.start}:${c.end}` : '';
   });
 
-  // 双语是**固定双行高**：自动测量会和虚拟滚动的绝对定位打架（开发文档 §6.3.2）
-  const rowHeight = $derived(app.track === 'both' ? ROW_H * 2 : ROW_H);
-  const rowStart = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN));
-  const rowEnd = $derived(
-    Math.min(
-      app.cues.length,
-      rowStart + Math.ceil((viewH || 400) / rowHeight) + OVERSCAN * 2,
-    ),
+  // 双语是**固定双行高**：自动测量会和虚拟滚动的绝对定位打架（开发文档 §6.3.2）。
+  // 窗口计算是纯函数，在 lib/reviewTable.ts（可单测，也不占这里的行数预算）。
+  const rowHeight = $derived(rowHeightFor(app.track));
+  const vwin = $derived(
+    virtualWindow({ scrollTop, viewH, total: app.cues.length, rowH: rowHeight }),
   );
+  const rowStart = $derived(vwin.start);
+  const rowEnd = $derived(vwin.end);
   const visibleCues = $derived(app.cues.slice(rowStart, rowEnd));
 
   const zoomX = $derived(duration > 0 ? Math.max(1, duration / Math.max(viewSpan, 0.001)) : 1);
@@ -1916,13 +1913,14 @@
 
   function revealRow(i: number) {
     if (!rowsEl) return;
-    const top = i * rowHeight;
-    const viewTop = rowsEl.scrollTop;
-    const viewBottom = viewTop + rowsEl.clientHeight;
-    // 已经在可视区中间就不动，避免播放时每句都抖一下
-    if (top >= viewTop + rowHeight * 2 && top + rowHeight <= viewBottom - rowHeight * 2) return;
-    const above = Math.max(1, Math.floor((rowsEl.clientHeight * 0.4) / rowHeight));
-    const target = Math.max(0, (i - above) * rowHeight);
+    // 判定与目标位置都是纯计算（lib/reviewTable.ts），这里只负责滚动动画
+    const target = revealScrollTop({
+      index: i,
+      scrollTop: rowsEl.scrollTop,
+      viewH: rowsEl.clientHeight,
+      rowH: rowHeight,
+    });
+    if (target === null) return;
     cancelAnimationFrame(revealRaf);
     // 播放中必须瞬时：平滑滚动会被后台窗口节流，让人以为表格没跟上。
     // 暂停时的跳转用 120ms 自己滚，手感比浏览器自带 smooth（约 300ms）干脆。
