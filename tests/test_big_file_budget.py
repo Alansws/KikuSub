@@ -53,7 +53,7 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              两步都逐像素比对过（0.0000% 差异）。3780 → 3158 → 2644。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 2645,
+    "views/ReviewView.svelte": 2615,
 }
 
 

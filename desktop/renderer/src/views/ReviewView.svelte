@@ -47,6 +47,7 @@
     replaceInCue,
     replaceInTranslation,
     seekTo,
+    qa,
     setTrackMode,
     splitCueAt,
     startProxyJob,
@@ -120,6 +121,7 @@
   } from '../lib/reviewViewport';
   import { claimTranslationDefault, planInitialReviewView } from '../lib/reviewStart';
   import { revealScrollTop, rowHeightFor, virtualWindow } from '../lib/reviewTable';
+  import { pendingItems, rowStatuses } from '../lib/reviewRowStatus';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -370,6 +372,21 @@
   const rowStart = $derived(vwin.start);
   const rowEnd = $derived(vwin.end);
   const visibleCues = $derived(app.cues.slice(rowStart, rowEnd));
+
+  /**
+   * 表格「状态」列：从质检队列按时间窗落到行上（纯函数在 lib/reviewRowStatus.ts）。
+   * 已核对 / 已跳过的项不算待核——否则用户确认完还在报红。
+   */
+  const rowStatus = $derived(
+    rowStatuses(
+      app.cues,
+      pendingItems(
+        (qa.payload?.items ?? []) as never[],
+        qa.payload?.statuses as never,
+      ),
+      new Set(app.cues.map((_, i) => i).filter((i) => isTranslationStale(i))),
+    ),
+  );
 
   const zoomX = $derived(duration > 0 ? Math.max(1, duration / Math.max(viewSpan, 0.001)) : 1);
   const progressPct = $derived(
@@ -2201,6 +2218,7 @@
       matchedSet: matchedCueSet,
       findCue: currentFind?.cue ?? -1,
       busy,
+      statuses: rowStatus,
       displayText: cueDisplayText,
       translationAt,
       isStale: isTranslationStale,
@@ -2592,54 +2610,6 @@
     .tl-tools {
       gap: 7px;
     }
-    /* 查找栏在 680/540 宽下要留在一行：隐藏「Aa」与分隔线，输入框可收缩。
-       折行会把表格再吃掉一行高度，关闭按钮也会单独掉到第二行。 */
-    .find-bar {
-      padding: 5px 6px;
-      gap: 3px;
-      flex-wrap: wrap;
-    }
-    .find-input {
-      width: auto;
-      flex: 1 1 110px;
-      min-width: 80px;
-    }
-    .find-input.replace {
-      width: auto;
-      flex: 1 1 96px;
-      min-width: 72px;
-    }
-    .find-count {
-      min-width: 42px;
-    }
-    /* 窄窗口优先保住「替换 / 跳过 / 全部替换」一行；跳过数量靠删除线判断 */
-    .find-skipped {
-      display: none;
-    }
-    .find-case,
-    .find-sep {
-      display: none;
-    }
   }
 
-  @media (max-width: 700px) {
-    /* 540 / 680 宽：只留「# / 开始 / 字幕文本 / 行内动作」四列 */
-    .thead,
-    .row {
-      grid-template-columns: 30px 78px minmax(0, 1fr) 36px;
-      column-gap: var(--sp-1);
-      padding: 0 var(--sp-2);
-    }
-    .thead > :nth-child(3),
-    .thead > :nth-child(4),
-    .row > :nth-child(3),
-    .row > :nth-child(4) {
-      display: none;
-    }
-    .find-input,
-    .find-input.replace {
-      width: 120px;
-      flex-basis: 120px;
-    }
-  }
 </style>
