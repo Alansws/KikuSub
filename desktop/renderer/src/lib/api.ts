@@ -57,6 +57,8 @@ export interface AppSettings {
   export_dir: string;
   /** 成片导出目录；空字符串表示跟随 export_dir。 */
   video_export_dir: string;
+  /** 章节自动命名模板：`{num}` 中文数字 / `{n}` 阿拉伯数字，默认 `章节{num}`。 */
+  chapter_name_template?: string;
 }
 
 export interface VadAsset {
@@ -1357,6 +1359,7 @@ export const api = {
     enabled_engines?: string[];
     export_dir?: string;
     video_export_dir?: string;
+    chapter_name_template?: string;
   }) =>
     req<SettingsPayload>('/api/settings', {
       method: 'PATCH',

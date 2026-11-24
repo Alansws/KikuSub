@@ -3173,6 +3173,7 @@ export async function updateSettings(patch: {
   enabled_engines?: string[];
   export_dir?: string;
   video_export_dir?: string;
+  chapter_name_template?: string;
 }) {
   try {
     const data = await api.patchSettings(patch);

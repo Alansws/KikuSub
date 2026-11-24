@@ -6,6 +6,7 @@
    * 这样选主题只需要点一次，也不必先理解皮肤与明暗两层概念。
    */
   import SettingsSection from '../../components/settings/SettingsSection.svelte';
+  import ChapterNaming from '../../components/settings/appearance/ChapterNaming.svelte';
   import ThemePicker from '../../components/settings/appearance/ThemePicker.svelte';
   import TtsPrefList from '../../components/settings/appearance/TtsPrefList.svelte';
   import { app, setTheme } from '../../lib/store.svelte';
@@ -23,6 +24,13 @@
     meta={`当前：${currentName}`}
   >
     <ThemePicker current={app.theme} onselect={(id) => setTheme(id)} />
+  </SettingsSection>
+
+  <SettingsSection
+    title="章节命名"
+    caption="把时刻点补成区间、或框选一段设为章节时，按片中顺序自动起名。自己起过名字的章节不会被改。"
+  >
+    <ChapterNaming />
   </SettingsSection>
 
   <SettingsSection

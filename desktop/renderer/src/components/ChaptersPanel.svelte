@@ -1,11 +1,15 @@
 <script lang="ts">
   /**
-   * 检查器里的「章节标记」面板（独立组件，避免 Inspector 继续膨胀）。
+   * 检查器里的「章节」页签。
    *
-   * 三种入口都必须支持：播放头插时刻点、选区设为章节（输入标题回车即添加）、
-   * 列表里改标题 / 微调起止 / 删除 / 点击跳转。所有写操作都经
-   * `lib/chapters.svelte.ts` → `POST /api/chapters`，服务端整表替换并记一步历史，
-   * 所以 ⌘Z 能退掉这里的每一次操作（没有第二套撤销栈）。
+   * 2026-11-25 重做布局：原来的卡片里塞了三段解释文字、新建输入框和列表挤在一起，
+   * 用户说「功能逻辑不清晰、说明文字太多」。现在只分两层：
+   *
+   * 1. **上面是「新建」**：一个可选标题 + 两枚动作（时刻点 / 选区章节）；
+   * 2. **下面每条标记一行**：名称 + 时间（点击跳转），行内图标是「对这一段做什么」
+   *    —— 处理范围 / 加入转写选区 / 补端点 / 编辑 / 删除，解释都收进 title。
+   *
+   * 所有写操作仍经 `lib/chapters.svelte.ts` → `POST /api/chapters`（一步历史）。
    */
   import Icon from './Icon.svelte';
   import {
@@ -19,6 +23,7 @@
     seekToMark,
     setChapterDraftEdge,
     updateMark,
+    useChapterAsTranscribe,
   } from '../lib/chapters.svelte';
   import { pendingEdge, readyError, span as draftSpan } from '../lib/chapterDraft';
   import { setExportClip, toast } from '../lib/store.svelte';
@@ -34,16 +39,16 @@
     Boolean(chapters.selection && chapters.selection.end - chapters.selection.start >= 0.2),
   );
 
-  /** 章节草稿（把一个时刻点补成区间）：状态在 lib/chapters.svelte.ts。 */
+  /** 章节草稿（把一个时刻点补成区间）。 */
   const draft = $derived(chapters.draft);
   const preview = $derived(draftSpan(draft, play.time));
   const draftError = $derived(readyError(draft));
+  /** 还缺哪一端：另一端就是已锁定的锚点，不能在这里被误按覆盖。 */
+  const draftPending = $derived(draft ? pendingEdge(draft) : null);
   /** 两端都落位但差太短时才提示；「待定」本身已经写在槽位里。 */
   const shortDraft = $derived(
     Boolean(draft && draft.start !== null && draft.end !== null && draftError),
   );
-  /** 还缺哪一端：另一端就是已锁定的锚点，不能在这里被误按覆盖。 */
-  const draftPending = $derived(draft ? pendingEdge(draft) : null);
 
   function submitNew() {
     const text = title.trim();
@@ -62,6 +67,18 @@
     }
   }
 
+  function addPoint() {
+    const text = title.trim();
+    title = '';
+    void addPointAtPlayhead(text);
+  }
+
+  function addRange() {
+    const text = title.trim();
+    title = '';
+    void addRangeChapter(chapters.selection, text);
+  }
+
   function beginEdit(mark: { id: string; title: string; start: number; end: number | null }) {
     editing = {
       id: mark.id,
@@ -72,29 +89,26 @@
   }
 
   function commitEdit() {
-    const draft = editing;
-    if (!draft) return;
+    const draftEdit = editing;
+    if (!draftEdit) return;
     editing = null;
-    const start = parseTimeInput(draft.start);
+    const start = parseTimeInput(draftEdit.start);
     if (start === null) return; // 起点非法：保持原值，不写历史
-    const end = parseTimeInput(draft.end);
+    const end = parseTimeInput(draftEdit.end);
     const patch: { start: number; end: number | null; title: string } = {
       start,
       // 结束时间留空 = 时刻点；早于起点时把它当作时刻点，避免生成非法区间
       end: end !== null && end > start ? end : null,
-      title: draft.title.trim() || `时刻点 ${tcShort(start)}`,
+      title: draftEdit.title.trim() || `时刻点 ${tcShort(start)}`,
     };
-    void updateMark(draft.id, patch);
+    void updateMark(draftEdit.id, patch);
   }
 
   function cancelEdit() {
     editing = null;
   }
 
-  /**
-   * 把这个区间章节设为「处理范围」：润色、翻译、导出三处共用这一份。
-   * 时刻点不提供这个入口——它是点，不是可处理的片段。
-   */
+  /** 把区间章节设为「处理范围」：润色、翻译、导出三处共用这一份。 */
   function useAsClip(mark: { id: string; title: string; start: number; end: number | null }) {
     if (mark.end === null) return;
     const scope = scopeForChapter({
@@ -107,12 +121,22 @@
     setExportClip(scope);
     toast(`处理范围已设为 ${clipCaption(scope)}（润色 / 翻译 / 导出通用）`);
   }
+
+  function useAsTranscribe(mark: {
+    id: string;
+    title: string;
+    start: number;
+    end: number | null;
+  }) {
+    if (mark.end === null) return;
+    useChapterAsTranscribe(mark);
+  }
 </script>
 
 <section class="chapters-panel" aria-label="章节标记">
   <header>
-    <b>章节标记</b>
-    <span class="count" title="时刻点会自动衔接到下一个标记或片尾">
+    <b>章节</b>
+    <span class="count" title="时刻点会自动衔接到下一个标记或片尾；导出时按顺序写入容器">
       {chapters.marks.length} 个标记
       {#if chapters.layoutCount && chapters.layoutCount !== chapters.marks.length}
         · 写入后 {chapters.layoutCount} 段
@@ -147,8 +171,9 @@
       </div>
       {#if preview}
         <p class="draft-live">
-          播放头 {tcShort(play.time)} · 预览 {tcShort(preview.start)} → {tcShort(preview.end)}
-          （{tcShort(preview.end - preview.start)}）
+          预览 {tcShort(preview.start)} → {tcShort(preview.end)} · 时长 {tcShort(
+            preview.end - preview.start,
+          )}
         </p>
       {/if}
       <div class="draft-actions">
@@ -168,7 +193,11 @@
         >
           设为终点 <kbd>O</kbd>
         </button>
-        <button class="btn tiny" disabled={Boolean(draftError)} onclick={() => void saveChapterDraft()}>
+        <button
+          class="btn tiny"
+          disabled={Boolean(draftError)}
+          onclick={() => void saveChapterDraft()}
+        >
           保存章节
         </button>
       </div>
@@ -176,55 +205,44 @@
         <p class="err">{draftError}</p>
       {/if}
     </div>
-  {/if}
-
-  <div class="add-row" class:hidden={Boolean(draft)}>
-    <input
-      class="ch-title"
-      type="text"
-      placeholder="新标记标题（回车添加）"
-      bind:value={title}
-      onkeydown={onNewKeydown}
-      disabled={chapters.saving}
-      maxlength="120"
-    />
-    <div class="add-actions">
-      <button
-        class="btn tiny"
-        onclick={() => {
-          const text = title.trim();
-          title = '';
-          void addPointAtPlayhead(text);
-        }}
+  {:else}
+    <div class="compose">
+      <input
+        class="ch-title"
+        type="text"
+        placeholder="标题（可选，回车添加）"
+        bind:value={title}
+        onkeydown={onNewKeydown}
         disabled={chapters.saving}
-        title="在播放头插入时刻点（不选区间时回车走这个）"
-      >
-        <Icon name="flag" size={10} /> 插时刻点
-      </button>
-      <button
-        class="btn tiny"
-        onclick={() => {
-          const text = title.trim();
-          title = '';
-          void addRangeChapter(chapters.selection, text);
-        }}
-        disabled={chapters.saving || !hasSelection}
-        title={hasSelection ? '把当前波形选区设为一个章节' : '先在波形上框选一段'}
-      >
-        选区设为章节
-      </button>
+        maxlength="120"
+      />
+      <div class="compose-actions">
+        <button
+          class="btn tiny"
+          onclick={addPoint}
+          disabled={chapters.saving}
+          title="在播放头插入时刻点（不框选时回车走这个）"
+        >
+          <Icon name="flag" size={10} /> 时刻点
+        </button>
+        <button
+          class="btn tiny"
+          onclick={addRange}
+          disabled={chapters.saving || !hasSelection}
+          title={hasSelection ? '把波形上的时间选区设为一个章节' : '先在波形上框选一段'}
+        >
+          <Icon name="range" size={10} /> 选区章节
+        </button>
+      </div>
     </div>
-  </div>
+  {/if}
 
   {#if chapters.error}
     <p class="err">{chapters.error}</p>
   {/if}
 
-  {#if !chapters.marks.length}
-    <p class="chapter-empty">
-      还没有标记。在播放头点「插时刻点」，或先框选一段波形再「选区设为章节」——两者都会写进成片容器，IINA
-      等播放器可直接跳转。
-    </p>
+  {#if !chapters.marks.length && !draft}
+    <p class="chapter-empty">还没有标记：上方回车插入时刻点，或先框选一段再点「选区章节」。</p>
   {:else}
     <ul class="list">
       {#each [...chapters.marks].sort((a, b) => a.start - b.start) as mark (mark.id)}
@@ -270,12 +288,29 @@
             >
               <span class="kind" aria-hidden="true">{mark.end === null ? '◆' : '▭'}</span>
               <span class="t">{mark.title || '未命名'}</span>
-              <span class="times">
-                {tcShort(mark.start)}{mark.end === null ? '' : ` → ${tcShort(mark.end)}`}
-              </span>
             </button>
+            <span class="times">
+              {tcShort(mark.start)}{mark.end === null ? '' : ` → ${tcShort(mark.end)}`}
+            </span>
             <div class="ops">
-              {#if mark.end === null}
+              {#if mark.end !== null}
+                <button
+                  class="iconbtn"
+                  onclick={() => useAsClip(mark)}
+                  title="处理范围：润色 / 翻译 / 导出都只用这一段"
+                  aria-label="处理此片段"
+                >
+                  <Icon name="film" size={11} />
+                </button>
+                <button
+                  class="iconbtn"
+                  onclick={() => useAsTranscribe(mark)}
+                  title="加入转写页的时间区间（只转这一段）"
+                  aria-label="加入转写选区"
+                >
+                  <Icon name="range" size={11} />
+                </button>
+              {:else}
                 <button
                   class="iconbtn"
                   onclick={() => beginChapterDraft(mark.id, 'end')}
@@ -293,17 +328,12 @@
                   <Icon name="chevron-right" size={11} />
                 </button>
               {/if}
-              {#if mark.end !== null}
-                <button
-                  class="iconbtn"
-                  onclick={() => useAsClip(mark)}
-                  title="仅处理此片段：把这一章设为润色 / 翻译 / 导出范围"
-                  aria-label="仅处理此片段"
-                >
-                  <Icon name="film" size={11} />
-                </button>
-              {/if}
-              <button class="iconbtn" onclick={() => beginEdit(mark)} title="编辑标题与时间" aria-label="编辑标记">
+              <button
+                class="iconbtn"
+                onclick={() => beginEdit(mark)}
+                title="编辑标题与时间"
+                aria-label="编辑标记"
+              >
                 <Icon name="pencil" size={11} />
               </button>
               <button
@@ -320,14 +350,6 @@
       {/each}
     </ul>
   {/if}
-
-  <p class="hint">
-    单击标记跳转；标题与时间可在这里改。标记随影片保存（换片 / 重启不丢），导出时按顺序写入容器。
-    区间章节右侧的「仅处理此片段」会把这一段设为润色 / 翻译 / 导出的范围。
-    {#if play.duration > 0}
-      当前播放头 {tcShort(play.time)}。
-    {/if}
-  </p>
 </section>
 
 <style>
@@ -357,7 +379,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .add-row {
+  .compose {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -374,13 +396,15 @@
     color: var(--text);
   }
 
-  .add-row.hidden {
-    display: none;
-  }
-
-  .add-actions {
+  .compose-actions {
     display: flex;
     gap: 6px;
+  }
+
+  .compose-actions .btn {
+    height: 24px;
+    padding: 0 var(--sp-2);
+    font-size: 11px;
   }
 
   .list {
@@ -402,6 +426,10 @@
 
   .item:hover {
     background: var(--hover);
+  }
+
+  .item.is-draft {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
 
   .jump {
@@ -433,17 +461,20 @@
   }
 
   .times {
-    margin-left: auto;
     flex: none;
     font-size: 11px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
 
+  /*
+   * 行内操作：默认半透明（3 枚图标在 348px 里不算挤，但全显会抢名字的注意力），
+   * hover / 键盘聚焦时变实。完全藏起来的话用户不会知道这一行能操作。
+   */
   .ops {
     display: flex;
     gap: 2px;
-    opacity: 0;
+    opacity: 0.55;
   }
 
   .item:hover .ops,
@@ -509,8 +540,7 @@
     gap: 6px;
   }
 
-  .chapter-empty,
-  .hint {
+  .chapter-empty {
     margin: 0;
     font-size: 11px;
     line-height: 16px;
@@ -621,7 +651,4 @@
     color: var(--text-3);
   }
 
-  .item.is-draft {
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-  }
 </style>

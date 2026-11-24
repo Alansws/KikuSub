@@ -9,6 +9,7 @@
  */
 
 import { api, type ChapterMark } from './api';
+import { autoChapterName, DEFAULT_CHAPTER_TEMPLATE, isAutoTitle, normalizeTemplate } from './chapterNaming';
 import {
   beginDraft,
   readyError,
@@ -18,6 +19,7 @@ import {
   type DraftEdge,
 } from './chapterDraft';
 import { app, play, seekTo, toast } from './store.svelte';
+import { tcShort } from './time';
 
 export const chapters = $state({
   marks: [] as ChapterMark[],
@@ -120,6 +122,16 @@ async function persist(next: ChapterMark[], label: string): Promise<void> {
   }
 }
 
+/** 章节自动命名模板（设置页可改；读不到时用默认「章节{num}」）。 */
+function nameTemplate(): string {
+  return normalizeTemplate(app.settings?.chapter_name_template ?? DEFAULT_CHAPTER_TEMPLATE);
+}
+
+/** 按当前模板给候选区间起名（序号只数区间章节，按起点排序）。 */
+function autoName(candidate: { id?: string; start: number; end: number | null }): string {
+  return autoChapterName(nameTemplate(), chapters.marks, candidate);
+}
+
 function timecode(seconds: number): string {
   const total = Math.max(0, seconds);
   const h = Math.floor(total / 3600);
@@ -153,11 +165,13 @@ export async function addRangeChapter(
   }
   const start = Math.round(Math.max(0, selection.start) * 1000) / 1000;
   const end = Math.round(Math.max(start + 0.2, selection.end) * 1000) / 1000;
+  const id = newId();
   const mark: ChapterMark = {
-    id: newId(),
+    id,
     start,
     end,
-    title: (title || '').trim() || `场景 ${timecode(start)}–${timecode(end)}`,
+    // 没给标题就按位置自动命名（章节一 / 章节二…），模板在设置里可改
+    title: (title || '').trim() || autoName({ id, start, end }),
   };
   await persist([...chapters.marks, mark], `新建章节「${mark.title}」`);
 }
@@ -191,6 +205,29 @@ export function seekToMark(id: string): void {
   const target = chapters.marks.find((mark) => mark.id === id);
   if (!target) return;
   seekTo(Math.min(target.start, play.duration || target.start));
+}
+
+/**
+ * 把区间章节填进转写页的两个时间输入框并切过去。
+ *
+ * 与核对台选区工具条的「同步到转写页」同一条链路：写一次性消息 `app.slice`，
+ * 转写页读走即清空（见 `lib/transcribeSlice.ts`）。时刻点没有区间，不提供入口。
+ */
+export function useChapterAsTranscribe(mark: {
+  id: string;
+  start: number;
+  end: number | null;
+  title: string;
+}): void {
+  if (mark.end === null) return;
+  app.slice = {
+    start: tcShort(mark.start),
+    end: tcShort(mark.end),
+    nonce: (app.slice?.nonce ?? 0) + 1,
+  };
+  app.view = 'transcribe';
+  app.inspectorOpen = false;
+  toast(`已把「${mark.title || '未命名'}」填进转写页的时间区间，可直接局部转写`);
 }
 
 /** 供导出页判断「存在标记时默认开启」。 */
@@ -268,12 +305,15 @@ export async function saveChapterDraft(): Promise<boolean> {
     toast('原标记已经不存在了', 'warn');
     return false;
   }
+  const renamed = isAutoTitle(target.title)
+    ? autoName({ id: target.id, start: times.start, end: times.end })
+    : target.title;
   const next = chapters.marks.map((mark) =>
-    mark.id === draft.from ? { ...mark, start: times.start, end: times.end } : mark,
+    mark.id === draft.from ? { ...mark, start: times.start, end: times.end, title: renamed } : mark,
   );
   chapters.draft = null;
   await persist(next, `补全章节「${target.title || '未命名'}」`);
-  toast(`章节已补全：${timecode(times.start)} → ${timecode(times.end)}`);
+  toast(`章节已补全：${renamed}（${timecode(times.start)} → ${timecode(times.end)}）`);
   return true;
 }
 
