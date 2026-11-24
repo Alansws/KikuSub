@@ -127,12 +127,9 @@
   }
   .hero-main {
     display: grid;
-    /* 右列（模型占用）原来写死 minmax(300px, 360px)：在 1440 的整页里没问题，
-       但设置改成 820 浮层后内容栏只有 ~620px，右列仍要 360px，左列就被压成
-       131px —— 设备名截成「A…」、三个标签竖排。这里让右列按内容收敛。 */
-    grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
-    gap: var(--sp-5);
-    padding: var(--sp-5) var(--sp-5);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    gap: var(--sp-8);
+    padding: var(--sp-5) var(--sp-6);
   }
   .hero-eyebrow {
     display: flex;
@@ -224,7 +221,7 @@
     color: var(--text-3);
     white-space: nowrap;
   }
-  @container sheet (max-width: 620px) {
+  @media (max-width: 1120px) {
     .hero-main {
       grid-template-columns: minmax(0, 1fr);
       gap: var(--sp-5);

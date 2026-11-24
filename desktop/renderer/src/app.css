@@ -171,12 +171,6 @@
   /* 画面本体（16:9 的那一块）的 1px 细边：舞台是浅灰时靠它把画面与留白分开，
      不能再用「0.06 白」那种只对深色成立的值。 */
   --stage-frame: rgba(27, 39, 64, 0.16);
-  /* 设置浮层（2026-11-24 方案 A）：窗框 + 类别栏浅灰 + 内容画布。
-     MacWhisper 的偏好窗就是「灰底上浮白卡」，所以内容区画布要比卡片深一层。 */
-  --sheet-bg: var(--raise);
-  --sheet-line: var(--line-2);
-  --sheet-rail: #eef1f6;
-  --sheet-canvas: #f2f5f9;
   --wave: #a3adbe;
 
   /* 波形底部字幕轨道。灰条时代和底色的对比只有 4%，几乎看不见；
@@ -284,11 +278,6 @@ html[data-theme='dark'] {
   --stage-line: rgba(255, 255, 255, 0.34);
   /* 深色下画面本来就与舞台同色系，细边只需要「刚好不糊成一片」 */
   --stage-frame: rgba(236, 241, 250, 0.09);
-  /* 设置浮层（深色）：画布比页面深一层，卡片用 raise，靠 1px 细边分层 */
-  --sheet-bg: #15181d;
-  --sheet-line: rgba(236, 241, 250, 0.1);
-  --sheet-rail: #101318;
-  --sheet-canvas: #1a1e24;
   --wave: #8f9db5;
 
   --cue-lane: rgba(236, 241, 250, 0.06);
@@ -396,10 +385,6 @@ html[data-theme='mincho'] {
   --stage-bg: #101112;
   --stage-line: rgba(255, 255, 255, 0.33);
   --stage-frame: rgba(236, 241, 250, 0.09);
-  --sheet-bg: #ffffff;
-  --sheet-line: rgba(24, 26, 28, 0.08);
-  --sheet-rail: #f0f1ee;
-  --sheet-canvas: #f4f5f2;
   --wave: #9aa0a0;
 
   --cue-lane: rgba(21, 24, 27, 0.05);
@@ -904,10 +889,8 @@ html[data-theme='dark'] .card {
 /* ---------- 设置页：Inset 分组列表 ---------- */
 /* 四个页签共用；组件里不要再各写一份（和 .sec/.sec-head 同一个道理）。 */
 .set-group {
-  /* MacWhisper 图 2 的材质：一张浮在浅灰画布上的独立白卡——10px 圆角、
-     纯白底、1px 细外边框，卡片之间留间距（间距由各页的 .sections gap 给）。 */
   border: 1px solid var(--inset-line);
-  border-radius: 10px;
+  border-radius: var(--rad-inset);
   background: var(--inset-bg);
   overflow: hidden;
 }
@@ -922,9 +905,9 @@ html[data-theme='dark'] .card {
   border-bottom: 1px solid var(--inset-line);
   min-height: 46px;
   /* 右侧控件放不下时**整行折行**，而不是把左边说明挤成一条 40px 宽的缝。
-     设置浮层内容栏固定 ~613px，一条「路径 + 状态 + 三个按钮」就占 380px；
-     原来的 `flex: 0 0 auto` 让控件列永不收缩，说明列被压到 46–160px，
-     正文变成 9–11 行的一根竖条（2026-11-24 用户报障「每页都显示异常」）。 */
+     一条「路径 + 状态 + 三个按钮」就占 380–477px；若控件列永不收缩，
+     说明列会被压到 46–160px，正文变成 9–11 行的一根竖条
+     （2026-11-24 用户报障「每个设置子页显示都异常」）。 */
   flex-wrap: wrap;
 }
 .set-row:last-child {
@@ -970,10 +953,10 @@ html[data-theme='dark'] .card {
   /* 「路径 / 徽标 + 动作」那一列：可以占满折行后的整宽（路径左对齐到行首、
      按钮右对齐到行尾），但**仍然可以收缩**。原来写 `flex: 0 0 auto`（不可收缩）
      时，路径长了这条列就要求 max-content，超过行宽后直接戳出卡片右边缘
-     （200% 缩放 / 窄浮层实测溢出 22–81px）。现在允许收缩，路径本身有
+     （200% 缩放实测溢出 22–81px）。现在允许收缩，路径本身有
      `overflow: hidden; text-overflow: ellipsis`，拿不到宽度就省略，
      按钮永远留在卡内。 */
-  flex: 1 1 auto;
+  flex: 1 1 46%;
   min-width: 0;
 }
 .set-path {
@@ -994,11 +977,7 @@ html[data-theme='dark'] .card {
   font: inherit;
   font-size: 12px;
   height: var(--ctl-h-lg);
-  /* 固定宽度、统一右对齐（2026-11-24）：原来 `flex:1` 让「模型」拉满整行、
-     同一张卡里的「服务地址」却因为是 flex 分配而偏短，读起来像两种控件。
-     现在所有 AI 输入框同宽，和右侧的按钮列对齐。 */
-  flex: 0 0 250px;
-  width: 250px;
+  flex: 1;
   min-width: 0;
   padding: 0 var(--sp-2);
   border: 1px solid var(--separator);
@@ -1015,28 +994,16 @@ html[data-theme='dark'] .card {
   font-family: var(--font-mono);
 }
 .key-input {
-  /* 这一行是竖排（输入框在上、按钮在下），所以 flex-basis 会作用在高度轴上：
-     写 `flex: 0 0 250px` 会把输入框拉成 250px 高。这里显式锁死高度只用 width 控宽。 */
-  flex: 0 0 auto;
-  width: 250px;
-  height: var(--ctl-h-lg);
+  flex: 0 1 190px;
   color: var(--text-2);
 }
 .key-state {
-  /* 行内小徽标：跟说明文字同一行，所以要比说明再小一档 */
-  display: inline-block;
-  margin-right: 5px;
-  padding: 0 5px;
-  border-radius: 4px;
-  background: var(--warn-soft);
+  font-size: var(--fs-label);
   color: var(--warn);
-  font-size: 11px;
-  line-height: 15px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .key-state.ok {
-  background: var(--success-soft);
   color: var(--success);
 }
 .set-row-desc.test-ok {

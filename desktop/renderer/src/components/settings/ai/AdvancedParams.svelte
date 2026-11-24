@@ -151,7 +151,7 @@
     line-height: 19px;
     color: var(--ink-2);
   }
-  @container sheet (max-width: 560px) {
+  @media (max-width: 1120px) {
     .adv-fields {
       grid-template-columns: minmax(0, 1fr);
     }

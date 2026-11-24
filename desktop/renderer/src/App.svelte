@@ -61,7 +61,6 @@
   } from './lib/transport.svelte';
   import { toggleSnap } from './lib/snapPrefs.svelte';
   import { toggleSidebar } from './lib/sidebarPrefs.svelte';
-  import { closeSettings, settingsOverlay } from './lib/settingsOverlay.svelte';
   import {
     alignSelectedCueEnd,
     alignSelectedCueStart,
@@ -536,14 +535,6 @@
       return;
     }
 
-    // 设置浮层是模态的：Esc 先收它（比质检面板 / 查找栏都更「上层」），
-    // 关掉之后回到原来那一屏，上下文不动。
-    if (e.key === 'Escape' && settingsOverlay.open) {
-      e.preventDefault();
-      closeSettings();
-      return;
-    }
-
     // AI 多轮对话浮窗在最上层：Esc 先收它，再轮到质检面板 / 查找栏 / 抽屉。
     if (e.key === 'Escape' && arbitration.dialogOpen) {
       e.preventDefault();
@@ -697,6 +688,8 @@
           <ExportView />
         {:else if app.view === 'report'}
           <ReportView />
+        {:else if app.view === 'settings'}
+          <SettingsView />
         {/if}
         </div>
         {/key}
@@ -726,11 +719,6 @@
     <StatusBar {engine} />
   </div>
 </div>
-
-<!-- 设置浮层（2026-11-24 方案 A）：压在页面上，不改变 app.view。 -->
-{#if settingsOverlay.open && !app.quitting}
-  <SettingsView />
-{/if}
 
 {#if app.quitting}
   <!-- 退出流程里什么都不显示：窗口马上就会被主进程收起 -->

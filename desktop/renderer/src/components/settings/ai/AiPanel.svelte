@@ -86,11 +86,6 @@
       <div class="set-row-main">
         <span class="set-row-title">API Key</span>
         <span class="set-row-desc">
-          <!-- 状态跟着说明走，放在左边（2026-11-24）：否则「已配置 + 输入框 +
-               保存 + 清除」四件东西挤在右侧一行，读起来像一堆并列按钮。 -->
-          <span class="key-state" class:ok={aiState.hasKey}>
-            {aiState.hasKey ? '已配置' : '未配置'}
-          </span>
           {#if aiState.hasKey}
             已保存，本机 AES-256-GCM 加密；输入新值可替换。
           {:else if cfg.key_optional}
@@ -100,9 +95,10 @@
           {/if}
         </span>
       </div>
-      <!-- 输入框与其他行同宽同右边缘；保存 / 清除放到它下面一行，
-           不再和输入框抢同一行（那样四件东西会横着挤成一团）。 -->
-      <div class="set-row-ctl key-ctl">
+      <div class="set-row-ctl">
+        <span class="key-state" class:ok={aiState.hasKey}>
+          {aiState.hasKey ? '已配置' : '未配置'}
+        </span>
         <input
           class="ai-input key-input"
           type="password"
@@ -112,12 +108,10 @@
           placeholder={aiState.hasKey ? '输入新值可替换' : 'sk-…'}
           aria-label="API Key"
         />
-        <div class="key-acts">
-          <button class="btn sm" onclick={saveAiKey} disabled={!aiState.keyInput.trim() || !aiState.keyReady}>
-            保存 Key
-          </button>
-          <button class="btn sm ghost" onclick={clearAiKey} disabled={!aiState.hasKey}>清除</button>
-        </div>
+        <button class="btn sm" onclick={saveAiKey} disabled={!aiState.keyInput.trim() || !aiState.keyReady}>
+          保存 Key
+        </button>
+        <button class="btn sm ghost" onclick={clearAiKey} disabled={!aiState.hasKey}>清除</button>
       </div>
     </div>
 
@@ -144,12 +138,6 @@
     </div>
   </div>
 
-  <!-- 隐私说明放在卡片正下方（2026-11-24）：它不是一行设置，插进行列表中间
-       会读成「又一条灰色警告横幅」。11px 弱化灰字，与卡片边界分开。 -->
-  <p class="group-note">
-    调用会把字幕文本发送到该地址。Key 只保存在本机、加密存储，升级或重装应用都不会丢；每次请求时才解密。
-  </p>
-
   {#if aiState.keyBroken}
     <div class="note-box warn">
       <span class="note-icon"><Icon name="warn" size={13} /></span>
@@ -167,6 +155,13 @@
     </div>
   {/if}
 
+  <div class="note-box">
+    <span class="note-icon"><Icon name="warn" size={13} /></span>
+    <span>
+      <b>调用会把字幕文本发送到该地址。</b>
+      Key 只保存在本机、加密存储，升级或重装应用都不会丢；每次请求时才解密。
+    </span>
+  </div>
 
   <AiAdvancedFold />
 
@@ -179,26 +174,6 @@
 {/if}
 
 <style>
-  /* 只让「输入框 + 按钮排」竖着落，行本身仍然按内容高度走；
-     这里绝不能给 height 或 align-items: stretch，否则 .set-row 会被撑成一大块白。 */
-  .key-ctl {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--sp-1);
-    width: auto;
-  }
-  .key-acts {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-1);
-  }
-  .group-note {
-    margin: var(--sp-2) 2px 0;
-    font-size: 11px;
-    line-height: 16px;
-    color: var(--text-3);
-  }
   .ai-empty {
     display: flex;
     align-items: center;

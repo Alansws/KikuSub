@@ -2,10 +2,11 @@
 /**
  * 设置四个子页的布局回归：不许挤出内容区、不许文字互相压住（2026-11-24，§3.4.16）。
  *
- * 触发：用户报「设置每个子页显示都异常」。上一版把断点全改成 `@container sheet`
- * 之后断点是对的，但 `.set-row-ctl { flex: 0 0 auto }` 让控件列永不收缩，
- * 一条「路径 + 徽标 + 三个按钮」把左侧说明压成 46–160px、9–11 行的竖条；
- * 音色克隆卡的三列网格则让步骤链溢出，压住「打开模型目录」。
+ * 触发：用户报「设置每个子页显示都异常」。当时的断点是对的（问的是内容栏容器），
+ * 但 `.set-row-ctl { flex: 0 0 auto }` 让控件列永不收缩，一条「路径 + 徽标 +
+ * 三个按钮」把左侧说明压成 46–160px、9–11 行的竖条；音色克隆卡的三列网格则让
+ * 步骤链溢出，压住「打开模型目录」。修法（flex 折行）与设置页是整页还是浮层无关，
+ * 所以 2026-11-24 把设置退回整页后这套断言继续适用（§3.4.18）。
  *
  * 这个脚本不比较像素（那样每次字体微调都会红），只断言三条布局不变量：
  *
@@ -14,7 +15,9 @@
  * 3. 没有可见文字元素 `scrollWidth > clientWidth`（`.set-path` 的省略号是有意的，
  *    它带 title，单独放行）。
  *
- * 四页 × 四种视口条件（1440 / 1120 / 1000 / 1440 + 200% 缩放）全部要满足。
+ * 四页 × 三种视口条件（1440×900 / 1120×800 / 1000×700）全部要满足。
+ * **不含 200% 缩放**（AGENTS.md 红线 14 / desktop-lifecycle §3.7.1）：本应用没有缩放菜单，
+ * 200% 的有效视口只有 680×419，布局必然塌——把它写进验收只会稳定地报假红。
  * 折叠区（进阶 / 其余内部路径 / 日志原文）在每个视口里都展开再量，避免只量短状态。
  *
  * 走主进程 `--screenshot` 静默路径（透明窗口 + capturePage + app.exit），桌面上不出现。
@@ -33,12 +36,11 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BASE = path.join(os.tmpdir(), 'kikusub-settings-layout');
 
-/** 四页 × 四档视口；`zoom` 用 CSS zoom 模拟 200% 缩放。 */
+/** 四页 × 三档视口。**没有 200% 缩放用例**（见文件头）。 */
 const CASES = [
-  { name: '1440x900', size: '1440x900', zoom: 1 },
-  { name: '1120x800', size: '1120x800', zoom: 1 },
-  { name: '1000x700', size: '1000x700', zoom: 1 },
-  { name: '1440x900-zoom200', size: '1440x900', zoom: 2 },
+  { name: '1440x900', size: '1440x900' },
+  { name: '1120x800', size: '1120x800' },
+  { name: '1000x700', size: '1000x700' },
 ];
 const TABS = ['engines', 'appearance', 'ai', 'env'];
 
@@ -48,23 +50,20 @@ const TABS = ['engines', 'appearance', 'ai', 'env'];
  */
 const EVAL = String.raw`
   (async () => {
-    const ZOOM = __ZOOM__;
-    if (ZOOM !== 1) {
-      document.documentElement.style.zoom = String(ZOOM);
-      await new Promise((r) => setTimeout(r, 500));
-    }
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const label = (el) => {
       const cls = typeof el.className === 'string' ? el.className.split(' ')[0] : '';
       return el.tagName.toLowerCase() + (cls ? '.' + cls : '');
     };
 
-    // 设置入口是侧栏最后一项（「设置」不在 View 联合类型里，它开浮层）。
+    // 设置入口是侧栏最后一项（整页视图，点了就切 view）。
     const items = document.querySelectorAll('.sb-item');
     items[items.length - 1]?.click();
     await sleep(2600);
     const content = document.querySelector('.set-content');
-    if (!content) return JSON.stringify({ error: '设置浮层没有打开' });
+    if (!content) return JSON.stringify({ error: '设置页没有打开' });
+    // 滚动容器是页面根（.settings），不是内容列：整页形态下内容列不自己滚。
+    const scroller = document.querySelector('.settings') || content;
 
     const result = { contentW: Math.round(content.getBoundingClientRect().width), tabs: {} };
 
@@ -81,10 +80,10 @@ const EVAL = String.raw`
       const broke = [];
       const overlaps = [];
       const clipped = [];
-      const maxY = Math.max(0, content.scrollHeight - content.clientHeight);
+      const maxY = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
 
       for (let y = 0; y <= maxY; y += 260) {
-        content.scrollTo(0, y);
+        scroller.scrollTo(0, y);
         await sleep(150);
         const cr = content.getBoundingClientRect();
         for (const el of content.querySelectorAll('*')) {
@@ -141,7 +140,7 @@ const EVAL = String.raw`
           })
           .slice(0, 6);
       };
-      content.scrollTo(0, 0);
+      scroller.scrollTo(0, 0);
       await sleep(150);
       result.tabs[id] = {
         broke: uniq(broke),
@@ -163,7 +162,7 @@ function check(name, condition, detail) {
   console.error(`❌ ${name}${detail === undefined ? '' : `\n   ${JSON.stringify(detail)}`}`);
 }
 
-function run(name, { size, zoom, shot }) {
+function run(name, { size, shot }) {
   const dir = path.join(BASE, 'run', name);
   fs.rmSync(dir, { recursive: true, force: true });
   for (const sub of ['data', 'profile', 'out']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
@@ -179,7 +178,7 @@ function run(name, { size, zoom, shot }) {
     KIKUSUB_DATA_DIR: path.join(dir, 'data'),
     KIKUSUB_PREFERENCES_PATH: path.join(dir, 'prefs.json'),
     KIKUSUB_SETTINGS_PATH: path.join(dir, 'settings', 'settings.json'),
-    KIKUSUB_DEV_EVAL: EVAL.replace('__ZOOM__', String(zoom)),
+    KIKUSUB_DEV_EVAL: EVAL,
   };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.NODE_OPTIONS;

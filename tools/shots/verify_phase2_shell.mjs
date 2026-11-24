@@ -257,7 +257,7 @@ function ensureMedia() {
   return seed;
 }
 
-function run(seed, dataDir, shotPath, theme = 'light', zoom = 1, size = '1440x900') {
+function run(seed, dataDir, shotPath, theme = 'light', size = '1440x900') {
   const args = ['.', '--no-sandbox', `--user-data-dir=${path.join(BASE, dataDir)}`,
     `--screenshot=${shotPath}`];
   const env = {
@@ -270,7 +270,6 @@ function run(seed, dataDir, shotPath, theme = 'light', zoom = 1, size = '1440x90
     KIKUSUB_DATA_DIR: path.join(BASE, 'data'),
     KIKUSUB_ALLOW_MULTIPLE: '1',
   };
-  if (zoom !== 1) env.KIKUSUB_ZOOM = String(zoom);
   const extra = process.env.KIKUSUB_SHOT_ELECTRON_ARGS;
   if (extra) args.push(...extra.split(' '));
   const out = execFileSync('npx', ['electron', ...args], {
@@ -430,11 +429,13 @@ check('暗色：画面本体仍有 1px 细边', /inset/.test(dark.stage.frameBor
 check('暗色：1px 分割线对舞台 ≥3:1', dark.themes.lineContrast >= 3, dark.themes);
 check('暗色：底栏文字对底栏底色 ≥4.5:1', dark.relocated.statusInk >= 4.5, dark.relocated);
 
-// ---- 6) 紧凑模式（200% 缩放 → 680px 视口）：同一套红绿灯安全区 ----
-// 触发条件不是窗口宽度而是 CSS 视口：应用没有缩放菜单，200% 缩放会让 1360 窗口
-// 变成 680×419，图标轨被媒体查询加宽到 56px——和 52px 一样窄于红绿灯右缘 71px，
-// 所以开关同样必须挂到顶栏、同样要让出 --tl-safe-x。
-const compact = run(seed, 'profile-compact', path.join(BASE, 'compact.png'), 'light', 2, '1360x838');
+// ---- 6) 紧凑模式（窗口被拉到 ≤900px）：同一套红绿灯安全区 ----
+// 触发条件是 CSS 视口宽度，不是缩放：用户把窗口拉窄到 900px 以下时，图标轨被媒体查询
+// 加宽到 56px——和 52px 一样窄于红绿灯右缘 71px，所以开关同样必须挂到顶栏、
+// 同样要让出 --tl-safe-x。
+// **刻意用真实窄窗而不是 200% 缩放**：本应用没有缩放菜单，200% 不是用户可达状态
+// （AGENTS.md 红线 14 / desktop-lifecycle §3.7.1），拿它做验收只会稳定报假红。
+const compact = run(seed, 'profile-compact', path.join(BASE, 'compact.png'), 'light', '880x838');
 // 紧凑模式下「展开」是 56px 图标轨；收起后仍是 52（`.sidebar.collapsed` 优先级更高，
 // 且 52 本来就是「16px 图标 + 两侧各 18px」的下限）。这里断言的是收起后的值，
 // 展开态的 56 由下一条量 `.sidebar` 的宽度间接覆盖（toggle 挂在顶栏、左栏无开关）。

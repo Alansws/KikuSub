@@ -1220,11 +1220,6 @@ export function toggleTheme() {
 }
 
 export function setView(view: View) {
-  // 设置已改成浮层（lib/settingsOverlay）：旧入口照样能用，转成开浮层。
-  if (view === 'settings') {
-    void import('./settingsOverlay.svelte').then((m) => m.openSettings());
-    return;
-  }
   app.view = view;
   // 检查器只属于「核对」屏（已确认的设计决定）
   // 紧凑模式里检查器是抽屉：切到核对屏不主动盖住画面，由用户点开关打开

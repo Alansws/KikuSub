@@ -5,8 +5,8 @@
  * 截图脚本的 `?tab=`、以及测试。散在组件里就会出现「页面里叫 env、脚本里叫
  * diagnostics」这种对不上的情况。
  *
- * 侧栏的 ⌘1–⌘8 主导航与这里无关：页签只在使用设置浮层时生效（2026-11-24 起
- * 设置是居中偏好浮层，见 docs/contracts/review-console.md §3.4.15）。
+ * 侧栏的 ⌘1–⌘8 主导航与这里无关：页签只在设置页内部生效（设置是独立一页，
+ * 见 docs/contracts/review-console.md §3.4.18）。
  */
 
 export type SettingsTabId = 'engines' | 'appearance' | 'ai' | 'env';

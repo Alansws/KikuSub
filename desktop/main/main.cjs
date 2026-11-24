@@ -880,8 +880,9 @@ function createWindow() {
 
   // 渲染进程就绪后把已有握手补发一次（避免 sidecar 比页面先好的竞态）
   win.webContents.on('did-finish-load', () => {
-    // 开发用：KIKUSUB_ZOOM=2 把页面放大到 200%，用于缩放健壮性截图。
-    // 这是取证开关，不是产品功能（应用没有缩放菜单）。
+    // 开发用：KIKUSUB_ZOOM=2 把页面放大到 200%，仅手动取证时用。这是取证开关，
+    // 不是产品功能（应用没有缩放菜单）。**不要拿它做验收用例**：200% 下视口只有
+    // 680×419，布局必然塌（AGENTS.md 红线 14 / desktop-lifecycle §3.7.1）。
     if (IS_DEV && process.env.KIKUSUB_ZOOM) {
       const factor = Number(process.env.KIKUSUB_ZOOM);
       if (Number.isFinite(factor) && factor > 0) {

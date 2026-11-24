@@ -2,7 +2,6 @@
   import Icon from './Icon.svelte';
   import SidebarToggle from './SidebarToggle.svelte';
   import { app, setView, type View } from '../lib/store.svelte';
-  import { openSettings, settingsOverlay } from '../lib/settingsOverlay.svelte';
   import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
   import { dual } from '../lib/dualReview.svelte';
   import appIcon from '../assets/app-icon.png';
@@ -108,8 +107,8 @@
 
   <button
     class="sb-item"
-    class:active={settingsOverlay.open}
-    onclick={() => openSettings()}
+    class:active={app.view === 'settings'}
+    onclick={() => setView('settings')}
     title="设置：引擎与模型、文件夹路径、日志与诊断（⌘,）"
     aria-label="设置（⌘,）"
   >

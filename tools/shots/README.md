@@ -106,7 +106,7 @@ node tools/shots/verify_phase2_shell.mjs
 # 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_phase2_shell.mjs
 ```
 
-40 条断言，亮 / 暗两套主题 + 紧凑模式（200% 缩放）各跑一遍，失败退出码非 0。收起态除了「开关必须移出左栏」，
+40 条断言，亮 / 暗两套主题 + 紧凑模式（880px 真实窄窗）各跑一遍，失败退出码非 0。收起态除了「开关必须移出左栏」，
 还断言它与红绿灯的**横向净空 ≥16px、中线差 ≤1px**，以及顶部 40px 是一整块底色
 （竖分割线从 y=40 起，不横穿红绿灯）。口径见
 `docs/contracts/review-console.md` §3.4.13。
@@ -254,7 +254,7 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_ai_fold
 - 没有两块可见文字（按钮 / 徽标 / 步骤 / 标题 / 说明 / 输入框）互相压住；
 - 没有可见文字元素 `scrollWidth > clientWidth`（`.set-path` 的省略号是有意的，放行）。
 
-四页 × 四种视口条件（1440×900 / 1120×800 / 1000×700 / 1440×900 + 200% 缩放），
+四页 × 三种视口条件（1440×900 / 1120×800 / 1000×700）；**不含 200% 缩放**（红线 14，见下），
 每个视口里都把折叠区展开再量。修复前会红 13 条。
 
 ```bash
@@ -263,6 +263,11 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_layout.
 ```
 
 契约口径见 [review-console.md](../../docs/contracts/review-console.md) §3.4.16。
+
+> **不看 200% 页面缩放**（2026-11-24，`AGENTS.md` 红线 14 / desktop-lifecycle §3.7.1）：
+> 应用没有缩放菜单，200% 的视口只有 680×419，布局必然塌。它**不是**验收条件，
+> 不要在脚本里加 `zoom200` / `KIKUSUB_ZOOM=2` 用例（只会稳定报假红）。
+> `KIKUSUB_ZOOM` 取证开关仍在，但要手动看一眼时才用。
 
 ## 基线
 

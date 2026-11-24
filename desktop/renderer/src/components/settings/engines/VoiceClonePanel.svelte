@@ -91,26 +91,17 @@
 
 <style>
   .feature {
-    /* 两行网格：第一行「身份 + 状态/动作」，第二行「三步流程」整宽。
-       原来是三列 `1fr | 1.5fr | auto`：浮层内容栏只有 ~573px 时，
-       auto 列（两个按钮 + 状态）吃掉 211px，剩下 274px 要分给 1fr / 1.5fr，
-       步骤列被压到 163px 而内容要 328px —— 直接溢出盖住按钮。
-       流程链单独占一整行后，525px 的内宽放得下 328px 的三步。 */
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      'id act'
-      'flow flow';
-    align-items: start;
-    gap: var(--sp-3) var(--sp-5);
-    padding: var(--sp-4) var(--sp-5);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+    align-items: center;
+    gap: var(--sp-5);
+    padding: var(--sp-5) var(--sp-6);
     border: 1px solid var(--bento-border);
     border-radius: var(--rad-card);
     background: var(--bento-bg);
     box-shadow: var(--bento-shadow);
   }
   .feature-id {
-    grid-area: id;
     display: flex;
     align-items: center;
     gap: var(--sp-3);
@@ -153,14 +144,10 @@
     background: var(--success);
   }
   .feature-flow {
-    grid-area: flow;
     display: flex;
     align-items: center;
     gap: 6px;
-    /* 三步链最长 ~328px；放不下时**自己折行**，不许溢出压到右侧按钮上。
-       （2026-11-24 实测：浮层内容栏 573px 时这一列只有 163px，第三步
-        「3 朗读日文」直接盖住了「打开模型目录」。） */
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     min-width: 0;
   }
   .step {
@@ -197,7 +184,6 @@
     flex: 0 0 auto;
   }
   .feature-act {
-    grid-area: act;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -252,15 +238,10 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
-  /* 内容栏再窄（≤520px 容器）：动作列也压不动了，整张卡改成竖排三段。 */
-  @container sheet (max-width: 520px) {
+  @media (max-width: 1120px) {
     .feature {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-areas:
-        'id'
-        'flow'
-        'act';
-      gap: var(--sp-3);
+      gap: var(--sp-4);
     }
     .feature-act {
       align-items: flex-start;

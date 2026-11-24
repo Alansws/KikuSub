@@ -29,12 +29,12 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--sp-4);
   }
-  @container sheet (max-width: 560px) {
+  @media (max-width: 1120px) {
     .theme-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
-  @container sheet (max-width: 440px) {
+  @media (max-width: 860px) {
     .theme-grid {
       grid-template-columns: minmax(0, 1fr);
     }

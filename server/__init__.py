@@ -12,6 +12,6 @@
 
 from __future__ import annotations
 
-API_VERSION = "0.7.0"
+API_VERSION = "0.7.1"
 
 __all__: list[str] = ["API_VERSION"]

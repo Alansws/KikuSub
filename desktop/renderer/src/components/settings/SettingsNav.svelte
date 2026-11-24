@@ -170,7 +170,7 @@
     font-size: var(--fs-label);
     color: var(--text-3);
   }
-  @container sheet (max-width: 560px) {
+  @media (max-width: 1120px) {
     .nav-hint {
       display: none;
     }
