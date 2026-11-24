@@ -91,11 +91,11 @@ def _seed_primary(client: TestClient) -> None:
     assert resp.status_code == 200, resp.text
 
 
-def _run_alt_job(client: TestClient, media_id: str) -> dict:
+def _run_alt_job(client: TestClient, media_id: str, **extra) -> dict:
     created = client.post(
         "/api/jobs",
         headers=AUTH,
-        json={"media_id": media_id, "alt_review": True},
+        json={"media_id": media_id, "alt_review": True, **extra},
     )
     assert created.status_code == 201, created.text
     job_id = created.json()["id"]
@@ -126,6 +126,71 @@ def test_alt_review_does_not_touch_primary(make_client, tmp_path):
     assert alt["exists"] is True
     assert alt["count"] == 2
     assert [c["text"] for c in alt["cues"]] == ["おはよう", "今日は飴だ"]
+
+
+def test_alt_review_range_merges_only_that_window(make_client, tmp_path):
+    """逐章做双源的核心路径：第二版按区间合并，A 与 B 的其它区间都不动。
+
+    2026-11-25 之前单引擎路径只允许整片写第二列，这条请求会被静默降级成
+    「写核对台」；转写页也因此把「放进双引擎复核」在区间任务里藏了起来。
+    """
+    client = make_client(
+        [SubtitleCue(0.0, 1.0, "B 前"), SubtitleCue(10.0, 11.0, "B 後")]
+    )
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    _seed_primary(client)
+    first = _run_alt_job(client, media_id)
+    assert first["status"] == "done"
+    assert first["result"]["applied"] == "alt_review"
+
+    # 第二遍只重听 4–7 秒：替身 runner 换一组只落在这段里的字幕。
+    client.app.state.jobs._runner.cues = [SubtitleCue(5.0, 6.0, "B 区間")]
+    second = _run_alt_job(client, media_id, apply="replace_range", start=4.0, end=7.0)
+    assert second["status"] == "done", second
+    assert second["result"]["applied"] == "alt_review_range"
+    # 本次只落 1 条；alt_count 是这一趟的条数，合并后的总数看 /api/alt-review
+    assert second["result"]["alt_count"] == 1
+
+    primary = client.get("/api/cues", headers=AUTH).json()["cues"]
+    assert [c["text"] for c in primary] == ["おはよう", "今日は雨だ"]
+
+    alt = client.get("/api/alt-review", headers=AUTH).json()
+    assert [(c["start"], c["text"]) for c in alt["cues"]] == [
+        (0.0, "B 前"),
+        (5.0, "B 区間"),
+        (10.0, "B 後"),
+    ]
+
+
+def test_alt_review_rejects_empty_primary(make_client, tmp_path):
+    """没有主稿就没有对照：必须 422，不许静默降级成写核对台。"""
+    client = make_client([SubtitleCue(0.0, 1.0, "x")])
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    resp = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={"media_id": media_id, "alt_review": True},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "还没有主稿" in resp.text
+    assert client.get("/api/jobs", headers=AUTH).json()["active"] is None
+
+
+def test_alt_review_rejects_append(make_client, tmp_path):
+    """B 是一份独立整表，没有「追加」这种合并语义（与 dual 同一口径）。"""
+    client = make_client([SubtitleCue(0.0, 1.0, "x")])
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    _seed_primary(client)
+    resp = client.post(
+        "/api/jobs",
+        headers=AUTH,
+        json={"media_id": media_id, "alt_review": True, "apply": "append"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "追加" in resp.text
 
 
 def test_alt_review_is_restored_per_media(make_client, tmp_path):
