@@ -75,6 +75,7 @@ from .transcribe import (
     detect_speech_stamps,
     extend_segment_onsets,
     forbidden_cut_positions,
+    gate_stamps_by_energy,
     load_audio_for_transcription,
     merge_vad_segments,
     split_text_into_cues,

@@ -279,7 +279,6 @@ def save_reshape_proposal(
     cues = session.review_cues
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕")
-    total = len(cues)
     if payload.digest and payload.digest != reshape.digest_of(cues):
         raise HTTPException(
             status_code=409,
