@@ -863,16 +863,25 @@ html[data-theme='dark'] .card {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
+  /* 折行后控件那一行离上面说明只留 6px：这里不是两个设置项之间的距离，
+     是同一个设置项内部的两段，用 --sp-4 会读成「另一条设置」。 */
+  row-gap: 6px;
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--inset-line);
   min-height: 46px;
+  /* 右侧控件放不下时**整行折行**，而不是把左边说明挤成一条 40px 宽的缝。
+     设置浮层内容栏固定 ~613px，一条「路径 + 状态 + 三个按钮」就占 380px；
+     原来的 `flex: 0 0 auto` 让控件列永不收缩，说明列被压到 46–160px，
+     正文变成 9–11 行的一根竖条（2026-11-24 用户报障「每页都显示异常」）。 */
+  flex-wrap: wrap;
 }
 .set-row:last-child {
   border-bottom: 0;
 }
 .set-row-main {
   min-width: 0;
-  flex: 1 1 auto;
+  /* 240px 是「说明还能读成句子」的下限；低于它就让控件换行，别再压这句话。 */
+  flex: 1 1 240px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -889,17 +898,30 @@ html[data-theme='dark'] .card {
   line-height: 19px;
 }
 .set-row-ctl {
-  flex: 0 0 auto;
+  /* 控件列优先保持自己的一行整宽（放不下时由 .set-row 的 wrap 把它整体换下去），
+     但允许它先收缩到 min-content 再换行，所以必须带 `min-width: 0`。 */
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   justify-content: flex-end;
+  min-width: 0;
+  /* 控件列自己也折行：按钮串（「更改… + 恢复默认 + 打开」）在窄栏或放大字号下
+     比整行还宽时，往下排而不是戳出卡片右边缘。 */
+  flex-wrap: wrap;
+  /* 折行后贴着行右边缘，与上一行说明的右边界对齐。
+     `flex-grow: 1` 让它在独占一行时铺满整行，路径左对齐到行首——
+     否则「路径 + 徽标 + 按钮」会缩成一团飘在行中间。 */
+  margin-left: auto;
 }
 .set-row-ctl.grow {
-  /* 输入框自 2026-11-24 起是固定宽度（250px）并右对齐；这一列不再抢空间，
-     否则「模型」（说明很短）会把输入框推到最右、「服务地址」却停在中间，
-     同一张卡里两个输入框的左边缘对不齐。 */
-  flex: 0 0 auto;
+  /* 「路径 / 徽标 + 动作」那一列：可以占满折行后的整宽（路径左对齐到行首、
+     按钮右对齐到行尾），但**仍然可以收缩**。原来写 `flex: 0 0 auto`（不可收缩）
+     时，路径长了这条列就要求 max-content，超过行宽后直接戳出卡片右边缘
+     （200% 缩放 / 窄浮层实测溢出 22–81px）。现在允许收缩，路径本身有
+     `overflow: hidden; text-overflow: ellipsis`，拿不到宽度就省略，
+     按钮永远留在卡内。 */
+  flex: 1 1 auto;
   min-width: 0;
 }
 .set-path {
@@ -910,6 +932,9 @@ html[data-theme='dark'] .card {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  /* 路径是这一列里唯一「可以拿不到整宽」的东西：先让它按剩余空间伸缩并省略，
+     动作按钮保持原尺寸留在卡内。 */
+  flex: 1 1 auto;
 }
 /* AI 通道的输入与状态：AiPanel（核心配置）与 AiAdvancedFold（进阶折叠区）共用。 */
 /* 2026-11-21 分级折叠时从 AiPanel 提上来，两处不再各写一份。 */
