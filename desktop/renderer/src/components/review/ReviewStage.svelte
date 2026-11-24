@@ -10,6 +10,8 @@
    * 负责 detach，视频节点换掉时必须走到它。
    */
   import ProxyGate from '../ProxyGate.svelte';
+  import Icon from '../Icon.svelte';
+  import { app } from '../../lib/store.svelte';
 
   let {
     src = '',
@@ -46,18 +48,43 @@
   } = $props();
 
   let videoEl = $state<HTMLVideoElement | null>(null);
+  /** 「关闭画面」只收起监看区，字幕 / 时间轴 / 声音都还在：视频节点不卸载，播放不中断。 */
+  let closed = $state(false);
+  let lastMediaId = '';
 
   $effect(() => {
     if (videoEl) onvideo?.(videoEl);
   });
+
+  // 换片自动打开：上一部片关掉的画面不该把下一部片也藏起来。
+  $effect(() => {
+    const id = app.media?.id ?? '';
+    if (id !== lastMediaId) {
+      lastMediaId = id;
+      closed = false;
+    }
+  });
+
+  function closeStage() {
+    videoEl?.pause();
+    closed = true;
+  }
 </script>
 
 <div class="stage">
+  {#if closed}
+    <div class="stage-closed">
+      <span class="sc-label"><Icon name="film" size={12} />监看画面已关闭</span>
+      <span class="sc-hint">声音、字幕与时间轴仍然可用</span>
+      <button class="sc-open" onclick={() => (closed = false)}>打开画面</button>
+    </div>
+  {/if}
   <!-- `.player` 只负责「这一屏给监看区多高」：默认按 16:9 自然高度，
        拖过分隔条之后由内联 height 决定（见下方 :style）。
        `.frame` 才是那个 16:9 的画面本体（1px 细边 + 极轻投影）。 -->
   <div
     class="player"
+    class:off={closed}
     style={stageHeight ? `--stage-h:${stageHeight}px` : ''}
   >
     <div class="frame">
@@ -91,6 +118,16 @@
       onstart={onstartproxy}
       onimport={onimportproxy}
     />
+    {#if src}
+      <button
+        class="frame-close"
+        onclick={closeStage}
+        title="关闭监看画面（声音与字幕继续可用）"
+        aria-label="关闭监看画面"
+      >
+        <Icon name="close" size={11} />
+      </button>
+    {/if}
     </div>
   </div>
 
@@ -98,6 +135,7 @@
        双击回到默认（16:9 自然高度）。 -->
   <button
     class="splitter"
+    class:off={closed}
     aria-label="调整监看区高度（双击还原）"
     title="拖动调整监看区高度 · 双击还原"
     onpointerdown={(e) => {
@@ -134,6 +172,49 @@
     display: flex;
     flex-direction: column;
     background: var(--stage-bg);
+  }
+  /* 关闭画面后的细条：收起画面但不丢声音 / 时间轴；换片时自动恢复。 */
+  .stage-closed {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 26px;
+    border-bottom: 1px solid var(--stage-line);
+    color: var(--ink-2);
+    font-size: 12px;
+  }
+  .sc-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .sc-hint {
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sc-open {
+    margin-left: auto;
+    height: 22px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    cursor: default;
+  }
+  .sc-open:hover {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .player.off,
+  .splitter.off {
+    display: none;
   }
   /* `.player` = 这一屏分给监看区的高度（默认 = 16:9 自然高度；拖高后 = 内联高度）。
      它不再有底色、圆角或外边距 —— 视觉边界全部交给里面的 `.frame`。 */
@@ -184,6 +265,31 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+  .frame-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 3;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 50%;
+    background: rgba(10, 12, 16, 0.52);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    cursor: default;
+    opacity: 0.72;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: opacity var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+  }
+  .frame-close:hover,
+  .frame-close:focus-visible {
+    opacity: 1;
+    background: rgba(10, 12, 16, 0.78);
   }
   video {
     width: 100%;

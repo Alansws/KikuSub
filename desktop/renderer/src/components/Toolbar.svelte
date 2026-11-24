@@ -283,12 +283,14 @@
             class="menu-item"
             role="menuitem"
             onclick={importProxy}
-            disabled={jobBusy || Boolean(app.media?.proxy_ready) || !app.media}
-            title="选择已经压好的代理文件，直接挂到当前媒体，不再重新压制"
+            disabled={jobBusy || !app.media}
+            title={app.media?.proxy_ready
+              ? '选择另一份已经压好的代理文件，替换当前监看代理（不再重新压制）'
+              : '选择已经压好的代理文件，直接挂到当前媒体，不再重新压制'}
           >
             <Icon name="tray" size={12} />
             <span class="mi-label">导入代理…</span>
-            <span class="mi-sub">已有文件</span>
+            <span class="mi-sub">{app.media?.proxy_ready ? '替换现有' : '已有文件'}</span>
           </button>
 
           <div class="mi-sep" role="separator"></div>

@@ -37,6 +37,22 @@ export function pickRulerStep(span: number): number {
   return 900;
 }
 
+/** 相邻刻度标签之间至少留出的空隙（px），防止右端被夹回来后叠成一团。 */
+export const RULER_LABEL_GAP = 6;
+
+/**
+ * 一个刻度标签的 x 坐标（纯函数，方便单测）。
+ *
+ * 默认放在刻度右侧 `+3`；右侧放不下时，把整个标签向左夹到画布内，
+ * 而不是移到刻度左边（旧实现 `x - lw - 4` 会让最后一个标签压到前一个上，
+ * 2026-11-25 用户截图里「165:00」和「180:00」叠在一起就是这条）。
+ */
+export function rulerLabelX(tickX: number, labelWidth: number, width: number): number {
+  const preferred = tickX + 3;
+  const clamped = Math.min(preferred, width - 2 - labelWidth);
+  return Math.max(0, clamped);
+}
+
 /** 刻度标签：小于 1 秒时显示十分之一秒，避免出现两位小数。 */
 export function rulerLabel(t: number, step: number): string {
   if (step < 1) {
@@ -71,21 +87,23 @@ export function paintRuler(ctx: CanvasRenderingContext2D, input: RulerInput) {
   ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
   ctx.textBaseline = 'top';
   const first = Math.ceil(input.viewStart / step) * step;
+  // 已画标签的右边界：夹回来的最后一个标签不许再压到前一个上。
+  let lastLabelRight = -Infinity;
   for (let t = first; t <= input.viewStart + input.viewSpan; t += step) {
     const x = Math.round(input.xOf(t)) + 0.5;
     const major = Math.abs(t / (step * 5) - Math.round(t / (step * 5))) < 1e-6;
     ctx.fillStyle = major ? input.separatorStrong : input.separator;
     ctx.fillRect(x, 0, 1, major ? 7 : 4);
     if (major || step >= 5) {
-      ctx.fillStyle = input.text;
       const label = rulerLabel(t, step);
       const lw = ctx.measureText(label).width;
-      // 最右一格的标签别被画布裁掉：贴着右边界时向左放
-      ctx.fillText(
-        label,
-        x + 4 + lw > input.width ? Math.max(0, x - lw - 4) : x + 3,
-        1,
-      );
+      const lx = rulerLabelX(x, lw, input.width);
+      // 太挤就只画刻度不画字：宁可少一个标签，也不要出现叠字。
+      if (lx >= lastLabelRight + RULER_LABEL_GAP) {
+        ctx.fillStyle = input.text;
+        ctx.fillText(label, lx, 1);
+        lastLabelRight = lx + lw;
+      }
     }
   }
   ctx.fillStyle = input.separator;

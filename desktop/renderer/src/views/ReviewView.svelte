@@ -244,7 +244,7 @@
 
   // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
   const src = $derived(
-    app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready)) : '',
+    app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready), app.media.proxy_version) : '',
   );
   const proxyBusy = $derived(
     app.jobKind === 'proxy' &&

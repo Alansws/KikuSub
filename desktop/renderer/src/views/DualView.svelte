@@ -37,7 +37,7 @@
 
   // 行内试听与核对台用同一份流：有代理走代理（Chromium 解不开 MKV / HEVC）。
   const mediaSrc = $derived(
-    app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready)) : '',
+    app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready), app.media.proxy_version) : '',
   );
 
   const filteredRows = $derived(

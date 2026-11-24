@@ -1518,11 +1518,8 @@ export async function importProxyFromFile() {
     toast('已经有一个代理任务在跑，等它完成或先打断', 'warn');
     return;
   }
-  if (app.media.proxy_ready) {
-    toast('当前媒体已经有代理，无需重复导入', 'warn');
-    return;
-  }
   const mediaId = app.media.id;
+  const replacing = app.media.proxy_ready;
   const file = await window.kikusub.pickMedia();
   if (!file) return;
   app.busy = true;
@@ -1530,7 +1527,7 @@ export async function importProxyFromFile() {
     logEvent('info', 'proxy-import', file);
     await api.attachProxy(mediaId, file);
     await refreshMedia();
-    toast('代理已导入，监看画面会切换到该文件');
+    toast(replacing ? '已替换监看代理，画面已切换' : '代理已导入，监看画面会切换到该文件');
   } catch (err) {
     toast(`导入代理失败：${(err as Error).message}`, 'error');
   } finally {

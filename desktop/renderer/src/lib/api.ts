@@ -25,6 +25,8 @@ export interface MediaInfo {
   needs_proxy: boolean;
   proxy_reason: string;
   proxy_ready: boolean;
+  /** 代理文件版本（大小 + mtime）；重新导入代理后 URL 会带上它来避开缓存。 */
+  proxy_version?: string;
 }
 
 export interface EngineInfo {
@@ -943,9 +945,13 @@ if (typeof window !== 'undefined') {
  * `proxy=true` 时走 480p 监看代理——Chromium 解不开 MKV / HEVC，
  * 原片直接喂给 `<video>` 只会黑屏。
  */
-export function mediaUrl(mediaId: string, proxy = false) {
+export function mediaUrl(mediaId: string, proxy = false, version = '') {
   const q = new URLSearchParams({ token: TOKEN });
-  if (proxy) q.set('proxy', '1');
+  if (proxy) {
+    q.set('proxy', '1');
+    // 重新导入代理后文件内容变了但路径没变；带上版本号让 <video> 真正换源。
+    if (version) q.set('v', version);
+  }
   return `${BASE}/media/${mediaId}?${q}`;
 }
 
