@@ -58,6 +58,7 @@
     tts,
   } from '../lib/store.svelte';
   import { chapters, loadChapters, seekToMark } from '../lib/chapters.svelte';
+  import { dual } from '../lib/dualReview.svelte';
   import { jobBusy } from '../lib/jobState';
   import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
   import { formatDuration, tc, tcShort } from '../lib/time';
@@ -122,6 +123,14 @@
   import { claimTranslationDefault, planInitialReviewView } from '../lib/reviewStart';
   import { revealScrollTop, rowHeightFor, virtualWindow } from '../lib/reviewTable';
   import { pendingItems, rowStatuses } from '../lib/reviewRowStatus';
+  import {
+    clampStageHeight,
+    mediaResolution,
+    proxyLabel,
+    readStageHeight,
+    saveStageHeight,
+    stageMaxHeight,
+  } from '../lib/stagePrefs';
 
   let { engine = 'whisper' }: { engine?: string } = $props();
 
@@ -144,6 +153,19 @@
   let viewH = $state(0);
   let waveW = $state(0);
   // 波形高度：默认 80（D 稿），拖底部把手可调并记住。2026-11-21 曾随字幕轨道抬到 88，轨道回到 17 后一并回到 80。
+  // 监看区高度（0 = 16:9 自然高度）。偏好与纯计算都在 lib/stagePrefs。
+  let stageHeight = $state(readStageHeight());
+  const maxStageHeight = $derived(stageMaxHeight(typeof window !== 'undefined' ? window.innerHeight : 900));
+
+  function setStageHeight(h: number) {
+    const next = clampStageHeight(h, typeof window !== 'undefined' ? window.innerHeight : 900);
+    stageHeight = next;
+    saveStageHeight(next);
+  }
+
+  const stageProxyLabel = $derived(proxyLabel(app.media));
+  const stageResolution = $derived(mediaResolution(app.media));
+
   const savedHeight = Number(localStorage.getItem('kikusub.waveHeight') || 0);
   let waveHeight = $state(Math.max(72, Math.min(300, savedHeight || 80)));
 
@@ -2084,6 +2106,13 @@
     <ReviewStage
       {src}
       {captionLines}
+      {stageHeight}
+      maxStageHeight={maxStageHeight}
+      proxyLabel={stageProxyLabel}
+      resolution={stageResolution}
+      fps={app.media?.video_fps ?? 0}
+      bDiff={dual.exists ? (dual.stats?.badge ?? 0) : null}
+      ondragbar={(h) => setStageHeight(h)}
       gate={videoGate}
       proxyReason={app.media?.proxy_reason ?? ''}
       onvideo={(node) => (video = node)}
@@ -2410,8 +2439,9 @@
     flex: 0 0 auto;
   }
 
+  /* 监看舞台通栏（2026-11-24 Phase 2）：不再留左右 26px 的亮底，暗底一直铺到窗口边，
+     下面再接走带与时间轴（它们仍有自己的内边距）。 */
   .stage {
-    padding: 18px 26px 0;
     display: flex;
     flex-direction: column;
     flex: 0 0 auto;

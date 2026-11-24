@@ -121,11 +121,10 @@
     <div class="tp-knob" style="left:{progressPct}%"></div>
   </div>
   <span class="tp-dur">{formatDuration(duration)}</span>
-</div>
 
-<!-- 第二行只放「看时间轴」的工具：缩放、全景、聚焦、跟随。
-     润色 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
-<div class="tl-tools">
+  <!-- 缩放 / 全景 / 聚焦 / 跟随（2026-11-24 Phase 2：与播放行合并成一条 34px）。
+       润色 / 导出在顶栏，代理与原文 / 译文轨的导入删除在「⋯」里。 -->
+  <div class="tl-sep"></div>
   <div class="zoom-group">
     <button class="zbtn" onclick={() => onZoomAt(time, 1.5)} title="缩小波形" aria-label="缩小波形">
       <Icon name="minus" size={12} />
@@ -182,13 +181,17 @@
 </div>
 
 <style>
+  /* 单行走带条 34px（2026-11-24 Phase 2）：左 = 播放 + 等宽时间码 + 进度 + 时长，
+     右 = 缩放 / 全景 / 聚焦 / 跟随。原来拆两行（32 + 30 + 间距）白吃掉 35px 垂直高度。 */
   .transport {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 9px;
-    height: 32px;
-    flex: 0 0 32px;
-    margin-top: 10px;
+    height: 34px;
+    flex: 0 0 34px;
+    margin-top: 6px;
+    padding: 0 26px;
   }
   .playbtn {
     width: 24px;
@@ -293,14 +296,12 @@
   }
 
   /* 时间线第二行：只放时间轴工具 */
-  .tl-tools {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    height: 30px;
-    flex: 0 0 30px;
-    margin-top: 3px;
+  /* 播放行与缩放行之间的竖分隔线：比一整行高度便宜得多 */
+  .tl-sep {
+    width: 1px;
+    height: 14px;
+    flex: 0 0 1px;
+    background: var(--separator);
   }
   .zoom-group {
     display: flex;

@@ -51,9 +51,12 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              含 16 条单测，顺手修了 NaN 输入会算出空窗口的 bug），再把整块表格
 #              （表头 + 虚拟列表 + 查找栏）搬到 components/review/ReviewTable.svelte。
 #              两步都逐像素比对过（0.0000% 差异）。3780 → 3158 → 2644。
+# 2026-11-24（Phase 2 暗底舞台）：加「可拖高的监看区」时先抽 lib/stagePrefs.ts
+#              （高度偏好 + 上限 + 状态条文案，三条纯函数），再接线的；净 +30 行
+#              是舞台状态条与分隔条接线本身，预算按实测值 2645 记。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 2615,
+    "views/ReviewView.svelte": 2645,
 }
 
 
