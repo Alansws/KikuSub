@@ -9,6 +9,7 @@
    */
   import Icon from '../components/Icon.svelte';
   import { app, focusRange, jumpToCue, setView, toast } from '../lib/store.svelte';
+  import { chooseTarget } from '../lib/transcribeTask.svelte';
   import { mediaUrl } from '../lib/api';
   import { audition, auditionRange, stopAudition } from '../lib/audition.svelte';
   import { mediaUnplayable } from '../lib/videoFallback';
@@ -70,6 +71,12 @@
     const when = at ? `${altIsImported() ? '导入于' : '生成于'} ${at}` : '';
     return [name, when].filter(Boolean).join(' · ');
   });
+
+  /** 空态 CTA：去转写页时顺手把产出切到「第二版」，回来只剩选引擎和范围。 */
+  function goTranscribe(): void {
+    if (app.cues.length) chooseTarget('alt');
+    setView('transcribe');
+  }
 
   async function importB() {
     moreOpen = false;
@@ -295,7 +302,7 @@
             {/if}
           </div>
         {:else}
-          <button class="btn ghost" onclick={() => setView('transcribe')}>去转写页</button>
+          <button class="btn ghost" onclick={goTranscribe}>去转写页</button>
         {/if}
       </div>
     </div>
@@ -372,12 +379,12 @@
       <span class="blank-icon"><Icon name="rows" size={24} /></span>
       <div class="et">还没有第二版字幕</div>
       <div class="es">
-        在转写页换一个引擎（或同一引擎换一组参数）再整片转一次，结果选「放进双引擎复核」；
-        也可以把工作流里已经做好的另一版字幕直接导入这里。第二版只做只读对照，
-        按当前媒体自动保存，切走再切回来仍然在。
+        在转写页把产出选成「第二版」，换一个引擎跑同一段（整片或某一章区间都行），
+        结果只写这里、核对台一个字不动；也可以把已经做好的另一版字幕直接导入。
+        第二版按当前媒体自动保存，切走再切回来仍然在。
       </div>
       <div class="ea">
-        <button class="btn primary" onclick={() => setView('transcribe')}>去转写页</button>
+        <button class="btn primary" onclick={goTranscribe}>去转写页生成第二版</button>
         <button class="btn ghost" onclick={importB}>导入已有字幕作为 B 版…</button>
       </div>
     </div>

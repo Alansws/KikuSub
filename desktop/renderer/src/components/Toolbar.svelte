@@ -122,7 +122,9 @@
       case 'transcribe':
         return app.job?.status === 'running'
           ? `转写中 ${app.job.percent}%`
-          : `${app.cues.length} 条 · 待转写`;
+          : app.cues.length
+            ? `${app.cues.length} 条主稿`
+            : '待转写';
       case 'review':
         return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
       case 'dual':

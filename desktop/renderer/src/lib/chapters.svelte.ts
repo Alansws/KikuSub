@@ -224,6 +224,8 @@ export function useChapterAsTranscribe(mark: {
     start: tcShort(mark.start),
     end: tcShort(mark.end),
     nonce: (app.slice?.nonce ?? 0) + 1,
+    origin: 'chapter',
+    label: mark.title,
   };
   app.view = 'transcribe';
   app.inspectorOpen = false;

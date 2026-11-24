@@ -161,7 +161,11 @@ export const app = $state({
   },
 
   /** 从核对台「同步到转写页」带过去的区间；nonce 变一次，转写页就填一次。 */
-  slice: null as null | { start: string; end: string; nonce: number },
+  slice: null as null | {
+    start: string; end: string; nonce: number;
+    /** 来源：章节行 / 核对台选区；转写页据此显示「来源」而不是两个裸时间。 */
+    origin?: 'chapter' | 'review'; label?: string;
+  },
 
   // 提示
   toast: '',
@@ -2513,7 +2517,9 @@ export async function startTranscribe(
       end,
       keep_absolute_timeline: opts.absoluteTimeline,
       apply,
-      alt_review: !dualEngine && !isRange && Boolean(opts.altReview),
+      // 第二版不再限定整片：服务端 `set_alt_review(replace_range=…)` 会按区间合并
+      // （逐章做双源的核心路径），这里只把「写第二列」的意图透传过去。
+      alt_review: !dualEngine && Boolean(opts.altReview),
       // 参数键就是 core.params 的规格键，服务端负责补默认 / 夹区间
       params: tuning.values[opts.engine] ?? {},
     });

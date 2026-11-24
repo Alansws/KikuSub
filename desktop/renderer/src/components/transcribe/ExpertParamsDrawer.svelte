@@ -32,6 +32,16 @@
     const entry = tuning.schema?.find((item) => item.key === engine);
     return (entry?.groups ?? []).reduce((sum, group) => sum + (group.params?.length ?? 0), 0);
   });
+  /**
+   * 与默认值不同的参数项数。用户最常踩的坑是「上一轮调过阈值、下一轮忘了」，
+   * 折叠态直接把「已改 N 项」露在标题上，不用展开也知道当前引擎不是默认参数。
+   */
+  const changedCount = $derived.by(() => {
+    const entry = tuning.schema?.find((item) => item.key === engine);
+    const current = tuning.values[engine] ?? {};
+    if (!entry?.defaults) return 0;
+    return Object.entries(current).filter(([key, value]) => entry.defaults[key] !== value).length;
+  });
 
   // 换引擎时清掉上一套引擎的选中项；参数面板本身按引擎分开存，不互相污染。
   // 用普通变量而不是 $state：它只记录「上一次看到的引擎」，不参与渲染。
@@ -86,11 +96,11 @@
     </span>
     <span class="expert-meta">
       {#if deletablePreset}
-        当前预设：{deletablePreset}
+        当前预设：{deletablePreset}{#if changedCount} · 已改 {changedCount} 项{/if}
       {:else if open}
         收合
       {:else}
-        {paramCount ? `${paramCount} 项参数` : '按需调整'} · 展开
+        {paramCount ? `${paramCount} 项参数` : '按需调整'}{#if changedCount} · 已改 {changedCount} 项{/if} · 展开
       {/if}
       <span class="chev" class:open aria-hidden="true">
         <Icon name="chevron-right" size={11} />

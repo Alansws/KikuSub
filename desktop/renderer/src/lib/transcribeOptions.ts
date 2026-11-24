@@ -13,7 +13,10 @@ export interface TranscribeOptions {
   absoluteTimeline: boolean;
   /** 结果如何进入核对台；档位与文案见 `lib/applyMode.ts`。区间默认 `replace_range`。 */
   apply?: 'replace' | 'append' | 'replace_range';
-  /** 整片且核对台非空时：true = 写进双引擎复核第二列，不覆盖核对台。 */
+  /**
+   * true = 写进双引擎复核第二列，不覆盖核对台。要求核对台非空；
+   * 整片替换整列，区间（apply=replace_range）只替换该区间内的 B。
+   */
   altReview?: boolean;
   /** 双引擎顺序协同的副引擎；设置后本次任务 kind=dual。 */
   dualEngine?: string;
