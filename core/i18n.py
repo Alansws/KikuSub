@@ -87,3 +87,48 @@ def stale_indices(cues: list[SubtitleCue], base: list[str]) -> list[int]:
         if index >= len(base) or base[index] != cue.text:
             stale.append(index)
     return stale
+
+
+# ---------------------------------------------------------------------------
+# 「只动了句读」的原文改动
+#
+# 批量清理标点只删 / 换 句读与空白，不碰任何字。如果拿这种改动去算 stale，整条
+# 译文轨会一夜之间全是「原文已改」——用户看着几十条其实没问题的提示，只会不再
+# 相信这个提示（2026-11-25 用户报障）。所以「标点等价」必须单独识别。
+#
+# 字符集与桌面端 `lib/punctuation.ts` 的清理集合保持一致：只有这里列出的符号
+# 与空白不算语义；加字、删字、改假名 / 汉字 / 数字一定会判定成「原文改过」。
+# ---------------------------------------------------------------------------
+
+PUNCT_NOISE = "、，。．｡､,.…⋯‥"
+
+
+def punctuation_signature(text: str) -> str:
+    """去掉句读与空白后的字符序列；两条文本相等 = 只动了标点。"""
+    return "".join(
+        ch for ch in str(text or "") if ch not in PUNCT_NOISE and not ch.isspace()
+    )
+
+
+def is_punctuation_only_change(old: str, new: str) -> bool:
+    """``old`` → ``new`` 是否只是标点 / 空白的变化（内容一字未动）。"""
+    if old == new:
+        return False
+    return punctuation_signature(old) == punctuation_signature(new)
+
+
+def rebase_punctuation_base(cues: list[SubtitleCue], base: list[str]) -> tuple[list[str], list[int]]:
+    """把「只动句读」的新原文同步进译文 base。
+
+    返回 ``(新 base, 被对齐的下标)``。**纯函数**：调用方决定写回哪条轨。
+    用途是让「清理标点」之后的译文保持「全部同步」，而不是整片标红。
+    """
+    out = list(base)
+    rebased: list[int] = []
+    for index, cue in enumerate(cues):
+        if index >= len(out):
+            break
+        if is_punctuation_only_change(out[index], cue.text):
+            out[index] = cue.text
+            rebased.append(index)
+    return out, rebased

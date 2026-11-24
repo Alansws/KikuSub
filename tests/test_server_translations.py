@@ -594,3 +594,65 @@ def test_replace_translation_texts_rejects_count_and_missing_track(ctx):
         json={"texts": ["a", "b", "c"]},
     )
     assert missing.status_code == 404
+
+
+# ------------------------------------------------- 只动句读的改动不算过期（2026-11-25）
+
+
+def test_punctuation_clean_rebases_base_and_clears_stale(ctx):
+    """批量清理标点（replace-all 同一条路）后，译文轨必须仍是「全部同步」。"""
+    client, _ = ctx
+    # 真实顺序：带句读的原文 → 生成译文（base 带句读）→ 清理标点
+    noisy = [
+        {"start": 0.0, "end": 1.0, "text": "…おはよう"},
+        {"start": 1.0, "end": 2.0, "text": "今日は雨だ。"},
+        {"start": 2.0, "end": 3.0, "text": "またね…"},
+    ]
+    assert client.post("/api/cues", headers=AUTH, json={"cues": noisy}).status_code == 200
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+
+    res = client.post(
+        "/api/cues/replace-all",
+        headers=AUTH,
+        json={"label": "清理标点（3 条）", "cues": CUES},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["rebased"] == {"zh-Hans": [0, 1, 2]}
+
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["stale"] == []
+    assert track["base"] == TEXTS
+    # 译文本身一个字没动
+    assert track["texts"] == ZH
+
+
+def test_single_punctuation_edit_rebases_only_that_entry(ctx):
+    client, _ = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    res = client.patch("/api/cues/0", headers=AUTH, json={"text": "おはよう。"})
+    assert res.status_code == 200
+    assert res.json()["rebased"] == {"zh-Hans": [0]}
+    assert client.get("/api/translations", headers=AUTH).json()["items"][0]["stale"] == []
+
+    # 真改字仍然过期，而且不会有 rebased
+    res = client.patch("/api/cues/1", headers=AUTH, json={"text": "今日は雪だ"})
+    assert "rebased" not in res.json()
+    assert client.get("/api/translations", headers=AUTH).json()["items"][0]["stale"] == [1]
+
+
+def test_draft_restore_clears_legacy_punctuation_noise(ctx):
+    """上一版留下的「只动标点」的 base，重开工程时要自己归零。"""
+    client, tmp_path = ctx
+    client.post("/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ZH})
+    client.post("/api/cues/draft", headers=AUTH)
+    # 直接改盘上的 i18n 文件，模拟旧版本的 base（原文后来被清过标点）
+    i18n_path = next(tmp_path.glob("*.autosave_draft.i18n.json"))
+    payload = json.loads(i18n_path.read_text(encoding="utf-8"))
+    payload["tracks"]["zh-Hans"]["base"] = ["…おはよう", "今日は雨だ。", "またね…"]
+    i18n_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    res = client.post("/api/cues/draft/restore", headers=AUTH)
+    assert res.status_code == 200, res.text
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["stale"] == []
+    assert track["base"] == TEXTS

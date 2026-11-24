@@ -116,3 +116,43 @@ def test_deletion_shifts_everything_after_it_to_stale():
     base = [c.text for c in CUES]
     remaining = [CUES[0], CUES[2]]
     assert stale_indices(remaining, base) == [1]
+
+
+# --------------------------------------------------- 只动句读的原文改动（2026-11-25）
+
+
+def test_punctuation_signature_drops_only_noise():
+    from core.i18n import is_punctuation_only_change, punctuation_signature
+
+    # 清理标点会删 / 换的字符与空白都不算语义
+    assert punctuation_signature("…こんにちは、") == "こんにちは"
+    assert punctuation_signature("じゃあ　もう") == "じゃあもう"
+    assert is_punctuation_only_change("…こんにちは", "こんにちは")
+    assert is_punctuation_only_change("じゃあ、もう", "じゃあ　もう")
+    assert is_punctuation_only_change("吸って…。", "吸って")
+    # 加字 / 改字 / 去掉问号都算原文真的改了
+    assert not is_punctuation_only_change("今日は雨", "今日は雪")
+    assert not is_punctuation_only_change("行く？", "行く")
+    assert not is_punctuation_only_change("ああ", "ああも")
+
+
+def test_rebase_punctuation_base_only_touches_noise():
+    from core.i18n import rebase_punctuation_base
+
+    cues = [
+        SubtitleCue(0.0, 1.0, "こんにちは"),
+        SubtitleCue(1.0, 2.0, "今日は雪だ"),
+        SubtitleCue(2.0, 3.0, "またね"),
+    ]
+    base = ["…こんにちは", "今日は雨だ", "またね"]
+    out, rebased = rebase_punctuation_base(cues, base)
+    assert rebased == [0]
+    assert out == ["こんにちは", "今日は雨だ", "またね"]
+
+
+def test_rebase_punctuation_base_survives_short_base():
+    from core.i18n import rebase_punctuation_base
+
+    out, rebased = rebase_punctuation_base(CUES, ["…おはよう"])
+    assert rebased == [0]
+    assert out == ["おはよう"]

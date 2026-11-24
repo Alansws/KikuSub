@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.chapters import ChapterMark, load_marks, normalize_marks, save_marks
+from core.i18n import rebase_punctuation_base
 from core.subtitles import SubtitleCue, join_cue_texts
 from core.textio import write_text_atomic
 
@@ -509,7 +510,7 @@ class Session:
         *,
         source: dict | None = None,
         record: bool = True,
-    ) -> None:
+    ) -> dict[str, list[int]]:
         """整表替换；``source`` 非空时同步改写这张表的来源。
 
         来源必须和字幕一起进历史：先导入 A、再导入 B、再 ⌘Z 时，回退的是
@@ -517,7 +518,12 @@ class Session:
         普通编辑（AI 应用、查找替换）不传 ``source``，保留原来源。
 
         条数变了的整表替换会让任何旧译文轨无法逐条对齐，这里统一丢弃错位的轨；
-        条数没变的替换保留轨（内容变化由 stale 计算如实反映）。
+        条数没变的替换保留轨（内容变化由 stale 计算如实反映）。**只动句读**的
+        改动不算原文过期，会在压历史之前把 base 静默对齐（见
+        :func:`core.i18n.rebase_punctuation_base`）。
+
+        返回 ``{语种: 被对齐的下标}``，路由把它放进快照，渲染层据此就地更新本地
+        base（不能靠重拉全量轨：那会把正在编辑的输入框回灌）。
         """
         with self.lock:
             self._ensure_baseline()
@@ -525,10 +531,12 @@ class Session:
             if source is not None:
                 self.review_source = dict(source)
             self._drop_misaligned_translations()
+            rebased = self.rebase_translation_base()
             if record:
                 self._record(label)
             else:
                 self.updated_at = time.time()
+            return rebased
 
     def replace_range(
         self,
@@ -635,6 +643,21 @@ class Session:
             shifted.append(lang)
         return shifted
 
+    def rebase_translation_base(self) -> dict[str, list[int]]:
+        """把「只动句读」的原文同步进各语种译文 base，返回被对齐的下标。
+
+        这不是一次编辑：不压历史、不改 `updated_at`。清理标点（整轨 replace-all）
+        与手工改一条都走这里；恢复草稿后也调一次，把上一版留下的标点噪声清掉。
+        """
+        out: dict[str, list[int]] = {}
+        with self.lock:
+            for lang, track in self.translations.items():
+                base, rebased = rebase_punctuation_base(self.review_cues, track.base)
+                if rebased:
+                    track.base = base
+                    out[lang] = rebased
+        return out
+
     def _drop_misaligned_translations(self) -> None:
         """删掉条数已与字幕对不上的译文轨，绝不让错位的轨继续存在。"""
         count = len(self.review_cues)
@@ -668,14 +691,19 @@ class Session:
         end: float,
         text: str,
         label: str = "",
-    ) -> bool:
+    ) -> dict[str, list[int]] | None:
+        """改一条字幕。越界返回 ``None``；否则返回被静默对齐的译文 base。
+
+        只改标点 / 空白时不算「原文改了」：base 跟着更新，译文的过期提示不弹。
+        """
         with self.lock:
             if not 0 <= index < len(self.review_cues):
-                return False
+                return None
             self._ensure_baseline()
             self.review_cues[index] = SubtitleCue(start=start, end=end, text=text)
+            rebased = self.rebase_translation_base()
             self._record(label or f"修改第 {index + 1} 条")
-            return True
+            return rebased
 
     def delete_cue(self, index: int, label: str = "") -> bool:
         """删除一条：译文轨同步删掉同一位置，后面的译文不会整体前移一条。"""
