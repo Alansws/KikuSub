@@ -33,6 +33,7 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import { applyRebasedBases } from './translationBase';
 import type { SliceRequest } from './transcribeSlice';
 import {
   dualSelectionError,
@@ -231,6 +232,8 @@ export function applyHistoryMeta(data: CueSnapshot) {
 export function applyCueSnapshot(data: CueSnapshot, opts: { applyClientState?: boolean } = {}) {
   app.cues = data.cues;
   app.cuesRevision += 1;
+  // 只动句读的改动：服务端已对齐译文 base，本地就地跟着改（不 bump revision）。
+  applyRebasedBases(app.translations, app.cues, data.rebased);
   app.canUndo = data.can_undo;
   app.canRedo = data.can_redo;
   // 来源与字幕一起回滚：导入字幕 / 撤销 / 历史跳转都会带新的来源。

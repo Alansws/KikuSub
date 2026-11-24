@@ -334,6 +334,11 @@ export interface CueSnapshot {
   /** 只有撤销 / 重做 / 历史跳转才带：把导出设置与 AI 草稿一起回滚。 */
   export_ui?: Record<string, any>;
   ai_draft?: Record<string, any>;
+  /**
+   * 「只动了句读」的原文改动被服务端静默对齐的译文下标：`{语种: [i…]}`。
+   * 前端只就地改本地 base，不重拉译文轨（避免回灌正在编辑的输入框）。
+   */
+  rebased?: Record<string, number[]>;
 }
 
 /** 历史时间线上的一步。past=可点回去；current=当前状态；undone=可重做。 */
