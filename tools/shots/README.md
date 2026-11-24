@@ -93,6 +93,21 @@ node tools/shots/verify_reshape_flow.mjs --scenario stale
 同样走 `--screenshot` 静默路径（透明窗口 + `capturePage` + `app.exit`，桌面上不出现），
 断言失败退出码非 0。契约口径见 `docs/contracts/ai-proposal.md` §3.7.6。
 
+## 外壳几何与主题对比度（Phase 2）
+
+核对台改过外壳之后，有三件事既有脚本看不到：**52px 收起态与系统红绿灯的安全区**、
+**暗底监看舞台的比例与状态条**、**1px 分割线 / 状态条文字的对比度**。
+红绿灯是原生绘制、DOM 读不到，所以脚本量的是渲染层能负责的那一半（开关必须移出左栏、
+品牌图标与第一个导航项的位置）；对比度则按 CSS 令牌**实算** WCAG 比值，不靠肉眼。
+
+```bash
+node tools/shots/verify_phase2_shell.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_phase2_shell.mjs
+```
+
+18 条断言，亮 / 暗两套主题各跑一遍，失败退出码非 0。口径见
+`docs/contracts/review-console.md` §3.4.13。
+
 ## 清理标点回归
 
 用户报障过的两类行（2026-11-17「句中顿号被换成空格」「行尾省略号点了不动」）有专门的
