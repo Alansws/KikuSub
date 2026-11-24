@@ -9,7 +9,7 @@
    * `toggleSidebar()`，状态只有一个。
    */
   import Icon from './Icon.svelte';
-  import { app, toggleSidebar } from '../lib/store.svelte';
+  import { sidebarPrefs, toggleSidebar } from '../lib/sidebarPrefs.svelte';
 
   let { floating = false }: { floating?: boolean } = $props();
 </script>
@@ -18,11 +18,11 @@
   class="sb-toggle"
   class:floating
   onclick={toggleSidebar}
-  aria-expanded={!app.sidebarCollapsed}
-  title={app.sidebarCollapsed ? '展开侧边栏（⌃⌘S）' : '收起侧边栏（⌃⌘S）'}
-  aria-label={app.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+  aria-expanded={!sidebarPrefs.collapsed}
+  title={sidebarPrefs.collapsed ? '展开侧边栏（⌃⌘S）' : '收起侧边栏（⌃⌘S）'}
+  aria-label={sidebarPrefs.collapsed ? '展开侧边栏' : '收起侧边栏'}
 >
-  <Icon name={app.sidebarCollapsed ? 'chevron-right' : 'chevron-left'} size={12} />
+  <Icon name={sidebarPrefs.collapsed ? 'chevron-right' : 'chevron-left'} size={12} />
 </button>
 
 <style>

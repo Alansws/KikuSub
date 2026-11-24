@@ -2,6 +2,7 @@
   import Icon from './Icon.svelte';
   import EngineSwitch from './EngineSwitch.svelte';
   import SidebarToggle from './SidebarToggle.svelte';
+  import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
   import PunctCleanPanel from './PunctCleanPanel.svelte';
   import {
     app,
@@ -149,7 +150,7 @@
 <header class="toolbar">
   <!-- 侧栏收起后，它的展开开关挂到顶栏最左（52px 里红绿灯占掉 x19–71，
      放左栏会压在红绿灯上）。展开态由左栏自己那一颗负责，这里不重复。 -->
-  {#if app.sidebarCollapsed}
+  {#if sidebarPrefs.collapsed}
     <SidebarToggle />
   {/if}
   <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>

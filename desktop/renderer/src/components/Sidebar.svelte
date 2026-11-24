@@ -2,6 +2,7 @@
   import Icon from './Icon.svelte';
   import SidebarToggle from './SidebarToggle.svelte';
   import { app, setView, type View } from '../lib/store.svelte';
+  import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
   import { dual } from '../lib/dualReview.svelte';
   import appIcon from '../assets/app-icon.png';
 
@@ -51,10 +52,10 @@
   ];
 </script>
 
-<aside class="sidebar" class:collapsed={app.sidebarCollapsed}>
+<aside class="sidebar" class:collapsed={sidebarPrefs.collapsed}>
   <!-- 展开态的折叠开关贴在红绿灯留白区右侧；收起态它移到顶栏
        （52px 里红绿灯占掉 x19–71，开关放在这里会被压在红绿灯上）。 -->
-  {#if !app.sidebarCollapsed}
+  {#if !sidebarPrefs.collapsed}
     <SidebarToggle floating />
   {/if}
 

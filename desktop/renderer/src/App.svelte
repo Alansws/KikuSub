@@ -39,7 +39,6 @@
     setView,
     toast,
     toggleQaPanel,
-    toggleSidebar,
     toggleTheme,
     undo,
     type View,
@@ -61,6 +60,7 @@
     stepSeconds,
   } from './lib/transport.svelte';
   import { toggleSnap } from './lib/snapPrefs.svelte';
+  import { toggleSidebar } from './lib/sidebarPrefs.svelte';
   import {
     alignSelectedCueEnd,
     alignSelectedCueStart,
