@@ -53,12 +53,14 @@
 </script>
 
 <div class="stage">
+  <!-- `.player` 只负责「这一屏给监看区多高」：默认按 16:9 自然高度，
+       拖过分隔条之后由内联 height 决定（见下方 :style）。
+       `.frame` 才是那个 16:9 的画面本体（1px 细边 + 极轻投影）。 -->
   <div
     class="player"
-    style={stageHeight
-      ? `--stage-h:${stageHeight}px;height:${stageHeight}px;width:auto;max-height:none`
-      : ''}
+    style={stageHeight ? `--stage-h:${stageHeight}px` : ''}
   >
+    <div class="frame">
   {#if src}
     <video
       {@attach attach}
@@ -89,6 +91,7 @@
       onstart={onstartproxy}
       onimport={onimportproxy}
     />
+    </div>
   </div>
 
   <!-- 可拖的高度分隔条：向下拉 = 画面变高、时间轴与表格让位。
@@ -121,42 +124,66 @@
 </div>
 
 <style>
-  /* 画面固定在 640×360 的 16:9 框里（窗口更窄时等比缩），只留阴影，不要光晕 */
-  /* 监看舞台：全宽暗底（2026-11-24 Phase 2）。
-     原来是一块亮灰底上漂着 640×360 的黑圆角卡片，读起来像「嵌在网页里的播放器」；
-     改成通栏暗底之后画面是唯一亮点，边框与圆角都收掉（阴影也不再需要）。
-     颜色走令牌：--stage-bg 在亮/暗两套主题里各自接近纯黑，保证画面边缘不发灰。 */
+  /* 监看舞台：通栏画布（2026-11-24 Phase 2；同日二改）。
+     原来是「通栏深黑 + 黑画面」，浅色主题下 16:9 画面四周（左右 + 底部）
+     会露出两条生硬的黑边。现在舞台底色是主题令牌 `--stage-bg`：
+     浅色 = 柔和浅灰画布、深色 = 近纯黑（与旧行为一致）。
+     画面本体（`.frame`）才是唯一「暗」的东西，1px 细边 + 极轻投影让它
+     读成浮在画布上的一块屏幕，而不是被裁掉一半的黑底。 */
   .stage {
     display: flex;
     flex-direction: column;
     background: var(--stage-bg);
   }
+  /* `.player` = 这一屏分给监看区的高度（默认 = 16:9 自然高度；拖高后 = 内联高度）。
+     它不再有底色、圆角或外边距 —— 视觉边界全部交给里面的 `.frame`。 */
   .player {
     position: relative;
-    /* 高度自适应真 16:9：宽由容器定、高由 aspect-ratio 定；
-       拖高时高度由内联 style 覆盖，宽度仍然按 16:9 反推（见下）。
-       禁止水平拉伸或 overflow 裁剪上下画面（object-fit: contain 保底）。 */
-    /* 默认高度同时受三件事约束：容器宽、16:9、以及「给下面留出空间」的窗口比例。
-       拖高时内联 height 覆盖这一条（见 .player[style]）。 */
-    width: auto;
-    height: var(--stage-natural, auto);
-    max-width: 100%;
-    max-height: var(--stage-cap, 46vh);
-    aspect-ratio: 16 / 9;
+    width: 100%;
     margin: 0 auto;
-    background: #000;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  /* 用户拖过高度：按内联高度铺满，宽度仍由 16:9 换算，绝不横向拉伸 */
-  .player[style*='height'] {
-    height: var(--stage-h, auto);
+  /* 用户拖过高度：`.player` 就是这个高度，`.frame` 在它里面按 16:9 收敛。
+     宽度上限同时问两件事 —— 容器多宽、以及「拖出来的高度按 16:9 反推能有多宽」；
+     取较小值，高度由 aspect-ratio 自己长出来。
+     只写 `height:100%; width:auto` 时，宽度被 max-width 夹住而高度不缩，
+     比例就破了（实测 856×486 = 1.76，画面被拉扁）。
+     用 `--stage-h` 是否被内联设置来判定，比 `[style*='height']` 稳。 */
+  .player[style*='--stage-h'] {
+    height: var(--stage-h);
     max-height: none;
-    width: auto;
   }
-  :global(html[data-theme='dark']) .player {
-    box-shadow: var(--shadow-video), 0 0 0 1px rgba(236, 241, 250, 0.06);
+  .player[style*='--stage-h'] .frame {
+    width: min(100%, calc(var(--stage-h) * 16 / 9));
+    /* 拖高就是要「变大」：默认那 640px 上限在这一态必须让开，
+       否则拖到 486 高仍然只有 640 宽，留出一圈没用的画布。 */
+    max-width: none;
+    height: auto;
+  }
+  /* 画面本体：严格 16:9，高度自适应（宽由容器定、高由 aspect-ratio 定）。
+     `width` 同时受三条上限约束 —— 容器宽、「高度上限按 16:9 反推出来的宽」、
+     以及默认的 640px 设计宽。只写 `width:100%` + `max-height` 时，高度被夹住
+     而宽度不跟着缩，比例就破了（实测 856×407 = 2.10）。
+     写成 min() 之后宽度自己让位，画面永远是准确 16:9。 */
+  .frame {
+    position: relative;
+    width: min(100%, calc(var(--stage-cap, 46vh) * 16 / 9));
+    max-width: 640px;
+    aspect-ratio: 16 / 9;
+    margin: 0 auto;
+    background: #000;
+    /* 画面周围的暗色外边距全部去掉：不再有 margin / padding / 圆角，
+       只留 1px 细边（--stage-frame）+ 极轻投影（--shadow-video）。
+       细边用 inset box-shadow 而不是 border：border 会吃掉 1px 内容高度，
+       16:9 的换算就会差一个像素，截图回归会把它读成「拉伸了」。 */
+    box-shadow:
+      inset 0 0 0 1px var(--stage-frame),
+      var(--shadow-video);
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   video {
     width: 100%;
