@@ -167,6 +167,19 @@ node tools/shots/verify_scrub_pan.mjs
 截图落在系统临时目录的 `kikusub-scrub-pan/scrub-pan.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.6「拖到边缘自动滚动」。
 
+## 章节草稿（把时刻点补成区间）回归
+
+先找到场景结束（插时刻点），再回头找开始——两个端点分别落位，不用把 14 分钟塞进一屏。
+脚本覆盖：补起点 / 补终点、`I` / `O` 落端点、时间轴虚线预览、端点越界拦截、
+Esc 撤草稿、保存后 ⌘Z 退回时刻点。
+
+```bash
+node tools/shots/verify_chapter_draft.mjs
+```
+
+截图落在系统临时目录的 `kikusub-chapter-draft/chapter-draft.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.9「章节草稿」。
+
 ## 点行选区与单句 AI 判定回归
 
 2026-11-20 新增两条用户报障/新流程的静默回归：

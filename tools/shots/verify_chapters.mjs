@@ -155,7 +155,8 @@ const EVAL = String.raw`
 
     // 5) 编辑标题 + 回车
     const firstItem = items().find((el) => el.textContent.includes('倒计时开始'));
-    firstItem?.querySelector('.iconbtn')?.click();
+    // 按 aria-label 找「编辑」，不按位置：时刻点行还多了「补起点 / 补终点」两枚按钮
+    firstItem?.querySelector('[aria-label="编辑标记"]')?.click();
     await sleep(250);
     const editTitle = document.querySelector('.chapters-panel .e-title');
     editTitle.focus();
