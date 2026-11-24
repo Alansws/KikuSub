@@ -125,6 +125,22 @@ node tools/shots/verify_punct_clean.mjs
 截图落在 `/tmp/kikusub-punct-verify/punct-clean.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.4。
 
+## 译文轨三态与单句补译回归
+
+2026-11-25 用户报障的两件事：清理标点后译文区一堆「待更新」（其实内容没问题）、
+局部转写补一句把整条译文轨删掉。脚本在真实界面里断言：待译 / 原文已改两种计数分开、
+只改标点不过期、真改字才过期、待译行显示「待译」、AI 补译的草稿进输入框并能采纳、
+请求材料只带前后几行原文 + 邻居已有译文。AI 那一跳指向脚本自己起的假模型
+（独立进程），不需要 LM Studio 或网络。
+
+```bash
+node tools/shots/verify_translation_flow.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_translation_flow.mjs
+```
+
+截图落在系统临时目录的 `kikusub-translation-flow/translation-flow.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.20。
+
 ## 复制 / 粘贴字幕回归
 
 气声句（吸って / 入って）从「偶尔转对的一条」复制到两个播放头位置，是 2026-11-17 的新流程。

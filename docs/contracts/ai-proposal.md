@@ -131,6 +131,21 @@
   删除原文用 `POST /api/cues/clear`（连同无法再对齐的译文轨，一步历史）；删除译文仍走
   `DELETE /api/translations/{lang}`。转写页两张文件卡、核对台「⋯」与检查器译文区都复用
   这三个入口，不要再各写一套导入逻辑。
+- **2026-11-25：局部转写保轨 + 单句补译**：
+  - 局部转写（`/api/jobs` 的 `apply=replace_range`）改走
+    `Session.replace_review(keep_translations=True)`：条数变了也不丢轨。
+    `core/i18n.remap_track()` 先按 `(start, end, text)` 整条配对，再按时间重叠 1:1
+    配对（搬译文、保留旧 base），其余留空（待译）。整片 / 追加转写仍然整轨丢弃。
+  - **空译文 = 待译，不算过期**：`stale_indices(cues, base, texts)` 跳过空文本，
+    `track.pending` 单独计数。前端 `lib/translationStatus.ts` 是同一口径的本地实现。
+  - `POST /api/ai/translate-cue {index, lang}`：**只回文本**，不落盘、不进历史、
+    不改字幕。用 `_arbitrate_target()`（默认本机 LM Studio），材料只有前后各 4 条
+    原文 + 邻居已有译文；提示词与 `{text, note}` 校验在 `core/ai_translate_cue.py`
+    （失败带 `STRICT_HINT` 重问一次）。采纳由前端调既有
+    `PATCH /api/translations/{lang}/{index}`。
+  - 鉴权与 `/api/ai/arbitrate` 完全相同：覆盖地址时读 `X-AI-Arbitrate-Key`，否则
+    `X-AI-Key`；`is_local_url` 放行无 Key 的本机服务。
+
 #### 3.7.3 双源润色（2026-11 新增）
 
 - **B 版来源不影响提案契约**：第二版可以由另一引擎整片转写产生，也可以由

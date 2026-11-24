@@ -390,7 +390,10 @@
 - **一次整轨提交 = 一步历史**：走 `POST /api/cues/replace-all`（与「全部替换」同一条路），
   `label = 清理标点（N 条）`；前端 `applyCueSnapshot` + `scheduleDraftSave` + `loadCueHistory`，
   字幕表、底部字幕块、历史面板、草稿暂存同一轮刷新，⌘Z 一次退干净。条数不变，
-  已有译文轨不会被丢弃（会如实标成「原文已改」的过期态）。
+  已有译文轨不会被丢弃；**只动句读的改动不算「原文已改」**：`Session.replace_review`
+  在压历史之前用 `core.i18n.rebase_punctuation_base()` 把 `base` 静默对齐，快照回传
+  `rebased: {语种: [下标]}`，前端只就地改本地 base（不 bump `translationsRevision`，
+  免得回灌正在编辑的输入框）。2026-11-25 实测：79 条「原文已改」里 0 条真有语义改动。
 - **入口三个，面板一个**：核对台顶栏「清理标点」（`Toolbar.svelte`，锚点与「⋯ 更多」同款）、
   `⌘⇧L`（`review.cleanPunct`，可在 ⌘K 面板改键）、编辑菜单「清理标点…」（菜单不绑
   accelerator，键归渲染层）。**⌘K 不能占**——它是键盘快捷键面板。
@@ -1050,3 +1053,37 @@
   `verify_arbitration_dialog.mjs`（三行各自的复制、唯一展开入口、追问与清空重判）、
   `verify_review_defaults.mjs`（操作区 `bottom ≤ clientHeight`、检查器内无 `.save-dock`、
   底栏 `.draft-dock` 就位）。
+
+#### 3.4.20 译文轨三态与单句补译（2026-11-25）
+
+> 用户一次报了三件事：① 清理标点后译文区「70 条待更新」，但内容其实没问题；
+> ② 双语模式下用「转写选区」补一句，219 条译文被整轨删掉（靠 ⌘Z 救回）；
+> ③ 新句只有原文没有译文，逐句精听卡在这里。
+
+- **三态，不许混成一个 stale**：`待译`（`texts[i]` 为空）/ `原文已改`（有译文但
+  `base[i] != text[i]`）/ 同步。服务端 `core.i18n.stale_indices(cues, base, texts)`
+  跳过空译文，`pending_indices()` 单独数待译；`/api/translations` 回包带 `pending`。
+  检查器轨道信息显示 `N 条待译`（accent）与 `M 条原文已改`（warn），都为零才「全部同步」；
+  表里空译文显示灰色「待译」，过期译文才是 warn 色。
+- **只动句读 = 不过期**：见 §3.4.4。`rebase_punctuation_base()` 的字符集只含清理标点
+  会动的那几个 + 空白；加字 / 删字 / 改假名一定仍算改过。恢复草稿时也跑一次，
+  老工程打开即归零。
+- **局部转写保留译文轨**：`转写选区 / 转重此句` 的 `apply=replace_range` 走
+  `Session.replace_review(keep_translations=True)` → `core.i18n.remap_track()`：
+  整条相同（起止 + 文本）原样搬；时间重叠的搬译文、**保留旧 base**（显示「原文已改」，
+  人能对照）；其余新句留空（待译）；配不上的旧条目丢弃。整片 / 追加转写仍然整轨丢弃
+  （时间轴全换了，搬过去只会张冠李戴）。前端在 job 完成时补一次 `loadTranslations()`，
+  否则双语行会整体错位一条。
+- **单句补译**：检查器译文标签行的「AI 补译 / 重译」→ `POST /api/ai/translate-cue`，
+  用**单句判定模型**（本机 LM Studio）只翻这一条，材料是前后各 4 条原文 + 邻居已有译文；
+  不写轨、不进历史。结果直接填进译文输入框并标「AI 草稿 · 未保存」，「采纳」=
+  `updateTranslation()`（一步历史，⌘Z 可退）。请求期间换片 / 改句就丢弃结果。
+  接口契约在 `ai-proposal.md` §3.7.2。
+- **回归**：`tools/shots/verify_translation_flow.mjs`（24 条真界面断言：两种计数、
+  待译行、标点不过期、真改字过期、补译草稿进输入框、采纳后落轨、请求材料含邻居译文；
+  假模型跑在独立进程里，不需要 LM Studio）、`desktop/test/translation-status.test.mjs`、
+  `desktop/test/translation-base.test.mjs`、`tests/test_i18n.py`、
+  `tests/test_server_translations.py`、`tests/test_server_jobs_range.py`、
+  `tests/test_ai_translate_cue.py`、`tests/test_server_ai.py`。
+- **预算**：stale / pending 纯逻辑搬进 `lib/translationStatus.ts`、rebase 就地更新搬进
+  `lib/translationBase.ts`；`store.svelte.ts` 只多两行接线，预算 3255 → 3252。
