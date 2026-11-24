@@ -97,15 +97,18 @@ node tools/shots/verify_reshape_flow.mjs --scenario stale
 
 核对台改过外壳之后，有三件事既有脚本看不到：**52px 收起态与系统红绿灯的安全区**、
 **暗底监看舞台的比例与状态条**、**1px 分割线 / 状态条文字的对比度**。
-红绿灯是原生绘制、DOM 读不到，所以脚本量的是渲染层能负责的那一半（开关必须移出左栏、
-品牌图标与第一个导航项的位置）；对比度则按 CSS 令牌**实算** WCAG 比值，不靠肉眼。
+红绿灯是原生绘制、DOM 读不到，所以脚本量的是渲染层能负责的那一半（开关必须移出左栏
+且让出安全区、与三颗灯同一水平线、品牌图标与第一个导航项的位置）；对比度则按 CSS 令牌
+**实算** WCAG 比值，不靠肉眼。
 
 ```bash
 node tools/shots/verify_phase2_shell.mjs
 # 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_phase2_shell.mjs
 ```
 
-18 条断言，亮 / 暗两套主题各跑一遍，失败退出码非 0。口径见
+40 条断言，亮 / 暗两套主题 + 紧凑模式（200% 缩放）各跑一遍，失败退出码非 0。收起态除了「开关必须移出左栏」，
+还断言它与红绿灯的**横向净空 ≥16px、中线差 ≤1px**，以及顶部 40px 是一整块底色
+（竖分割线从 y=40 起，不横穿红绿灯）。口径见
 `docs/contracts/review-console.md` §3.4.13。
 
 ## 清理标点回归
@@ -239,6 +242,27 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_ai_fold
 `settings-ai-fold-configured.png`、`export-track-hint.png`、`export-bottom.png`。
 契约口径见 [ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.7 与
 [export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
+
+## 设置四页布局回归（不越界 / 不重叠 / 不挤成竖条）
+
+2026-11-24 新增。用户报「设置每个子页都显示异常」时，真正坏的不是断点，是
+`.set-row-ctl { flex: 0 0 auto }` 让控件列永不收缩：一条「路径 + 徽标 + 三个按钮」
+把左侧说明压成 46–160px、9–11 行的竖条，音色克隆卡的步骤链还会压住右侧按钮。
+这个脚本不比较像素（字体微调就会红），只断言三条布局不变量：
+
+- 内容区里没有元素的右边界越过 `.set-content`；
+- 没有两块可见文字（按钮 / 徽标 / 步骤 / 标题 / 说明 / 输入框）互相压住；
+- 没有可见文字元素 `scrollWidth > clientWidth`（`.set-path` 的省略号是有意的，放行）。
+
+四页 × 四种视口条件（1440×900 / 1120×800 / 1000×700 / 1440×900 + 200% 缩放），
+每个视口里都把折叠区展开再量。修复前会红 13 条。
+
+```bash
+node tools/shots/verify_settings_layout.mjs
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_layout.mjs
+```
+
+契约口径见 [review-console.md](../../docs/contracts/review-console.md) §3.4.16。
 
 ## 基线
 
