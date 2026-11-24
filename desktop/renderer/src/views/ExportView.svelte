@@ -1070,7 +1070,7 @@
     font-size: var(--fs-ui);
     color: var(--ink-2);
     line-height: 19px;
-    padding-top: 4px;
+    padding-top: var(--sp-1);
   }
   .metrics {
     display: flex;
