@@ -5,7 +5,8 @@
  * 截图脚本的 `?tab=`、以及测试。散在组件里就会出现「页面里叫 env、脚本里叫
  * diagnostics」这种对不上的情况。
  *
- * 侧栏的 ⌘1–⌘8 主导航与这里无关：页签只在设置页内部生效。
+ * 侧栏的 ⌘1–⌘8 主导航与这里无关：页签只在使用设置浮层时生效（2026-11-24 起
+ * 设置是居中偏好浮层，见 docs/contracts/review-console.md §3.4.15）。
  */
 
 export type SettingsTabId = 'engines' | 'appearance' | 'ai' | 'env';
@@ -82,7 +83,7 @@ export function saveSettingsTab(id: SettingsTabId, storage?: StorageLike | null)
   }
 }
 
-/** ←/→ 切换：到头绕回另一端（macOS 分段控件的习惯）。 */
+/** ↑/↓ 切换：到头绕回另一端（macOS 侧栏列表的习惯；分段控件时代是 ←/→）。 */
 export function stepSettingsTab(current: SettingsTabId, delta: number): SettingsTabId {
   const index = SETTINGS_TABS.findIndex((tab) => tab.id === current);
   if (index < 0) return DEFAULT_TAB;
