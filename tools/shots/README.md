@@ -154,6 +154,19 @@ node tools/shots/verify_review_transport.mjs
 截图落在系统临时目录的 `kikusub-review-transport/review-transport.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.6。
 
+## 播放头拖到边缘自动滚动回归
+
+把播放头拖过波形左右缘后，视窗与播放头一起继续推进（指针压住不动也走）。脚本用
+合成 `PointerEvent` 覆盖：单击刻度条不自动滚、右缘推进时播放头钉住且缩放不变、
+松手立刻停、松手后画面落在最终位置、往左对称。
+
+```bash
+node tools/shots/verify_scrub_pan.mjs
+```
+
+截图落在系统临时目录的 `kikusub-scrub-pan/scrub-pan.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.6「拖到边缘自动滚动」。
+
 ## 点行选区与单句 AI 判定回归
 
 2026-11-20 新增两条用户报障/新流程的静默回归：
