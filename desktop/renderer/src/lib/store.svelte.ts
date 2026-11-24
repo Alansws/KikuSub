@@ -34,6 +34,7 @@ import {
 } from './api';
 import { aiBridge } from './aiBridge';
 import { applyRebasedBases } from './translationBase';
+import { countPending, cueIsStale } from './translationStatus';
 import type { SliceRequest } from './transcribeSlice';
 import {
   dualSelectionError,
@@ -2709,6 +2710,8 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
   }
   await refreshCues();
   await refreshQa();
+  // 局部转写会搬动译文轨（新句留空待译）：不重拉的话双语行会整体错位一条。
+  await loadTranslations();
   // 整片/区间转写都会改写核对表：写一份最新草稿，防丢
   scheduleDraftSave(0);
 
@@ -3047,24 +3050,20 @@ export function translationAt(index: number): string {
 }
 
 /**
- * 这一条的译文是否已经过期。
+ * 这一条的译文是否已经过期（有译文、但原文改过）。
  *
  * 本地按 `base`（生成译文时的原文快照）实时比较，而不是读服务端返回的 `stale`：
  * 用户改一句原文后界面要立刻变黄，不该等下一次请求。服务端那份仍保留给 API 消费者。
+ * 空译文是「待译」，由 `translationPendingCounts()` 单独计数（见 lib/translationStatus.ts）。
  */
 export function isTranslationStale(index: number): boolean {
-  const track = app.translations[app.trackLang];
-  if (!track) return false;
-  const base = track.base ?? [];
-  if (index >= base.length) return true;
-  return base[index] !== (app.cues[index]?.text ?? '');
+  return cueIsStale(app.translations[app.trackLang], index, app.cues);
 }
 
-export function staleTranslationCount(): number {
-  if (app.track === 'source' || !app.translations[app.trackLang]) return 0;
-  let count = 0;
-  for (let i = 0; i < app.cues.length; i += 1) if (isTranslationStale(i)) count += 1;
-  return count;
+/** 当前语种下「待译 / 原文已改」的条数；原文模式不计。 */
+export function translationPendingCounts() {
+  if (app.track === 'source') return { gap: 0, stale: 0 };
+  return countPending(app.translations[app.trackLang], app.cues);
 }
 
 export async function undoTranslation(lang = app.trackLang) {

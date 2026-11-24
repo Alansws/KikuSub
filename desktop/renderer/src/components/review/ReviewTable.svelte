@@ -314,18 +314,23 @@
                 {/each}
               </span>
               <span class="line sub" class:stale={view.isStale(i)}>
-                {#each view.highlight(
-                  view.displayText(view.translationAt(i)),
-                  'target',
-                  view.ordinalFor(i, 'target'),
-                  view.skippedFor(i, 'target'),
-                ) as part}
-                  <span
-                    class:text-hit={part.hit}
-                    class:cur={part.cur}
-                    class:skipped={part.skipped}>{part.text}</span
-                  >
-                {/each}
+                {#if view.translationAt(i)}
+                  {#each view.highlight(
+                    view.displayText(view.translationAt(i)),
+                    'target',
+                    view.ordinalFor(i, 'target'),
+                    view.skippedFor(i, 'target'),
+                  ) as part}
+                    <span
+                      class:text-hit={part.hit}
+                      class:cur={part.cur}
+                      class:skipped={part.skipped}>{part.text}</span
+                    >
+                  {/each}
+                {:else}
+                  <!-- 局部转写新加进来的句子：只有原文，还没有译文。 -->
+                  <span class="todo">待译</span>
+                {/if}
               </span>
             {:else}
               <span class="line">
@@ -541,6 +546,11 @@
   }
   .c-text .line.stale {
     color: var(--warn);
+  }
+  /* 待译不是错误，只是还没翻：用第三级文字色，别跟 stale 的 warn 抢注意力。 */
+  .c-text .line .todo {
+    color: var(--text-3);
+    font-size: 0.92em;
   }
   .c-text .text-hit {
     background: var(--hit);

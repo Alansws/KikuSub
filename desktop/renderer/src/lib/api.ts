@@ -526,6 +526,8 @@ export interface TranslationTrack {
   texts: string[];
   base: string[];
   stale: number[];
+  /** 还没有译文的条数（服务端算；界面本地也算一份，见 lib/translationStatus.ts）。 */
+  pending?: number;
   created_at: number;
   entry: string;
 }

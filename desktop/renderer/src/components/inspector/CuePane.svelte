@@ -25,8 +25,8 @@
     removeTranslationTrack,
     setTrackLang,
     setTrackMode,
-    staleTranslationCount,
     translationAt,
+    translationPendingCounts,
     undoTranslation,
     updateCue,
     updateTranslation,
@@ -45,7 +45,7 @@
   const cue = $derived(app.cues[play.selected] ?? null);
   const trackLangs = $derived(Object.keys(app.translations).sort());
   const hasTrack = $derived(Boolean(app.translations[app.trackLang]));
-  const staleCount = $derived(staleTranslationCount());
+  const pending = $derived(translationPendingCounts());
 
   let draft = $state('');
   let draftTr = $state('');
@@ -171,9 +171,13 @@
   {#if hasTrack}
     <div class="track-meta">
       <span>{app.translations[app.trackLang]?.count ?? 0} 条</span>
-      {#if staleCount > 0}
-        <span class="warn">{staleCount} 条待更新</span>
-      {:else}
+      {#if pending.gap > 0}
+        <span class="todo">{pending.gap} 条待译</span>
+      {/if}
+      {#if pending.stale > 0}
+        <span class="warn">{pending.stale} 条原文已改</span>
+      {/if}
+      {#if !pending.gap && !pending.stale}
         <span class="ok">全部同步</span>
       {/if}
       <button class="link" onclick={() => importTranslationFromExport()}>导入译文</button>
@@ -214,6 +218,8 @@
         ></textarea>
         {#if isTranslationStale(play.selected)}
           <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
+        {:else if !translationAt(play.selected)}
+          <div class="edit-hint">这条还没有译文（局部转写新加进来的句子）</div>
         {/if}
       {:else}
         <div class="edit-label">原文</div>
@@ -242,6 +248,8 @@
         ></textarea>
         {#if isTranslationStale(play.selected)}
           <div class="edit-hint">这一条的原文改过了，译文可能需要同步</div>
+        {:else if !translationAt(play.selected)}
+          <div class="edit-hint">这条还没有译文（局部转写新加进来的句子）</div>
         {/if}
       {/if}
     {:else}
@@ -389,6 +397,10 @@
   }
   .track-meta .warn {
     color: var(--warn);
+  }
+  /* 待译 = 还没翻，不是错误；用 accent，别跟「原文已改」的 warn 混成一色。 */
+  .track-meta .todo {
+    color: var(--accent);
   }
   .track-meta .link {
     margin-left: auto;
