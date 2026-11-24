@@ -495,3 +495,29 @@ def test_export_names_differ_between_engines(client: TestClient, tmp_path: Path)
     assert whisper["name"] == "episode.AnimeWhisper.reviewed.srt"
     assert qwen["name"] == "episode.Qwen3-ASR.reviewed.srt"
     assert whisper["path"] != qwen["path"]
+
+
+def test_reimport_proxy_replaces_existing_and_bumps_version(client: TestClient, tmp_path: Path) -> None:
+    """已有代理时再次导入：替换文件，并让 proxy_version 变化以绕过浏览器缓存。"""
+    media = tmp_path / "episode.mkv"
+    media.write_bytes(b"x" * 100)
+    media_id = client.post("/api/media", headers=auth(), json={"path": str(media)}).json()["id"]
+
+    first = tmp_path / "first-proxy.mp4"
+    first.write_bytes(b"1" * (60 * 1024))
+    got_first = client.post(
+        f"/api/media/{media_id}/proxy", headers=auth(), json={"path": str(first)}
+    ).json()
+    assert got_first["proxy_ready"] is True
+    assert got_first["proxy_version"]
+
+    second = tmp_path / "second-proxy.mp4"
+    second.write_bytes(b"2" * (70 * 1024))
+    got_second = client.post(
+        f"/api/media/{media_id}/proxy", headers=auth(), json={"path": str(second)}
+    ).json()
+    assert got_second["proxy_ready"] is True
+    assert got_second["proxy_version"] != got_first["proxy_version"]
+
+    proxy_file = tmp_path / "web_proxies" / "episode_100_preview.mp4"
+    assert proxy_file.stat().st_size == second.stat().st_size
