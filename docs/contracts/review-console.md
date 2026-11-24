@@ -494,7 +494,8 @@
     由调用方注入 `clampStart`（不复制 `clampTimelineView`）。原因是 `node --test` 直接
     加载 `.ts` 时 ESM 不给无扩展名相对路径补 `.ts`，`lib/` 里被单测覆盖的模块都遵守
     同一条（`timelineView` / `cueSnap` / `findMatches` …）。
-  - `ReviewView` 预算 2619 → 2586（§3.4.12 的大文件纪律）。
+  - `ReviewView` 预算 2619 → 2586 → 2583（§3.4.12 的大文件纪律；章节端点拖动需接
+    `onview`，先内联掉两处 `xPlayhead()` 腾行）。
   - **回归**：`desktop/test/scrub.test.mjs`（19 条：速度曲线 / 起步速度 / 对称 / 加速 /
     单击不滚 / 片头片尾 / 松手即停 / 擦洗器）、`tools/shots/verify_scrub_pan.mjs`（9 条无窗口真实
     界面）；`verify_review_transport` / `verify_cue_selection` / `verify_review_viewport`
@@ -611,6 +612,24 @@
   - 回归：`desktop/test/chapterDraft.test.mjs`（10 条）、
     `tools/shots/verify_chapter_draft.mjs`（14 条真实界面）；`verify_chapters.mjs` 的
     编辑按钮改为按 `aria-label` 定位——时刻点行多了两枚按钮，按位置取 `.iconbtn` 会点错。
+- **端点拖动 + 边缘自动平移（2026-11-25，方案 B）**：区间章节的两端可以在时间轴的
+  6px 色条上直接拖，不必回面板改时间。
+  - **拖旗标 = 改起点**，拖过 `CLICK_SLOP=4px` 才算拖，**单击仍然是跳转**（同一枚按钮上
+    两种手势，阈值是唯一判据，与 §3.4 的框选阈值同口径）；右端另有一枚抓手改终点。
+  - 抓手命中区 12×12、视觉仍是 2px 深色竖线（色条只有 6px 高，不许为了好抓把它撑高）。
+    时刻点没有抓手——它没有区间可改，只有单击跳转。
+  - 拖动中只改渲染层的 `drag` 快照（时间轴色带随时跟手，还带一个 `mm:ss.mmm` 气泡），
+    松手才 `updateMark()` 提交：**一步历史**，⌘Z 一次撤回；没改动就不写。
+  - **拖动不 seek**：拖到左右缘时视窗继续平移（复用 §3.4.6 的 `createScrubPan`，
+    `isDragging` 由「正在拖章节端点」提供），`advance(delta)` 推进的是**端点时间**
+    而不是播放头——播放头停在原处，画面不跟着跳。
+  - 端点范围与服务端 `core/chapters.py` 同口径：起点 ≥ 0 且 ≤ 终点 − 0.2；终点 ≥
+    起点 + 0.2 且 ≤ 下一条标记起点 / 片尾。纯函数在 `lib/chapterEdge.ts`。
+  - **顶部 17px 刻度条仍是专属擦洗区**：旗标与抓手都在它下方的 6px 色条里，覆盖层整体
+    `pointer-events: none`，只有这两类子元素例外。
+  - 回归：`desktop/test/chapterEdge.test.mjs`（7 条）、
+    `tools/shots/verify_chapter_edge.mjs`（10 条真实界面：拖终点 / 拖起点 / 单击仍跳转 /
+    ⌘Z / 压住右缘自动推进 / 抓手钉在右缘）。
 - **「仅处理此片段」**：区间章节（`end` 有值）的操作区多一个按钮，把这个章节设为
   **处理 / 导出范围**（`setExportClip()`，进统一历史）。润色、翻译、导出三页共用这
   一份；时刻点不提供该入口（它是点，不是可处理的片段）。契约见
