@@ -34,9 +34,9 @@
     避免工具条上的块数与波形对不上。
   - 表格行 `mousedown` 在 ⇧ 时 `preventDefault`，否则跨行连选会顺带选中一片文字。
 - **擦洗区**：顶部 `RULER_H=17px` 和播放头两侧 `PLAYHEAD_GRAB=8px` 是专属 scrub；
-  `beginScrub / setScrub / endScrub` 负责暂停、16ms 节流写 `video.currentTime`、松手
+  `createScrubber()`（`lib/scrub.ts`）负责暂停、16ms 节流写 `video.currentTime`、松手
   恢复原播放状态。视频进度条复用同一套（禁止再写独立的 click-to-seek），三者共同保证
-  拖动时能逐帧预览。
+  拖动时能逐帧预览。指针压到左右缘会继续滚动，见 §3.4.6「拖到边缘自动滚动」。
 - **底部字幕轨道**：`LANE_H=17px`（块高 `LANE_H-6=11px`）。2026-11-21 曾调到 24px
   （块 18px）想放大抓取热区，用户当天报「太高、上下太宽」后回到 17；抓取不靠块高——
   命中判定用的是整条轨道（`h - RESIZE_H - LANE_H` 往上，含底部 6px 把手），
@@ -477,13 +477,36 @@
   - 非 1× 时时间码旁出现可点击的倍速标签，单击恢复 1×；标签不是历史编辑。
   - **不做真倒放**：HTML5 `playbackRate` 不支持负值，定时 seek 模拟反向会与 rAF 推进 /
     音频解码打架；产品上只承诺倍速，不承诺反向穿梭。
+- **拖到边缘自动滚动（2026-11-25）**：拖动播放头（顶部刻度条 / 播放头两侧 8px）越过
+  左右缘后，视窗与播放头**同步**推进——播放头在屏幕上钉住不动，媒体时间继续走，
+  不用「松手 → 双指平移 → 重新抓播放头」。往左完全对称。
+  - 热区 `EDGE_PAN_ZONE=56px`；越界距离按 2 倍热区归一化后取 1.5 次幂，封顶
+    `EDGE_PAN_SCREENS=0.6` **屏/秒**（跟着缩放走）；刚压过边缘另有 `EDGE_PAN_BASE`
+    = 12% 的「爬行」速度（窗口最大化时指针推不出多远，靠它仍能继续滚）；
+    压住 `1200ms` 二次加速到 **2.2×**。
+  - **必须收到过 `pointermove` 才武装**（`scrubPan.arm/move/reset`）：单击刻度条时指针
+    本来就在近缘热区里，按一下不能把画面自己带走；松手、外部 `seek()`/`seekNonce`
+    都会复位，片头 / 片尾被 `clampTimelineView` 夹住后不再推进。
+  - 越界时指针先夹回可视区再算时间（`timeAt` 不能被越界坐标一步跳到视窗外）；
+    `revealPlayhead` 仍然只在松手（`onFinish`）时调用一次。不碰 `CLICK_SLOP=4`、
+    进度条 click-to-seek、`duration/69` 与跟随偏好。
+  - **零运行时相对导入**：擦洗状态机 + 推进器 + 速度数学都在 `lib/scrub.ts`，视窗 clamp
+    由调用方注入 `clampStart`（不复制 `clampTimelineView`）。原因是 `node --test` 直接
+    加载 `.ts` 时 ESM 不给无扩展名相对路径补 `.ts`，`lib/` 里被单测覆盖的模块都遵守
+    同一条（`timelineView` / `cueSnap` / `findMatches` …）。
+  - `ReviewView` 预算 2619 → 2586（§3.4.12 的大文件纪律）。
+  - **回归**：`desktop/test/scrub.test.mjs`（19 条：速度曲线 / 起步速度 / 对称 / 加速 /
+    单击不滚 / 片头片尾 / 松手即停 / 擦洗器）、`tools/shots/verify_scrub_pan.mjs`（9 条无窗口真实
+    界面）；`verify_review_transport` / `verify_cue_selection` / `verify_review_viewport`
+    同轮保持全绿。
 - **历史与红线**：入点 / 出点 / 切割走服务端统一历史；步进、试听、磁吸、全片、倍速
   都不进历史。吸附只叠加在 `cueDragTimes()` 之后，不碰 `CLICK_SLOP=4`、进度条
   click-to-seek 与 `duration/69`。`store.svelte.ts` 未增行；`ReviewView` 预算从
-  3877 → 3808 → 3802（`tests/test_big_file_budget.py`）。
+  3877 → 3808 → 3802 → 2586（`tests/test_big_file_budget.py`）。
 - **回归**：`desktop/test/frameStep.test.mjs`、`cueEdit.test.mjs`、`cueSnap.test.mjs`、
-  `timelineView.test.mjs`、`playbackRate.test.mjs`；Python `tests/test_media_probe.py`；
-  真实界面 `tools/shots/verify_review_transport.mjs`（24fps 片源，无窗口）。
+  `timelineView.test.mjs`、`playbackRate.test.mjs`、`scrub.test.mjs`（擦洗 + 边缘滚动）；
+  Python `tests/test_media_probe.py`；真实界面 `tools/shots/verify_review_transport.mjs`
+  （24fps 片源，无窗口）与 `verify_scrub_pan.mjs`。
 
 #### 3.4.7 核对台工作现场持久化（2026-11-20）
 
