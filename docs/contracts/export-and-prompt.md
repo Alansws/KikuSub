@@ -134,11 +134,25 @@
   任务失败或取消后按钮随 `job.status` 自动回到可点击的「压制代理」；
   `proxy_ready` 但画面仍失败时只显示「代理已就绪，但画面仍无法播放」。
 - 代理任务仍走 `/api/jobs` 的 `kind=proxy`。
-- **已有代理可直接挂载（2026-11 新增）**：`POST /api/media/{id}/proxy`（`path`）交给
-  `MediaStore.attach_proxy()` → `core.proxy.install_existing_proxy()`：优先硬链接，跨盘用
-  符号链接，最后才复制；写进标准 `web_proxies/` 路径并原子 rename，重启后仍会被识别为
-  已就绪。`openMedia()` 完全不再自动起压制任务。物理文件不存在/太小、
-  音频文件或原片本身都会被拒绝。
+- **压制默认走多核 CPU，不是 VideoToolbox（2026-11-25 性能修正）**：
+  `core.proxy.build_streaming_cmd()` 默认软解 + `libx264 -preset ultrafast -crf 20`。
+  2026-11-25 在 M4 Pro 上用同一段 1080p H.264 实测：`-hwaccel videotoolbox` +
+  `h264_videotoolbox` 只有 **14.8×**（CPU/GPU 都闲着）；软解 + libx264 ultrafast
+  在 `-crf 20` 下约 **48×**（60 秒样本 11.6 s CPU / 1.26 s 墙钟，约吃满 10 核），
+  体积 / 画面与旧的 2200k 同档。原因是硬解帧还要下载回系统内存做 480p scale，
+  固定功能块在这一档反而不如多核软解。**不要为了「看起来用了硬件」把它改回
+  `-hwaccel videotoolbox`**；VideoToolbox 方案仍保留在 `create_proxy()` 的回退链里，
+  x264 不可用时会自动尝试。
+- **已有代理可直接挂载，且可以替换（2026-11 新增 / 2026-11-25 修正）**：
+  `POST /api/media/{id}/proxy`（`path`）交给 `MediaStore.attach_proxy()` →
+  `core.proxy.install_existing_proxy()`：优先硬链接，跨盘用符号链接，最后才复制；
+  写进标准 `web_proxies/` 路径并原子 rename，重启后仍会被识别为已就绪。
+  **目标路径已有代理时也替换**——用户点「导入代理…」就是明确要换一份，不能静默复用
+  旧文件；「⋯」里的该菜单项在有代理时保持可点，副标题显示「替换现有」。
+  `MediaInfo.proxy_version`（大小 + `mtime_ns`）随 `GET /api/media` 返回，前端拼成
+  `?proxy=1&v=…`，否则 `<video>` 会继续播 URL 相同的旧缓存。
+  `openMedia()` 完全不再自动起压制任务。物理文件不存在/太小、音频文件或原片本身
+  都会被拒绝。
 - 画面提示文案不要写成「无法解码」这种绝对结论：`bitrate` 只是「能播但拖动卡」，
   而 `container` / `codec` 用「无法直接播放」即可。
 

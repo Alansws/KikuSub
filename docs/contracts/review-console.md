@@ -920,6 +920,14 @@
   高度记忆在 `localStorage['kikusub.stageHeight']`，上限 = 窗口高 ×0.55。
 - **单行走带 34px**：播放 / 等宽时间码 / 进度 / 时长 与 缩放 / 全景 / 聚焦 / 跟随
   合并为一条，中间用 1px 竖分隔线。原来拆两行白吃掉 35px 垂直高度。
+- **监看画面可以关闭（2026-11-25 用户报障）**：画面右上角的 × 把监看区收成一条
+  32px 的「监看画面已关闭 / 打开画面」，**视频节点不卸载**——声音、字幕、时间轴、
+  跟随与代理都还在，按播放仍能听声音；换片时自动恢复成打开态。不要改成
+  `{#if !closed}` 卸载 `<video>`：那会连音频和播放头一起断掉。
+- **时间刻度末端不叠字（2026-11-25 用户报障）**：`paintRuler()` 的标签默认在刻度
+  右侧 +3；右侧放不下时向左夹到 `width - 2 - labelWidth`（旧实现移到刻度左边，
+  会和前一个标签叠成「165180:00」）。夹回后仍与上一个标签间距不足
+  `RULER_LABEL_GAP=6` 时只画刻度、跳过该标签，绝不叠字。
 - **检查器去套娃卡片**：当前句、三版对照外层、A / B 两版、字幕剪贴板原来各自
   一层「白底 + 1px 灰框 + 蓝左线 / 圆角」，叠起来读成网页表单。现在一律改成
   1px 横向分割线分段（走 `--line`，不是 5% 灰），层级靠字号与留白。
@@ -928,7 +936,7 @@
   只有引擎名保留省略号——那是值，不是内容。
 - **回归**：`tools/shots/verify_phase2_shell.mjs`（18 条，见下）+ 既有的
   `verify_review_transport` / `verify_cue_selection` / `verify_review_defaults` /
-  `verify_cue_clipboard` / `verify_review_viewport`。预算：`ReviewView` 2645、
+  `verify_cue_clipboard` / `verify_review_viewport`。预算：`ReviewView` 2619、
   `ReviewTable` / `ReviewStage` / `ReviewTransport` / `ReviewWaveTrack` 各自独立成文件。
 
 - **对比度不许靠肉眼**：`--stage-line` 第一版是 0.14 白（对舞台只有 **1.48:1**，
