@@ -1348,7 +1348,14 @@ class JobManager:
                     "at": time.time(),
                     "apply": apply,
                 }
-            session.replace_review(merged, label=label, source=source)
+            # 局部转写保留译文轨（按位置搬移，新条目留空待译）；整片 / 追加转写
+            # 的时间轴整体换了，旧轨搬过去只会张冠李戴，仍然整轨丢弃。
+            session.replace_review(
+                merged,
+                label=label,
+                source=source,
+                keep_translations=apply == "replace_range" and start_s is not None,
+            )
             session.updated_at = time.time()
             # 前端据此把底部表格 / 右侧检查器直接定位到**这次新转出的第一句**。
             # 只给时间区间不够：padding 会让区间起点落在新句之前，play.time 不在

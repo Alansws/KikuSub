@@ -656,3 +656,18 @@ def test_draft_restore_clears_legacy_punctuation_noise(ctx):
     track = client.get("/api/translations", headers=AUTH).json()["items"][0]
     assert track["stale"] == []
     assert track["base"] == TEXTS
+
+
+# ------------------------------------------------- 「待译」与「原文已改」分开（2026-11-25）
+
+
+def test_empty_translation_is_pending_not_stale(ctx):
+    client, _ = ctx
+    client.post(
+        "/api/translations", headers=AUTH, json={"lang": "zh-Hans", "texts": ["早上好", "", "再见"]}
+    )
+    track = client.get("/api/translations", headers=AUTH).json()["items"][0]
+    assert track["stale"] == []
+    assert track["pending"] == 1
+    summary = client.get("/api/cues", headers=AUTH).json()["translations"]["zh-Hans"]
+    assert summary["stale"] == []

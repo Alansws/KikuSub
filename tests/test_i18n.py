@@ -156,3 +156,58 @@ def test_rebase_punctuation_base_survives_short_base():
     out, rebased = rebase_punctuation_base(CUES, ["…おはよう"])
     assert rebased == [0]
     assert out == ["おはよう"]
+
+
+# ------------------------------------------------- 局部转写后的译文轨映射（2026-11-25）
+
+
+def test_remap_track_keeps_exact_matches_and_blanks_new_cue():
+    from core.i18n import remap_track
+
+    old = [
+        SubtitleCue(0.0, 1.0, "おはよう"),
+        SubtitleCue(2.0, 3.0, "またね"),
+    ]
+    new = [
+        SubtitleCue(0.0, 1.0, "おはよう"),
+        SubtitleCue(1.1, 1.9, "射精管理"),  # 局部转写新加的一句
+        SubtitleCue(2.0, 3.0, "またね"),
+    ]
+    texts, base, stats = remap_track(old, new, ["早上好", "再见"], ["おはよう", "またね"])
+    # 新句留空 → 待译；前后两条原样对齐，后面的译文没有整体前移
+    assert texts == ["早上好", "", "再见"]
+    assert base == ["おはよう", "射精管理", "またね"]
+    assert stats == {"kept": 2, "moved": 0, "blank": 1, "dropped": 0}
+
+
+def test_remap_track_moves_rewritten_text_and_keeps_base_as_stale():
+    from core.i18n import remap_track
+
+    old = [SubtitleCue(0.0, 2.0, "わかってる")]
+    new = [SubtitleCue(0.0, 2.0, "わかってる？")]  # 只差句读：不能丢译文
+    texts, base, stats = remap_track(old, new, ["你明白吗"], ["わかってる"])
+    assert texts == ["你明白吗"]
+    # base 保留旧快照（原文真的改过时界面要如实提示）；句读差异由 rebase 处理
+    assert base == ["わかってる"]
+    assert stats["moved"] == 1
+
+
+def test_remap_track_does_not_give_a_translation_to_a_different_line():
+    from core.i18n import remap_track
+
+    # 时间完全不重叠：宁可留空，也不要把上一句的译文塞给新句
+    old = [SubtitleCue(0.0, 1.0, "おはよう")]
+    new = [SubtitleCue(50.0, 51.0, "こんばんは")]
+    texts, _base, stats = remap_track(old, new, ["早上好"], ["おはよう"])
+    assert texts == [""]
+    assert stats == {"kept": 0, "moved": 0, "blank": 1, "dropped": 1}
+
+
+def test_remap_track_survives_short_or_missing_arrays():
+    from core.i18n import remap_track
+
+    old = [SubtitleCue(0.0, 1.0, "A"), SubtitleCue(1.0, 2.0, "B")]
+    new = [SubtitleCue(0.0, 1.0, "A")]
+    texts, base, _stats = remap_track(old, new, [], [])
+    assert texts == [""]
+    assert base == ["A"]

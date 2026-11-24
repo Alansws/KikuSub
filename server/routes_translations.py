@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from core import ai_proposal as proposals
+from core.i18n import pending_indices
 from core.subtitles import align_translation_texts, cues_from_subtitle_file
 
 from .deps import get_session
@@ -64,6 +65,7 @@ def track_payload(session: Session, lang: str) -> dict:
             "count": 0,
             "texts": [],
             "base": [],
+            "pending": 0,
             "stale": [],
             "created_at": 0.0,
             "entry": "",
@@ -72,6 +74,8 @@ def track_payload(session: Session, lang: str) -> dict:
         "lang": lang,
         "exists": True,
         "count": len(track.texts),
+        # 「待译」与「原文已改」是两件事：前者是还没翻，后者是翻了但对不上。
+        "pending": len(pending_indices(session.review_cues, track.texts)),
         "texts": list(track.texts),
         "base": list(track.base),
         "stale": session.stale_translation(lang),

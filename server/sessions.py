@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.chapters import ChapterMark, load_marks, normalize_marks, save_marks
-from core.i18n import rebase_punctuation_base
+from core.i18n import rebase_punctuation_base, remap_track
 from core.subtitles import SubtitleCue, join_cue_texts
 from core.textio import write_text_atomic
 
@@ -510,6 +510,7 @@ class Session:
         *,
         source: dict | None = None,
         record: bool = True,
+        keep_translations: bool = False,
     ) -> dict[str, list[int]]:
         """整表替换；``source`` 非空时同步改写这张表的来源。
 
@@ -522,15 +523,26 @@ class Session:
         改动不算原文过期，会在压历史之前把 base 静默对齐（见
         :func:`core.i18n.rebase_punctuation_base`）。
 
+        ``keep_translations`` 只给**局部转写**（核对台的「转写选区 / 重转此句」）
+        用：条数变了也不丢轨，按 :func:`core.i18n.remap_track` 的规则搬移，
+        区间外条目的译文一条不动，新条目留空待译。整片重转不能开——时间轴全变了，
+        搬过去只会把上一版的译文塞给新一版的句子。
+
         返回 ``{语种: 被对齐的下标}``，路由把它放进快照，渲染层据此就地更新本地
         base（不能靠重拉全量轨：那会把正在编辑的输入框回灌）。
         """
         with self.lock:
             self._ensure_baseline()
+            previous = self.review_cues
             self.review_cues = _copy(cues)
             if source is not None:
                 self.review_source = dict(source)
-            self._drop_misaligned_translations()
+            if keep_translations and self.translations:
+                self._remap_translations(previous)
+                # 平移之后的旧版整轨已经对不上新表，撤销栈只能清掉。
+                self._drop_translation_undo()
+            else:
+                self._drop_misaligned_translations()
             rebased = self.rebase_translation_base()
             if record:
                 self._record(label)
@@ -598,6 +610,24 @@ class Session:
                 "dropped_translations": dropped,
                 "shifted_translations": shifted,
             }
+
+    def _remap_translations(self, old_cues: list[SubtitleCue]) -> None:
+        """把现有各语种译文轨按 ``old_cues → review_cues`` 映射过去。
+
+        规则在 :func:`core.i18n.remap_track`（纯函数、有单测）。这里只负责替换
+        轨对象并保留 created_at / entry。
+        """
+        for lang, track in list(self.translations.items()):
+            texts, base, _stats = remap_track(
+                old_cues, self.review_cues, track.texts, track.base
+            )
+            self.translations[lang] = TranslationTrack(
+                lang=lang,
+                texts=texts,
+                base=base,
+                created_at=track.created_at,
+                entry=track.entry,
+            )
 
     def _shift_translations_for_range(
         self,
@@ -1142,7 +1172,7 @@ class Session:
         track = self.translations.get(lang)
         if track is None:
             return []
-        return stale_indices(self.review_cues, track.base)
+        return stale_indices(self.review_cues, track.base, track.texts)
 
 
 def _load_alt_file(path: Path) -> dict | None:

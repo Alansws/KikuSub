@@ -102,3 +102,59 @@ def test_full_transcription_marks_review_source(tmp_path):
     assert session.review_source["job_id"] == "job-full"
     session.undo()
     assert session.review_source == {}
+
+
+def test_range_transcription_keeps_translation_track(tmp_path):
+    """选区转写插入一条新句：译文轨必须按位置搬移，新句留空待译。
+
+    2026-11-25 用户实测：219 条译文的片子里框选补一句，整条轨被
+    `_drop_misaligned_translations()` 删掉（只能靠 ⌘Z 救回来）。
+    """
+    from types import SimpleNamespace
+
+    from server.jobs import JobManager, JobRecord
+    from server.sessions import Session, TranslationTrack
+
+    manager = JobManager(tmp_path)
+    session = Session(id="s")
+    media = tmp_path / "demo.mkv"
+
+    def job(job_id: str) -> JobRecord:
+        record = JobRecord(id=job_id, kind="transcribe")
+        record.result = {"out_filename": "demo.srt", "out_path": ""}
+        return record
+
+    full = SimpleNamespace(start_s=None, end_s=None, media_path=media)
+    manager._apply_cues(
+        session,
+        full,
+        [SubtitleCue(0.0, 1.0, "おはよう"), SubtitleCue(2.0, 3.0, "またね")],
+        "replace",
+        job("full"),
+    )
+    session.set_translation(
+        TranslationTrack(lang="zh-Hans", texts=["早上好", "再见"], base=["おはよう", "またね"]),
+        record=False,
+    )
+
+    rng = SimpleNamespace(start_s=1.0, end_s=2.0, media_path=media)
+    result = manager._apply_cues(
+        session, rng, [SubtitleCue(1.1, 1.9, "射精管理")], "replace_range", job("range")
+    )
+    assert result["applied"] == "replace_range"
+    assert [cue.text for cue in session.review_cues] == ["おはよう", "射精管理", "またね"]
+    track = session.translations["zh-Hans"]
+    # 前后两条译文原样保留，新句留空（待译），没有整体错位
+    assert track.texts == ["早上好", "", "再见"]
+    assert session.stale_translation("zh-Hans") == []
+    assert track.base[0] == "おはよう" and track.base[2] == "またね"
+
+    # 整片重转（时间轴整体换了）仍然整轨丢弃：搬过去只会张冠李戴
+    manager._apply_cues(
+        session,
+        full,
+        [SubtitleCue(0.0, 1.0, "ぜんぶ新しい"), SubtitleCue(1.0, 2.0, "別の句")],
+        "replace",
+        job("full-2"),
+    )
+    assert "zh-Hans" not in session.translations
