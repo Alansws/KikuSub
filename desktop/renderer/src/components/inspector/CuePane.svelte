@@ -412,14 +412,17 @@
     color: var(--danger);
   }
 
-  /* 当前句：全屏最大的字，也是唯一带蓝左线的卡片 */
+  /* 当前句：全屏最大的字。2026-11-24（Phase 2）去卡片化——它原来是
+     「白底 + 1px 灰框 + 2px 蓝左线 + 8px 圆角」的一层套娃，检查器里还有三四个
+     同款，叠起来就是「网页表单」。现在只用一条 1px 上分割线分段，
+     靠字号与留白建立层级；可编辑能力一点没变（还是 textarea）。 */
   .cue-card {
-    margin-top: var(--sp-4);
-    background: var(--raise);
-    border: 1px solid var(--line-2);
-    border-left: 2px solid var(--accent);
-    border-radius: 8px;
-    padding: var(--sp-4);
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) 0 0;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
   }
   .cue-tc {
     font-family: var(--font-mono);
@@ -502,10 +505,11 @@
   /* 字幕剪贴板：只在复制过之后出现；把「粘贴到播放头」放在一眼能看到的位置。 */
   .clip-strip {
     margin-top: var(--sp-2);
-    padding: var(--sp-2) var(--sp-3);
-    border: 1px solid var(--line-2);
-    border-radius: 6px;
-    background: var(--raise);
+    padding: var(--sp-2) 0;
+    border: 0;
+    border-top: 1px solid var(--line-2);
+    border-radius: 0;
+    background: transparent;
     display: flex;
     align-items: center;
     gap: var(--sp-2);

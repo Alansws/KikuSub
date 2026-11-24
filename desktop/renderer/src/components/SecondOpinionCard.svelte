@@ -389,15 +389,20 @@
   /* 三版对照：整块是一张卡，A / B / AI 各占一行。行内不再各套一圈边框——
      348px 宽的右栏里，三张卡 + 两个标题行光边框和内边距就要 ~90px（见契约
      「右侧检查器预算」）。 */
+  /* 2026-11-24（Phase 2）去卡片化：这张「卡里再套两张卡」的结构读起来像网页表单。
+     现在外层只是检查器里的一个分段（1px 上分割线 + 紧凑内边距），
+     A / B 两版之间同样用 1px 线分隔——层级靠线，不靠边框。 */
   .second-opinion {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
-    padding: 5px var(--sp-2) 3px;
-    border: 1px solid var(--line-2);
-    border-radius: 9px;
-    background: var(--raise);
-    box-shadow: 0 1px 1px rgba(27, 39, 64, 0.03);
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) 0 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   .so-head {
@@ -544,8 +549,9 @@
     min-width: 0;
   }
   .so-card + .so-card {
-    border-top: 1px solid var(--line-2);
-    padding-top: var(--sp-1);
+    border-top: 1px solid var(--line);
+    padding-top: var(--sp-2);
+    margin-top: var(--sp-1);
   }
   .so-card.alt {
     border-color: var(--line-2);
