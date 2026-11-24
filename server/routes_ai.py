@@ -561,6 +561,9 @@ def translate_cue(payload: TranslateCueRequest, request: Request, session: Sessi
             before=before,
             after=after,
             refs=refs,
+            # 与单句判定同一条 Qwen3 策略：不加 /no_think 时答案全进
+            # reasoning_content，content 为空，重试两次就报 502。
+            no_think="qwen" in config.model.lower() or "think" in config.model.lower(),
         )
     except ai_client.AiError as exc:
         detail = (

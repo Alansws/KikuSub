@@ -100,3 +100,18 @@ def test_translate_cue_retries_once_with_strict_hint(monkeypatch):
 def test_translate_cue_rejects_blank_source():
     with pytest.raises(cue.CueTranslateError):
         cue.translate_cue("   ", _config())
+
+
+def test_translate_cue_no_think_switch_is_opt_in(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        cue.client,
+        "chat_json",
+        lambda config, system, user, **kwargs: (
+            seen.append(system) or {"text": "你明白吗"}
+        ),
+    )
+    cue.translate_cue("わかってる？", _config(), dst_lang="zh-Hans")
+    assert "/no_think" not in seen[0]
+    cue.translate_cue("わかってる？", _config(), dst_lang="zh-Hans", no_think=True)
+    assert seen[1].rstrip().endswith("/no_think")

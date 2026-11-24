@@ -138,9 +138,14 @@ def translate_cue(
     before: object = (),
     after: object = (),
     refs: object = (),
+    no_think: bool = False,
     cancel=None,
 ) -> dict:
-    """翻一条。失败抛 :class:`CueTranslateError` / ``ai_client.AiError``。"""
+    """翻一条。失败抛 :class:`CueTranslateError` / ``ai_client.AiError``。
+
+    ``no_think`` 与单句判定同一条策略：Qwen3 系推理模型默认把答案写进
+    ``reasoning_content``、``content`` 为空；``/no_think`` 是它认识的软开关。
+    """
     target = _clean(text, MAX_TEXT_CHARS)
     if not target:
         raise CueTranslateError("这一句原文是空的，没有可翻译的内容")
@@ -148,6 +153,8 @@ def translate_cue(
         raise CueTranslateError("必须指定目标语种")
 
     system = SYSTEM_PROMPT.replace("__LANG__", lang_name(dst_lang))
+    if no_think:
+        system += "\n\n/no_think"
     prompt = build_prompt(target, before=before, after=after, refs=refs, dst_lang=dst_lang)
     # 本地推理模型（Qwen3 系）会用 assistant 前缀把输出钉成 JSON；云端模型走正常模式。
     prefill = '{"text": "' if client.is_local_url(cfg.base_url) else ""
