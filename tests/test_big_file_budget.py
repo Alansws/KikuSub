@@ -56,9 +56,12 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              是舞台状态条与分隔条接线本身，预算按实测值 2645 记。
 # 2026-11-24（当日收口）：撤销表格「状态」列与舞台状态条，ReviewView 2645 → 2619；
 #              lib/reviewRowStatus.ts 与其 18 条单测一并删除（不留半套实现）。
+# 2026-11-25（播放头边缘自动滚动）：擦洗状态机 + 边缘推进器整段搬进 lib/scrub.ts
+#              （零运行时相对导入，`node --test` 直接加载），ReviewView 2619 → 2586；
+#              接线只多出 scrub/scrubPan 两个构造块，净减 33 行，预算随实测值下调。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 2619,
+    "views/ReviewView.svelte": 2586,
 }
 
 

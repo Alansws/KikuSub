@@ -97,6 +97,7 @@
   } from '../lib/selection';
   import { canSplitAt } from '../lib/cueEdit';
   import { collectSnapTargets, snapCueTimes, snapThreshold } from '../lib/cueSnap';
+  import { createScrubber, createScrubPan } from '../lib/scrub';
   import { snapPrefs } from '../lib/snapPrefs.svelte';
   import { attachVideo, detachVideo, resetRate, transport } from '../lib/transport.svelte';
   import {
@@ -612,74 +613,39 @@
   let rafId = 0;
 
   // 擦洗：拖动播放头或进度条时，play.time 立刻跟手，video.currentTime 每帧最多写一次，
-  // 避免一次拖动触发上百个 seek 请求把解码器拖死。
-  let scrubbing = false;
-  let scrubTarget = 0;
-  let scrubRaf = 0;
-  let scrubResume = false;
-  let lastSeekAt = 0;
+  // 避免一次拖动触发上百个 seek 请求把解码器拖死。状态机在 lib/scrub.ts。
+  const scrub = createScrubber({
+    getVideo: () => video,
+    getDuration: () => duration,
+    getPlaying: () => play.playing,
+    setTime: (t) => {
+      play.time = t;
+      play.stopAt = 0;
+    },
+    onFinish: (t) => revealPlayhead(t),
+  });
 
-  function setScrub(t: number) {
-    const max = duration || video?.duration || Number.POSITIVE_INFINITY;
-    const value = Math.max(0, Math.min(max, t));
-    play.time = value;
-    play.stopAt = 0;
-    scrubTarget = value;
-    // 每帧最多写一次 currentTime；窗口被遮挡时 rAF 会被节流，
-    // 所以再加一条 16ms 的“立即写”分支，保证拖动时画面真的跟手。
-    const now = performance.now();
-    if (now - lastSeekAt >= 16) {
-      lastSeekAt = now;
-      flushScrub();
-    } else if (!scrubRaf) {
-      scrubRaf = requestAnimationFrame(flushScrub);
-    }
-  }
-
-  function flushScrub() {
-    scrubRaf = 0;
-    if (!video) return;
-    if (Math.abs(video.currentTime - scrubTarget) < 0.004) return;
-    try {
-      video.currentTime = scrubTarget;
-    } catch {
-      /* 媒体还没就绪：播放头数字照样跟手 */
-    }
-  }
-
-  function beginScrub(t: number) {
-    if (!scrubbing) {
-      scrubResume = !video?.paused && !video?.ended && play.playing;
-      if (scrubResume) video?.pause();
-    }
-    scrubbing = true;
-    setScrub(t);
-  }
-
-  function endScrub() {
-    if (!scrubbing) return;
-    scrubbing = false;
-    if (scrubRaf) {
-      cancelAnimationFrame(scrubRaf);
-      scrubRaf = 0;
-    }
-    if (video) {
-      try {
-        video.currentTime = scrubTarget;
-      } catch {
-        /* ignore */
-      }
-    }
-    if (scrubResume) {
-      scrubResume = false;
-      void video?.play().catch(() => {});
-    }
-    // 擦洗期间不自动平移（手还在拖）；松手后把最终位置带回视窗
-    revealPlayhead(scrubTarget);
-  }
+  /**
+   * 播放头拖到边缘后的自动推进（NLE 的 edge autoscroll）。
+   *
+   * 指针位置由 pointermove 记下，推进由 rAF 驱动：指针压住不动时不会再发事件，
+   * 只有每帧自己算速度才能「一直滚」。擦洗与推进器都在 lib/scrub.ts。
+   */
+  const scrubPan = createScrubPan({
+    // 擦洗被外部定位打断（scrub.cancel）时立刻停止推进，别让视窗自己漂
+    getMode: () => (scrub.active ? dragMode : 'none'),
+    getRect: () => waveWrap?.getBoundingClientRect() ?? null,
+    getView: () => ({ start: viewStart, span: viewSpan }),
+    getDuration: () => duration,
+    clampStart: (start, span) => clampTimelineView(start, span, duration, MIN_SPAN).start,
+    setView: (start) => setView(start, viewSpan),
+    advance: (delta) => scrub.set(scrub.target + delta),
+  });
 
   function tick() {
     rafId = requestAnimationFrame(tick);
+    // 拖动到边缘的自动推进放在 <video> 判断之前：代理还没压好的 MKV 也要能拖
+    scrubPan.step();
     if (!video) return;
     // 只在「真的能解码并且在播」时用 video.currentTime 驱动播放头。
     // MKV / HEVC 还没压好代理时 readyState 一直是 0，如果无条件同步，
@@ -689,9 +655,9 @@
     if (ready) {
       // 擦洗期间由手指说了算：seek 还没落盘时 currentTime 是滞后的，
       // 不能拿它把 play.time 拽回去，否则播放头会来回抖。
-      if (!scrubbing && !video.paused && !video.ended) play.time = t;
+      if (!scrub.active && !video.paused && !video.ended) play.time = t;
       play.playing = !video.paused && !video.ended;
-    } else if (!scrubbing) {
+    } else if (!scrub.active) {
       play.playing = false;
     }
     if (play.stopAt > 0 && play.playing && t >= play.stopAt - 0.01) {
@@ -705,7 +671,7 @@
     if (
       follow &&
       play.playing &&
-      !scrubbing &&
+      !scrub.active &&
       viewSpan < duration * 0.96 &&
       (t > viewStart + viewSpan * 0.92 || t < viewStart + viewSpan * 0.02)
     ) {
@@ -767,12 +733,7 @@
     // 暂停时的跳转也要让播放头可见（跟随开启时）；视频尚未绑定也要平移波形
     untrack(() => revealPlayhead(t));
     if (!video) return;
-    scrubbing = false;
-    if (scrubRaf) {
-      cancelAnimationFrame(scrubRaf);
-      scrubRaf = 0;
-    }
-    scrubTarget = t;
+    scrub.cancel(t);
     try {
       video.currentTime = t;
     } catch {
@@ -896,12 +857,9 @@
   }
 
   function seek(time: number) {
-    scrubbing = false;
-    if (scrubRaf) {
-      cancelAnimationFrame(scrubRaf);
-      scrubRaf = 0;
-    }
-    scrubTarget = time;
+    // 外部定位打断在途擦洗，且不把播放重新拉起来
+    scrub.cancel(time);
+    scrubPan.reset();
     seekTo(time);
   }
 
@@ -921,12 +879,12 @@
     } catch {
       /* ignore */
     }
-    beginScrub(timeFromTrack(e.clientX, e.currentTarget as HTMLElement));
+    scrub.begin(timeFromTrack(e.clientX, e.currentTarget as HTMLElement));
   }
 
   function onTrackPointerMove(e: PointerEvent) {
     if (!trackDrag) return;
-    setScrub(timeFromTrack(e.clientX, e.currentTarget as HTMLElement));
+    scrub.set(timeFromTrack(e.clientX, e.currentTarget as HTMLElement));
   }
 
   function onTrackPointerUp(e: PointerEvent) {
@@ -937,7 +895,7 @@
     } catch {
       /* ignore */
     }
-    endScrub();
+    scrub.end();
   }
 
   function wavePoint(e: PointerEvent) {
@@ -986,11 +944,14 @@
     requestAnimationFrame(draw);
   }
 
-  function beginPlayhead(t: number) {
+  function beginPlayhead(t: number, clientX: number) {
     dragMode = 'playhead';
     dragMoved = true;
     waveCursor = 'ew-resize';
-    beginScrub(t);
+    // 武装交给第一次 pointermove：单击刻度条时指针本来就在近缘热区里，
+    // 不能因为按下的位置靠边就自己滚起来。
+    scrubPan.arm(clientX);
+    scrub.begin(t);
   }
 
   function beginSelectRange(a: number, b: number) {
@@ -1150,13 +1111,13 @@
 
     // 1) 顶部刻度条：专属擦洗带，拖它就只移动播放头，永远不会变成框选
     if (pt.y <= RULER_H + 1) {
-      beginPlayhead(t);
+      beginPlayhead(t, e.clientX);
       return;
     }
 
     // 2) 播放头两侧 8px：随时抓得住（不用精确点到 1px 的线）
     if (Math.abs(pt.x - xPlayhead()) <= PLAYHEAD_GRAB) {
-      beginPlayhead(t);
+      beginPlayhead(t, e.clientX);
       return;
     }
 
@@ -1228,7 +1189,12 @@
       return;
     }
     if (dragMode === 'playhead') {
-      setScrub(t);
+      // 越界时把指针夹回可视区：外侧由 scrubPan 推进视窗与时间，
+      // 不能让 timeAt(越界 x) 把播放头一步跳到视窗外。
+      scrubPan.move(e.clientX);
+      const rect = waveWrap.getBoundingClientRect();
+      const x = Math.max(rect.left, Math.min(rect.left + rect.width, e.clientX));
+      scrub.set(timeAt(x));
       return;
     }
     if (dragMode === 'cue-move' || dragMode === 'cue-l' || dragMode === 'cue-r') {
@@ -1433,7 +1399,8 @@
     const mode = dragMode;
     if (mode === 'playhead') {
       dragMode = 'none';
-      endScrub();
+      scrub.end();
+      scrubPan.reset();
       return;
     }
     if (mode === 'pan') {
