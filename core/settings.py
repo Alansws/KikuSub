@@ -11,6 +11,9 @@
   还能在原来的地方找到已经转写的字幕。
 - `video_export_dir`：成片导出目录。空字符串表示跟随 `export_dir`；成片通常很大，
   所以允许单独放到另一块磁盘。
+- `chapter_name_template`：章节自动命名模板。`{num}` = 中文数字（一、二、…），
+  `{n}` = 阿拉伯数字；默认 `章节{num}`。模板里没有占位符时自动补 ` {num}`，否则
+  每个新章节都会叫同一个名字。
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ log = logging.getLogger(__name__)
 
 DEFAULT_AI_BASE_URL = "https://api.deepseek.com"
 # 分块条数的允许区间：太小会让模型丢掉上下文，太大会撞输出上限。
+DEFAULT_CHAPTER_TEMPLATE = "章节{num}"
+# 章节命名模板最长多少字：够放「第{num}章 · 场景」这种，又不至于撑爆时间轴标签。
+MAX_CHAPTER_TEMPLATE = 40
 CHUNK_RANGE = (20, 2000)
 CONTEXT_RANGE = (0, 30)
 # 本地 LM Studio 的上下文档位；默认 2048，省内存且对单句判定足够。
@@ -37,6 +43,7 @@ DEFAULTS: dict = {
     "enabled_engines": list(engines.DEFAULT_ENABLED),
     "export_dir": "",
     "video_export_dir": "",
+    "chapter_name_template": "章节{num}",
     # ---- AI（实验功能）----
     # 密钥**不在这里**：它由桌面端 `desktop/main/aikey.cjs` 用本机主密钥做 AES-256-GCM
     # 加密后存在 `preferences.json` 的 `aik1:` 密文里（主密钥 `{dataDir}/.ai-key`，0600），
@@ -74,6 +81,9 @@ def _normalize(raw: dict | None) -> dict:
     video_export = raw.get("video_export_dir")
     if isinstance(video_export, str):
         data["video_export_dir"] = video_export.strip()
+    template = raw.get("chapter_name_template")
+    if isinstance(template, str):
+        data["chapter_name_template"] = normalize_chapter_template(template)
 
     if isinstance(raw.get("ai_enabled"), bool):
         data["ai_enabled"] = raw["ai_enabled"]
@@ -105,6 +115,32 @@ def _normalize(raw: dict | None) -> dict:
         if isinstance(value, int) and not isinstance(value, bool):
             data[key] = max(low, min(high, value))
     return data
+
+
+def normalize_chapter_template(raw: str | None) -> str:
+    """把用户输入的模板收敛成一定带占位符、长度受控的样子。
+
+    - 空值 / 全空白 → 默认 `章节{num}`；
+    - 没有 `{num}` 也没有 `{n}` → 末尾补 ` {num}`（否则每个章节同名，等于没命名）；
+    - 超长时截的是**前缀**，占位符留在末尾——截掉占位符等于把命名变成固定文案。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return DEFAULT_CHAPTER_TEMPLATE
+    if "{num}" in text:
+        placeholder = "{num}"
+    elif "{n}" in text:
+        placeholder = "{n}"
+    else:
+        placeholder = "{num}"
+        text = f"{text} {placeholder}"
+    if len(text) <= MAX_CHAPTER_TEMPLATE:
+        return text
+    room = max(1, MAX_CHAPTER_TEMPLATE - len(placeholder) - 1)
+    prefix = text.replace(placeholder, "").strip()[:room].strip()
+    if not prefix:
+        return DEFAULT_CHAPTER_TEMPLATE
+    return f"{prefix} {placeholder}"
 
 
 def resolve_export_dir(data: dict | None = None, fallback: Path | None = None) -> Path:
@@ -163,6 +199,8 @@ def save_settings(patch: dict, path: Path | None = None) -> dict:
         merged["export_dir"] = patch.get("export_dir") or ""
     if "video_export_dir" in patch:
         merged["video_export_dir"] = patch.get("video_export_dir") or ""
+    if "chapter_name_template" in patch:
+        merged["chapter_name_template"] = patch.get("chapter_name_template") or ""
     for key in (
         "ai_enabled",
         "ai_base_url",

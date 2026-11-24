@@ -272,6 +272,36 @@ def test_video_export_dir_defaults_to_export_dir_and_can_be_changed(
     assert config["video_export_dir"] == str(target.resolve())
 
 
+def test_chapter_name_template_defaults_and_normalizes(client: TestClient) -> None:
+    """章节自动命名模板：默认「章节{num}」，没有占位符时自动补，空串恢复默认。"""
+    data = client.get("/api/settings", headers=AUTH).json()
+    assert data["settings"]["chapter_name_template"] == "章节{num}"
+
+    resp = client.patch(
+        "/api/settings", headers=AUTH, json={"chapter_name_template": "场景{num}"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["chapter_name_template"] == "场景{num}"
+    config = client.get("/api/config", headers=AUTH).json()
+    assert config["settings"]["chapter_name_template"] == "场景{num}"
+
+    # 没有占位符 → 补 {num}，否则每个章节都会叫同一个名字
+    resp = client.patch("/api/settings", headers=AUTH, json={"chapter_name_template": " 第  "})
+    assert resp.json()["settings"]["chapter_name_template"] == "第 {num}"
+
+    # 空串 / 全空白 → 恢复默认
+    resp = client.patch("/api/settings", headers=AUTH, json={"chapter_name_template": "   "})
+    assert resp.json()["settings"]["chapter_name_template"] == "章节{num}"
+
+
+def test_chapter_name_template_is_length_capped() -> None:
+    from core.settings import MAX_CHAPTER_TEMPLATE, normalize_chapter_template
+
+    long_name = "很长的章节前缀" * 20
+    assert len(normalize_chapter_template(long_name)) <= MAX_CHAPTER_TEMPLATE
+    assert normalize_chapter_template(long_name).endswith("{num}")
+
+
 def test_export_dir_rejects_relative_and_file_paths(client: TestClient, tmp_path: Path) -> None:
     relative = client.patch("/api/settings", headers=AUTH, json={"export_dir": "relative/dir"})
     assert relative.status_code == 422
