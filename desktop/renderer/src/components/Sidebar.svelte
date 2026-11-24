@@ -125,6 +125,13 @@
     padding: var(--sp-1) var(--sp-2) 14px;
     color: var(--text);
   }
+  /* 收起态：只剩 27px 图标，下边距要更大一点，否则第一个导航项贴着它。
+     组件样式排在 app.css 之后，同一条规则放这里才压得住（与下方紧凑模式同理）。 */
+  .sidebar.collapsed .sb-brand {
+    justify-content: center;
+    gap: 0;
+    padding: 2px 0 var(--sp-4);
+  }
   .brand-mark {
     display: block;
     width: 20px;

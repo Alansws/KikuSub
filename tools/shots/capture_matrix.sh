@@ -90,7 +90,14 @@ shot() {  # $1=状态名 $2=dev-eval $3=是否用 seed
               "KIKUSUB_OUTPUT_DIR=$base/out" "KIKUSUB_DATA_DIR=$base/data"
               "KIKUSUB_PREFERENCES_PATH=$base/prefs.json")
   [ -n "$seed" ] && envs+=("KIKUSUB_DEV_SEED=$SEED")
-  [ -n "$eval" ] && envs+=("KIKUSUB_DEV_EVAL=$(theme_eval)$eval")
+  # 主题要单独判一次：`review` 这类状态没有自己的 eval，过去 `[ -n "$eval" ]`
+  # 直接把 theme_eval 一起吞掉了——`--theme dark --states review` 截出来的
+  # 其实是浅色，文件名却在骗人（2026-11-24 发现）。
+  local theme_prefix
+  theme_prefix="$(theme_eval)"
+  if [ -n "$theme_prefix" ] || [ -n "$eval" ]; then
+    envs+=("KIKUSUB_DEV_EVAL=${theme_prefix}${eval}")
+  fi
   local extra_args=()
   # 截图模式不固定 userData：这里显式给一个临时 profile，避免落到用户的
   # ~/Library/Application Support 里（沙箱环境会直接起不来）。

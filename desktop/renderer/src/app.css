@@ -481,7 +481,9 @@ body {
 .sidebar.collapsed .sb-brand {
   justify-content: center;
   gap: 0;
-  padding: 2px 0 10px;
+  /* 收起态只剩 27px 图标：下边距给到 14px，第一个导航项才不会贴着它
+     （实测差 2px 时读起来像两个控件粘在一起；红绿灯占掉 y<46，图标从 46 起）。 */
+  padding: 2px 0 14px;
 }
 .sidebar.collapsed .brand-text,
 .sidebar.collapsed .sb-label,
