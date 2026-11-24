@@ -147,10 +147,12 @@
   });
 </script>
 
-<header class="toolbar">
-  <!-- 侧栏收起后，它的展开开关挂到顶栏最左（52px 里红绿灯占掉 x19–71，
-     放左栏会压在红绿灯上）。展开态由左栏自己那一颗负责，这里不重复。 -->
-  {#if sidebarPrefs.collapsed}
+<header class="toolbar" class:rail-collapsed={sidebarPrefs.collapsed}>
+  <!-- 侧栏收起后，它的展开开关挂到顶栏最左。这里**必须让出红绿灯的安全区**
+       （`--tl-safe-x` 87px）：收起态顶栏从 52px 起，红绿灯右缘在 71px，
+       只留 16px 内边距的话开关正好落在 x=68，压在绿灯上（2026-11-24 修）。
+       展开态由左栏自己那一颗负责，这里不重复。 -->
+  {#if sidebarPrefs.collapsed || app.compact}
     <SidebarToggle />
   {/if}
   <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>
@@ -443,9 +445,11 @@
     z-index: 30;
     /* 单行顶栏 40px（2026-11-24 Phase 1）：文件名 / 条数 / 引擎在左，
        全局动作在右。原来 52px 多出来的 12px 没有承担任何信息，
-       只是把视频监看区往下推。 */
-    height: 40px;
-    flex: 0 0 40px;
+       只是把视频监看区往下推。
+       高度走 `--topbar-h`（app.css）：收起态的侧栏顶部要把同样的 40px
+       铺成一整块底色，两处必须同一个数值，否则交界处会露出 1px 的缝。 */
+    height: var(--topbar-h);
+    flex: 0 0 var(--topbar-h);
     display: flex;
     align-items: center;
     gap: 9px;
@@ -463,6 +467,26 @@
      那个区域的点击就会被系统当成拖动窗口。 */
   .toolbar > :global(*) {
     -webkit-app-region: no-drag;
+  }
+
+  /* 收起态：顶栏从侧栏右缘起，而红绿灯右缘在 71px —— 首个控件必须让到
+     `--tl-safe-x`（87px = 19 + 52 + 16 呼吸）之后。
+     **基准用 `--sb-collapsed-w`（52）而不是 `--sb-rail-w`**：收起态在紧凑模式下
+     同样是 52（`.sidebar.collapsed` 比媒体查询里的 `.sidebar` 多一个类、优先级更高），
+     用 56 去减会少让 4px。反算内边距：87 − 52 = 35px。
+     红绿灯是原生绘制、DOM 量不到，所以这个数字与 `main.cjs` 的
+     `trafficLightPosition.x` 绑死，取值理由写在 app.css 的 `--tl-safe-x` 注释里。 */
+  .toolbar.rail-collapsed {
+    padding-left: calc(var(--tl-safe-x) - var(--sb-collapsed-w));
+  }
+  /* 4px 光学校正（2026-11-24）：顶栏 40px，控件按盒模型居中后中线在 y=20，
+     而三颗灯的中线在 y=24（`trafficLightPosition.y` 18 + 灯高 12 / 2）。
+     不校正的话开关会「微微悬在三个点上面」，与 MacWhisper 的同一行读感不一致。
+     这里只把开关本体下移 4px，不动顶栏的行高；顶栏里只会有这一颗开关
+     （收起态或紧凑模式，展开态它挂在左栏），所以不必再加限定类。 */
+  .toolbar > :global(.sb-toggle) {
+    position: relative;
+    top: 4px;
   }
 
   .tb-title {
@@ -770,7 +794,10 @@
   @media (max-width: 900px) {
     .toolbar {
       gap: 6px;
-      padding: 0 10px;
+      /* 紧凑模式图标轨 56px（收起时是 52，见 `.toolbar.rail-collapsed`），
+         顶栏从轨右缘起；默认 16px 内边距会让标题落在 x=72，距红绿灯右缘（71）
+         只剩 1px。左右统一遵守安全区：右边保持紧凑模式的 10px 呼吸。 */
+      padding: 0 10px 0 calc(var(--tl-safe-x) - var(--sb-rail-w));
     }
     .tb-sub {
       display: none;

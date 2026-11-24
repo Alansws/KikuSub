@@ -414,8 +414,11 @@
 
   /* 当前句：全屏最大的字。2026-11-24（Phase 2）去卡片化——它原来是
      「白底 + 1px 灰框 + 2px 蓝左线 + 8px 圆角」的一层套娃，检查器里还有三四个
-     同款，叠起来就是「网页表单」。现在只用一条 1px 上分割线分段，
-     靠字号与留白建立层级；可编辑能力一点没变（还是 textarea）。 */
+     同款，叠起来就是「网页表单」。现在**外层**只用一条 1px 上分割线分段，
+     靠字号与留白建立层级。
+     同日二改：套娃层不恢复，但里面的 textarea 恢复成独立输入框——
+     两者不是一回事：外层再套卡会回到「网页表单」，而输入框没有边框
+     就分不清「这行字能不能改」（浅色下字号再大也是正文长相）。 */
   .cue-card {
     margin-top: var(--sp-3);
     padding: var(--sp-3) 0 0;
@@ -433,14 +436,24 @@
     letter-spacing: -0.01em;
     white-space: nowrap;
   }
+  /* 可编辑台词 = 一个真正的输入框（2026-11-24 用户报障后又改回来）。
+     去卡片化（Phase 2）把这里的边框和底一起收掉了，只剩一行大字；
+     在浅色检查器里它和正文完全同质，读不出「这是能点的输入框」。
+     现在恢复「输入框质感」，但**不恢复套娃卡片**：外层 .cue-card 仍然只有
+     一条 1px 上分割线，白框只是这一行的控件本身。
+     时间码留在框外上方（.cue-tc），框内只放可编辑的台词。
+     底色走 --raise（浅色 #fff / 深色 #181c23 / 明朝墨 #fff），
+     与设置页、AI 通道的输入框同一个令牌，不另造一套。 */
   .cue-text {
     display: block;
     width: 100%;
     margin-top: var(--sp-2);
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: var(--raise);
+    /* rows=2（20/29 × 2 = 58）加上上下内边距与 1px 边框，高度才是整数像素；
+       用 padding 撑而不是靠 rows 硬顶，聚焦时框体不会跳。 */
+    padding: 6px 9px;
     font: inherit;
     font-family: var(--font-cue);
     font-size: 20px;
@@ -449,10 +462,13 @@
     letter-spacing: -0.01em;
     color: var(--ink);
     resize: none;
-    min-height: 58px;
+    min-height: 72px;
     user-select: text;
     outline: none;
-    transition: box-shadow var(--dur-fast) var(--ease);
+    transition:
+      border-color var(--dur-fast) var(--ease),
+      box-shadow var(--dur-fast) var(--ease),
+      background var(--dur-fast) var(--ease);
   }
   .cue-text.sub {
     font-family: var(--font-sans);
@@ -460,10 +476,16 @@
     font-weight: 400;
     line-height: 24px;
     color: var(--ink-2);
-    min-height: 44px;
+    min-height: 62px;
   }
-  .cue-text:focus-visible {
-    outline: none;
+  .cue-text:hover {
+    border-color: var(--line);
+  }
+  /* 聚焦：边框转强调色 + 一圈柔和光晕。用父级 `:focus-within` 而不是
+     `:focus-visible` —— 点进输入框也要亮（那是「现在可以改这一句」的提示），
+     而且焦点落在框内任何位置都成立。 */
+  .cue-card:focus-within .cue-text {
+    border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .edit-label {

@@ -7,6 +7,11 @@
    * 红绿灯就在 x≈19–71 —— 开关放在那里会**压在红绿灯上**，物理上点不到。
    * 所以收起后开关改挂到顶栏最左侧（见 `Toolbar.svelte`），职责仍是同一个
    * `toggleSidebar()`，状态只有一个。
+   *
+   * **图标不是尖角箭头**（2026-11-24 用户裁定）：左右尖角在顶栏会被读成
+   * 「上一页 / 下一页」（那是浏览器后退的形状），而它实际是「显隐侧栏」。
+   * 现在两态都用同一颗「侧栏」图标（外框 + 左列实底，MacWhisper 同款），
+   * 状态靠 `aria-expanded` + title 表达，不靠把三角形掉头。
    */
   import Icon from './Icon.svelte';
   import { sidebarPrefs, toggleSidebar } from '../lib/sidebarPrefs.svelte';
@@ -22,7 +27,7 @@
   title={sidebarPrefs.collapsed ? '展开侧边栏（⌃⌘S）' : '收起侧边栏（⌃⌘S）'}
   aria-label={sidebarPrefs.collapsed ? '展开侧边栏' : '收起侧边栏'}
 >
-  <Icon name={sidebarPrefs.collapsed ? 'chevron-right' : 'chevron-left'} size={12} />
+  <Icon name="sidebar-toggle" size={13} />
 </button>
 
 <style>

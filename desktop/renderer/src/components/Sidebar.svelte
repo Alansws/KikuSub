@@ -54,9 +54,11 @@
 </script>
 
 <aside class="sidebar" class:collapsed={sidebarPrefs.collapsed}>
-  <!-- 展开态的折叠开关贴在红绿灯留白区右侧；收起态它移到顶栏
-       （52px 里红绿灯占掉 x19–71，开关放在这里会被压在红绿灯上）。 -->
-  {#if !sidebarPrefs.collapsed}
+  <!-- 展开态的折叠开关贴在红绿灯留白区右侧；收起态它移到顶栏。
+       紧凑模式（≤900px，含 200% 缩放）同理：图标轨只有 56px，
+       `right: 10px` 会把开关放到 x≈24，正好压在红绿灯（x19–71）上，
+       所以**两种「窄轨」情况都挂到顶栏**，这里只留全宽展开态。 -->
+  {#if !sidebarPrefs.collapsed && !app.compact}
     <SidebarToggle floating />
   {/if}
 
@@ -127,11 +129,13 @@
     color: var(--text);
   }
   /* 收起态：只剩 27px 图标，下边距要更大一点，否则第一个导航项贴着它。
-     组件样式排在 app.css 之后，同一条规则放这里才压得住（与下方紧凑模式同理）。 */
+     组件样式排在 app.css 之后，同一条规则放这里才压得住（与下方紧凑模式同理）。
+     上内边距 6px：app.css 把收起态的 `padding-top` 设成 40（= 顶栏底边，
+     顶带整块连续），这里再给 6 让图标从 y=46 起，与发丝线留出呼吸。 */
   .sidebar.collapsed .sb-brand {
     justify-content: center;
     gap: 0;
-    padding: 2px 0 var(--sp-4);
+    padding: 6px 0 var(--sp-4);
   }
   .brand-mark {
     display: block;
@@ -256,7 +260,8 @@
     .sb-brand {
       justify-content: center;
       gap: 0;
-      padding: var(--sp-1) 0 var(--sp-3);
+      /* 6px：顶栏发丝线在 y=40，图标从 y=46 起，与收起态一致 */
+      padding: 6px 0 var(--sp-3);
     }
     .brand-name,
     .brand-sub {

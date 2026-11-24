@@ -852,6 +852,11 @@ function createWindow() {
     vibrancy: 'sidebar',
     visualEffectState: 'followWindow',
     titleBarStyle: 'hiddenInset',
+    // 红绿灯位置。**渲染层有两个数值与它绑死**（见 app.css 的 `--tl-safe-x`
+    // 与 `--topbar-h`）：三颗 12px 灯 + 2×8 间距 = 52 宽，右缘落在 x=71；
+    // 收起态顶栏从侧栏右缘 52px 起，首个控件必须让到 87（71 + 16 呼吸），
+    // 且顶栏 40px 要比灯的中线 y=24 留出余量。改这里的 x/y 必须同步改
+    // `--tl-safe-x`，回归脚本 tools/shots/verify_phase2_shell.mjs 会拦。
     trafficLightPosition: { x: 19, y: 18 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

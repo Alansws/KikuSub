@@ -68,6 +68,23 @@
   /* 侧栏收起态宽度：52px 正好是 16px 图标 + 两侧各 18px 的呼吸，
      和「一条图标轨」的视觉重量一致，再窄就捏不住点击目标了。 */
   --sb-collapsed-w: 52px;
+
+  /* 系统红绿灯的安全区（2026-11-24）：
+     19（右缘起点）+ 52（三颗 12px 灯 + 2×8 间距）+ 16（呼吸）= 87px。
+     **必须与 `desktop/main/main.cjs` 的 `trafficLightPosition.x` 同步**：
+     红绿灯是原生绘制的，DOM 读不到，改一处不同步另一处就会重新叠上
+     （收起态第一版就是这样把开关压在绿灯上：顶栏从 52px 起 + 16px 内边距 = 68px）。
+     收起态的顶栏用它让位，展开态顶栏从 236px 起、天然在安全区右侧。 */
+  --tl-safe-x: 87px;
+  /* 收起态图标轨的实际宽度。默认就是 `--sb-collapsed-w`，但 ≤900px 的紧凑模式
+     把轨加宽到 56px（点按目标要更大），顶栏的让位是按「轨宽」反算的，
+     所以这里单独提一个 token，紧凑模式覆盖它一处即可，不用在 Toolbar 里
+     再写一个 56 的魔法数。 */
+  --sb-rail-w: var(--sb-collapsed-w);
+  /* 顶栏高度：收起态侧栏顶部要把同样的 40px 铺成一整块连续底色（红绿灯背后
+     不能出现「两种底色 + 一条竖线」），所以顶栏与侧栏顶部共用这一个数值，
+     见 `.sidebar.collapsed` 一段。 */
+  --topbar-h: 40px;
   --ctl-h-lg: 32px;
   --ctl-h-xl: 36px;
   /* 设置页分段导航的段高（比普通控件高一档） */
@@ -469,6 +486,9 @@ body {
   background: var(--bg-sidebar);
   backdrop-filter: saturate(180%) blur(24px);
   -webkit-backdrop-filter: saturate(180%) blur(24px);
+  /* 竖分割线：展开态侧栏 236px，整组红绿灯（x19–71）都在栏内，线在右缘不会
+     碰到任何一颗灯，所以照常从顶到底。收起态会横穿红绿灯，例外见下面的
+     `.sidebar.collapsed` 一段。 */
   border-right: 1px solid var(--separator);
   padding: 46px 12px 12px;
   display: flex;
@@ -494,13 +514,45 @@ body {
 .sidebar.collapsed {
   width: var(--sb-collapsed-w);
   flex: 0 0 var(--sb-collapsed-w);
+
+  /* 顶栏那 40px 与顶栏连成一整块（2026-11-24）：
+     收起后顶栏从 52px 起、而红绿灯右缘在 71px，三颗灯横跨在「侧栏 + 顶栏」
+     两侧；若左栏照常带自己的底色和右边框，那条 1px 竖线正好从黄灯与绿灯之间
+     穿过去，视觉上把红黄绿劈成两半。
+     处理：顶部 40px 刷成与顶栏**完全相同的颜色**（`--paper`：顶栏是
+     `--bg-toolbar` 0.86 的同色叠在 `.main` 的 `--paper` 上，合成结果就是
+     `--paper` 本身，三套主题都成立），底部同一条发丝线；竖分割线（::after）
+     改从 y=40 起画，与顶栏底边在 (52,40) 接成直角。
+     主因记在 `docs/contracts/review-console.md` §3.4.13。 */
+  border-right-color: transparent;
+  /* 内容从顶栏底边起（40px），与上面那条「整块顶带」严丝合缝：
+     留 46px 会在 40–46 之间露出一条 6px 的侧栏色，正是要消掉的那种割裂。 */
+  padding-top: var(--topbar-h);
+}
+.sidebar.collapsed::before {
+  height: var(--topbar-h);
+  background: var(--paper);
+  box-shadow: inset 0 -1px 0 var(--separator);
+}
+.sidebar.collapsed::after {
+  content: '';
+  position: absolute;
+  top: var(--topbar-h);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--separator);
+  pointer-events: none;
+  -webkit-app-region: no-drag;
 }
 .sidebar.collapsed .sb-brand {
   justify-content: center;
   gap: 0;
   /* 收起态只剩 27px 图标：下边距给到 14px，第一个导航项才不会贴着它
-     （实测差 2px 时读起来像两个控件粘在一起；红绿灯占掉 y<46，图标从 46 起）。 */
-  padding: 2px 0 14px;
+     （实测差 2px 时读起来像两个控件粘在一起）。
+     上边距 6px：收起态的 padding-top 已经是 40（= 顶栏底边），
+     再给 6 就是图标从 y=46 起，与红绿灯区（y<30）留足 16px。 */
+  padding: 6px 0 14px;
 }
 .sidebar.collapsed .brand-text,
 .sidebar.collapsed .sb-label,
@@ -1076,15 +1128,39 @@ progress {
    内容区因此重新拿回整个宽度。
    ============================================================ */
 @media (max-width: 900px) {
+  :root {
+    /* 紧凑模式图标轨 56px：顶栏收起态的让位按这个宽度反算（见 Toolbar 注释） */
+    --sb-rail-w: 56px;
+  }
   .sidebar {
-    width: 56px;
-    flex: 0 0 56px;
-    padding: 46px 8px 10px;
+    width: var(--sb-rail-w);
+    flex: 0 0 var(--sb-rail-w);
+    /* 与收起态同一套「顶带连续」处理（见 `.sidebar.collapsed` 的注释）：
+       56px 的轨也窄于红绿灯右缘 71px，竖线照样会从黄灯与绿灯之间穿过去。 */
+    border-right-color: transparent;
+    padding: var(--topbar-h) 8px 10px;
+  }
+  .sidebar::before {
+    height: var(--topbar-h);
+    background: var(--paper);
+    box-shadow: inset 0 -1px 0 var(--separator);
+  }
+  .sidebar::after {
+    content: '';
+    position: absolute;
+    top: var(--topbar-h);
+    right: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--separator);
+    pointer-events: none;
+    -webkit-app-region: no-drag;
   }
   .sidebar .sb-brand {
     justify-content: center;
     gap: 0;
-    padding: 4px 0 12px;
+    /* 6px：图标从 y=46 起，与顶栏发丝线（y=40）留出呼吸 */
+    padding: 6px 0 12px;
   }
   .sidebar .brand-name,
   .sidebar .brand-sub,
