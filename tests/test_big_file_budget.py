@@ -61,8 +61,11 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              接线只多出 scrub/scrubPan 两个构造块，净减 33 行，预算随实测值下调。
 # 2026-11-25（章节端点拖动）：给 ChapterTrack 接 `onview` 要占一行，先把两处重复的
 #              `xPlayhead()` 换成 `xOf(play.time)` 内联（删 3 行），2586 → 2583。
+# 2026-11-25（译文轨三态 / 单句补译）：stale 判定搬进 `lib/translationStatus.ts`、
+#              「只动句读」的本地对齐搬进 `lib/translationBase.ts`，store 只留两行接线；
+#              3255 → 3252（下调，不是放宽）。
 BUDGET = {
-    "lib/store.svelte.ts": 3255,
+    "lib/store.svelte.ts": 3252,
     "views/ReviewView.svelte": 2583,
 }
 

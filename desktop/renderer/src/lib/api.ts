@@ -604,6 +604,15 @@ export interface AiArbitrationResult {
   elapsed_ms: number;
 }
 
+/** 单句补译（只读草稿，采纳才落轨）。 */
+export interface AiTranslateCueResult {
+  text: string;
+  note: string;
+  lang: string;
+  model: string;
+  elapsed_ms: number;
+}
+
 /** 双引擎复核对齐后的一行。`kind` 对应 = / ~ / + / −。 */
 export interface DualRow {
   kind: 'same' | 'diff' | 'only_a' | 'only_b';
@@ -1773,6 +1782,21 @@ export const api = {
     },
   ) =>
     req<AiArbitrationResult>('/api/ai/arbitrate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: {
+        'X-AI-Key': opts.globalKey,
+        ...(opts.useArbitrate ? { 'X-AI-Arbitrate-Key': opts.arbitrateKey || '' } : {}),
+      },
+      signal: opts.signal,
+    }),
+
+  /** 让单句判定模型把第 index 条原文翻成 lang；不写轨、不进历史。 */
+  translateCue: (
+    payload: { index: number; lang?: string },
+    opts: { globalKey: string; arbitrateKey?: string; useArbitrate: boolean; signal?: AbortSignal },
+  ) =>
+    req<AiTranslateCueResult>('/api/ai/translate-cue', {
       method: 'POST',
       body: JSON.stringify(payload),
       headers: {
