@@ -47,11 +47,16 @@
 - **同步**：`cueIndex` 变化时（点波形、拖播放头、播放中）表格 `revealRow()` 且
   `play.selected` 跟到该块；用户点的行若已在当前块内则保留其选择，不能被“块内第一条”
   规则抢回去。
-- **核对期保存**：右侧检查器底部常驻 `save-dock`。`暂存进度` 调
-  `POST /api/cues/draft`，只写运行数据目录的 `{stem}.autosave_draft.srt`（与旧 Gradio
-  同名共用），不覆盖导出交付文件；编辑成功后由 `scheduleDraftSave()` 0.9s 防抖自动写一次。
-  `导出` 调 `POST /api/cues/export` 写 `settings.json` 的 `export_dir`。两者语义不同：
-  草稿是防丢备份，导出是交付文件；即使没有任务报告（重开应用后手动导入字幕）也必须能导出。
+- **核对期保存**：`暂存进度` 调 `POST /api/cues/draft`，只写运行数据目录的
+  `{stem}.autosave_draft.srt`（与旧 Gradio 同名共用），不覆盖导出交付文件；编辑成功后由
+  `scheduleDraftSave()` 0.9s 防抖自动写一次。`导出` 调 `POST /api/cues/export` 写
+  `settings.json` 的 `export_dir`。两者语义不同：草稿是防丢备份，导出是交付文件；即使
+  没有任务报告（重开应用后手动导入字幕）也必须能导出。
+  **入口位置（2026-11-24 Phase 1 变更）**：暂存与导出不再共用一张卡片，也不再待在右侧
+  检查器底部——`components/DraftDock.svelte` 常驻**底栏右侧**（只在核对屏且有字幕时
+  出现，状态文案「尚未暂存 / 已暂存 时间 · N 条」+ 恢复 + 暂存）；导出走顶栏「导出」
+  按钮与导出视图。理由：那块卡片同时装两件不同作用域的事，在 1360×838 下会吃掉检查器
+  的可滚动高度（2026-11-21 报障过 TTS 面板被它截断）。
 - **核对表来源与报告解耦（2026-11 修复）**：`Session.review_source`（`transcription` /
   `import` / `draft`）随字幕快照一起返回，并参与历史回滚；导入字幕或恢复草稿后，
   右侧检查器不得再展示上一次转写的质检速览 / 生效参数 / 输出，`GET /api/qa` 返回
@@ -287,7 +292,7 @@
     **界面（2026-11-21 Step 3 重排）**：`components/inspector/TtsControls.svelte` 常驻在
     「当前条目」的操作行里——**一枚「朗读 / 停止 / 生成中」按钮 + 音色下拉 + 「⚙」**，
     与「试听原声」同一行（原来那张底部「TTS 对照」大卡片在 1360×838 下会被底部
-    保存栏截断，用户得滚动才看得见）。语速、**上传 / 截取 / 音色库（带数量）/ 管理**
+    保存栏截断，用户得滚动才看得见；那个保存栏 2026-11-24 已移出检查器）。语速、**上传 / 截取 / 音色库（带数量）/ 管理**
     与「下载克隆模型」CTA 收进「⚙」按需展开的面板（`.tts-panel`），默认收起、不占
     常驻高度；音色库用图标动作（试听 / 设为默认 / 管理）而不是一行文字链接，模型下载
     进度与批量建音色进度也在面板里。参考音频约束（3–10 秒、单人干声）放在上传/截取
@@ -583,12 +588,12 @@
 
   | 文件 | 职责 |
   | --- | --- |
-  | `components/Inspector.svelte` | 页签 + 三个页签的内容挂载 + 常驻保存栏（约 240 行） |
+  | `components/Inspector.svelte` | 页签 + 三个页签的内容挂载（约 200 行） |
   | `components/inspector/CuePane.svelte` | 「当前条目」：显示模式行、稿纸卡、操作行、字幕剪贴板 |
   | `components/inspector/TtsControls.svelte` | 朗读控件：图标按钮 + 音色下拉 + 「⚙」面板（见 §3.4.2） |
   | `components/inspector/ReviewAssistant.svelte` | 纠偏助手的挂载点（复核 / AI 判定见 §3.4.5） |
   | `components/inspector/InspectorMeta.svelte` | 只读信息：来源 / 质检速览 / 生效参数 / 输出 |
-  | `components/inspector/SaveDock.svelte` | 底部保存栏（暂存 / 格式 / 导出 / 恢复） |
+  | `components/DraftDock.svelte` | 底栏的暂存 / 恢复（2026-11-24 从检查器底部搬出） |
 
   拆分只搬家：状态与副作用仍只有在原处那一份（草稿草写与 `registerCueDraftCommit`、
   换句 `stopTts()`、`refreshDraftInfo`/`loadTranslations`/`loadTtsVoices` 的刷新时机、
@@ -599,8 +604,9 @@
   比原来的「单行 + 底部 TTS 大卡片（134px）」省约 100px，这是「不用滚动就能操作完」
   的来源。
 - **不溢出的判据是可测的**：`tools/shots/verify_review_defaults.mjs` 在 1360×838 里断言
-  从显示模式到 AI 判定的整块 `bottom ≤ .ins-scroll.clientHeight`，且 `≤ .save-dock.top`。
-  只读的「生效参数 / 输出」在 AI 已配置或双语稿下仍可能需要滚动——那是信息，不是操作。
+  从显示模式到 AI 判定的整块 `bottom ≤ .ins-scroll.clientHeight`，检查器里**不再存在**
+  `.save-dock`，且底栏 `.draft-dock` 有暂存入口与状态文案。只读的「生效参数 / 输出」在
+  AI 已配置或双语稿下仍可能需要滚动——那是信息，不是操作。
 - **第一次打开这部片（没有本机现场快照）**：`lib/reviewStart.ts` 的
   `planInitialReviewView()` 给默认现场——**选中第 1 条字幕、播放头 seek 到它的起点、
   视野 `duration/50`（`INITIAL_VIEW_ZOOM=50`，和「聚焦」69× 同量级）**。
@@ -627,6 +633,43 @@
   真的 seek、默认双语且只生效一次、操作区不溢出重爬、朗读面板按需展开）；
   既有 `verify_review_viewport.mjs` / `verify_cue_clipboard.mjs` /
   `verify_review_transport.mjs` / `verify_arbitration*.mjs` 同轮全绿。
+
+#### 3.4.12 核对台组件拆分与外壳（2026-11-24，界面原生化 Phase 0/1）
+
+> 触发：核对台单文件 3780 行、检查器/走带/监看/时间轴混在一起，任何动排版都得先读完
+> 整份文件（红线 11 的「只许变短」正是在说这件事）。Phase 0 只搬家、不改行为；
+> Phase 1 才动外壳。**红线 5/6/7/8 一步没动**：单击 vs 框选、进度条 click-to-seek、
+> `duration/69` 步进、50 步统一历史、导出走 `setExport*` 全部原样。
+
+- **核对台拆分（Phase 0，纯搬运，视觉零变化）**：
+
+  | 文件 | 职责 |
+  | --- | --- |
+  | `views/ReviewView.svelte` | 状态机与命中判定：擦洗器、拖块、选区 clamp、虚拟列表、查找、右键菜单（3780 → 3158 行） |
+  | `components/review/ReviewTransport.svelte` | 播放走带行 + 缩放工具行（只读 props + 回调） |
+  | `components/review/ReviewStage.svelte` | 视频监看：画面 + 字幕叠加 + 代理闸门（`{@attach}` 传 `bindVideo`） |
+  | `components/review/ReviewWaveTrack.svelte` | 波形 / 字幕轨道画布（纯展示 + 事件转发） |
+
+  拆分口径：**状态只有一份，仍在 `ReviewView`**；子组件不持有交互状态。验收方式是
+  无窗口截图的逐像素比对（`review` 页 0.0000% 差异），不是「编译通过」。
+
+- **外壳（Phase 1）**：
+  - **侧栏可折叠**：`app.sidebarCollapsed`（持久化 `localStorage['kikusub.sidebarCollapsed']`），
+    236px ↔ 52px（`app.css` 的 `--sb-collapsed-w`）。收起只留图标条，title 与无障碍名
+    保留。**开关不能放在收起后的左栏里**：那 52px 中系统红绿灯占 x≈19–71，按钮会被压在
+    红绿灯上点不到——所以收起态改挂顶栏最左（`components/SidebarToggle.svelte`，
+    `floating` 为真时钉在展开态的留白区）。入口三处同一个 `toggleSidebar()`：
+    侧栏按钮 / 顶栏按钮 / ⌃⌘S（渲染层兜底 + 「显示」菜单，主进程 `menu:sidebar`）。
+  - **顶栏单行 40px**（原 52px）：文件名 / 条数 / 引擎在左，全局动作在右。顶部与侧栏之间
+    不再有横向分割线；左栏通顶，红绿灯落在它的留白区里。
+  - **暂存移到底栏**（见 §3.4「核对期保存」）：检查器只剩与当前条目 / 队列 / 章节有关
+    的内容，卡片式的「保存」区不再出现。
+
+- **回归**：`verify_review_transport`（逐帧 / 倍速 / 磁吸 / 缩放记忆）、
+  `verify_cue_selection`（单击 vs 4px 框选 / ⇧ 连选 / ⌘ 多选）、`verify_review_viewport`
+  （切页回来恢复现场）、`verify_cue_clipboard`、`verify_review_defaults`（检查器无
+  `.save-dock`、底栏 `.draft-dock` 就位）必须全绿；`tests/test_big_file_budget.py`
+  的 `views/ReviewView.svelte` 预算同步下调到 3158。
 
 #### 3.4.11 「三版对照」一张卡与判定结果入视野（2026-11-21，界面重构 Step 3 后续）
 
@@ -660,4 +703,5 @@
 - **回归**：`verify_arbitration.mjs`（结果行 / 徽章 / 采用 + 新增几何断言：三行顺序
   与「AI 结果行底边 ≤ `.ins-scroll.clientHeight`」）、
   `verify_arbitration_dialog.mjs`（三行各自的复制、唯一展开入口、追问与清空重判）、
-  `verify_review_defaults.mjs`（操作区 `bottom ≤ clientHeight` 与 `≤ save-dock.top`）。
+  `verify_review_defaults.mjs`（操作区 `bottom ≤ clientHeight`、检查器内无 `.save-dock`、
+  底栏 `.draft-dock` 就位）。
