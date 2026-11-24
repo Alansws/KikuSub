@@ -180,6 +180,18 @@ node tools/shots/verify_chapter_draft.mjs
 截图落在系统临时目录的 `kikusub-chapter-draft/chapter-draft.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.9「章节草稿」。
 
+## 章节区间端点拖动回归
+
+区间章节两端直接在 6px 色条上拖：旗标拖过 4px 改起点（单击仍是跳转），右端抓手改终点；
+拖到边缘时视窗自己平移。脚本覆盖拖动、⌘Z 撤销、压住右缘继续推进、拖动不 seek。
+
+```bash
+node tools/shots/verify_chapter_edge.mjs
+```
+
+截图落在系统临时目录的 `kikusub-chapter-edge/chapter-edge.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.9「端点拖动」。
+
 ## 点行选区与单句 AI 判定回归
 
 2026-11-20 新增两条用户报障/新流程的静默回归：
