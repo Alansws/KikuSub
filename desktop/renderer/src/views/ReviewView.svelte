@@ -633,7 +633,7 @@
    */
   const scrubPan = createScrubPan({
     // 擦洗被外部定位打断（scrub.cancel）时立刻停止推进，别让视窗自己漂
-    getMode: () => (scrub.active ? dragMode : 'none'),
+    isDragging: () => scrub.active && dragMode === 'playhead',
     getRect: () => waveWrap?.getBoundingClientRect() ?? null,
     getView: () => ({ start: viewStart, span: viewSpan }),
     getDuration: () => duration,
@@ -846,10 +846,6 @@
     activeGuide: number | null;
   } | null = null;
 
-  function xPlayhead() {
-    return xOf(play.time);
-  }
-
   function togglePlay() {
     if (!video) return;
     if (video.paused) void video.play().catch(() => {});
@@ -1060,7 +1056,7 @@
   function updateHover(e: PointerEvent) {
     if (!waveWrap) return;
     const pt = wavePoint(e);
-    if (pt.y <= RULER_H + 1 || Math.abs(pt.x - xPlayhead()) <= PLAYHEAD_GRAB) {
+    if (pt.y <= RULER_H + 1 || Math.abs(pt.x - xOf(play.time)) <= PLAYHEAD_GRAB) {
       if (hoverKey) hoverKey = '';
       waveCursor = 'ew-resize';
       return;
@@ -1116,7 +1112,7 @@
     }
 
     // 2) 播放头两侧 8px：随时抓得住（不用精确点到 1px 的线）
-    if (Math.abs(pt.x - xPlayhead()) <= PLAYHEAD_GRAB) {
+    if (Math.abs(pt.x - xOf(play.time)) <= PLAYHEAD_GRAB) {
       beginPlayhead(t, e.clientX);
       return;
     }
@@ -2136,7 +2132,7 @@
       {viewSpan}
       rulerH={RULER_H}
       playTime={play.time}
-      playheadX={xPlayhead()}
+      playheadX={xOf(play.time)}
       {waveW}
       selectionLeft={selection ? xOf(selection.start) : null}
       selectionWidth={selection ? xOf(selection.end) - xOf(selection.start) : 0}
@@ -2162,6 +2158,7 @@
         setView(t - span / 2, span);
       }}
       onseekmark={(id) => seekToMark(id)}
+      onview={(start) => setView(start, viewSpan)}
       onselectionresize={(edge, e) => {
         e.stopPropagation();
         dragMode = edge === 'l' ? 'resize-l' : 'resize-r';

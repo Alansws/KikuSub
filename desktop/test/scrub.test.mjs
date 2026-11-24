@@ -96,7 +96,7 @@ function harness(init = {}) {
     ...init,
   };
   const pan = createScrubPan({
-    getMode: () => state.mode,
+    isDragging: () => state.mode === 'playhead',
     getRect: () => state.rect,
     getView: () => ({ ...state.view }),
     getDuration: () => state.duration,

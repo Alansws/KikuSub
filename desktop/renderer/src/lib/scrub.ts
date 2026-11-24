@@ -217,8 +217,8 @@ export function edgePanVelocity(input: EdgePanInput): EdgePan {
 }
 
 export interface ScrubPanDeps {
-  /** 当前拖动模式；只有 `'playhead'` 才推进。 */
-  getMode: () => string;
+  /** 拖拽是否还在进行；false 时任何 step 都不推进（防止松手后自己漂）。 */
+  isDragging: () => boolean;
   /** 时间轴可视矩形；元素还没挂上时返回 null。 */
   getRect: () => { left: number; width: number } | null;
   getView: () => { start: number; span: number };
@@ -256,7 +256,7 @@ export function createScrubPan(deps: ScrubPanDeps): ScrubPan {
   }
 
   function step(now = performance.now()): boolean {
-    if (!armed || deps.getMode() !== 'playhead') return false;
+    if (!armed || !deps.isDragging()) return false;
     const rect = deps.getRect();
     const view = deps.getView();
     const duration = deps.getDuration();

@@ -59,9 +59,11 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 # 2026-11-25（播放头边缘自动滚动）：擦洗状态机 + 边缘推进器整段搬进 lib/scrub.ts
 #              （零运行时相对导入，`node --test` 直接加载），ReviewView 2619 → 2586；
 #              接线只多出 scrub/scrubPan 两个构造块，净减 33 行，预算随实测值下调。
+# 2026-11-25（章节端点拖动）：给 ChapterTrack 接 `onview` 要占一行，先把两处重复的
+#              `xPlayhead()` 换成 `xOf(play.time)` 内联（删 3 行），2586 → 2583。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 2586,
+    "views/ReviewView.svelte": 2583,
 }
 
 

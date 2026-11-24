@@ -46,6 +46,7 @@
     oncontextmenu,
     ondblclick,
     onseekmark,
+    onview,
     onselectionresize,
     onfocusplayhead,
     onresizedown,
@@ -78,6 +79,7 @@
     oncontextmenu: (e: MouseEvent) => void;
     ondblclick: (e: MouseEvent) => void;
     onseekmark: (id: string, start: number) => void;
+    onview?: ((start: number) => void) | null;
     onselectionresize: (edge: 'l' | 'r', e: PointerEvent) => void;
     onfocusplayhead: () => void;
     onresizedown: (e: PointerEvent) => void;
@@ -121,7 +123,7 @@
   class:dragging
 >
   <canvas bind:this={canvasEl}></canvas>
-  <ChapterTrack {marks} {duration} {viewStart} {viewSpan} {rulerH} onseek={onseekmark} />
+  <ChapterTrack {marks} {duration} {viewStart} {viewSpan} {rulerH} onseek={onseekmark} {onview} />
 
   {#if cueTip}
     <div class="cue-tip" style="left:{cueTip.x}px">{cueTip.label}</div>
