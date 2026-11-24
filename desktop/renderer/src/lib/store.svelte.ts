@@ -61,6 +61,7 @@ import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 import { markExplicitJump } from './reviewViewport';
+import { isSubtitlePath, pickVideoExportDir } from './mediaPath';
 
 export type View =
   | 'import'
@@ -1219,6 +1220,11 @@ export function toggleTheme() {
 }
 
 export function setView(view: View) {
+  // 设置已改成浮层（lib/settingsOverlay）：旧入口照样能用，转成开浮层。
+  if (view === 'settings') {
+    void import('./settingsOverlay.svelte').then((m) => m.openSettings());
+    return;
+  }
   app.view = view;
   // 检查器只属于「核对」屏（已确认的设计决定）
   // 紧凑模式里检查器是抽屉：切到核对屏不主动盖住画面，由用户点开关打开
@@ -1235,7 +1241,6 @@ export function setView(view: View) {
 // 媒体
 // ---------------------------------------------------------------------------
 
-const SUBTITLE_EXTS = ['.srt', '.vtt'];
 
 // 上次会话：只存路径与小整数，不复制媒体/字幕；重启后按真实链路重新导入。
 const LAST_MEDIA_KEY = 'kikusub.lastMedia';
@@ -1310,8 +1315,7 @@ export async function openMedia(
   // 换片前取消上一部片还没落地的草稿写入，避免把旧字幕写到新媒体的草稿名下
   clearTimeout(draftTimer);
   draftAgain = false;
-  const lower = path.toLowerCase();
-  if (SUBTITLE_EXTS.some((ext) => lower.endsWith(ext))) {
+  if (isSubtitlePath(path)) {
     await openSubtitle(path);
     return;
   }
@@ -1323,7 +1327,7 @@ export async function openMedia(
     // 换片：不把「重置导出面板」记成一次编辑；新会话的起始状态由下面的
     // 静默同步建立。
     resetExportPanel({ record: false });
-    exporter.outDir = defaultVideoExportDir();
+    exporter.outDir = pickVideoExportDir(app.config);
     // 让服务端基线记住新片的默认导出设置，第一次调字号之前 ⌘Z 才有正确的起点。
     void syncClientState(false);
     app.view = 'review';
@@ -1544,10 +1548,6 @@ export async function importProxyFromFile() {
 
 let exportPlanTimer: number | undefined;
 let exportPlanSeq = 0;
-
-export function defaultVideoExportDir(): string {
-  return app.config?.video_export_dir || app.config?.export_dir || app.config?.output_dir || '';
-}
 
 export async function loadExportOptions(force = false) {
   if (!app.connected) return;

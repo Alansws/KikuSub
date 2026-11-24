@@ -80,7 +80,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--sp-4);
   }
-  @media (max-width: 1120px) {
+  @container sheet (max-width: 560px) {
     .set-section-grid {
       grid-template-columns: minmax(0, 1fr);
     }

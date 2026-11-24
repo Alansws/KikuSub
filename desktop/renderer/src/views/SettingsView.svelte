@@ -9,13 +9,14 @@
    * 页签记忆走 localStorage（`kikusub.settingsTab`）：⌘, 回来时停在上次那一页。
    * 侧栏的 ⌘1–⌘8 主导航不受影响。
    */
-  import PageHeader from '../components/PageHeader.svelte';
+  import Icon from '../components/Icon.svelte';
   import SettingsNav from '../components/settings/SettingsNav.svelte';
   import EngineTab from './settings/EngineTab.svelte';
   import AppearanceTab from './settings/AppearanceTab.svelte';
   import AiTab from './settings/AiTab.svelte';
   import EnvironmentTab from './settings/EnvironmentTab.svelte';
   import { app, loadSettings, loadTtsVoices, settings, tts } from '../lib/store.svelte';
+  import { closeSettings } from '../lib/settingsOverlay.svelte';
   import { readSettingsTab, saveSettingsTab, type SettingsTabId } from '../lib/settings/tabs';
   import { loadAiConfig } from '../lib/settings/aiConfig.svelte';
   import { loadDiagnostics } from '../lib/settings/diagnostics.svelte';
@@ -65,23 +66,24 @@
   }
 </script>
 
-<div class="settings">
-  <PageHeader
-    title="设置"
-    subtitle="引擎与模型、外观与朗读、AI 与技能、环境与诊断。"
-  >
-    <div class="head-meta">
-      <span>{installedCount} / {engines.length} 个引擎已就绪</span>
-      <span>·</span>
-      <span>{enabledCount} 个已启用</span>
-      <kbd class="head-key" title="⌘, 可从任意页面回到设置">⌘,</kbd>
+<!-- 设置是**浮层**，不是一页（2026-11-24 方案 A）：⌘, 或左栏「设置」把它压在
+     当前页面之上，关掉就回到原处——不再有「双侧栏同屏」的套娃，也不打断核对台。 -->
+<div class="set-overlay" role="presentation">
+  <button class="set-scrim" aria-label="关闭设置" onclick={() => closeSettings()}></button>
+
+  <div class="set-sheet" role="dialog" aria-modal="true" aria-label="设置">
+    <div class="set-sheet-bar">
+      <span class="set-sheet-title">设置</span>
+      <span class="set-sheet-meta">{installedCount} / {engines.length} 个引擎就绪 · {enabledCount} 个已启用</span>
+      <button class="set-close" onclick={() => closeSettings()} title="关闭（Esc）" aria-label="关闭设置">
+        <Icon name="close" size={11} />
+      </button>
     </div>
-  </PageHeader>
 
-  <div class="set-body">
-    <SettingsNav {tab} engineCount={engines.length} onchange={select} />
+    <div class="set-body">
+      <SettingsNav {tab} engineCount={engines.length} onchange={select} />
 
-    <div class="set-content">
+      <div class="set-content settings">
       {#if tab === 'engines'}
         <div id="set-pane-engines" class="pane" role="tabpanel" aria-labelledby="set-tab-engines">
           <EngineTab />
@@ -108,81 +110,172 @@
       <div class="about">
         KikuSub · 本地优先的日语字幕工作台。所有音视频与模型都在本机处理，不上传。
       </div>
+      </div>
     </div>
   </div>
 </div>
 
 <style>
-  .settings {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
-       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
-    padding: var(--sp-8) var(--sp-6) var(--sp-12);
+  /* ---------------- 浮层外壳 ---------------- */
+  .set-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 240;
     display: grid;
-    grid-template-columns: minmax(0, 1040px);
-    justify-content: start;
-    align-content: start;
+    place-items: center;
+    padding: var(--sp-6);
   }
-  .head-meta {
+  /* 点遮罩关闭；它自己不参与布局，也不抢焦点环 */
+  .set-scrim {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    background: rgba(13, 20, 36, 0.28);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    cursor: default;
+    animation: scrimIn 140ms var(--ease) both;
+  }
+  @keyframes scrimIn {
+    from {
+      opacity: 0;
+    }
+  }
+
+  /* 居中偏好窗：820×580，最高不超过视口；内容区自己滚，窗框不滚。 */
+  .set-sheet {
+    position: relative;
+    width: min(820px, 100%);
+    height: min(580px, 100%);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 10px;
+    background: var(--sheet-bg);
+    border: 1px solid var(--sheet-line);
+    box-shadow: var(--shadow-pop);
+    animation: sheetIn 160ms var(--ease) both;
+  }
+  @keyframes sheetIn {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.995);
+    }
+  }
+
+  /* 一行标题栏取代原来 ~100px 的大字页眉 */
+  .set-sheet-bar {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--sp-3);
+    height: 38px;
+    padding: 0 var(--sp-3) 0 var(--sp-5);
+    border-bottom: 1px solid var(--sheet-line);
+  }
+  .set-sheet-title {
+    font-size: var(--fs-body);
+    line-height: 18px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .set-sheet-meta {
+    margin-left: auto;
     font-size: var(--fs-label);
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .head-key {
-    margin-left: 6px;
-    padding: 1px 6px;
-    border: 1px solid var(--line);
+  .set-close {
+    appearance: none;
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
     border-radius: 5px;
-    background: var(--bg-content);
+    background: transparent;
     color: var(--text-3);
-    font-family: var(--font-sans);
-    font-size: 11.5px;
-    line-height: 16px;
-  }
-  /* 2026-11-24（MacWhisper 风格）：左侧类别列表 + 右侧内容。 */
-  .set-body {
     display: grid;
-    grid-template-columns: 176px minmax(0, 1fr);
-    gap: var(--sp-8);
-    align-items: start;
+    place-items: center;
   }
+  .set-close:hover {
+    background: var(--fill);
+    color: var(--text);
+  }
+  .set-close:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: -2px;
+  }
+
+  /* 唯一一套左右分栏：196px 通高浅灰类别栏 + 1px 竖线 + 内容区 */
+  .set-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 196px minmax(0, 1fr);
+  }
+  .set-body > :global(.set-nav) {
+    padding: var(--sp-3) var(--sp-2);
+    background: var(--sheet-rail);
+    border-right: 1px solid var(--sheet-line);
+    overflow-y: auto;
+  }
+
+  /* 内容区：浅灰画布，卡片浮在上面 */
   .set-content {
     min-width: 0;
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
+    padding: var(--sp-4) var(--sp-5) var(--sp-6);
+    background: var(--sheet-canvas);
+    /* 内容不足一屏时不要把最后一个区块拉满剩余高度（会把画布盖成一条白带） */
+    align-content: start;
+    /* 浮层里的可用宽度与窗口无关（820 窗 - 196 类别栏 ≈ 620）。
+       所以设置子树里的断点必须问「我的容器多宽」，不能问视口 —— 否则
+       1440 的窗口会命中 max-width:1120 之外的桌面版布局，把标签挤成竖排。 */
+    container-type: inline-size;
+    container-name: sheet;
   }
   .pane {
     min-width: 0;
   }
   .about {
-    margin-top: var(--sp-10);
+    margin-top: var(--sp-6);
     padding-top: var(--sp-3);
-    border-top: 1px solid var(--separator-soft);
-    font-size: var(--fs-label);
+    border-top: 1px solid var(--sheet-line);
+    font-size: 11px;
     color: var(--text-3);
     text-align: center;
   }
+
   @media (max-width: 1120px) {
-    .settings {
-      padding: var(--sp-6) var(--sp-6) var(--sp-10);
+    .set-overlay {
+      padding: var(--sp-4);
     }
-    /* 窄窗口把类别列表收到 148px，内容区优先 */
     .set-body {
-      grid-template-columns: 148px minmax(0, 1fr);
-      gap: var(--sp-5);
+      grid-template-columns: 168px minmax(0, 1fr);
     }
   }
+  /* 窄窗（1100×760 及以下）：窗体贴满可用高度，类别栏再收一点 */
   @media (max-width: 900px) {
-    /* 极窄：类别改成横向滚动的一行，不再吃掉三分之一宽度 */
+    .set-overlay {
+      padding: var(--sp-2);
+    }
+    .set-sheet {
+      width: 100%;
+      height: 100%;
+    }
     .set-body {
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--sp-4);
+      grid-template-columns: 148px minmax(0, 1fr);
+    }
+    .set-content {
+      padding: var(--sp-3) var(--sp-4) var(--sp-5);
     }
   }
 </style>

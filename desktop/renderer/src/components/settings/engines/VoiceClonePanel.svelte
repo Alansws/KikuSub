@@ -238,7 +238,7 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
-  @media (max-width: 1120px) {
+  @container sheet (max-width: 560px) {
     .feature {
       grid-template-columns: minmax(0, 1fr);
       gap: var(--sp-4);

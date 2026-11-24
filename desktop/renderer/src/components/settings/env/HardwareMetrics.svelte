@@ -108,7 +108,7 @@
     font-family: var(--font-mono);
     font-size: 11px;
   }
-  @media (max-width: 1120px) {
+  @container sheet (max-width: 560px) {
     .metrics {
       grid-template-columns: minmax(0, 1fr);
     }

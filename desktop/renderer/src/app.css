@@ -146,6 +146,12 @@
      连成一片、看不出画面边界。舞台自己的状态条已撤销，1px 分割线直接压在舞台上。 */
   --stage-bg: #111214;
   --stage-line: rgba(255, 255, 255, 0.34);
+  /* 设置浮层（2026-11-24 方案 A）：窗框 + 类别栏浅灰 + 内容画布。
+     MacWhisper 的偏好窗就是「灰底上浮白卡」，所以内容区画布要比卡片深一层。 */
+  --sheet-bg: var(--raise);
+  --sheet-line: var(--line-2);
+  --sheet-rail: #eef1f6;
+  --sheet-canvas: #f2f5f9;
   --wave: #a3adbe;
 
   /* 波形底部字幕轨道。灰条时代和底色的对比只有 4%，几乎看不见；
@@ -251,6 +257,11 @@ html[data-theme='dark'] {
      （0.14 实测只有 1.48:1，等于看不见）。 */
   --stage-bg: #08090b;
   --stage-line: rgba(255, 255, 255, 0.34);
+  /* 设置浮层（深色）：画布比页面深一层，卡片用 raise，靠 1px 细边分层 */
+  --sheet-bg: #15181d;
+  --sheet-line: rgba(236, 241, 250, 0.1);
+  --sheet-rail: #101318;
+  --sheet-canvas: #1a1e24;
   --wave: #8f9db5;
 
   --cue-lane: rgba(236, 241, 250, 0.06);
@@ -357,6 +368,10 @@ html[data-theme='mincho'] {
   --caption-bg: rgba(18, 20, 22, 0.66);
   --stage-bg: #101112;
   --stage-line: rgba(255, 255, 255, 0.33);
+  --sheet-bg: #ffffff;
+  --sheet-line: rgba(24, 26, 28, 0.08);
+  --sheet-rail: #f0f1ee;
+  --sheet-canvas: #f4f5f2;
   --wave: #9aa0a0;
 
   --cue-lane: rgba(21, 24, 27, 0.05);
@@ -826,8 +841,10 @@ html[data-theme='dark'] .card {
 /* ---------- 设置页：Inset 分组列表 ---------- */
 /* 四个页签共用；组件里不要再各写一份（和 .sec/.sec-head 同一个道理）。 */
 .set-group {
+  /* MacWhisper 图 2 的材质：一张浮在浅灰画布上的独立白卡——10px 圆角、
+     纯白底、1px 细外边框，卡片之间留间距（间距由各页的 .sections gap 给）。 */
   border: 1px solid var(--inset-line);
-  border-radius: var(--rad-inset);
+  border-radius: 10px;
   background: var(--inset-bg);
   overflow: hidden;
 }
@@ -868,7 +885,10 @@ html[data-theme='dark'] .card {
   justify-content: flex-end;
 }
 .set-row-ctl.grow {
-  flex: 1 1 46%;
+  /* 输入框自 2026-11-24 起是固定宽度（250px）并右对齐；这一列不再抢空间，
+     否则「模型」（说明很短）会把输入框推到最右、「服务地址」却停在中间，
+     同一张卡里两个输入框的左边缘对不齐。 */
+  flex: 0 0 auto;
   min-width: 0;
 }
 .set-path {
@@ -886,7 +906,11 @@ html[data-theme='dark'] .card {
   font: inherit;
   font-size: 12px;
   height: var(--ctl-h-lg);
-  flex: 1;
+  /* 固定宽度、统一右对齐（2026-11-24）：原来 `flex:1` 让「模型」拉满整行、
+     同一张卡里的「服务地址」却因为是 flex 分配而偏短，读起来像两种控件。
+     现在所有 AI 输入框同宽，和右侧的按钮列对齐。 */
+  flex: 0 0 250px;
+  width: 250px;
   min-width: 0;
   padding: 0 var(--sp-2);
   border: 1px solid var(--separator);
@@ -903,16 +927,28 @@ html[data-theme='dark'] .card {
   font-family: var(--font-mono);
 }
 .key-input {
-  flex: 0 1 190px;
+  /* 这一行是竖排（输入框在上、按钮在下），所以 flex-basis 会作用在高度轴上：
+     写 `flex: 0 0 250px` 会把输入框拉成 250px 高。这里显式锁死高度只用 width 控宽。 */
+  flex: 0 0 auto;
+  width: 250px;
+  height: var(--ctl-h-lg);
   color: var(--text-2);
 }
 .key-state {
-  font-size: var(--fs-label);
+  /* 行内小徽标：跟说明文字同一行，所以要比说明再小一档 */
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--warn-soft);
   color: var(--warn);
+  font-size: 11px;
+  line-height: 15px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .key-state.ok {
+  background: var(--success-soft);
   color: var(--success);
 }
 .set-row-desc.test-ok {
