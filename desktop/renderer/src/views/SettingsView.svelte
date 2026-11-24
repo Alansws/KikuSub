@@ -10,7 +10,7 @@
    * 侧栏的 ⌘1–⌘8 主导航不受影响。
    */
   import PageHeader from '../components/PageHeader.svelte';
-  import SettingsTabs from '../components/settings/SettingsTabs.svelte';
+  import SettingsNav from '../components/settings/SettingsNav.svelte';
   import EngineTab from './settings/EngineTab.svelte';
   import AppearanceTab from './settings/AppearanceTab.svelte';
   import AiTab from './settings/AiTab.svelte';
@@ -78,27 +78,38 @@
     </div>
   </PageHeader>
 
-  <SettingsTabs {tab} engineCount={engines.length} onchange={select} />
+  <div class="set-body">
+    <SettingsNav {tab} engineCount={engines.length} onchange={select} />
 
-  {#if tab === 'engines'}
-    <div id="set-pane-engines" class="pane" role="tabpanel" aria-labelledby="set-tab-engines">
-      <EngineTab />
-    </div>
-  {:else if tab === 'appearance'}
-    <div id="set-pane-appearance" class="pane" role="tabpanel" aria-labelledby="set-tab-appearance">
-      <AppearanceTab />
-    </div>
-  {:else if tab === 'ai'}
-    <div id="set-pane-ai" class="pane" role="tabpanel" aria-labelledby="set-tab-ai">
-      <AiTab />
-    </div>
-  {:else}
-    <div id="set-pane-env" class="pane" role="tabpanel" aria-labelledby="set-tab-env">
-      <EnvironmentTab />
-    </div>
-  {/if}
+    <div class="set-content">
+      {#if tab === 'engines'}
+        <div id="set-pane-engines" class="pane" role="tabpanel" aria-labelledby="set-tab-engines">
+          <EngineTab />
+        </div>
+      {:else if tab === 'appearance'}
+        <div
+          id="set-pane-appearance"
+          class="pane"
+          role="tabpanel"
+          aria-labelledby="set-tab-appearance"
+        >
+          <AppearanceTab />
+        </div>
+      {:else if tab === 'ai'}
+        <div id="set-pane-ai" class="pane" role="tabpanel" aria-labelledby="set-tab-ai">
+          <AiTab />
+        </div>
+      {:else}
+        <div id="set-pane-env" class="pane" role="tabpanel" aria-labelledby="set-tab-env">
+          <EnvironmentTab />
+        </div>
+      {/if}
 
-  <div class="about">KikuSub · 本地优先的日语字幕工作台。所有音视频与模型都在本机处理，不上传。</div>
+      <div class="about">
+        KikuSub · 本地优先的日语字幕工作台。所有音视频与模型都在本机处理，不上传。
+      </div>
+    </div>
+  </div>
 </div>
 
 <style>
@@ -134,6 +145,18 @@
     font-size: 11.5px;
     line-height: 16px;
   }
+  /* 2026-11-24（MacWhisper 风格）：左侧类别列表 + 右侧内容。 */
+  .set-body {
+    display: grid;
+    grid-template-columns: 176px minmax(0, 1fr);
+    gap: var(--sp-8);
+    align-items: start;
+  }
+  .set-content {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .pane {
     min-width: 0;
   }
@@ -148,6 +171,18 @@
   @media (max-width: 1120px) {
     .settings {
       padding: var(--sp-6) var(--sp-6) var(--sp-10);
+    }
+    /* 窄窗口把类别列表收到 148px，内容区优先 */
+    .set-body {
+      grid-template-columns: 148px minmax(0, 1fr);
+      gap: var(--sp-5);
+    }
+  }
+  @media (max-width: 900px) {
+    /* 极窄：类别改成横向滚动的一行，不再吃掉三分之一宽度 */
+    .set-body {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--sp-4);
     }
   }
 </style>
