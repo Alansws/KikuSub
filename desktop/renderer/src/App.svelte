@@ -46,7 +46,7 @@
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
   import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
-  import { loadChapters } from './lib/chapters.svelte';
+  import { cancelChapterDraft, loadChapters, setChapterDraftEdge } from './lib/chapters.svelte';
   import { startProposalWatcher } from './lib/externalProposals.svelte';
   import { applyDevSeed } from './lib/devSeed';
   import { arbitration, closeArbitrationDialog } from './lib/arbitration.svelte';
@@ -408,6 +408,12 @@
       case 'review.outPoint':
         void alignSelectedCueEnd();
         return;
+      case 'review.chapterStart':
+        setChapterDraftEdge('start', play.time);
+        return;
+      case 'review.chapterEnd':
+        setChapterDraftEdge('end', play.time);
+        return;
       case 'review.splitAtPlayhead':
         void splitSelectedAtPlayhead();
         return;
@@ -492,6 +498,8 @@
   const NO_REPEAT_ACTIONS = new Set([
     'review.inPoint',
     'review.outPoint',
+    'review.chapterStart',
+    'review.chapterEnd',
     'review.splitAtPlayhead',
     'review.auditionCue',
     'review.toggleSnap',
@@ -624,6 +632,12 @@
 
     if (e.key === 'Escape' && app.job?.status === 'running') {
       cancelJob();
+      return;
+    }
+
+    // 章节草稿：Esc 先撤草稿（它只是个未保存的两端），再轮到时间选区。
+    if (e.key === 'Escape' && app.view === 'review' && cancelChapterDraft()) {
+      e.preventDefault();
       return;
     }
 

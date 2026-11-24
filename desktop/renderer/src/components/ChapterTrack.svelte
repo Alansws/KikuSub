@@ -10,6 +10,9 @@
    * 画的刻度天然对齐。
    */
   import type { ChapterMark } from '../lib/api';
+  import { chapters } from '../lib/chapters.svelte';
+  import { span as draftSpan } from '../lib/chapterDraft';
+  import { play } from '../lib/store.svelte';
 
   let {
     marks = [],
@@ -58,6 +61,12 @@
     return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
+  /**
+   * 章节草稿的预览区间：待定的那一端跟着播放头走（与章节面板读同一个
+   * `draftSpan`），所以「找起点」时色带会随手一动就伸缩。
+   */
+  const draftRange = $derived(draftSpan(chapters.draft, play.time));
+
   function tooltip(item: { mark: ChapterMark; start: number; end: number }): string {
     const kind = item.mark.end === null ? '时刻点' : '章节';
     return `${item.mark.title || '未命名'}（${kind} ${tc(item.start)} → ${tc(item.end)}）· 单击跳转`;
@@ -66,6 +75,13 @@
 
 {#if visible.length}
   <div class="chapter-track" style="top:{rulerH}px" aria-label="章节标记">
+    {#if draftRange && draftRange.end - draftRange.start > 0.001}
+      <div
+        class="draft-band"
+        style="left:{pct(draftRange.start)}%;width:{Math.max(0.3, pct(draftRange.end) - pct(draftRange.start))}%"
+        aria-hidden="true"
+      ></div>
+    {/if}
     <div class="band">
       {#each visible as item (item.mark.id)}
         <span
@@ -119,6 +135,17 @@
     background: var(--accent);
     /* 底部一条深色边：与波形上方的字幕淡蓝区分开，不会读成「播放进度」 */
     box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.28);
+  }
+
+  .draft-band {
+    position: absolute;
+    top: 0;
+    height: 6px;
+    box-sizing: border-box;
+    border: 1px dashed var(--accent);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    z-index: 2;
   }
 
   .range.point {

@@ -11,11 +11,16 @@
   import {
     addPointAtPlayhead,
     addRangeChapter,
+    beginChapterDraft,
+    cancelChapterDraft,
     chapters,
     removeMark,
+    saveChapterDraft,
     seekToMark,
+    setChapterDraftEdge,
     updateMark,
   } from '../lib/chapters.svelte';
+  import { pendingEdge, readyError, span as draftSpan } from '../lib/chapterDraft';
   import { setExportClip, toast } from '../lib/store.svelte';
   import { play } from '../lib/store.svelte';
   import { clipCaption, scopeForChapter } from '../lib/clipRange';
@@ -28,6 +33,17 @@
   const hasSelection = $derived(
     Boolean(chapters.selection && chapters.selection.end - chapters.selection.start >= 0.2),
   );
+
+  /** 章节草稿（把一个时刻点补成区间）：状态在 lib/chapters.svelte.ts。 */
+  const draft = $derived(chapters.draft);
+  const preview = $derived(draftSpan(draft, play.time));
+  const draftError = $derived(readyError(draft));
+  /** 两端都落位但差太短时才提示；「待定」本身已经写在槽位里。 */
+  const shortDraft = $derived(
+    Boolean(draft && draft.start !== null && draft.end !== null && draftError),
+  );
+  /** 还缺哪一端：另一端就是已锁定的锚点，不能在这里被误按覆盖。 */
+  const draftPending = $derived(draft ? pendingEdge(draft) : null);
 
   function submitNew() {
     const text = title.trim();
@@ -104,7 +120,65 @@
     </span>
   </header>
 
-  <div class="add-row">
+  {#if draft}
+    <div class="draft" aria-label="章节草稿">
+      <div class="draft-head">
+        <b>补章节</b>
+        <span class="draft-title" title={draft.title}>{draft.title || '未命名'}</span>
+        <button
+          class="iconbtn"
+          onclick={() => cancelChapterDraft()}
+          title="取消草稿（Esc）"
+          aria-label="取消草稿"
+        >
+          <Icon name="close" size={10} />
+        </button>
+      </div>
+      <div class="draft-rows">
+        <div class="draft-slot" class:todo={draft.start === null}>
+          <span class="k">起点</span>
+          <span class="v">{draft.start === null ? '待定' : tcShort(draft.start)}</span>
+        </div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="draft-slot" class:todo={draft.end === null}>
+          <span class="k">终点</span>
+          <span class="v">{draft.end === null ? '待定' : tcShort(draft.end)}</span>
+        </div>
+      </div>
+      {#if preview}
+        <p class="draft-live">
+          播放头 {tcShort(play.time)} · 预览 {tcShort(preview.start)} → {tcShort(preview.end)}
+          （{tcShort(preview.end - preview.start)}）
+        </p>
+      {/if}
+      <div class="draft-actions">
+        <button
+          class="btn tiny"
+          disabled={Boolean(draftPending && draftPending !== 'start')}
+          title={draftPending === 'end' ? '终点是这一端的锚点，先补起点' : '把当前播放头设为章首'}
+          onclick={() => setChapterDraftEdge('start', play.time)}
+        >
+          设为起点 <kbd>I</kbd>
+        </button>
+        <button
+          class="btn tiny"
+          disabled={Boolean(draftPending && draftPending !== 'end')}
+          title={draftPending === 'start' ? '起点是这一端的锚点，先补终点' : '把当前播放头设为章末'}
+          onclick={() => setChapterDraftEdge('end', play.time)}
+        >
+          设为终点 <kbd>O</kbd>
+        </button>
+        <button class="btn tiny" disabled={Boolean(draftError)} onclick={() => void saveChapterDraft()}>
+          保存章节
+        </button>
+      </div>
+      {#if shortDraft}
+        <p class="err">{draftError}</p>
+      {/if}
+    </div>
+  {/if}
+
+  <div class="add-row" class:hidden={Boolean(draft)}>
     <input
       class="ch-title"
       type="text"
@@ -154,7 +228,7 @@
   {:else}
     <ul class="list">
       {#each [...chapters.marks].sort((a, b) => a.start - b.start) as mark (mark.id)}
-        <li class="item" class:point={mark.end === null}>
+        <li class="item" class:point={mark.end === null} class:is-draft={draft?.from === mark.id}>
           {#if editing && editing.id === mark.id}
             <div class="edit">
               <input
@@ -201,6 +275,24 @@
               </span>
             </button>
             <div class="ops">
+              {#if mark.end === null}
+                <button
+                  class="iconbtn"
+                  onclick={() => beginChapterDraft(mark.id, 'end')}
+                  title="把这个时刻当作章末，补一个起点"
+                  aria-label="补起点"
+                >
+                  <Icon name="chevron-left" size={11} />
+                </button>
+                <button
+                  class="iconbtn"
+                  onclick={() => beginChapterDraft(mark.id, 'start')}
+                  title="把这个时刻当作章首，补一个终点"
+                  aria-label="补终点"
+                >
+                  <Icon name="chevron-right" size={11} />
+                </button>
+              {/if}
               {#if mark.end !== null}
                 <button
                   class="iconbtn"
@@ -280,6 +372,10 @@
     border: 1px solid var(--line);
     background: var(--field);
     color: var(--text);
+  }
+
+  .add-row.hidden {
+    display: none;
   }
 
   .add-actions {
@@ -425,5 +521,107 @@
     margin: 0;
     font-size: 11px;
     color: var(--danger);
+  }
+
+  .draft {
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+    padding: var(--sp-2);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+  }
+
+  .draft-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .draft-head b {
+    font-size: 12px;
+    flex: none;
+  }
+
+  .draft-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-3);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .draft-rows {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .draft-slot {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--field);
+  }
+
+  .draft-slot .k {
+    font-size: 10px;
+    color: var(--text-3);
+  }
+
+  .draft-slot .v {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .draft-slot.todo .v {
+    color: var(--text-3);
+  }
+
+  .arrow {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  .draft-live {
+    margin: 0;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .draft-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .draft-actions .btn {
+    height: 24px;
+    padding: 0 var(--sp-2);
+    font-size: 11px;
+  }
+
+  kbd {
+    font: inherit;
+    font-size: 10px;
+    padding: 0 3px;
+    border-radius: 3px;
+    border: 1px solid var(--line);
+    color: var(--text-3);
+  }
+
+  .item.is-draft {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
 </style>
