@@ -47,9 +47,13 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              .sel-bar / .sel-info / .spin 死样式。每一步都用无窗口截图做像素比对
 #              （0.0000% 差异）后才继续。3780 → 3158。字幕表格与查找栏是 Phase 2
 #              真正要改列的地方，等那时连同纯逻辑一起抽（红线 11 的「先抽再改」）。
+# 2026-11-24（Phase 2）：先把表格的虚拟列表纯逻辑抽到 lib/reviewTable.ts（单独 commit，
+#              含 16 条单测，顺手修了 NaN 输入会算出空窗口的 bug），再把整块表格
+#              （表头 + 虚拟列表 + 查找栏）搬到 components/review/ReviewTable.svelte。
+#              两步都逐像素比对过（0.0000% 差异）。3780 → 3158 → 2644。
 BUDGET = {
     "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 3158,
+    "views/ReviewView.svelte": 2645,
 }
 
 

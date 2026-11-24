@@ -23,6 +23,7 @@
   import ReviewTransport from '../components/review/ReviewTransport.svelte';
   import ReviewWaveTrack from '../components/review/ReviewWaveTrack.svelte';
   import ReviewStage from '../components/review/ReviewStage.svelte';
+  import ReviewTable from '../components/review/ReviewTable.svelte';
   import ChapterTrack from '../components/ChapterTrack.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
@@ -2184,265 +2185,70 @@
     />
   </div>
 
-  <div class="table-area">
-    {#if findState.open}
-      <div class="find-bar">
-        <Icon name="search" size={12} />
-        <input
-          bind:this={findInput}
-          class="find-input"
-          bind:value={findState.query}
-          oninput={resetFindSession}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              findGo(e.shiftKey ? -1 : 1);
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              closeFind();
-            }
-          }}
-          placeholder={app.track === 'target'
-            ? '查找译文…'
-            : app.track === 'both'
-              ? '查找原文 / 译文…'
-              : '查找原文…'}
-          spellcheck="false"
-        />
-        <span class="find-count">
-          {#if findState.query}
-            {#if findMatches.length}
-              {findState.pos + 1} / {findMatches.length}
-            {:else if rawFindMatches.length}
-              已全部跳过
-            {:else}
-              无结果
-            {/if}
-          {:else}
-            0
-          {/if}
-        </span>
-        {#if skippedHitCount}
-          <span
-            class="find-skipped"
-            title="本轮已跳过 {skippedHitCount} 处；改查找词或重开查找可恢复"
-          >
-            跳过 {skippedHitCount}
-          </span>
-        {/if}
-        <button
-          class="btn icon ghost"
-          onclick={() => findGo(-1)}
-          disabled={!findMatches.length}
-          title={`上一处（${findPrevKey} / ⇧Enter）`}
-        >
-          <Icon name="chevron-left" size={11} />
-        </button>
-        <button
-          class="btn icon ghost"
-          onclick={() => findGo(1)}
-          disabled={!findMatches.length}
-          title={`下一处（${findNextKey} / Enter）`}
-        >
-          <Icon name="chevron-right" size={11} />
-        </button>
-        <button
-          class="find-case"
-          class:on={findState.caseSensitive}
-          onclick={() => {
-            findState.caseSensitive = !findState.caseSensitive;
-            resetFindSession();
-          }}
-          title="区分大小写"
-        >
-          Aa
-        </button>
-        <div class="find-sep"></div>
-        <input
-          class="find-input replace"
-          bind:value={findState.replacement}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              void findReplaceCurrent();
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              closeFind();
-            }
-          }}
-          placeholder="替换为（可留空）"
-          spellcheck="false"
-        />
-        <button class="btn tiny" onclick={findReplaceCurrent} disabled={!findMatches.length || findBusy}>
-          替换
-        </button>
-        <button
-          class="btn tiny"
-          onclick={findSkip}
-          disabled={!findMatches.length || findBusy}
-          title="跳过这一处，本轮不再回到它（不修改文本）"
-        >
-          跳过
-        </button>
-        <button
-          class="btn tiny primary"
-          onclick={findReplaceAll}
-          disabled={!findMatches.length || findBusy}
-          title={skippedHitCount
-            ? `替换本轮未跳过的 ${findMatches.length} 处（已跳过 ${skippedHitCount} 处保持原样）`
-            : '替换全部匹配'}
-        >
-          {skippedHitCount ? '替换剩余' : '全部替换'}
-        </button>
-        <div class="tl-spacer"></div>
-        <button class="btn icon ghost" onclick={closeFind} title="关闭（Esc）">
-          <Icon name="close" size={11} />
-        </button>
-      </div>
-    {/if}
-    <div class="thead">
-      <div class="c-idx">#</div>
-      <div class="c-t">开始</div>
-      <div class="c-t">结束</div>
-      <div class="c-dur">时长</div>
-      <div class="c-text">字幕文本</div>
-      <div class="c-acts"></div>
-    </div>
-    <div class="rows" bind:this={rowsEl} onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}>
-      {#if !app.cues.length}
-        <div class="empty-rows">
-          还没有字幕。到「转写」跑一次，或导入 SRT。
-        </div>
-      {:else}
-        <div style="height:{rowStart * rowHeight}px"></div>
-        {#each visibleCues as cue, k (rowStart + k)}
-          {@const i = rowStart + k}
-          <div
-            class="row"
-            class:dual={app.track === 'both'}
-            class:row-sel={multiKeys.length > 1 ? multiKeys.includes(`${cue.start}:${cue.end}`) : play.selected === i}
-            class:row-match={matchedCueSet.has(i)}
-            class:row-cur={currentFind?.cue === i}
-            class:playing={Boolean(activeKey) && `${cue.start}:${cue.end}` === activeKey}
-            data-i={i}
-            onmousedown={(e) => e.shiftKey && e.preventDefault()}
-            onclick={(e) => {
-              if (e.metaKey || e.ctrlKey) {
-                metaSelect(i);
-                return;
-              }
-              if (e.shiftKey) {
-                rangeSelectTo(i);
-                return;
-              }
-              selectCue(i, true, true);
-            }}
-            oncontextmenu={(e) => onCueContextMenu(e, i)}
-            ondblclick={() => previewRange(cue.start, cue.end)}
-            role="button"
-            tabindex="-1"
-            title="单击跳转 · ⌘ 单击多选 · ⇧ 单击连选 · 双击试听"
-          >
-            <div class="c-idx">{i + 1}</div>
-            <div class="c-t">{tcShort(cue.start)}</div>
-            <div class="c-t">{tcShort(cue.end)}</div>
-            <div class="c-dur">{(cue.end - cue.start).toFixed(2)}s</div>
-            <div class="c-text" class:dual={app.track === 'both'}>
-              {#if app.track === 'target'}
-                <span class="line" class:stale={isTranslationStale(i)}>
-                  {#if translationAt(i)}
-                    {#each highlight(
-                      cueDisplayText(translationAt(i)),
-                      'target',
-                      currentOrdinalFor(i, 'target'),
-                      skippedStartsFor(i, 'target'),
-                    ) as part}
-                      <span
-                        class:text-hit={part.hit}
-                        class:cur={part.cur}
-                        class:skipped={part.skipped}>{part.text}</span
-                      >
-                    {/each}
-                  {:else}
-                    （这条还没有译文）
-                  {/if}
-                </span>
-              {:else if app.track === 'both'}
-                <span class="line">
-                  {#each highlight(
-                    cueDisplayText(cue.text),
-                    'source',
-                    currentOrdinalFor(i, 'source'),
-                    skippedStartsFor(i, 'source'),
-                  ) as part}
-                    <span
-                      class:text-hit={part.hit}
-                      class:cur={part.cur}
-                      class:skipped={part.skipped}>{part.text}</span
-                    >
-                  {/each}
-                </span>
-                <span class="line sub" class:stale={isTranslationStale(i)}>
-                  {#each highlight(
-                    cueDisplayText(translationAt(i)),
-                    'target',
-                    currentOrdinalFor(i, 'target'),
-                    skippedStartsFor(i, 'target'),
-                  ) as part}
-                    <span
-                      class:text-hit={part.hit}
-                      class:cur={part.cur}
-                      class:skipped={part.skipped}>{part.text}</span
-                    >
-                  {/each}
-                </span>
-              {:else}
-                <span class="line">
-                  {#each highlight(
-                    cueDisplayText(cue.text),
-                    'source',
-                    currentOrdinalFor(i, 'source'),
-                    skippedStartsFor(i, 'source'),
-                  ) as part}
-                    <span
-                      class:text-hit={part.hit}
-                      class:cur={part.cur}
-                      class:skipped={part.skipped}>{part.text}</span
-                    >
-                  {/each}
-                </span>
-              {/if}
-            </div>
-            <div class="c-acts">
-              <button
-                class="row-btn"
-                onclick={(e) => {
-                  e.stopPropagation();
-                  previewRange(cue.start, cue.end);
-                }}
-                title="试听此句"
-              >
-                <Icon name="play" size={10} />
-              </button>
-              <button
-                class="row-btn"
-                onclick={(e) => {
-                  e.stopPropagation();
-                  retranscribeRow(i);
-                }}
-                disabled={busy}
-                title="单独重转此句（只替换这一条）"
-              >
-                <Icon name="wave" size={10} />
-              </button>
-            </div>
-          </div>
-        {/each}
-        <div style="height:{Math.max(0, (app.cues.length - rowEnd) * rowHeight)}px"></div>
-      {/if}
-    </div>
-  </div>
-
+  <ReviewTable
+    view={{
+      track: app.track,
+      rows: visibleCues,
+      rowStart,
+      rowEnd,
+      total: app.cues.length,
+      rowHeight,
+      padTop: rowStart * rowHeight,
+      padBottom: Math.max(0, (app.cues.length - rowEnd) * rowHeight),
+      selected: play.selected,
+      multiKeys,
+      activeKey,
+      matchedSet: matchedCueSet,
+      findCue: currentFind?.cue ?? -1,
+      busy,
+      displayText: cueDisplayText,
+      translationAt,
+      isStale: isTranslationStale,
+      highlight,
+      ordinalFor: currentOrdinalFor,
+      skippedFor: skippedStartsFor,
+    }}
+    find={{
+      open: findState.open,
+      query: findState.query,
+      replacement: findState.replacement,
+      caseSensitive: findState.caseSensitive,
+      count: findMatches.length,
+      total: findState.pos,
+      rawTotal: rawFindMatches.length,
+      skipped: skippedHitCount,
+      busy: findBusy,
+      prevKey: findPrevKey,
+      nextKey: findNextKey,
+      onInput: resetFindSession,
+      onGo: findGo,
+      onReplace: () => void findReplaceCurrent(),
+      onSkip: findSkip,
+      onReplaceAll: findReplaceAll,
+      onToggleCase: () => {
+        findState.caseSensitive = !findState.caseSensitive;
+        resetFindSession();
+      },
+      onClose: closeFind,
+    }}
+    onscroll={(top) => (scrollTop = top)}
+    rowclick={(i, e) => {
+      if (e.metaKey || e.ctrlKey) {
+        metaSelect(i);
+        return;
+      }
+      if (e.shiftKey) {
+        rangeSelectTo(i);
+        return;
+      }
+      selectCue(i, true, true);
+    }}
+    rowcontext={onCueContextMenu}
+    rowaudition={(i) => previewRange(app.cues[i].start, app.cues[i].end)}
+    rowretranscribe={retranscribeRow}
+    onrows={(node) => (rowsEl = node)}
+    findInput={(node) => (findInput = node)}
+  />
   {#if contextMenu}
     <button
       class="ctx-backdrop"
@@ -2591,323 +2397,6 @@
     display: flex;
     flex-direction: column;
     flex: 0 0 auto;
-  }
-
-  /* ---------------- 表格 ---------------- */
-  .table-area {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    margin: 6px 26px 0;
-    border-top: 1px solid var(--line);
-  }
-  .thead {
-    display: grid;
-    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 44px;
-    column-gap: 6px;
-    align-items: center;
-    height: 30px;
-    padding: 0 10px;
-    font-size: 12px;
-    line-height: 16px;
-    font-weight: 500;
-    color: var(--text-2);
-    box-shadow: inset 0 -1px 0 var(--line-2);
-    flex: 0 0 30px;
-  }
-  .rows {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding-bottom: 0;
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
-  }
-
-  .row {
-    display: grid;
-    grid-template-columns: 34px 100px 100px 54px minmax(0, 1fr) 44px;
-    column-gap: 6px;
-    align-items: center;
-    height: 30px;
-    padding: 0 10px;
-    font-size: 15px;
-    line-height: 20px; /* 15/20：行内上下各 5px，基线稳定，不出现 20.25 的分数行高 */
-    /* 发丝线用 inset shadow：border 会吃掉 1px，行内 20px 文字就变成上下 4.5/5.5 */
-    box-shadow: inset 0 -1px 0 var(--line-2);
-    position: relative;
-    transition: background 120ms var(--ease);
-  }
-  .row:hover {
-    background: var(--line-2);
-  }
-  .row.row-match {
-    background: var(--hit-row);
-  }
-  .row.row-sel {
-    background: var(--accent-soft);
-  }
-  .row.playing::before,
-  .row.row-sel::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: var(--accent);
-  }
-  .row.playing .c-idx {
-    color: var(--accent);
-    font-weight: 600;
-  }
-  /* 查找当前项：即使播放头把选中行带走了，序号仍指出正在处理哪一条 */
-  .row.row-cur .c-idx {
-    color: var(--accent);
-    font-weight: 600;
-  }
-  .row.playing .c-text {
-    font-weight: 500;
-  }
-
-  @media (max-width: 1400px) {
-    /* 1360 默认窗口：给字幕文本多 16px，当前句不要被时间码/图标挤掉尾巴 */
-    .thead,
-    .row {
-      grid-template-columns: 34px 94px 94px 54px minmax(0, 1fr) 42px;
-    }
-  }
-
-  @media (max-width: 1220px) {
-    /* 窄窗口里选区工具条会挤出右边界：只留时长，把时间范围让给按钮 */
-    .sel-range {
-      display: none;
-    }
-    .thead,
-    .row {
-      grid-template-columns: 30px 88px 88px 48px minmax(0, 1fr) 38px;
-      column-gap: var(--sp-1);
-    }
-    .thead {
-      padding: 0 var(--sp-2);
-    }
-    .row {
-      padding: 0 var(--sp-2);
-    }
-  }
-
-  .c-idx {
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    font-family: var(--font-mono);
-  }
-  .c-t {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--ink-2);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.02em;
-  }
-  .c-dur {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .c-text {
-    min-width: 0;
-    font-family: var(--font-cue);
-    font-size: 15px;
-    line-height: 20px;
-    color: var(--ink);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding-right: 6px;
-  }
-  /* 双语：固定两行，行高与虚拟列表的 60px 对齐 */
-  .row.dual {
-    height: 60px;
-  }
-  .c-text.dual {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    /* 20 + 16 + 2 = 38：(60 - 38) / 2 = 11，双语的上下留白落在整数像素上 */
-    gap: 2px;
-    line-height: 20px;
-  }
-  .c-text .line {
-    display: block;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .c-text .line.sub {
-    /* 译文轨始终跟界面字体：12px 的明朝在浅底上太细，读起来像印刷品缩印 */
-    font-family: var(--font-sans);
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-2);
-  }
-  .c-text .line.stale {
-    color: var(--warn);
-  }
-  .c-text .text-hit {
-    background: var(--hit);
-    border-radius: 2px;
-    color: inherit;
-  }
-  /* 当前正在处理的这一处：比普通命中更深，同一句里有多处也能一眼分清 */
-  .c-text .text-hit.cur {
-    background: var(--accent);
-    color: var(--on-accent);
-    box-shadow: 0 0 0 1px var(--accent);
-  }
-  /* 本轮已跳过：仍在文本里，但本轮不再回来处理 */
-  .c-text .text-hit.skipped {
-    background: transparent;
-    color: var(--text-3);
-    text-decoration: line-through;
-    text-decoration-thickness: 1px;
-  }
-  .c-acts {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--sp-1);
-    opacity: 0;
-    transition: opacity 120ms var(--ease);
-  }
-  .row:hover .c-acts,
-  .row.row-sel .c-acts {
-    opacity: 1;
-  }
-  .row-btn {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: var(--text-3);
-    width: 19px;
-    height: 19px;
-    border-radius: 4px;
-    display: grid;
-    place-items: center;
-    position: relative;
-  }
-  /* 视觉 19px，热区 24px：伪元素只扩大命中范围，不改变行高与列宽 */
-  .row-btn::after {
-    content: '';
-    position: absolute;
-    inset: -2.5px -2px;
-  }
-  .row-btn:hover {
-    background: var(--fill-strong);
-    color: var(--accent);
-  }
-  .row-btn:disabled {
-    opacity: 0.35;
-  }
-
-  .empty-rows {
-    padding: 22px 14px;
-    color: var(--text-3);
-    font-size: 12.5px;
-  }
-
-  /* ---------------- 查找与替换 ---------------- */
-  .find-bar {
-    display: flex;
-    /* 桌面宽度下宁可让两个输入框收缩，也不要让关闭按钮掉到第二行 */
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: var(--sp-1);
-    padding: 5px 14px;
-    flex: 0 0 auto;
-    border-bottom: 1px solid var(--separator-soft);
-    background: color-mix(in srgb, var(--accent) 5%, var(--bg-content));
-  }
-  .find-input {
-    height: 24px;
-    width: 160px;
-    min-width: 96px;
-    flex: 0 1 160px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    padding: 0 7px;
-  }
-  .find-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-soft);
-  }
-  .find-input.replace {
-    width: 130px;
-    flex-basis: 130px;
-  }
-  .find-count {
-    min-width: 58px;
-    text-align: right;
-    font-size: 12px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    white-space: nowrap;
-  }
-  .find-skipped {
-    height: 18px;
-    padding: 0 5px;
-    border: 1px solid var(--separator);
-    border-radius: 3px;
-    font-size: 11px;
-    line-height: 16px;
-    color: var(--text-3);
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-  /* 1280 以下查找栏已经很挤：跳过数量不单列徽标，靠删除线和计数变化判断 */
-  @media (max-width: 1280px) {
-    .find-skipped {
-      display: none;
-    }
-  }
-  .find-case {
-    appearance: none;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--text-3);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    height: 22px;
-    padding: 0 5px;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .find-case:hover {
-    background: var(--fill-strong);
-  }
-  .find-case.on {
-    background: var(--accent-soft);
-    border-color: var(--accent-ring);
-    color: var(--accent);
-  }
-  .find-sep {
-    width: 1px;
-    height: 16px;
-    background: var(--separator);
-    margin: 0 3px;
-    flex: 0 0 1px;
   }
 
   /* ---------------- 音轨右键菜单 ---------------- */
