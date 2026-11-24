@@ -1132,6 +1132,7 @@ function buildMenu() {
         { label: '任务详报', click: send('menu:view', 'report') },
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
+        { label: '切换侧边栏', accelerator: 'Ctrl+CmdOrCtrl+S', click: send('menu:sidebar') },
         { label: '切换外观', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:theme') },
         { type: 'separator' },
         { role: 'togglefullscreen', label: '进入全屏幕' },

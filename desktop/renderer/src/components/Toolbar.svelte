@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import EngineSwitch from './EngineSwitch.svelte';
+  import SidebarToggle from './SidebarToggle.svelte';
   import PunctCleanPanel from './PunctCleanPanel.svelte';
   import {
     app,
@@ -146,6 +147,11 @@
 </script>
 
 <header class="toolbar">
+  <!-- 侧栏收起后，它的展开开关挂到顶栏最左（52px 里红绿灯占掉 x19–71，
+     放左栏会压在红绿灯上）。展开态由左栏自己那一颗负责，这里不重复。 -->
+  {#if app.sidebarCollapsed}
+    <SidebarToggle />
+  {/if}
   <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>
   <div class="tb-sub">{sub}</div>
 
@@ -406,11 +412,14 @@
        后面的检查器盖住（用户看到的是半截面板）。 */
     position: relative;
     z-index: 30;
-    height: 52px;
-    flex: 0 0 52px;
+    /* 单行顶栏 40px（2026-11-24 Phase 1）：文件名 / 条数 / 引擎在左，
+       全局动作在右。原来 52px 多出来的 12px 没有承担任何信息，
+       只是把视频监看区往下推。 */
+    height: 40px;
+    flex: 0 0 40px;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
     padding: 0 var(--sp-4);
     /* 发丝线用 inset shadow 而不是 border：border 会吃掉 1px 内容高度，
        52 高工具栏里的 18px 标题就会落在 16.5px 上（半像素发虚）。 */

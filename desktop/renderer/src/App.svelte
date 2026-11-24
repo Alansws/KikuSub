@@ -39,6 +39,7 @@
     setView,
     toast,
     toggleQaPanel,
+    toggleSidebar,
     toggleTheme,
     undo,
     type View,
@@ -313,6 +314,9 @@
         case 'inspector':
           app.inspectorOpen = !app.inspectorOpen;
           break;
+        case 'sidebar':
+          toggleSidebar();
+          break;
         case 'theme':
           toggleTheme();
           break;
@@ -504,6 +508,14 @@
 
     // ⌘, 是 macOS 的「设置…」惯例。菜单里也绑了同一条，但菜单快捷键在
     // 输入框聚焦时会被输入法/文本框吃掉，这里再兜一层。
+    // ⌃⌘S：侧栏折叠。菜单里也绑了同一条，这里兜住「菜单快捷键被输入框吃掉」
+    // 的情形（和 ⌘, 同一个考虑）。
+    if (e.metaKey && e.ctrlKey && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      toggleSidebar();
+      return;
+    }
+
     const mod = e.metaKey || e.ctrlKey;
     if (mod && (e.key === ',' || e.code === 'Comma')) {
       e.preventDefault();

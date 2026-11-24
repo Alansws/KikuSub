@@ -101,6 +101,14 @@ export const app = $state({
   /** 外观 id（不是 scss 类名）：'light' / 'dark' 属于青空，'mincho' 是明朝墨。 */
   theme: 'light' as ThemeId,
   inspectorOpen: true,
+  /**
+   * 左侧边栏折叠态（2026-11-24，Phase 1）。
+   * 收起后是 52px 纯图标条，把横向视野让给波形与字幕表。
+   * 持久化在 `localStorage['kikusub.sidebarCollapsed']`；紧凑模式（≤900px）
+   * 本来就强制图标条，此时这里的值不参与布局。
+   */
+  sidebarCollapsed:
+    typeof localStorage !== 'undefined' && localStorage.getItem('kikusub.sidebarCollapsed') === '1',
   /** 右侧检查器当前页签：当前条目 / 质检待核。 */
   inspectorTab: 'cue' as 'cue' | 'qa' | 'chapters',
   /** 紧凑模式（≤900px CSS 视口）：检查器是抽屉，切页/换片时默认收起。 */
@@ -1216,6 +1224,11 @@ export function setMode(mode: Scheme) {
 export function toggleTheme() {
   // 月亮按钮永远翻到「另一种明暗」：青空里明暗互换；明朝墨没有自己的深色，按它就回深色那套。
   setTheme(app.theme === 'dark' ? 'light' : 'dark');
+}
+
+export function toggleSidebar() {
+  app.sidebarCollapsed = !app.sidebarCollapsed;
+  localStorage.setItem('kikusub.sidebarCollapsed', app.sidebarCollapsed ? '1' : '0');
 }
 
 export function setView(view: View) {

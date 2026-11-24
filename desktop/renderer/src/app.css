@@ -65,6 +65,9 @@
 
   /* 控件高度 */
   --ctl-h: 28px;
+  /* 侧栏收起态宽度：52px 正好是 16px 图标 + 两侧各 18px 的呼吸，
+     和「一条图标轨」的视觉重量一致，再窄就捏不住点击目标了。 */
+  --sb-collapsed-w: 52px;
   --ctl-h-lg: 32px;
   --ctl-h-xl: 36px;
   /* 设置页分段导航的段高（比普通控件高一档） */
@@ -424,6 +427,9 @@ body {
   position: relative;
   width: 236px;
   flex: 0 0 236px;
+  /* 收起态：52px 纯图标条（2026-11-24 Phase 1）。用 --sidebar-w 过渡，
+     折叠开关在 Sidebar 顶部红绿灯留白区，状态存在 localStorage。 */
+  transition: width var(--dur-panel) var(--ease), flex-basis var(--dur-panel) var(--ease);
   background: var(--bg-sidebar);
   backdrop-filter: saturate(180%) blur(24px);
   -webkit-backdrop-filter: saturate(180%) blur(24px);
@@ -444,6 +450,33 @@ body {
   inset: 0 0 auto 0;
   height: 46px;
   -webkit-app-region: drag;
+}
+
+/* ---------- 侧栏收起态（52px 图标条） ----------
+   红绿灯已经占掉窗口左上角，收起后剩下的空间只够放图标；
+   标签与计数不参与布局，title / 无障碍名仍在（与 ≤900px 紧凑模式同一套规则）。 */
+.sidebar.collapsed {
+  width: var(--sb-collapsed-w);
+  flex: 0 0 var(--sb-collapsed-w);
+}
+.sidebar.collapsed .sb-brand {
+  justify-content: center;
+  gap: 0;
+  padding: 2px 0 10px;
+}
+.sidebar.collapsed .brand-text,
+.sidebar.collapsed .sb-label,
+.sidebar.collapsed .sb-count,
+.sidebar.collapsed .sb-key {
+  display: none;
+}
+.sidebar.collapsed .sb-item {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+.sidebar.collapsed .sb-item > span:not(.ico) {
+  display: none;
 }
 
 .main {

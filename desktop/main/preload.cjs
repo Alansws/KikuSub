@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld('kikusub', {
       on('menu:shortcuts', () => cb({ type: 'shortcuts' })),
       on('menu:export', () => cb({ type: 'export' })),
       on('menu:inspector', () => cb({ type: 'inspector' })),
+      on('menu:sidebar', () => cb({ type: 'sidebar' })),
       on('menu:theme', () => cb({ type: 'theme' })),
       on('menu:find', () => cb({ type: 'find' })),
       on('menu:play', () => cb({ type: 'play' })),

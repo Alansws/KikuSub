@@ -31,6 +31,7 @@ export interface MenuEvent {
     | 'settings'
     | 'export'
     | 'inspector'
+    | 'sidebar'
     | 'theme'
     | 'play'
     | 'prev-cue'

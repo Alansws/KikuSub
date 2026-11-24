@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import SidebarToggle from './SidebarToggle.svelte';
   import { app, setView, type View } from '../lib/store.svelte';
   import { dual } from '../lib/dualReview.svelte';
   import appIcon from '../assets/app-icon.png';
@@ -50,10 +51,16 @@
   ];
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" class:collapsed={app.sidebarCollapsed}>
+  <!-- 展开态的折叠开关贴在红绿灯留白区右侧；收起态它移到顶栏
+       （52px 里红绿灯占掉 x19–71，开关放在这里会被压在红绿灯上）。 -->
+  {#if !app.sidebarCollapsed}
+    <SidebarToggle floating />
+  {/if}
+
   <div class="sb-brand" aria-label="KikuSub 字幕工作台">
     <img class="brand-mark" src={appIcon} width="20" height="20" alt="" aria-hidden="true" />
-    <span>
+    <span class="brand-text">
       <span class="brand-name">KikuSub</span>
       <span class="brand-sub">字幕工作台</span>
     </span>
