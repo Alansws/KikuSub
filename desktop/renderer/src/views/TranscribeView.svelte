@@ -245,9 +245,10 @@
     if (dockState !== 'done' || !app.job) return { text: '', note: '' };
     const result = app.job.result ?? {};
     if (result.alt_review) {
+      // alt_count 只是这一趟落下的条数；区间合并后 B 的总数要读 dual.count。
       return {
-        text: `第二版已生成 · ${Number(result.alt_count ?? dual.count)} 条`,
-        note: '核对台未改动',
+        text: `第二版已生成 · 共 ${dual.count} 条`,
+        note: `本次 ${Number(result.alt_count ?? 0)} 条 · 核对台未改动`,
       };
     }
     if (result.dual) {
