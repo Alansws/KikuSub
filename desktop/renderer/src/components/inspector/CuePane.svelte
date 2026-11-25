@@ -420,25 +420,12 @@
     /* 页签底边已经是一条分隔线，这里不再叠一层 12px 的空白。 */
     margin-top: 0;
   }
-  /* G15：与上方页签（.insp-tab.on）统一成一套语法 ——
-     选中态 = accent-soft 底 + accent-text 字，不再用「白底 + 阴影」那套。
-     只作用于检查器内的这个 .seg，全局 .seg 不动（20+ 处复用，改动面太大）。 */
-  .seg {
-    height: 26px;
-    padding: 2px;
-    border-radius: 6px;
-  }
+  /* 分段控件走全局语法（灰槽 + 纯白凸起胶囊 + 深墨文字）。2026-11-25（Step 4.2）
+     删掉了这里原来的「accent-soft 底 + 蓝字」覆盖：同一屏里页签是底下划线、
+     分段是白色凸起胶囊，蓝色只给主操作与计数，选中态不再靠一层半透明蓝。
+     只把字号收 0.5px，让它比页签轻一档。 */
   .seg button {
-    height: 20px;
-    padding: 0 9px;
     font-size: 12px;
-    border-radius: 4px;
-  }
-  .seg button.on {
-    background: var(--accent-soft);
-    color: var(--accent-text);
-    box-shadow: none;
-    font-weight: 600;
   }
   .row-end {
     margin-left: auto;
@@ -464,14 +451,18 @@
     cursor: default;
   }
   .lang-sel {
-    height: 26px;
+    height: var(--ctl-h);
     border: 1px solid var(--line);
-    border-radius: 4px;
+    border-radius: var(--rad-control);
     background: var(--raise);
     color: var(--ink);
     font: inherit;
     font-size: 12px;
     padding: 0 7px;
+  }
+  .lang-sel:focus-visible {
+    border-color: var(--accent);
+    outline: none;
   }
   .track-meta {
     display: flex;
@@ -479,19 +470,22 @@
     flex-wrap: wrap;
     gap: var(--sp-2);
     margin-top: var(--sp-2);
-    font-size: 12px;
+    font-size: 11.5px;
     line-height: 16px;
     color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
   }
   .track-meta > span {
     white-space: nowrap;
   }
+  /* 一行「读数 + 动作」：读数在左，动作靠右。三个低频链接不再各占一行高度。 */
   .track-links {
     display: flex;
     justify-content: flex-end;
-    gap: 10px;
-    margin-top: 2px;
-    font-size: 12px;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-top: 1px;
+    font-size: 11.5px;
     line-height: 16px;
   }
   .track-meta .ok {
@@ -507,12 +501,15 @@
   .track-links .link {
     border: 0;
     background: transparent;
-    color: var(--accent);
+    color: var(--ink-3);
     font: inherit;
-    font-size: 12px;
+    font-size: 11.5px;
     cursor: pointer;
     padding: 0;
     white-space: nowrap;
+  }
+  .track-links .link:hover {
+    color: var(--accent-text);
   }
   .track-links .link:disabled {
     color: var(--text-3);
@@ -540,7 +537,7 @@
   }
   .cue-tc {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono);
     line-height: 16px;
     color: var(--ink-2);
     font-variant-numeric: tabular-nums;

@@ -366,14 +366,16 @@
 </section>
 
 <style>
-  /* 第三行在「三版对照」这张卡里，用一条虚线把它和 A / B 两版分开；
-     整块不再有自己的边框（外面那圈归 SecondOpinionCard）。 */
+  /* 第三行在「三版对照」这张卡里，用一条发丝线把它和 A / B 两版分开；
+     整块不再有自己的边框（外面那圈归 SecondOpinionCard）。
+     2026-11-25（Step 4.2）：虚线改实线——Cue Script 里只有「磁吸参考线」和
+     「章节草稿的待定端点」是虚线，分隔一律用 1px 发丝线，虚线会被读成占位框。 */
   .arb {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
     padding-top: var(--sp-1);
-    border-top: 1px dashed var(--line-2);
+    border-top: 1px solid var(--line);
   }
   /* 这一行是第三版的标签行：角色 + 徽章 + 朗读 + 复制，和上面 A / B 两行的头对齐。 */
   .arb-head {
@@ -603,34 +605,41 @@
     gap: var(--sp-1);
     margin-top: var(--sp-1);
   }
+  /* 与「三版对照」的复核 CTA 同一套二级按钮语法（纸面 + 发丝线）。
+     它原来是整条通栏的蓝底横幅：一屏里三条蓝横幅，读不出哪个才是主操作。 */
   .arb-run {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
+    align-self: flex-start;
     gap: 5px;
-    width: 100%;
-    height: 28px;
+    height: var(--ctl-h);
     padding: 0 10px;
-    border: 1px solid var(--accent-line);
-    border-radius: 7px;
-    background: var(--accent-soft);
-    color: var(--accent-hover);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: var(--raise);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .arb-run :global(svg) {
+    color: var(--ink-3);
   }
   .arb-run:hover:not(:disabled) {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent-soft) 70%, var(--raise));
+    border-color: var(--accent-line);
+    color: var(--accent-text);
   }
-  .arb-run:active:not(:disabled) {
-    transform: scale(0.99);
+  .arb-run:hover:not(:disabled) :global(svg) {
+    color: var(--accent-text);
   }
   .arb-run:disabled {
-    opacity: 0.6;
+    color: var(--ink-muted);
+    border-color: var(--line-2);
+    background: var(--fill);
     cursor: default;
   }
   .mini {
