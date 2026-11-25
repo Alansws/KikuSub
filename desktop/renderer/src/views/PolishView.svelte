@@ -393,7 +393,7 @@
       <Icon name="lock" size={11} />
       <span>只改文字：条数与时间码 1:1 不动，应用后回核对台逐句对照。</span>
       <button class="aiw-link" onclick={() => setView('reshape')}>
-        断句本身错了？去 ② 重排润色 →
+        断句本身错了？去重排润色 →
       </button>
     {/snippet}
     {#snippet statusExtra()}

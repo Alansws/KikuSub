@@ -675,7 +675,7 @@
       <span class="note-ico warn"><Icon name="warn" size={11} /></span>
       <span>会改条数与时间码：整段替换前先过一遍体检，越界的时间会单独高亮。</span>
       <button class="aiw-link" onclick={() => setView('polish')}>
-        只是改字？去 ① 锁轴润色 →
+        只是改字？去锁轴润色 →
       </button>
     {/snippet}
     {#snippet statusExtra()}

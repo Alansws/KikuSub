@@ -18,11 +18,14 @@ export interface NavItem {
   /** 与快捷键表一致的提示；空串表示没有全局键。 */
   key: string;
   /**
-   * 段内顺序编号（只给我「必须按顺序做」的两页用：① 锁轴润色 → ② 重排润色）。
-   * 它不是装饰：先锁轴、后重排是这个流程的真实先后（见 DESIGN.md 与台账 §2.3）。
-   * 只影响侧栏的可见标记，不进 `label` / `aria-label`，避免快捷键与脚本按名字匹配时被拆碎。
+   * 段内顺序提示（已停用，2026-11-26）。
+   *
+   * 曾经用 `①` / `②` 在侧栏给「锁轴润色 → 重排润色」标先后，但带圈数字和左侧
+   * 线性图标挤在同一行里，读起来像两个图标叠在一起（用户原话：「非常不协调」）。
+   * 先后关系改由**页内**说明承担（AI 工具条那句「断句本身错了？去重排润色 →」），
+   * 侧栏回到统一的「干净图标 + 纯净标题」。
    */
-  ordinal?: string;
+  ordinal?: never;
 }
 
 export interface NavGroup {
@@ -61,8 +64,8 @@ export const NAV_GROUPS: NavGroup[] = [
     stage: '03',
     label: '原文',
     items: [
-      { view: 'polish', icon: 'pencil', label: '锁轴润色', key: '⌘5', ordinal: '①' },
-      { view: 'reshape', icon: 'split', label: '重排润色', key: '⌘6', ordinal: '②' },
+      { view: 'polish', icon: 'pencil', label: '锁轴润色', key: '⌘5' },
+      { view: 'reshape', icon: 'split', label: '重排润色', key: '⌘6' },
     ],
   },
   {
