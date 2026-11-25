@@ -31,6 +31,7 @@ const launchguard = require('./launchguard.cjs');
 const skill = require('./skill.cjs');
 const cli = require('./cli.cjs');
 const windowmode = require('./windowmode.cjs');
+const isolation = require('./isolation.cjs');
 const {
   deleteCleanupCandidates,
   listCleanupCandidates,
@@ -41,6 +42,53 @@ const DESKTOP_ROOT = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..');
 
 const IS_DEV = !app.isPackaged;
+
+/**
+ * 双开 / 试用版隔离标识（2026-11-26）。
+ *
+ * 正式包没有 `Contents/Resources/app-isolation.json`，行为与以前完全一致：
+ * 产品名 KikuSub、Chromium userData 走 Electron 默认、用户可写数据根仍是
+ * `~/Library/Application Support/KikuSub`。
+ * `tools/pack/build_trial.sh` 装配试用版时会写这份身份文件，这里把产品名、
+ * Electron userData / sessionData 与用户数据根一起换到独立命名，让试用版能与
+ * 现役 KikuSub.app 同时运行，且绝不读写它的 settings.json / presets.json /
+ * `.ai-key`。单实例锁跟着 userData 走，所以这一项必须最先设定。
+ */
+const APP_ISOLATION = isolation.readIsolation({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+});
+
+if (!IS_DEV && APP_ISOLATION.dataDirName) {
+  try {
+    if (APP_ISOLATION.appName) app.setName(APP_ISOLATION.appName);
+    const isolatedRoot = isolation.resolveRoot({
+      appData: app.getPath('appData'),
+      dataDirName: APP_ISOLATION.dataDirName,
+      env: process.env,
+      allowOverride: true,
+    });
+    // Chromium 在 ready 之前就会去写 SingletonLock，目录必须先存在。
+    fs.mkdirSync(isolatedRoot, { recursive: true });
+    app.setPath('userData', isolatedRoot);
+    // 缓存 / Cookies / Local Storage 跟着 sessionData；显式写一份，避免旧 Electron
+    // 在 setPath('userData') 前就把 sessionData 定死到默认目录。
+    app.setPath('sessionData', isolatedRoot);
+  } catch (err) {
+    // 隔离包绝不能「退回共享目录」：那会直接读写现役版的 userData。建立不起来就拒绝启动。
+    console.error('[isolation] 试用版无法建立独立数据根，拒绝以共享目录启动：', err);
+    app.exit(1);
+  }
+} else if (
+  !IS_DEV &&
+  process.resourcesPath &&
+  fs.existsSync(path.join(process.resourcesPath, isolation.FILE_NAME))
+) {
+  // 身份文件存在却读不出安全的数据根：同样拒绝启动，避免「以为是试用版、实际读写旧版」。
+  console.error('[isolation] 包内 app-isolation.json 无效，拒绝回落到现役数据目录');
+  app.exit(1);
+}
+
 // 截图路径优先取环境变量：打包后的 .app 直接带 `--screenshot=` 会被 Chromium
 // 的命令行解析器拒掉（bad option），环境变量没有这个问题。
 const SHOT_ARG = process.argv.find((a) => a.startsWith('--screenshot'));
@@ -106,7 +154,13 @@ let quitConfirming = false;
 /** 用户可写目录：~/Library/Application Support/KikuSub（KIKUSUB_DATA_DIR 可覆盖）。 */
 function dataDir() {
   if (process.env.KIKUSUB_DATA_DIR) return process.env.KIKUSUB_DATA_DIR;
-  return path.join(app.getPath('appData'), 'KikuSub');
+  // 试用版 / 双开包用独立数据根（见 APP_ISOLATION），正式包仍是 KikuSub。
+  return isolation.resolveRoot({
+    appData: app.getPath('appData'),
+    dataDirName: isolation.dataDirName(APP_ISOLATION),
+    env: process.env,
+    allowOverride: Boolean(APP_ISOLATION.dataDirName),
+  });
 }
 
 /** 开发模式沿用仓库目录；打包后是 Application Support。 */
