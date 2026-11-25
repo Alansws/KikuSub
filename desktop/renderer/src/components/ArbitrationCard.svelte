@@ -228,11 +228,15 @@
       <span>重置对话后重新开始</span>
     </button>
   {:else if setupHint && !record}
-    <p class="arb-tip warn">{setupHint}</p>
-    <button class="arb-run" onclick={goSettings} title="打开设置 → AI 优化">
-      <Icon name="gear" size={12} />
-      <span>{cfg ? '去设置' : '重试读取配置'}</span>
-    </button>
+    <!-- 未配置时只占一行：说明 + 去设置，不再是一个悬在空白上的白底按钮
+         （2026-11-26 真机反馈：检查器底部那截「文字 + 大白按钮」显得没做完）。 -->
+    <div class="arb-setup">
+      <p class="arb-tip warn">{setupHint}</p>
+      <button class="arb-run inline" onclick={goSettings} title="打开设置 → AI 优化">
+        <Icon name="gear" size={11} />
+        <span>{cfg ? '去设置' : '重试读取配置'}</span>
+      </button>
+    </div>
   {:else}
     {#if record}
       <!-- 第三行：结果紧贴在 A / B 两行下面，点完「重新判定」结果就出现在眼前，
@@ -641,6 +645,38 @@
     border-color: var(--line-2);
     background: var(--fill);
     cursor: default;
+  }
+  /* 「还没配置」是一行状态：说明在左，动作在右，动作退成蓝铅笔文字链接。 */
+  .arb-setup {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+  .arb-setup .arb-tip {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .arb-run.inline {
+    align-self: center;
+    flex: 0 0 auto;
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent-text);
+    font-size: 11.5px;
+    font-weight: 500;
+  }
+  .arb-run.inline:hover:not(:disabled) {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
+  .arb-run.inline :global(svg) {
+    color: var(--accent-text);
   }
   .mini {
     height: 26px;

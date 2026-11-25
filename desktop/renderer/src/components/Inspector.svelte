@@ -65,7 +65,11 @@
       title="质检待核队列"
     >
       质检待核
-      {#if qaPending}<b>{qaPending}</b>{/if}
+      {#if qaPending}
+        <!-- 这个数字不是「读数」，是「还有几句要你动手」：和字幕表页边的待核朱点
+             同义，所以它用朱红微胶囊，而不是像「章节 3」那样的等宽灰数字。 -->
+        <span class="tab-badge" aria-label={`${qaPending} 条待核`}>{qaPending}</span>
+      {/if}
     </button>
     <button
       class="insp-tab"
@@ -115,12 +119,16 @@
     transition: width var(--dur-panel) var(--ease), flex-basis var(--dur-panel) var(--ease),
       opacity 140ms var(--ease);
   }
-  /* 左右各 16：台词框拿到 316px，比 20 多 8px；三版对照的长句少折一行 */
+  /* 左右各 16：台词框拿到 316px，比 20 多 8px；三版对照的长句少折一行。
+     纵向 flex：让 InspectorMeta 的 `margin-top: auto` 把它钉在检查器底缘，
+     内容短的时候空白落在中间而不是底部（2026-11-26 真机反馈）。 */
   .ins-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    display: flex;
+    flex-direction: column;
   }
   .insp-tabs {
     flex: 0 0 42px;
@@ -170,6 +178,25 @@
   }
   .insp-tab.on b {
     color: var(--accent-text);
+  }
+  /* 待核数 = 朱红微胶囊（2026-11-26 真机反馈：原来的极淡灰数字起不到警示作用）。
+     11px 等宽数字，朱红文字压在 10% 朱红底上：日间 4.9:1 / 夜间 5.6:1，均过 4.5；
+     胶囊高度比页签行矮一档，选中时也不会把页签顶高。 */
+  .insp-tab .tab-badge {
+    display: inline-grid;
+    place-items: center;
+    min-width: 16px;
+    height: 15px;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--danger-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 24%, transparent);
+    color: var(--danger);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
   }
   .tabs-spacer {
     flex: 1;

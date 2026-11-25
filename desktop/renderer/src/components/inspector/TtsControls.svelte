@@ -423,13 +423,15 @@
       <span class="tts-engine {engineTone}" title={engineTitle}>
         <i class="tts-status-dot" aria-hidden="true"></i>{engineLabel}
       </span>
-      <span class="tts-meta" title={selectedMeta}>{selectedMeta}</span>
       <button class="tts-panel-close" onclick={togglePanel} title="收起" aria-label="收起朗读设置">
         <Icon name="close" size={10} />
       </button>
     </div>
+    <!-- 音色的细节读数独占一行：348px 窄栏里把它塞进头部，只会把
+         「音量已对齐」压成「音量已…」（2026-11-26 真机报障）。 -->
+    <p class="tts-meta" title={selectedMeta}>{selectedMeta}</p>
 
-    <div class="tts-panel-row">
+    <div class="tts-panel-row primary-row">
       <div class="tts-select-wrap rate" title="语速">
         <select
           class="tts-select"
@@ -462,6 +464,9 @@
       >
         <Icon name="mic" size={12} /><span>截取</span>
       </button>
+    </div>
+
+    <div class="tts-panel-row">
       <button
         class="tts-action"
         class:on={ttsLibrary}
@@ -726,9 +731,15 @@
     background: var(--fill);
     color: var(--ink);
   }
+  /* `flex: 1 0 100%` 的 basis 只有 306px（348 − 两侧 16 内边距 + 滚动条），
+     但 flex 项的自动最小尺寸默认是 `min-content`，而这一行按钮的 min-content
+     加起来比容器宽——于是 `flex-shrink: 0` 让它顶着 363px 撑出检查器右缘，
+     被 `overflow: hidden` 裁掉（2026-11-26 真机：最右一个按钮只剩半截）。
+     `min-width: 0` 是根因修复；两行分组是让它在 306px 里也排得规整。 */
   .tts-panel {
     flex: 1 0 100%;
     order: 10;
+    min-width: 0;
     margin-top: var(--sp-2);
     padding: var(--sp-2) var(--sp-3) var(--sp-3);
     border: 1px solid var(--line-2);
@@ -737,6 +748,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
+    box-sizing: border-box;
   }
   .tts-panel-head {
     display: flex;
@@ -750,11 +762,6 @@
     line-height: 16px;
     font-weight: 600;
     color: var(--ink-2);
-  }
-  .tts-panel-head .tts-meta {
-    flex: 1 1 auto;
-    min-width: 0;
-    text-align: right;
   }
   .tts-panel-close {
     appearance: none;
@@ -773,11 +780,23 @@
     background: var(--fill);
     color: var(--ink);
   }
+  /* 第一行：语速（固定 64px）+ 上传 + 截取 三等分撑满；
+     第二行：音色库 / 管理，按内容宽度靠左。两行都在 306px 内，不再挤压。 */
   .tts-panel-row {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: var(--sp-1);
+    min-width: 0;
+  }
+  .tts-panel-row.primary-row {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+  }
+  .tts-panel-row.primary-row > .tts-action {
+    justify-content: center;
+    min-width: 0;
   }
   .mini {
     height: 26px;
@@ -898,10 +917,13 @@
     pointer-events: none;
     color: var(--ink-3);
   }
-  .tts-meta {
-    padding-left: 2px;
-    font-size: 10.5px;
-    line-height: 13px;
+  /* 音色读数：面板里的独立一行，11px，允许在极窄时省略（title 里有完整值） */
+  .tts-panel > .tts-meta {
+    display: block;
+    margin: -2px 0 0;
+    padding-left: 0;
+    font-size: 11px;
+    line-height: 15px;
     color: var(--text-3);
     white-space: nowrap;
     overflow: hidden;

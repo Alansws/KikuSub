@@ -47,57 +47,80 @@
   const sourcePath = $derived(source?.path || '');
 </script>
 
-{#if imported}
-  <!--
-    换了一版字幕（导入 / 恢复草稿）后，转写报告与质检队列属于另一版内容。
-    这里不再展示它们的数字，只说清「这一版是哪来的」，避免“面板说 A、核对台在用 B”。
-  -->
-  <div class="meta-sec">
-    <div class="source-row">
+<footer class="meta-foot">
+  <div class="foot-row">
+    {#if imported}
+      <!--
+        换了一版字幕（导入 / 恢复草稿）后，转写报告与质检队列属于另一版内容。
+        这里不再展示它们的数字，只说清「这一版是哪来的」，避免“面板说 A、核对台在用 B”。
+      -->
       <span class="source-badge">{sourceLabel}</span>
       <span class="source-name" title={sourcePath || outputName}>{outputName || '—'}</span>
-    </div>
-    <p class="meta-note">
-      质检速览与生效参数属于上一次转写，和这一版字幕对不上；整片转写后会重新生成。
-    </p>
+    {:else if coverage || lowConf}
+      <div class="chips">
+        {#if coverage}
+          <span class="chip warn">漏检 <b>{coverage}</b></span>
+        {/if}
+        {#if lowConf}
+          <span class="chip warn">低置信 <b>{lowConf}</b></span>
+        {/if}
+      </div>
+    {:else if !app.report}
+      <span class="foot-quiet">还没有质检速览 · 整片转写后生成</span>
+    {/if}
+    <div class="foot-spacer"></div>
+    {#if app.report && !imported}
+      <button class="meta-link" onclick={() => setView('report')} title="这一趟转写的完整参数、耗时与漏句清单">
+        任务报告
+        <Icon name="chevron-right" size={10} />
+      </button>
+    {/if}
   </div>
-{:else if coverage || lowConf}
-  <div class="meta-sec">
-    <div class="chips">
-      {#if coverage}
-        <span class="chip warn">漏检 <b>{coverage}</b></span>
-      {/if}
-      {#if lowConf}
-        <span class="chip warn">低置信 <b>{lowConf}</b></span>
-      {/if}
-      <span class="meta-note inline">都在「质检待核」里逐条处理</span>
-    </div>
-  </div>
-{/if}
-
-{#if app.report && !imported}
-  <button class="meta-link" onclick={() => setView('report')} title="这一趟转写的完整参数、耗时与漏句清单">
-    任务报告
-    <Icon name="chevron-right" size={10} />
-  </button>
-{/if}
+  {#if imported}
+    <p class="meta-note">质检速览与生效参数属于上一次转写，和这一版字幕对不上；整片转写后会重新生成。</p>
+  {:else if coverage || lowConf}
+    <p class="meta-note">都在「质检待核」里逐条处理</p>
+  {/if}
+</footer>
 
 <style>
-  .meta-sec {
-    margin-top: var(--sp-4);
-    padding-top: var(--sp-3);
+  /* 检查器底部的收尾区（2026-11-26 真机反馈：右栏底部几行信息下面留出一大块
+     尴尬空白）。两条规则：
+     1. `margin-top: auto` —— 内容短时它被推到检查器底缘，空白落在内容与收尾区
+        之间，读起来是「留白」，而不是「没写完」；
+     2. 一行收口 —— 状态（来源 / 漏检 / 低置信）在左，「任务报告」在右，同一条
+        基线上；说明最多一行小字，不再堆两个 section。 */
+  .meta-foot {
+    margin-top: auto;
+    padding: var(--sp-3) 0 2px;
     border-top: 1px solid var(--line);
+    min-width: 0;
+  }
+  .foot-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 20px;
+  }
+  .foot-spacer {
+    flex: 1;
+    min-width: var(--sp-2);
+  }
+  .foot-quiet {
+    min-width: 0;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--ink-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .meta-note {
-    margin: 6px 0 0;
+    margin: 5px 0 0;
     font-size: 11.5px;
     line-height: 17px;
     color: var(--ink-3);
-  }
-  .meta-note.inline {
-    margin: 0;
-    flex: 1 1 auto;
-    min-width: 90px;
   }
   .chips {
     display: flex;
@@ -134,15 +157,17 @@
   }
   .meta-link {
     appearance: none;
+    flex: 0 0 auto;
     border: 0;
     background: transparent;
     color: var(--ink-3);
     font: inherit;
-    font-size: 12px;
-    padding: var(--sp-3) 0 0;
+    font-size: 11.5px;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     gap: 1px;
+    cursor: pointer;
   }
   .meta-link:hover {
     color: var(--accent-text);

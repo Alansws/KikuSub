@@ -382,20 +382,22 @@
 </script>
 
 <div class="pane">
-  <PageHeader title="转写" {subtitle}>
-    <button
-      class="btn ghost sm"
-      type="button"
-      onclick={() => setView('report')}
-      disabled={!app.report}
-      title={app.report ? '查看本次转写的任务详报' : '跑完一次转写后才有报告'}
-    >
-      任务报告
-    </button>
-    <button class="btn ghost sm" type="button" onclick={() => (shortcuts.open = true)}>
-      快捷键
-    </button>
-  </PageHeader>
+  <div class="pane-head">
+    <PageHeader title="转写" {subtitle}>
+      <button
+        class="btn ghost sm"
+        type="button"
+        onclick={() => setView('report')}
+        disabled={!app.report}
+        title={app.report ? '查看本次转写的任务详报' : '跑完一次转写后才有报告'}
+      >
+        任务报告
+      </button>
+      <button class="btn ghost sm" type="button" onclick={() => (shortcuts.open = true)}>
+        快捷键
+      </button>
+    </PageHeader>
+  </div>
 
   <div class="main-scroll">
     <div class="page-wrap">
@@ -696,33 +698,38 @@
         </div>
       </div>
 
-      <div class="dock-wrap">
-        <RunDock
-          summary={dockSummary}
-          detail={plan.hint}
-          blocked={plan.blocked}
-          buttonLabel={plan.button}
-          disabled={!app.media || !app.connected || !hasEnabledEngine}
-          state={dockState}
-          {pct}
-          stage={app.job?.stage ?? ''}
-          statusText={doneInfo.text}
-          statusNote={doneInfo.note}
-          error={app.job?.error ?? ''}
-          doneCta={doneCta}
-          savedPath={dockState === 'done' ? app.lastSavedPath : ''}
-          onrun={go}
-          oncancel={cancelJob}
-          onreveal={revealSaved}
-        />
-      </div>
+    </div>
+  </div>
+
+  <!-- 执行栏是**停靠**的：它是 pane 的最后一个 flex 子项，不随内容滚动，
+       也不是浮在页面上的贴片。内容列（1120px）与上面的三步共用同一条左缘。 -->
+  <div class="dock-wrap">
+    <div class="dock-inner">
+      <RunDock
+        summary={dockSummary}
+        detail={plan.hint}
+        blocked={plan.blocked}
+        buttonLabel={plan.button}
+        disabled={!app.media || !app.connected || !hasEnabledEngine}
+        state={dockState}
+        {pct}
+        stage={app.job?.stage ?? ''}
+        statusText={doneInfo.text}
+        statusNote={doneInfo.note}
+        error={app.job?.error ?? ''}
+        doneCta={doneCta}
+        savedPath={dockState === 'done' ? app.lastSavedPath : ''}
+        onrun={go}
+        oncancel={cancelJob}
+        onreveal={revealSaved}
+      />
     </div>
   </div>
 </div>
 
 <style>
   .pane {
-    padding: var(--sp-6) var(--sp-8) 0;
+    padding: 0;
     overflow: hidden;
     flex: 1;
     min-height: 0;
@@ -731,10 +738,16 @@
     background: var(--canvas);
   }
 
+  .pane-head {
+    flex: 0 0 auto;
+    padding: var(--sp-6) var(--sp-8) 0;
+  }
+
   .main-scroll {
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+    padding: 0 var(--sp-8);
   }
 
   .page-wrap {
@@ -966,14 +979,23 @@
     color: var(--warn);
   }
 
-  /* 任务条跟在内容后面：内容短时自然收在内容下方，内容长时吸附在滚动区底部 */
+  /* 停靠栏：通栏的纸面色带 + 一条上发丝线。它不再用半透明模糊的白条浮在
+     画布上，也不在两侧内缩——内容列与上面三步共用同一条左缘。 */
   .dock-wrap {
-    position: sticky;
-    bottom: 0;
-    z-index: 2;
-    margin-top: auto;
-    padding-top: var(--sp-2);
-    background: var(--canvas);
+    flex: 0 0 auto;
+    padding: 0 var(--sp-8);
+    border-top: 1px solid var(--line);
+    /* 比纸面更靠画布一档：色带只是「台面下沉了 1px」，不是贴上去的白条。
+       真正的分隔由那条上发丝线负责（DESIGN.md：层级靠明度，不靠边框堆叠）。 */
+    background: color-mix(in srgb, var(--paper) 55%, var(--canvas));
+    min-width: 0;
+  }
+  /* 与 `.main-scroll` 的内边距 + `.page-wrap` 的 1120 内容列完全同一套几何，
+     这样底栏的复述文字和上面三步的左缘严格对齐（差 4px 都会被截图抓出来）。 */
+  .dock-inner {
+    width: 100%;
+    max-width: 1120px;
+    margin: 0 auto;
   }
 
   /* 1080（最小窗口）下仍保留右栏：它是「我现在有什么 / 下一步去哪」的锚点，

@@ -373,7 +373,7 @@
         <button class="btn primary" onclick={() => setView('import')}>去导入</button>
       </div>
     {:else}
-      <div class="export-card">
+      <div class="export-body">
         <div class="row">
           <span class="row-label">形式</span>
           <div class="mode-grid">
@@ -802,15 +802,17 @@
     justify-content: start;
     align-content: start;
   }
+  /* 页面骨架：内容直接落在画布台面上，用「标题 + 发丝线」分段。
+     2026-11-26 去套娃：原来这里是「灰画布 → 4 个大白框 → 里面 3 个导出形式白框
+     + 6 个字幕样式白框」三层，白框叠白框把页面切成一堆小卡片。现在没有任何
+     分区外壳：`.sec` 只有一条上发丝线，选项块只保留**一层**描边质感。 */
   .range-row {
     display: flex;
     align-items: center;
     gap: var(--sp-3);
     flex-wrap: wrap;
-    padding: 10px var(--sp-3);
-    border: 1px solid var(--separator-soft);
-    border-radius: 8px;
-    background: var(--bg-content);
+    padding: 0 0 14px;
+    min-width: 0;
   }
   .range-hint {
     font-size: var(--fs-ui);
@@ -832,8 +834,8 @@
     line-height: 19px;
   }
   .sec {
-    border-top: 1px solid var(--separator-soft);
-    padding: 18px 0 var(--sp-2);
+    border-top: 1px solid var(--line);
+    padding: var(--sp-5) 0 0;
   }
   .sec-head {
     display: flex;
@@ -935,19 +937,17 @@
     color: var(--text-2);
     font-size: 12px;
   }
-  .export-card {
-    border: 1px solid var(--separator);
-    border-radius: 12px;
-    background: var(--bg-content);
-    padding: var(--sp-4) 17px 14px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  /* 导出成片的分区本体：没有外壳、没有底色、没有投影。
+     每一行用一条发丝线分段，「形式 / 字幕轨 / 字幕样式 / 位置」就是四段。 */
+  .export-body {
+    min-width: 0;
   }
   .row {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--separator-soft);
+    padding: 11px 0;
+    border-bottom: 1px solid var(--line-2);
     min-width: 0;
   }
   .row:first-child {
@@ -970,12 +970,14 @@
     flex: 1;
     min-width: 0;
   }
+  /* 导出形式 = 唯一一层交互块：画布上一条描边 + 悬停淡底，
+     选中用蓝描边 + 极淡蓝底（选中态靠描边与底色的层次，不再叠一张白卡）。 */
   .mode {
     appearance: none;
     text-align: left;
-    border: 1px solid var(--separator);
-    border-radius: 4px;
-    background: var(--bg-content);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: transparent;
     padding: 9px 10px;
     color: var(--text);
     font: inherit;
@@ -983,7 +985,12 @@
     flex-direction: column;
     gap: 3px;
     min-width: 0;
+    cursor: pointer;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
+  }
+  .mode:hover:not(:disabled):not(.on) {
+    background: var(--row-hover);
+    border-color: var(--line);
   }
   /* 三种导出方式的说明是「选错要重编码几十分钟」的文字，必须可读：13/19 + --ink-2。 */
   .mode b {
@@ -1019,9 +1026,9 @@
   .preset {
     appearance: none;
     text-align: left;
-    border: 1px solid var(--separator);
-    border-radius: 4px;
-    background: var(--bg-content);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: transparent;
     padding: var(--sp-2) 9px;
     color: var(--text);
     font: inherit;
@@ -1029,7 +1036,11 @@
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    cursor: pointer;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
+  }
+  .preset:hover:not(:disabled):not(.on) {
+    background: var(--row-hover);
   }
   /* 码率预设的 hint 解释「这条在什么场景下更合适」，与样式预设同一套规则。 */
   .preset b {
@@ -1108,12 +1119,12 @@
   .run-card,
   .done-card {
     margin-top: var(--sp-3);
-    border-radius: 8px;
-    padding: var(--sp-3) 13px;
-    border: 1px solid var(--separator);
+    border-radius: var(--rad-control);
+    padding: var(--sp-3) 12px;
+    border: 1px solid var(--line-2);
   }
   .run-card {
-    background: linear-gradient(120deg, var(--accent-soft), transparent 70%);
+    background: var(--accent-soft);
   }
   .run-top {
     display: flex;
@@ -1229,9 +1240,8 @@
     display: flex;
     align-items: flex-end;
     gap: 14px;
-    margin-top: 14px;
+    margin-top: var(--sp-3);
     padding-top: var(--sp-3);
-    border-top: 1px solid var(--separator-soft);
   }
   .go {
     height: 34px;
@@ -1241,8 +1251,8 @@
     flex: 0 0 auto;
   }
   .style-section {
-    padding: var(--sp-3) 0 10px;
-    border-bottom: 1px solid var(--separator-soft);
+    padding: var(--sp-3) 0 12px;
+    border-bottom: 1px solid var(--line-2);
   }
   .style-head {
     display: flex;
@@ -1273,9 +1283,9 @@
   .style-preset {
     appearance: none;
     text-align: left;
-    border: 1px solid var(--separator);
-    border-radius: 8px;
-    background: var(--bg-content);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: transparent;
     padding: 7px var(--sp-2);
     color: var(--text);
     font: inherit;
@@ -1285,6 +1295,9 @@
     min-width: 0;
     cursor: pointer;
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
+  }
+  .style-preset:hover:not(:disabled):not(.on) {
+    background: var(--row-hover);
   }
   /* 「标题 ≥ 正文」：标题 13.5 略高于正文 13，正文用 --ink-2。
      6 张卡在 13/19 下仍是 2 行、不裁字（实测卡高 67 → 74），clamp 放到 3 行留余量。 */
@@ -1363,11 +1376,10 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    margin: 0 0 var(--sp-3);
-    padding: 6px 10px;
-    border: 1px solid var(--line);
-    border-radius: var(--rad-control);
-    background: var(--raise);
+    margin: 0 0 var(--sp-4);
+    padding: 0;
+    border: 0;
+    background: transparent;
     font-size: 12.5px;
     line-height: 18px;
     color: var(--ink-2);
