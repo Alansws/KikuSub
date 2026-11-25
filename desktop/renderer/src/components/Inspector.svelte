@@ -111,7 +111,9 @@
   .inspector {
     width: var(--inspector-w);
     flex: 0 0 var(--inspector-w);
-    background: var(--paper);
+    /* 检查器夹在台面与铬件之间的一档：浅色下比台面暗半阶、比侧栏浅半阶；
+       深色下比舞台亮一阶。三块并排时每两块都能读出边界。 */
+    background: var(--bg-inspector);
     border-left: 1px solid var(--line);
     overflow: hidden;
     display: flex;
@@ -138,7 +140,7 @@
     height: 42px;
     padding: 0 var(--sp-3);
     border-bottom: 1px solid var(--line);
-    background: var(--paper);
+    background: var(--bg-inspector);
   }
   /* 页签 = 台本的分隔页：字重 + 一段蓝铅笔底线，不涂底 */
   .insp-tab {

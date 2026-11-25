@@ -389,9 +389,9 @@
   }
   .lang-sel {
     height: var(--ctl-h);
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: var(--raise);
+    background: var(--well);
     color: var(--ink);
     font: inherit;
     font-size: 12px;
@@ -425,21 +425,18 @@
     letter-spacing: -0.01em;
     white-space: nowrap;
   }
-  /* 可编辑台词 = 一个真正的输入框（2026-11-24 用户报障后又改回来）。
-     去卡片化（Phase 2）把这里的边框和底一起收掉了，只剩一行大字；
-     在浅色检查器里它和正文完全同质，读不出「这是能点的输入框」。
-     现在恢复「输入框质感」，但**不恢复套娃卡片**：外层 .cue-card 仍然只有
-     一条 1px 上分割线，白框只是这一行的控件本身。
-     时间码留在框外上方（.cue-tc），框内只放可编辑的台词。
-     底色走 --raise（浅色 #fff / 深色 #181c23 / 明朝墨 #fff），
-     与设置页、AI 通道的输入框同一个令牌，不另造一套。 */
+  /* 可编辑台词 = 一个**凹陷的输入区**（2026-11-26 第二次重塑）。
+     它是输入框而不是卡片：无边框的极淡中性灰填充，和设置页 / AI 通道的
+     输入框同一个令牌（--well）。聚焦才升成纸白 + 一道蓝须 —— 白色只属于
+     「正在编辑的这一块」，不再常驻一张白框（检查器里白框套白框的那一层）。
+     时间码留在框外上方（.cue-tc），框内只放可编辑的台词。 */
   .cue-text {
     display: block;
     width: 100%;
     margin-top: var(--sp-2);
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: var(--raise);
+    background: var(--well);
     /* rows=2（20/29 × 2 = 58）加上上下内边距与 1px 边框，高度才是整数像素；
        用 padding 撑而不是靠 rows 硬顶，聚焦时框体不会跳。 */
     padding: 6px 9px;
@@ -468,12 +465,13 @@
     min-height: 62px;
   }
   .cue-text:hover {
-    border-color: var(--line);
+    background: var(--well-hover);
   }
-  /* 聚焦：边框转强调色 + 一圈柔和光晕。用父级 `:focus-within` 而不是
-     `:focus-visible` —— 点进输入框也要亮（那是「现在可以改这一句」的提示），
+  /* 聚焦：升成纸白 + 边框转强调色 + 一圈柔和光晕。用父级 `:focus-within`
+     而不是 `:focus-visible` —— 点进输入框也要亮（那是「现在可以改这一句」），
      而且焦点落在框内任何位置都成立。 */
   .cue-card:focus-within .cue-text {
+    background: var(--raise);
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }

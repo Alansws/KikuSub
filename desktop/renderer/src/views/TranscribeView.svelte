@@ -742,6 +742,12 @@
     flex: 0 0 auto;
     padding: var(--sp-6) var(--sp-8) 0;
   }
+  /* 页头与 `.page-wrap` 的 1120 内容列同一条左缘：原来页头按 32px 内边距贴左、
+     正文按 1120 居中，大窗口下标题会比正文左偏一个滚动条的宽度。 */
+  .pane-head :global(.page-head) {
+    max-width: 1120px;
+    margin-inline: auto;
+  }
 
   .main-scroll {
     overflow-y: auto;
@@ -868,12 +874,19 @@
   .range-input {
     width: 104px;
     height: 26px;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: var(--raise);
+    background: var(--well);
     color: var(--text);
     font-size: 12px;
     padding: 0 7px;
+  }
+  .range-input:hover {
+    background: var(--well-hover);
+  }
+  .range-input:focus {
+    background: var(--raise);
+    border-color: var(--accent);
   }
   .range-input.mono {
     font-family: var(--font-mono);
@@ -905,7 +918,7 @@
 
   /* 两版一起的流向：主角是「谁写哪里」，不靠一段长提示解释 */
   .duo {
-    border: 1px solid var(--line);
+    border: 0;
     border-radius: var(--rad-card);
     background: var(--fill);
     padding: var(--sp-2) 10px;
@@ -939,11 +952,14 @@
     font-size: 12px;
     color: var(--text);
     background: var(--raise);
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
     padding: 2px 6px;
     max-width: 190px;
     min-width: 120px;
+  }
+  .duo-select:focus {
+    border-color: var(--accent);
   }
   .duo-arrow {
     color: var(--text-3);

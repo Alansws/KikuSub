@@ -126,27 +126,29 @@
     }
   }
 
+  /* 未选中的外观卡 = 台面上的一块凹陷填充；选中才加一道细蓝须。
+     缩略图本身的颜色仍来自 --shot-*（它必须在任何外观下都能同时显示两套色）。 */
   .appearance-card {
     appearance: none;
     text-align: left;
     font: inherit;
     padding: var(--sp-2);
     border-radius: var(--rad-card);
-    border: 1px solid var(--line);
-    background: var(--raise);
+    border: 1px solid transparent;
+    background: var(--well);
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
     transition:
       border-color var(--dur) var(--ease),
-      box-shadow var(--dur) var(--ease);
+      background var(--dur) var(--ease);
   }
   .appearance-card:hover {
-    border-color: var(--accent-line);
+    background: var(--well-hover);
   }
   .appearance-card.on {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent-line);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
   }
 
   /* 迷你窗口：装饰性缩略图，颜色全部来自 --shot-*（1/4 尺度的间距单列在这里） */

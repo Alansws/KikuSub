@@ -97,13 +97,30 @@
   --ctl-h-xl: 36px;
   --seg-h: 28px;
 
-  /* ---------- 表面：冷纸 / 纸面 / 台本 ----------
-     2026-11-25 验收修正：日间三层表面整体提亮一档并去掉浊绿，
-     画布是干净的冷纸、纸面是中性浅灰白、台本回到纯白，
-     让「纸 → 台本」的层级靠明度差而不是靠灰调堆出来。 */
-  --canvas: #edf1f5;
-  --paper: #f7f9fb;
+  /* 单栏页面的内容列：导入（760 继续卡）/ 导出 / 提示词库 / 设置 / 任务详报
+     共用这一档；主舞台比它宽时**左右均分**留白，而不是把内容贴死在左边。
+     通栏网格（核对台、AI 三页的表格）不套它。 */
+  --measure-page: 1040px;
+  --measure-card: 760px;
+
+  /* ---------- 表面：纸台面 / 窗口铬件 / 凹陷填充 ----------
+     2026-11-26（第二次视觉重塑）：把「灰底贴白框」整条语法翻过来。
+
+       台面（--canvas）   = 干净高明度的纸白。页面内容直接落在它上面。
+       铬件（--paper）    = 侧栏 / 标题栏 / 底栏 / 时间轴坞，一档中性浅灰。
+       检查器             = 两档之间的一条窄带（--bg-inspector），让三块并排时能分区。
+       凹陷填充（--well） = 未选中的选项块 / 信息条 / 输入区：**无边框**的极淡中性灰。
+       台本纸（--raise）  = 真正的纸：台本表、输入框、浮层、面板。
+
+     规则：白底只允许出现在「台本纸 / 浮层 / 输入框」三类对象上；页内分区一律是
+     「标题 + 发丝线」或「凹陷填充」，全站不再有白框叠白框、也没有灰底贴白框。 */
+  --canvas: #ffffff;
+  --paper: #f0f2f4;
   --raise: #ffffff;
+  /* 凹陷填充 = 5% 中性墨，悬停 9%。靠明度而不是描边表达「凹下去的一块」；
+     --well / --well-hover 是语义别名，组件里写它们比写 --fill 更说得清用途。 */
+  --well: var(--fill);
+  --well-hover: var(--fill-strong);
   --ink: #15191c;
   --ink-2: #4a545c;
   /* 6.35:1 on sheet / 6.02:1 on panel —— 标签 / 计数 / 单位 / 快捷键。
@@ -116,8 +133,10 @@
      .14 是分隔线的最低可读档，不再回退到 5% 灰。 */
   --line: rgba(21, 25, 28, 0.14);
   --line-2: rgba(21, 25, 28, 0.1);
-  /* 明确的 1px 发丝线（cue 表、台本页边）：干净冷灰，不发黄 */
-  --rule: #ccd5dc;
+  /* 明确的 1px 发丝线（cue 表、台本页边）：干净冷灰，不发黄。
+     台面变成纸白之后它也从 #ccd5dc 退到 #dbe1e6 —— 白纸上的一条线
+     只要有形体就够，不需要再压一道深灰把版面切开。 */
+  --rule: #dbe1e6;
 
   /* ---------- 蓝铅笔 / 朱笔 ----------
      2026-11-25 验收修正：旧 #2D5FA6 是低饱和钢青，叠在灰底上显脏。
@@ -143,11 +162,13 @@
   --success-soft: rgba(53, 107, 82, 0.1);
 
   --bg-content: var(--raise);
-  --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(247, 249, 251, 0.9);
-  --bg-status: rgba(247, 249, 251, 0.94);
-  /* 侧栏叠在 macOS vibrancy 上：留一点透，颜色仍由冷纸画布决定 */
-  --bg-sidebar: rgba(237, 241, 245, 0.72);
+  /* 检查器夹在铬件与台面之间的窄带：既不像侧栏那么灰，也不跟台面抢白。
+     三块并排时（侧栏 / 工作区 / 检查器）每两块之间都有可读的明度差。 */
+  --bg-inspector: #f7f8f9;
+  --bg-toolbar: rgba(240, 242, 244, 0.9);
+  --bg-status: rgba(240, 242, 244, 0.94);
+  /* 侧栏叠在 macOS vibrancy 上：留一点透，颜色仍由铬件灰决定 */
+  --bg-sidebar: rgba(240, 242, 244, 0.74);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -175,7 +196,7 @@
 
   /* 监看舞台：浅色下是「画面浮在柔和浅灰画布上」，不是两条黑边；
      暗色下保持近黑，让画面成为唯一亮面。 */
-  --stage-bg: #e3e9ee;
+  --stage-bg: #e9ecf0;
   --stage-line: rgba(21, 25, 28, 0.52);
   --stage-frame: rgba(21, 25, 28, 0.16);
   --wave: #8b959b;
@@ -189,7 +210,9 @@
 
   /* ---------- 设置页令牌（分段 / Bento / 占用条 / Inset） ----------
      分段选中态回到 macOS 原生语法：灰槽里一颗**纯白凸起胶囊**，
-     极轻投影 + 深墨文字；不再往槽里涂半透明蓝。 */
+     极轻投影 + 深墨文字；不再往槽里涂半透明蓝。
+     2026-11-26：Bento / Inset 从「白卡 + 描边」退成**凹陷填充**——
+     未选中的选项是台面上一块无边框的淡灰，选中才加蓝须。 */
   --seg-track: rgba(15, 23, 30, 0.055);
   --seg-thumb: #ffffff;
   --seg-thumb-ring: rgba(15, 23, 30, 0.10);
@@ -198,16 +221,16 @@
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
-  --bento-bg: var(--raise);
-  --bento-border: rgba(21, 25, 28, 0.12);
-  --bento-border-on: rgba(11, 99, 229, 0.46);
-  --bento-glow: rgba(11, 99, 229, 0.08);
-  --bento-bg-on: var(--raise);
+  --bento-bg: var(--well);
+  --bento-border: transparent;
+  --bento-border-on: var(--accent-line);
+  --bento-glow: transparent;
+  --bento-bg-on: var(--accent-soft);
   --bento-shadow: none;
   --bento-shadow-on: none;
 
-  --hero-bg: var(--raise);
-  --hero-border: rgba(11, 99, 229, 0.18);
+  --hero-bg: var(--well);
+  --hero-border: transparent;
 
   --meter-track: rgba(21, 25, 28, 0.07);
   --meter-a: #0b63e5;
@@ -216,8 +239,8 @@
   --meter-muted: rgba(21, 25, 28, 0.28);
   --meter-gap: var(--raise);
 
-  --inset-bg: var(--raise);
-  --inset-line: rgba(21, 25, 28, 0.1);
+  --inset-bg: var(--well);
+  --inset-line: var(--line-2);
   --bg-inset: var(--inset-bg);
   --switch-knob: #ffffff;
 }
@@ -225,17 +248,23 @@
 html[data-theme='dark'] {
   color-scheme: dark;
 
-  --canvas: #0b0e11;
-  --paper: #12161a;
-  --raise: #171c21;
-  --ink: #ece8df;
-  --ink-2: #b3b8b8;
-  --ink-3: #959fa8;
-  --ink-muted: #5e686f;
+  /* ---------- 深碳黑灰的四阶（Final Cut Pro 的剪辑台语法） ----------
+     不再是「一块近黑到底」：观众席（--canvas）只是房间的地面，
+     铬件（--paper）比它亮一阶，台本纸与浮层（--raise）再亮一阶，
+     检查器夹在中间做第三块。相邻两阶差 ~10 个色阶（≈4% 明度），
+     刚好够分区、不够成条纹。
+     画面自己（--stage-bg）回到最深，于是影片是屋里唯一发亮的东西。 */
+  --canvas: #1a1c1f;
+  --paper: #24272b;
+  --raise: #2c3136;
+  --ink: #e9e6df;
+  --ink-2: #b6bbb9;
+  --ink-3: #98a1a8;
+  --ink-muted: #616b72;
 
-  --line: rgba(236, 232, 223, 0.16);
-  --line-2: rgba(236, 232, 223, 0.09);
-  --rule: #2a3238;
+  --line: rgba(236, 232, 223, 0.15);
+  --line-2: rgba(236, 232, 223, 0.085);
+  --rule: #34383d;
 
   --accent: #84a9e6;
   --accent-hover: #a8c4ef;
@@ -251,11 +280,11 @@ html[data-theme='dark'] {
   --success-soft: rgba(127, 184, 155, 0.12);
 
   --bg-content: var(--raise);
-  --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(12, 16, 20, 0.9);
-  --bg-status: rgba(18, 22, 26, 0.96);
-  /* 侧栏叠在 macOS 原生 vibrancy 上；0.92 既压住浅色底，又保留一点毛玻璃 */
-  --bg-sidebar: rgba(10, 13, 17, 0.92);
+  --bg-inspector: #1f2226;
+  --bg-toolbar: rgba(36, 39, 43, 0.9);
+  --bg-status: rgba(36, 39, 43, 0.96);
+  /* 侧栏叠在 macOS 原生 vibrancy 上；0.86 让桌面只透一点点 */
+  --bg-sidebar: rgba(31, 34, 38, 0.86);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -263,12 +292,14 @@ html[data-theme='dark'] {
   --separator: var(--line);
   --separator-soft: var(--line-2);
 
-  --fill: rgba(236, 232, 223, 0.06);
-  --fill-strong: rgba(236, 232, 223, 0.11);
-  --row-hover: rgba(236, 232, 223, 0.045);
+  /* 凹陷填充在暗色里是「提一档」：同样 6% / 11% 的白，落在任何一层碳灰上
+     都读成一块可点的面，而不是一块更黑的洞。 */
+  --fill: rgba(232, 230, 224, 0.065);
+  --fill-strong: rgba(232, 230, 224, 0.115);
+  --row-hover: rgba(232, 230, 224, 0.045);
 
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 18px 40px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 22px 46px rgba(0, 0, 0, 0.55);
   --shadow-btn: none;
   --shadow-seg: none;
 
@@ -278,46 +309,47 @@ html[data-theme='dark'] {
   --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
 
-  --stage-bg: #07090b;
+  --stage-bg: #0b0d0f;
   --stage-line: rgba(255, 255, 255, 0.34);
   --stage-frame: rgba(236, 232, 223, 0.1);
-  --wave: #8f9da4;
+  --wave: #93a1a8;
 
   --cue-lane: rgba(236, 232, 223, 0.06);
   --cue-wash: rgba(236, 232, 223, 0.035);
-  --cue-block: rgba(236, 232, 223, 0.12);
-  --cue-block-hover: rgba(236, 232, 223, 0.2);
+  --cue-block: rgba(236, 232, 223, 0.13);
+  --cue-block-hover: rgba(236, 232, 223, 0.21);
   --cue-block-active: rgba(132, 169, 230, 0.88);
   --cue-edge: rgba(160, 186, 240, 0.95);
 
-  --seg-track: rgba(236, 232, 223, 0.075);
-  --seg-thumb: #262c32;
-  --seg-thumb-ring: rgba(0, 0, 0, 0.38);
+  /* 分段：槽比台面暗、拇指比台面亮 —— FCP 里那颗凸起的小胶囊就是这个关系。 */
+  --seg-track: rgba(0, 0, 0, 0.22);
+  --seg-thumb: #3a4046;
+  --seg-thumb-ring: rgba(0, 0, 0, 0.42);
   --seg-thumb-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.42), 0 0 0 0.5px var(--seg-thumb-ring);
+    0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 0.5px var(--seg-thumb-ring);
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
-  --bento-bg: var(--raise);
-  --bento-border: rgba(236, 232, 223, 0.13);
-  --bento-border-on: rgba(132, 169, 230, 0.46);
-  --bento-glow: rgba(132, 169, 230, 0.1);
-  --bento-bg-on: rgba(132, 169, 230, 0.05);
+  --bento-bg: var(--well);
+  --bento-border: transparent;
+  --bento-border-on: var(--accent-line);
+  --bento-glow: transparent;
+  --bento-bg-on: var(--accent-soft);
   --bento-shadow: none;
   --bento-shadow-on: none;
 
-  --hero-bg: var(--raise);
-  --hero-border: rgba(132, 169, 230, 0.22);
+  --hero-bg: var(--well);
+  --hero-border: transparent;
 
   --meter-track: rgba(236, 232, 223, 0.085);
   --meter-a: #84a9e6;
   --meter-b: #7fb89b;
   --meter-c: #d2a15e;
   --meter-muted: rgba(236, 232, 223, 0.3);
-  --meter-gap: var(--paper);
+  --meter-gap: var(--raise);
 
-  --inset-bg: #1a1f24;
-  --inset-line: rgba(236, 232, 223, 0.1);
+  --inset-bg: var(--well);
+  --inset-line: var(--line-2);
   --bg-inset: var(--inset-bg);
 
   /* 深色强调色上的白字只有 2.9:1：实心主按钮固定用浅色的深蓝，白字回到 6.4:1 */
@@ -507,6 +539,22 @@ body {
   border-color: transparent;
   color: var(--text);
 }
+/* 次级动作的**标准小按钮**（Tinted / Soft）：
+   台面上的一块淡灰填充，无描边、无投影。孤立的「去双语翻译」「管理引擎…」
+   这类入口用它，而不是把一段裸蓝字飘在行末。 */
+.btn.soft {
+  background: var(--well);
+  border-color: transparent;
+  color: var(--text-2);
+}
+.btn.soft:hover:not(:disabled) {
+  background: var(--well-hover);
+  border-color: transparent;
+  color: var(--text);
+}
+.btn.soft.accent {
+  color: var(--accent-text);
+}
 .btn.icon {
   width: var(--ctl-h);
   padding: 0;
@@ -597,8 +645,10 @@ body {
 .field {
   height: var(--ctl-h-lg);
   border-radius: var(--rad-control);
-  border: 1px solid var(--line);
-  background: var(--raise);
+  /* 输入区是台面上的一块**凹陷填充**：无边框、极淡中性灰，聚焦才出现蓝须。
+     描边常驻会把它读成「白框」，而白框只留给台本纸与浮层。 */
+  border: 1px solid transparent;
+  background: var(--well);
   display: flex;
   align-items: center;
   padding: 0 9px;
@@ -609,7 +659,11 @@ body {
     border-color var(--dur) var(--ease),
     box-shadow var(--dur) var(--ease);
 }
+.field:hover {
+  background: var(--well-hover);
+}
 .field:focus-within {
+  background: var(--raise);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -659,10 +713,11 @@ body {
   letter-spacing: -0.01em;
 }
 
-/* 面板：一张台本纸 + 一条发丝线，不是浮起来的盒子 */
+/* 面板：台面上一块凹陷的说明区，不是「白框」。
+   2026-11-26：卡片语法只用于浮层（popover / 对话框）；页内分区不再用卡片。 */
 .card {
-  background: var(--raise);
-  border: 1px solid var(--line);
+  background: var(--well);
+  border: 0;
   border-radius: var(--rad-card);
   padding: 14px var(--sp-4);
 }
@@ -757,9 +812,10 @@ body {
 }
 
 /* ---------- 设置页：Inset 分组列表 ---------- */
-/* 四个页签共用；组件里不要再各写一份。 */
+/* 四个页签共用；组件里不要再各写一份。
+   分组 = 一整块凹陷填充（无描边），行与行之间只留一条发丝线。 */
 .set-group {
-  border: 1px solid var(--inset-line);
+  border: 0;
   border-radius: var(--rad-inset);
   background: var(--inset-bg);
   overflow: hidden;
@@ -826,13 +882,14 @@ body {
   flex: 1;
   min-width: 0;
   padding: 0 var(--sp-2);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--rad-control);
-  background: var(--raise);
+  background: var(--well);
   color: var(--text);
   outline: none;
 }
 .ai-input:focus {
+  background: var(--raise);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }

@@ -65,22 +65,22 @@
     font: inherit;
     padding: var(--sp-3);
     border-radius: var(--rad-card);
-    border: 1px solid var(--line);
-    background: var(--raise);
+    border: 1px solid transparent;
+    background: var(--well);
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
     min-width: 0;
     transition:
       border-color var(--dur) var(--ease),
-      box-shadow var(--dur) var(--ease);
+      background var(--dur) var(--ease);
   }
   .font-card:hover {
-    border-color: var(--accent-line);
+    background: var(--well-hover);
   }
   .font-card.on {
-    border-color: var(--accent);
-    box-shadow: inset 0 0 0 1px var(--accent-line);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
   }
   .sample {
     font-size: 17px;

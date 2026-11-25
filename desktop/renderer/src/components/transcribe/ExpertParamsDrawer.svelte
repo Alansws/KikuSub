@@ -238,8 +238,8 @@
     appearance: none;
     height: 26px;
     border-radius: var(--rad-control);
-    border: 1px solid var(--line);
-    background-color: var(--raise);
+    border: 0;
+    background-color: var(--well);
     color: var(--text);
     font: inherit;
     font-size: 12.5px;

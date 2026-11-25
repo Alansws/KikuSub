@@ -23,11 +23,13 @@
   border-bottom: 1px solid var(--separator);
 }
 
+/* 页边与单栏页面同一个 24px（原来是 14px）：切页时标题的左缘不会横向跳，
+   AI 三页的表格仍然通栏（它们是满屏网格，不该被收进 1040 的列里）。 */
 .aiw-title-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-3) 14px var(--sp-2);
+  padding: var(--sp-3) var(--sp-6) var(--sp-2);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -520,8 +522,9 @@ html[data-theme='dark'] .aiw-lane button.on {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--raise);
-  border: 1px solid var(--separator);
+  /* 面板是台面上一块凹陷填充（2026-11-26 去白框）；浮层才是 raise。 */
+  background: var(--well);
+  border: 0;
   border-radius: var(--rad-card);
   overflow: hidden;
 }
@@ -905,16 +908,19 @@ button.aiw-tc:focus-visible {
 .aiw-inline-empty .dim {
   color: var(--text-3);
 }
+/* 页级空态（「还没有字幕」）：居中的一块凹陷填充，不是一条通栏虚线框。
+   通栏虚线框在满宽舞台上既不像卡、也不像表，只像一段没画完的边框。 */
 .aiw-empty {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-2);
-  margin: 14px;
-  padding: 16px;
-  border: 1px dashed var(--separator);
+  width: min(560px, 100%);
+  margin: auto;
+  padding: var(--sp-5) var(--sp-5);
+  border: 0;
   border-radius: var(--rad-card);
-  background: var(--bg-inspector);
+  background: var(--well);
 }
 .aiw-empty-title {
   font-size: 13px;
@@ -941,16 +947,17 @@ button.aiw-tc:focus-visible {
   padding: var(--sp-6);
   overflow: auto;
 }
+/* 空态引导卡：不再是一张飘在白台面上的白卡，
+   而是一块凹陷填充（无描边、无阴影），内容仍居中。 */
 .aiw-blank-card {
   width: min(580px, 100%);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
   padding: var(--sp-5) var(--sp-5) var(--sp-4);
-  border: 1px solid var(--separator);
+  border: 0;
   border-radius: var(--rad-panel);
-  background: var(--raise);
-  box-shadow: var(--shadow-seg);
+  background: var(--well);
   color: var(--text-2);
 }
 .aiw-blank-head {

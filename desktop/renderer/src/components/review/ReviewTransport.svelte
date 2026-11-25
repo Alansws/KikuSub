@@ -444,4 +444,10 @@
       gap: 7px;
     }
   }
+  /* 紧凑模式：走带行收紧 7px；规则从父组件搬回来（scoped 样式跨不过组件边界）。 */
+  @media (max-width: 900px) {
+    .transport {
+      gap: 7px;
+    }
+  }
 </style>

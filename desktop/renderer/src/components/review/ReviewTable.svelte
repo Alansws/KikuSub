@@ -774,6 +774,14 @@
      折行会把表格再吃掉一行高度，关闭按钮也会单独掉到第二行。
      （2026-11-24 随表格一起搬进来：这些规则只作用于本组件里的节点。） */
   @media (max-width: 900px) {
+    /* 紧凑模式：表格保底 200px、最多 300px（虚拟列表自己滚），
+       让画面 / 波形 / 表格能整屏纵向滚动。规则从父组件搬回来——
+       scoped 样式跨不过组件边界，写在外面从来没生效。 */
+    .table-area {
+      flex: 0 0 auto;
+      height: clamp(200px, 52vh, 300px);
+      margin: 4px var(--sp-4) var(--sp-4);
+    }
     .find-bar {
       padding: 5px 6px;
       gap: 3px;

@@ -278,7 +278,9 @@
     <p class="track-note" role="status">
       <Icon name="warn" size={11} />
       <span>{NO_TRANSLATION_HINT}</span>
-      <button class="link" onclick={() => setView('translate')}>去双语翻译</button>
+      <button class="btn soft sm accent" onclick={() => setView('translate')}>
+        去双语翻译
+      </button>
     </p>
   {/if}
 
@@ -794,12 +796,14 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
-       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
+    /* 单栏页面共用的页面骨架：24px 左右内边距 + 1040 内容列。
+       2026-11-26：从「左对齐」改成**居中**——大窗口下原来右侧会甩出一大块空白，
+       看起来像内容被贴死在左缘。统一 max-width + 居中后，所有单栏页面在同一
+       窗口宽度下仍然共享同一条左缘（谁都不用自己发明 1120 / 1000 / 960）。 */
     padding: var(--sp-8) var(--sp-6) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 1040px);
-    justify-content: start;
+    grid-template-columns: minmax(0, var(--measure-page));
+    justify-content: center;
     align-content: start;
   }
   /* 页面骨架：内容直接落在画布台面上，用「标题 + 发丝线」分段。
@@ -833,9 +837,12 @@
     font-size: var(--fs-ui);
     line-height: 19px;
   }
+  /* 分段只用一条发丝线；线两侧各留出生气（上 24 / 下 20），
+     否则主按钮、分段器会紧贴着线，看起来像排版撞车。
+     2026-11-26 真机报障：「导出字幕」蓝按钮正下方贴着一根灰线，间距几乎为 0。 */
   .sec {
     border-top: 1px solid var(--line);
-    padding: var(--sp-5) 0 0;
+    padding: var(--sp-5) 0 var(--sp-6);
   }
   .sec-head {
     display: flex;
@@ -903,25 +910,42 @@
   .select {
     font: inherit;
     font-size: 12px;
-    padding: var(--sp-1) 7px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    height: 28px;
+    padding: 0 7px;
+    border-radius: var(--rad-control);
+    /* 下拉也是台面上的凹陷填充：无描边，悬停深半档。 */
+    border: 1px solid transparent;
+    background: var(--well);
     color: var(--text);
+  }
+  .select:hover {
+    background: var(--well-hover);
+  }
+  .select:focus-visible {
+    border-color: var(--accent);
   }
   .spacer {
     flex: 1;
   }
+  /* 最近导出的文件名是一个**读数**，不是主链接：淡灰胶囊 + 次级墨色，
+     悬停才提亮。蓝色只留给「去双语翻译」「开始导出」这类真正的动作。 */
   .path-link {
+    appearance: none;
+    height: 24px;
+    padding: 0 9px;
     border: 0;
-    background: transparent;
-    color: var(--accent);
-    font-size: 12px;
-    cursor: pointer;
+    border-radius: var(--rad-control);
+    background: var(--well);
+    color: var(--text-2);
+    font-size: 11px;
     max-width: 320px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .path-link:hover {
+    background: var(--well-hover);
+    color: var(--text);
   }
   .mono {
     font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
@@ -932,8 +956,9 @@
     align-items: center;
     gap: 9px;
     padding: 44px var(--sp-5);
-    border: 1px dashed var(--separator);
-    border-radius: 12px;
+    border: 0;
+    border-radius: var(--rad-card);
+    background: var(--well);
     color: var(--text-2);
     font-size: 12px;
   }
@@ -975,9 +1000,10 @@
   .mode {
     appearance: none;
     text-align: left;
-    border: 1px solid var(--line);
+    /* 只保留一层：无边框的凹陷填充。选中才加蓝须 + 极淡蓝底。 */
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: transparent;
+    background: var(--well);
     padding: 9px 10px;
     color: var(--text);
     font: inherit;
@@ -989,8 +1015,8 @@
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
   .mode:hover:not(:disabled):not(.on) {
-    background: var(--row-hover);
-    border-color: var(--line);
+    background: var(--well-hover);
+    border-color: transparent;
   }
   /* 三种导出方式的说明是「选错要重编码几十分钟」的文字，必须可读：13/19 + --ink-2。 */
   .mode b {
@@ -1026,9 +1052,9 @@
   .preset {
     appearance: none;
     text-align: left;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: transparent;
+    background: var(--well);
     padding: var(--sp-2) 9px;
     color: var(--text);
     font: inherit;
@@ -1040,7 +1066,7 @@
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
   .preset:hover:not(:disabled):not(.on) {
-    background: var(--row-hover);
+    background: var(--well-hover);
   }
   /* 码率预设的 hint 解释「这条在什么场景下更合适」，与样式预设同一套规则。 */
   .preset b {
@@ -1283,9 +1309,9 @@
   .style-preset {
     appearance: none;
     text-align: left;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: transparent;
+    background: var(--well);
     padding: 7px var(--sp-2);
     color: var(--text);
     font: inherit;
@@ -1297,7 +1323,7 @@
     transition: border-color 140ms var(--ease), background 140ms var(--ease);
   }
   .style-preset:hover:not(:disabled):not(.on) {
-    background: var(--row-hover);
+    background: var(--well-hover);
   }
   /* 「标题 ≥ 正文」：标题 13.5 略高于正文 13，正文用 --ink-2。
      6 张卡在 13/19 下仍是 2 行、不裁字（实测卡高 67 → 74），clamp 放到 3 行留余量。 */
@@ -1371,36 +1397,31 @@
   .chk.inline {
     font-size: 12px;
   }
-  /* 页面级提示：一条，放在页头与导出范围之间；不是横幅，也不抢主操作的蓝。 */
+  /* 页面级提示：一条完整的提示条（凹陷填充），说明在左、动作在右。
+     2026-11-26：原来是一行裸文字，右端吊着一段蓝字「去双语翻译」——孤立、抢眼、
+     还和主按钮抢蓝。现在整条是一块淡灰底，动作收进标准次级小按钮（.btn.soft）。 */
   .track-note {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
     margin: 0 0 var(--sp-4);
-    padding: 0;
+    padding: 7px var(--sp-2) 7px 10px;
     border: 0;
-    background: transparent;
+    border-radius: var(--rad-control);
+    background: var(--well);
     font-size: 12.5px;
     line-height: 18px;
     color: var(--ink-2);
   }
+  .track-note span {
+    min-width: 0;
+  }
   .track-note :global(svg) {
     color: var(--warn);
   }
-  .track-note .link {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: var(--accent-text);
-    font: inherit;
-    font-size: 12.5px;
-    padding: 0;
+  .track-note > :last-child {
     margin-left: auto;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .track-note .link:hover {
-    text-decoration: underline;
+    flex: 0 0 auto;
   }
 
   .preview-panel {
@@ -1465,11 +1486,16 @@
   .preview-text {
     font: inherit;
     font-size: 12px;
-    padding: var(--sp-1) 7px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    height: 28px;
+    padding: 0 7px;
+    border-radius: var(--rad-control);
+    border: 1px solid transparent;
+    background: var(--well);
     color: var(--text);
+  }
+  .preview-text:focus {
+    background: var(--raise);
+    border-color: var(--accent);
   }
   .preview-foot {
     display: flex;

@@ -342,20 +342,24 @@
     overflow-y: auto;
     padding: var(--sp-8) var(--sp-10) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 760px);
+    /* 导入页是单栏页面的例外：内容列是 760 的「继续当前工程」卡，比 1040 窄，
+       所以居中之后左右留白更大——这里刻意让它居中，而不是贴左。 */
+    grid-template-columns: minmax(0, var(--measure-card));
     justify-content: center;
     align-content: start;
     background: var(--canvas);
   }
 
   /* ---------- 继续当前工程（有片时本页唯一的主动作） ---------- */
+  /* 继续当前工程：台面上的一块凹陷填充（无描边）。
+     2026-11-26：原来它是「灰底上一张白卡」，正是这次要消灭的那一层。 */
   .resume {
     display: flex;
     align-items: center;
     gap: var(--sp-3);
     padding: var(--sp-3);
-    background: var(--raise);
-    border: 1px solid var(--rule);
+    background: var(--well);
+    border: 0;
     border-radius: var(--rad-card);
     margin-top: var(--sp-1);
   }
@@ -432,9 +436,9 @@
     height: 40px;
     margin-top: var(--sp-2);
     padding: 0 var(--sp-3);
-    border: 1px dashed var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
-    background: transparent;
+    background: var(--well);
     color: var(--ink-3);
     font: inherit;
     font-size: 12.5px;
@@ -445,9 +449,9 @@
       background var(--dur) var(--ease);
   }
   .dropstrip:hover {
-    border-color: var(--accent-line);
+    border-color: transparent;
     color: var(--ink-2);
-    background: var(--accent-soft);
+    background: var(--well-hover);
   }
   .dropstrip .dz-sub {
     margin-left: auto;
@@ -516,10 +520,10 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    border: 1px solid var(--separator-soft);
+    border: 0;
     border-radius: 8px;
     padding: 10px var(--sp-3);
-    background: var(--bg-content);
+    background: var(--well);
   }
   .ec-ico {
     width: 30px;
@@ -551,14 +555,15 @@
   }
 
   .recent {
-    border: 1px solid var(--separator-soft);
+    border: 0;
     border-radius: 8px;
+    background: var(--well);
     overflow: hidden;
   }
   .recent-row {
     display: flex;
     align-items: stretch;
-    border-bottom: 1px solid var(--separator-soft);
+    border-bottom: 1px solid var(--line-2);
   }
   .recent-row:last-child {
     border-bottom: 0;

@@ -1711,11 +1711,16 @@
 </div>
 
 <style>
+  /* 核对台是三块不同明度的面（2026-11-26 深碳阶）：
+     舞台是房间（--stage-bg，最深）→ 走带 + 时间轴坞（--paper，一阶亮）→
+     台本表（--raise，再亮一阶）。这样影片与波形条自然跳出来，而不是
+     在「一块近黑到底」的板子上失去参照。 */
   .review {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    background: var(--paper);
   }
 
   /* 时间轴与走带、字幕表共用同一条 16px 页边（Step 4.2 的最大视口原则：
@@ -1731,6 +1736,7 @@
     display: flex;
     flex-direction: column;
     flex: 0 0 auto;
+    background: var(--stage-bg);
   }
 
   /* ============================================================
@@ -1747,23 +1753,12 @@
     .stage {
       padding: var(--sp-3) var(--sp-4) 0;
     }
-    /* 200% 下保持 592×333 会把播放条推出首屏：按「视频 + 播放行 + 工具行」
-       正好占满一屏可用高度来定宽，波形与表格往下滚一屏即可。 */
-    .player {
-      width: min(640px, 100%, calc((100vh - 170px) * 16 / 9));
-    }
     .timeline {
       padding: 2px var(--sp-4) 0;
     }
-    .table-area {
-      flex: 0 0 auto;
-      height: clamp(200px, 52vh, 300px);
-      margin: 4px var(--sp-4) var(--sp-4);
-    }
-    .transport,
-    .tl-tools {
-      gap: 7px;
-    }
+    /* 紧凑模式里 `.player` / `.table-area` / `.transport` 的规则已经搬回它们
+       各自的组件（ReviewStage / ReviewTable / ReviewTransport）：Svelte 的
+       scoped 样式到不了子组件，写在这里的三条从来就没生效过。 */
   }
 
 </style>

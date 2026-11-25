@@ -108,7 +108,7 @@
   <div class="pick-foot">
     <span>选择结果与标题栏的引擎胶囊是同一个值</span>
     {#if onmanage}
-      <button class="btn ghost sm" type="button" onclick={onmanage}>
+      <button class="btn soft sm" type="button" onclick={onmanage}>
         <Icon name="gear" size={11} />管理引擎…
       </button>
     {/if}
@@ -148,14 +148,14 @@
   .engine:hover {
     background: var(--fill);
   }
-  /* 选中：干净纸白底 + 1px 蓝边框（macOS 原生层级）。
-     旧版整行涂 10% 半透明蓝，叠在灰底上会显脏；蓝色现在只留在
-     圆点、推荐徽章和边框上，文字回到深墨。 */
+  /* 选中：一层**清透微蓝**的填充 + 一道细蓝须（2026-11-26）。
+     台面变纸白之后「纸白底 + 蓝边」在白底上只剩一根线，选中读不出来；
+     改成半透明蓝底（与页边记号、导航选中同一族），未选中那条则完全无底色。 */
   .engine.on {
-    background: var(--raise);
+    background: var(--accent-soft);
     border-bottom-color: transparent;
     border-radius: var(--rad-control);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
   }
   .engine:focus-visible {
     outline: 2px solid var(--accent-ring);
@@ -265,7 +265,7 @@
     flex-direction: column;
     gap: 6px;
     padding: var(--sp-2) var(--sp-3);
-    border: 1px solid var(--line);
+    border: 0;
     border-radius: var(--rad-card);
     background: var(--fill);
     min-width: 0;
@@ -297,7 +297,7 @@
     gap: 6px;
     min-width: 0;
     padding: 4px var(--sp-2);
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--rad-control);
     background: var(--raise);
     color: var(--text);
@@ -305,11 +305,11 @@
     text-align: left;
   }
   .other-chip:hover {
-    border-color: var(--accent-line);
+    border-color: transparent;
   }
   .other-chip.on {
-    border-color: var(--accent);
-    background: var(--raise);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
   }
   .other-name {
     font-size: 12px;
@@ -327,8 +327,9 @@
 
   .pick-empty {
     padding: var(--sp-3);
-    border: 1px dashed var(--line);
+    border: 0;
     border-radius: var(--rad-card);
+    background: var(--well);
     font-size: 12px;
     line-height: 1.55;
     color: var(--text-3);
