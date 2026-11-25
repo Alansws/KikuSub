@@ -120,7 +120,7 @@
     position: fixed;
     inset: 0;
     z-index: 340;
-    background: rgba(0, 0, 0, 0.32);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     display: grid;
     place-items: center;

@@ -666,8 +666,8 @@
     font-size: 12px;
     padding: 6px 9px;
     border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     outline: none;
     min-width: 0;

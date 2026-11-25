@@ -177,9 +177,9 @@
     min-width: 0;
     flex-wrap: wrap;
     padding: 3px 6px;
-    border: 1px solid var(--separator-soft);
+    border: 1px solid var(--well-line);
     border-radius: 6px;
-    background: var(--bg-content);
+    background: var(--well);
   }
   .clip-scope.compact {
     padding: 1px var(--sp-1);
@@ -201,8 +201,8 @@
     max-width: 260px;
     padding: 2px 5px;
     border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
   }
   .clip-custom {
@@ -216,8 +216,8 @@
     font-size: 12px;
     padding: 2px 5px;
     border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }

@@ -1433,9 +1433,9 @@
     align-items: flex-start;
     gap: 6px;
     padding: 5px 7px;
-    border: 1px solid var(--separator);
+    border: 1px solid var(--well-line);
     border-radius: var(--rad-card);
-    background: var(--bg-content);
+    background: var(--well);
     cursor: pointer;
     content-visibility: auto;
     contain-intrinsic-size: auto 40px;
@@ -1445,7 +1445,7 @@
   }
   .op-row.conflict {
     border-color: color-mix(in srgb, var(--danger) 45%, transparent);
-    background: color-mix(in srgb, var(--danger) 6%, var(--bg-content));
+    background: color-mix(in srgb, var(--danger) 6%, var(--surface));
     cursor: default;
   }
   .op-row input {
@@ -1651,7 +1651,7 @@
     margin-bottom: 2px;
     border-radius: var(--rad-control);
     border: 1px solid var(--accent);
-    background: var(--bg-content);
+    background: var(--well-focus);
     color: var(--text);
     outline: none;
   }

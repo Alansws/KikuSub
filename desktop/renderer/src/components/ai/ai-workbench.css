@@ -758,7 +758,7 @@ html[data-theme='dark'] .aiw-lane button.on {
   font-size: 12px;
   line-height: 18px;
   color: var(--text-3);
-  background: var(--bg-content);
+  background: var(--canvas);
   border-bottom: 1px solid var(--separator);
 }
 .aiw-list {
@@ -1152,7 +1152,7 @@ button.aiw-tc:focus-visible {
   padding: var(--sp-1);
   border: 1px solid var(--separator);
   border-radius: 8px;
-  background: var(--bg-content);
+  background: var(--raise);
   box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;

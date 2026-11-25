@@ -370,7 +370,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
-    background: var(--surface);
+    background: var(--raise);
     border: 1px solid var(--line);
     border-radius: 8px;
     box-shadow: var(--shadow-pop);

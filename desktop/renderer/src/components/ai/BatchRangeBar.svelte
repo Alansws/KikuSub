@@ -189,9 +189,9 @@
     min-width: 0;
     flex-wrap: wrap;
     padding: 2px 6px;
-    border: 1px solid var(--separator-soft);
+    border: 1px solid var(--well-line);
     border-radius: 6px;
-    background: var(--bg-content);
+    background: var(--well);
     font-size: 11.5px;
     color: var(--text-3);
   }
@@ -210,8 +210,8 @@
     text-align: center;
     padding: 1px 3px;
     border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     outline: none;
   }

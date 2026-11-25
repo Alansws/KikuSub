@@ -114,7 +114,7 @@
     border: 0;
     padding: 0;
     margin: 0;
-    background: color-mix(in srgb, var(--canvas) 42%, rgba(0, 0, 0, 0.24));
+    background: var(--scrim-soft);
     backdrop-filter: blur(2px);
     -webkit-backdrop-filter: blur(2px);
     cursor: default;
@@ -131,7 +131,7 @@
     width: min(360px, calc(100vw - 48px));
     padding: var(--sp-4) var(--sp-4) var(--sp-3);
     border-radius: var(--rad-panel);
-    background: var(--surface);
+    background: var(--raise);
     border: 1px solid var(--line);
     box-shadow: var(--shadow-pop);
     display: flex;

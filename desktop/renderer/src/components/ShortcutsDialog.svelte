@@ -163,7 +163,7 @@
     z-index: 330;
     border: 0;
     padding: 0;
-    background: rgba(13, 20, 36, 0.26);
+    background: var(--scrim);
     backdrop-filter: blur(2px);
     cursor: default;
     animation: scFade 120ms var(--ease) both;
@@ -310,8 +310,8 @@
   }
   .sc-key {
     appearance: none;
-    border: 1px solid var(--line);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     min-width: 82px;
     height: 26px;

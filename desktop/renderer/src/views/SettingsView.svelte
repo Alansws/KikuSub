@@ -139,9 +139,9 @@
   .head-key {
     margin-left: 6px;
     padding: 1px 6px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--well-line);
     border-radius: 5px;
-    background: var(--bg-content);
+    background: var(--well);
     color: var(--text-3);
     font-family: var(--font-sans);
     font-size: 11.5px;

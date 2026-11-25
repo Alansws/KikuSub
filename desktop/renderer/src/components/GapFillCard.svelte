@@ -208,7 +208,7 @@
   .gap-card {
     flex: 0 0 auto;
     border-bottom: 1px solid var(--separator);
-    background: var(--bg-content);
+    background: var(--surface);
     font-size: 12px;
     color: var(--text-2);
   }
@@ -344,8 +344,8 @@
     line-height: 1.5;
     padding: var(--sp-2) 10px;
     border-radius: var(--rad-card);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     outline: none;
   }
@@ -373,9 +373,9 @@
     flex-direction: column;
     max-height: 42vh;
     overflow: auto;
-    border: 1px solid var(--separator);
+    border: 1px solid var(--well-line);
     border-radius: 6px;
-    background: var(--bg-content);
+    background: var(--well);
   }
   .gap-list-head,
   .gap-item {
@@ -429,7 +429,7 @@
   }
   .gap-input:focus {
     border-color: var(--accent);
-    background: var(--bg-content);
+    background: var(--well-focus);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .pin {

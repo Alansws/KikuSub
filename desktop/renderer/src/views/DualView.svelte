@@ -650,7 +650,7 @@
     padding: var(--sp-1);
     border: 1px solid var(--separator);
     border-radius: 8px;
-    background: var(--bg-content);
+    background: var(--raise);
     box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;

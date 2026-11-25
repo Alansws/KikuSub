@@ -768,8 +768,8 @@
     line-height: 1.55;
     padding: var(--sp-2) 10px;
     border-radius: var(--rad-card);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     outline: none;
   }
@@ -838,7 +838,7 @@
     padding: 3px 5px;
     border-radius: 4px;
     border: 1px solid var(--accent);
-    background: var(--bg-content);
+    background: var(--well-focus);
     color: var(--text);
     outline: none;
   }

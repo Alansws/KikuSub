@@ -857,7 +857,7 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--scrim);
     backdrop-filter: blur(2px);
     display: grid;
     place-items: center;
@@ -929,13 +929,14 @@
     animation: viewIn var(--dur-page) var(--ease) both;
   }
   /* 紧凑模式的抽屉遮罩：只盖住工作区，不挡工具栏（工具栏仍是拖窗与切换入口） */
+  /* 检查器的关闭遮罩：同样是中性遮罩，只是压在半透明浮层下面一档。 */
   .ins-scrim {
     position: absolute;
     inset: 0;
     z-index: 19;
     border: 0;
     padding: 0;
-    background: rgba(13, 20, 36, 0.22);
+    background: var(--scrim);
     cursor: default;
     animation: scrimIn 120ms var(--ease) both;
   }

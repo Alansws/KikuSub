@@ -903,7 +903,7 @@
     opacity: 0.4;
   }
   .seg button.on {
-    background: var(--bg-content);
+    background: var(--seg-thumb);
     color: var(--text);
     box-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.12);
   }
