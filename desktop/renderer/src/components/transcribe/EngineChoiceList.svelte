@@ -148,11 +148,14 @@
   .engine:hover {
     background: var(--fill);
   }
-  /* 选中：一行 tint + 1px 外环；不是浮起来的卡片 */
+  /* 选中：干净纸白底 + 1px 蓝边框（macOS 原生层级）。
+     旧版整行涂 10% 半透明蓝，叠在灰底上会显脏；蓝色现在只留在
+     圆点、推荐徽章和边框上，文字回到深墨。 */
   .engine.on {
-    background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px var(--accent-line);
+    background: var(--raise);
+    border-bottom-color: transparent;
     border-radius: var(--rad-control);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
   .engine:focus-visible {
     outline: 2px solid var(--accent-ring);
@@ -306,7 +309,7 @@
   }
   .other-chip.on {
     border-color: var(--accent);
-    background: var(--accent-soft);
+    background: var(--raise);
   }
   .other-name {
     font-size: 12px;
@@ -314,7 +317,7 @@
     white-space: nowrap;
   }
   .other-chip.on .other-name {
-    color: var(--accent-text);
+    color: var(--text);
   }
   .other-meta {
     font-size: 10.5px;

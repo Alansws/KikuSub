@@ -94,14 +94,17 @@
   --ctl-h-xl: 36px;
   --seg-h: 28px;
 
-  /* ---------- 表面：冷纸 / 纸面 / 台本 ---------- */
-  --canvas: #e7ecef;
-  --paper: #f4f6f6;
-  --raise: #fcfdfc;
+  /* ---------- 表面：冷纸 / 纸面 / 台本 ----------
+     2026-11-25 验收修正：日间三层表面整体提亮一档并去掉浊绿，
+     画布是干净的冷纸、纸面是中性浅灰白、台本回到纯白，
+     让「纸 → 台本」的层级靠明度差而不是靠灰调堆出来。 */
+  --canvas: #edf1f5;
+  --paper: #f7f9fb;
+  --raise: #ffffff;
   --ink: #15191c;
   --ink-2: #4a545c;
-  /* 6.23:1 on sheet —— 标签 / 计数 / 单位 / 快捷键。11px 也要读得清，
-     所以比 DESIGN.md 里的 #5E6A72 再深一档（5.45 → 6.23）。 */
+  /* 6.35:1 on sheet / 6.02:1 on panel —— 标签 / 计数 / 单位 / 快捷键。
+     11px 也要读得清，所以比 DESIGN.md 里的 #5E6A72 再深一档。 */
   --ink-3: #566168;
   /* 禁用 / 不可用专用：弱到不像可读内容，但仍高于纯装饰（2.9:1） */
   --ink-muted: #8e979c;
@@ -110,17 +113,20 @@
      .14 是分隔线的最低可读档，不再回退到 5% 灰。 */
   --line: rgba(21, 25, 28, 0.14);
   --line-2: rgba(21, 25, 28, 0.1);
-  /* 明确的 1px 发丝线（cue 表、台本页边） */
-  --rule: #c8d1d6;
+  /* 明确的 1px 发丝线（cue 表、台本页边）：干净冷灰，不发黄 */
+  --rule: #ccd5dc;
 
-  /* ---------- 蓝铅笔 / 朱笔 ---------- */
-  --accent: #2d5fa6;
-  --accent-hover: #234b85;
-  /* 文字/图标形式的强调：蓝铅笔本身在纸面 5.87、台本 6.24，小字也达标 */
-  --accent-text: #2d5fa6;
-  --accent-soft: rgba(45, 95, 166, 0.1);
-  --accent-ring: rgba(45, 95, 166, 0.45);
-  --accent-line: rgba(45, 95, 166, 0.36);
+  /* ---------- 蓝铅笔 / 朱笔 ----------
+     2026-11-25 验收修正：旧 #2D5FA6 是低饱和钢青，叠在灰底上显脏。
+     换成更清澈的专业钴蓝（高彩度、明度适中），实算 5.34:1 on 台本、
+     5.06:1 on 纸面、4.71:1 on 画布；白字落在它上面 5.34:1。 */
+  --accent: #0b63e5;
+  --accent-hover: #0952c4;
+  /* 文字/图标形式的强调：与实心主按钮同一个蓝，保证小字也 ≥4.5 */
+  --accent-text: #0b63e5;
+  --accent-soft: rgba(11, 99, 229, 0.09);
+  --accent-ring: rgba(11, 99, 229, 0.45);
+  --accent-line: rgba(11, 99, 229, 0.34);
   --btn-primary-bg: var(--accent);
   --btn-primary-hover: var(--accent-hover);
   --control-on: var(--accent);
@@ -135,10 +141,10 @@
 
   --bg-content: var(--raise);
   --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(244, 246, 246, 0.9);
-  --bg-status: rgba(244, 246, 246, 0.94);
+  --bg-toolbar: rgba(247, 249, 251, 0.9);
+  --bg-status: rgba(247, 249, 251, 0.94);
   /* 侧栏叠在 macOS vibrancy 上：留一点透，颜色仍由冷纸画布决定 */
-  --bg-sidebar: rgba(231, 236, 239, 0.72);
+  --bg-sidebar: rgba(237, 241, 245, 0.72);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -164,7 +170,7 @@
 
   /* 监看舞台：浅色下是「画面浮在柔和浅灰画布上」，不是两条黑边；
      暗色下保持近黑，让画面成为唯一亮面。 */
-  --stage-bg: #dde4e7;
+  --stage-bg: #e3e9ee;
   --stage-line: rgba(21, 25, 28, 0.52);
   --stage-frame: rgba(21, 25, 28, 0.16);
   --wave: #8b959b;
@@ -173,30 +179,33 @@
   --cue-wash: rgba(21, 25, 28, 0.03);
   --cue-block: rgba(21, 25, 28, 0.14);
   --cue-block-hover: rgba(21, 25, 28, 0.24);
-  --cue-block-active: rgba(45, 95, 166, 0.84);
-  --cue-edge: rgba(45, 95, 166, 0.9);
+  --cue-block-active: rgba(11, 99, 229, 0.88);
+  --cue-edge: rgba(11, 99, 229, 0.92);
 
-  /* ---------- 设置页令牌（分段 / Bento / 占用条 / Inset） ---------- */
-  --seg-track: rgba(21, 25, 28, 0.06);
-  --seg-thumb: var(--raise);
-  --seg-thumb-ring: rgba(21, 25, 28, 0.12);
-  --seg-thumb-shadow: none;
+  /* ---------- 设置页令牌（分段 / Bento / 占用条 / Inset） ----------
+     分段选中态回到 macOS 原生语法：灰槽里一颗**纯白凸起胶囊**，
+     极轻投影 + 深墨文字；不再往槽里涂半透明蓝。 */
+  --seg-track: rgba(15, 23, 30, 0.055);
+  --seg-thumb: #ffffff;
+  --seg-thumb-ring: rgba(15, 23, 30, 0.10);
+  --seg-thumb-shadow:
+    0 1px 2px rgba(15, 23, 30, 0.12), 0 0 0 0.5px var(--seg-thumb-ring);
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
   --bento-bg: var(--raise);
   --bento-border: rgba(21, 25, 28, 0.12);
-  --bento-border-on: rgba(45, 95, 166, 0.34);
-  --bento-glow: rgba(45, 95, 166, 0.08);
-  --bento-bg-on: rgba(45, 95, 166, 0.04);
+  --bento-border-on: rgba(11, 99, 229, 0.46);
+  --bento-glow: rgba(11, 99, 229, 0.08);
+  --bento-bg-on: var(--raise);
   --bento-shadow: none;
   --bento-shadow-on: none;
 
   --hero-bg: var(--raise);
-  --hero-border: rgba(45, 95, 166, 0.16);
+  --hero-border: rgba(11, 99, 229, 0.18);
 
   --meter-track: rgba(21, 25, 28, 0.07);
-  --meter-a: #2d5fa6;
+  --meter-a: #0b63e5;
   --meter-b: #356b52;
   --meter-c: #7e5416;
   --meter-muted: rgba(21, 25, 28, 0.28);
@@ -278,7 +287,9 @@ html[data-theme='dark'] {
 
   --seg-track: rgba(236, 232, 223, 0.075);
   --seg-thumb: #262c32;
-  --seg-thumb-ring: rgba(236, 232, 223, 0.12);
+  --seg-thumb-ring: rgba(0, 0, 0, 0.38);
+  --seg-thumb-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.42), 0 0 0 0.5px var(--seg-thumb-ring);
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
@@ -512,11 +523,12 @@ body {
   font-weight: 600;
 }
 
-/* 分段：选中用蓝铅笔 tint + 1px 边，不用阴影 */
+/* 分段：macOS HIG 语法——灰槽里的纯白凸起胶囊 + 极轻投影 + 深墨文字。
+   蓝色只留给主操作、单选圆点与最关键的指示器，不再往槽里涂半透明蓝。 */
 .seg {
   display: inline-flex;
   padding: 2px;
-  background: var(--fill);
+  background: var(--seg-track);
   border-radius: var(--rad-control);
   gap: 2px;
   height: var(--seg-h);
@@ -525,7 +537,7 @@ body {
   appearance: none;
   border: 0;
   background: transparent;
-  color: var(--text-2);
+  color: var(--seg-ink);
   font: inherit;
   font-size: 12.5px;
   padding: 0 10px;
@@ -534,17 +546,18 @@ body {
   cursor: default;
   transition:
     background var(--dur) var(--ease),
-    color var(--dur) var(--ease);
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
   white-space: nowrap;
 }
 .seg button:hover:not(:disabled) {
   color: var(--text);
 }
 .seg button.on {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
-  font-weight: 500;
+  background: var(--seg-thumb);
+  color: var(--seg-ink-on);
+  box-shadow: var(--seg-thumb-shadow);
+  font-weight: 600;
 }
 .seg button:disabled {
   opacity: 0.42;
@@ -555,7 +568,7 @@ body {
   height: 24px;
   padding: 1px;
   gap: 1px;
-  background: var(--fill-strong);
+  background: var(--seg-track);
 }
 .seg.compact button {
   width: 26px;
@@ -563,11 +576,12 @@ body {
   padding: 0;
   display: grid;
   place-items: center;
-  color: var(--text-2);
+  color: var(--seg-ink);
 }
 .seg.compact button.on {
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--line);
+  background: var(--seg-thumb);
+  color: var(--seg-ink-on);
+  box-shadow: var(--seg-thumb-shadow);
 }
 
 .seg button:focus-visible {

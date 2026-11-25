@@ -185,6 +185,9 @@ const EVAL = String.raw`
       bodyInk: ratio(token('--ink'), token('--paper')),
       labelInk: ratio(token('--ink-3'), token('--paper')),
       accentInk: ratio(token('--accent-text'), token('--paper')),
+      accentOnSheet: ratio(token('--accent-text'), token('--raise')),
+      accentOnCanvas: ratio(token('--accent-text'), token('--canvas')),
+      onAccent: ratio(token('--on-accent'), token('--accent')),
       hairline: ratio(over(token('--line'), token('--paper')), token('--paper')),
     };
     const bar = document.querySelector('.statusbar');
@@ -332,6 +335,10 @@ check('亮色：底栏文字对底栏底色 ≥4.5:1', light.relocated.statusInk
 check('亮色：正文墨对纸面 ≥7:1', light.themes.bodyInk >= 7, light.themes);
 check('亮色：11px 标签墨对纸面 ≥4.5:1', light.themes.labelInk >= 4.5, light.themes);
 check('亮色：蓝铅笔文字对纸面 ≥4.5:1', light.themes.accentInk >= 4.5, light.themes);
+check('亮色：蓝铅笔文字对台本 ≥4.5:1', light.themes.accentOnSheet >= 4.5, light.themes);
+check('亮色：蓝铅笔文字对画布 ≥4.5:1', light.themes.accentOnCanvas >= 4.5, light.themes);
+check('亮色：主按钮白字对强调底 ≥4.5:1', light.themes.onAccent >= 4.5, light.themes);
+console.log('    亮色实算：', JSON.stringify(light.themes));
 check('亮色：发丝线可见（≥1.25:1，不回退到看不见的 5% 灰）', light.themes.hairline >= 1.25, light.themes);
 
 // ---- 4) 暗色：同一套结构，另一套令牌 ----
