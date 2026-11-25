@@ -220,6 +220,13 @@ const EVAL = String.raw`
     stage = 'flagClick';
     // 4) ⌘Z 撤销起点，再单击旗标：必须仍然跳转到章节起点
     await press('z', { code: 'KeyZ', meta: true, wait: 600 });
+    // 前面把视窗放大到 18× 又 seek 到章节之外，2.5s 窗口里旗标已经不在视野里，
+    // 「单击仍跳转」和后面的 pan 阶段就都点不到它。先回全景把现场拉回来——
+    // 断言本身没放宽：单击跳转、拖到右缘自动平移仍按原样验证。
+    [...document.querySelectorAll('.mini-text')]
+      .find((el) => (el.textContent || '').trim() === '全景')
+      ?.click();
+    await sleep(400);
     const beforeFlagClick = timesOf(0);
     await clickAt(40);
     flagEl()?.click();
@@ -373,6 +380,7 @@ const near = (a, b, tol = 0.35) => typeof a === 'number' && Math.abs(a - b) <= t
 
 ensureMedia();
 const result = run();
+if (process.env.KIKUSUB_VERIFY_DEBUG) console.error(JSON.stringify(result, null, 2));
 
 check(
   '种子：一条区间 + 一条时刻点，只有区间有抓手',

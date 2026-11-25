@@ -11,7 +11,7 @@
  *   - 字幕单独导出：文件名带片段标签，SRT 里的时间已归零（node 侧真读文件）；
  *   - 成片导出：ffprobe 验证时长 = 12s、章节「发射点」= 8.5s（node 侧真读容器）；
  *   - 润色页 / 翻译页：表格只剩这一段 4 行、计数与页头选择器一致；
- *   - 章节面板「仅处理此片段」：一键把这个章节设为处理范围。
+ *   - 章节面板「处理此片段」：一键把这个章节设为处理范围。
  *
  * 走主进程 `--screenshot` 静默路径（透明窗口 + capturePage + app.exit），
  * 桌面上不出现。断言失败退出码非 0。
@@ -120,7 +120,7 @@ const EVAL = String.raw`
     const doneSub = text(document.querySelector('.done-card .done-sub'));
 
     // 5) 润色页：表格只剩这一段 4 行
-    sidebar('润色')?.click();
+    sidebar('锁轴润色')?.click();
     await waitFor(() => document.querySelector('.aiw-page'));
     await sleep(1200);
     const polishRows = document.querySelectorAll('.aiw-row').length;
@@ -128,7 +128,7 @@ const EVAL = String.raw`
     const polishSubbar = text(document.querySelector('.aiw-title-row .clip-scope'));
 
     // 6) 翻译页：同样只有 4 行
-    sidebar('翻译')?.click();
+    sidebar('双语翻译')?.click();
     await waitFor(() => document.querySelector('.ai'));
     await sleep(1000);
     const translateRows = document.querySelectorAll('.ai .list .row').length;
@@ -144,7 +144,7 @@ const EVAL = String.raw`
     );
     chapterTab?.click();
     const panel = await waitFor(() => document.querySelector('.chapters-panel'));
-    const useButtons = [...(panel?.querySelectorAll('button[aria-label="仅处理此片段"]') ?? [])];
+    const useButtons = [...(panel?.querySelectorAll('button[aria-label="处理此片段"]') ?? [])];
     // 回全片（导出页那个选择器还在页面外，这里用章节按钮之前先经导出页改回全片）
     sidebar('导出')?.click();
     await waitFor(() => document.querySelector('.export-view'));
@@ -165,7 +165,7 @@ const EVAL = String.raw`
     const panelItems = [...document.querySelectorAll('.chapters-panel .item')];
     const panelText = text(document.querySelector('.chapters-panel'));
     const rangeItems = panelItems.filter((el) => (el.textContent || '').includes('章节1'));
-    const useButton = rangeItems[0]?.querySelector('button[aria-label="仅处理此片段"]');
+    const useButton = rangeItems[0]?.querySelector('button[aria-label="处理此片段"]');
     const useButtonFound = Boolean(useButton);
     useButton?.click();
     await sleep(800);
@@ -178,10 +178,10 @@ const EVAL = String.raw`
 
     // 8) 收尾截图停在指定页面
     if ('${FINAL_VIEW}' === 'polish') {
-      sidebar('润色')?.click();
+      sidebar('锁轴润色')?.click();
       await waitFor(() => document.querySelector('.aiw-page'));
     } else if ('${FINAL_VIEW}' === 'translate') {
-      sidebar('翻译')?.click();
+      sidebar('双语翻译')?.click();
       await waitFor(() => document.querySelector('.ai'));
     } else {
       sidebar('导出')?.click();
@@ -377,7 +377,7 @@ check('翻译页有范围选择器', result.translateTranslate === true, result)
 check('翻译页选择器显示命中 4 / 5', result.translateSubbar.includes('4 / 5'), result.translateSubbar);
 
 // ---- 章节面板一键带入 ----
-check('区间章节有「仅处理此片段」', result.useButtons >= 1, result.useButtons);
+check('区间章节有「处理此片段」', result.useButtons >= 1, result.useButtons);
 check('切回全片后计数恢复 5 条', result.cueCountFull.includes('5 条'), result.cueCountFull);
 check(
   '一键带入后范围回到章节1',
