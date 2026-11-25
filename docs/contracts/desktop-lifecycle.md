@@ -123,6 +123,25 @@
   `build_app.sh` 在 `rm -rf "$APP"` 前先让同路径旧实例退出，退不掉就**报错退出**，
   不许带着旧进程覆盖包体。
 
+#### 双开 / 试用版隔离（2026-11-26）
+
+- 现役版身份固定：产物 `build/pack/KikuSub.app`、bundle id `com.kikusub.desktop`、
+  Chromium userData 走 Electron 默认、用户数据根 `~/Library/Application Support/KikuSub`。
+  **正常发版不改这些默认值。**
+- `bash tools/pack/build_trial.sh` 通过 `build_app.sh` 的构建期环境变量产出独立包
+  `build/pack-next/KikuSub-Next.app`（bundle id `com.kikusub.desktop.next`），并在包内写
+  `Contents/Resources/app-isolation.json`。主进程的 `desktop/main/isolation.cjs` 在
+  `ready` 前据 `appName` / `dataDirName` 设定 `app.setName` 与 `userData` / `sessionData`；
+  用户数据根（`settings.json` / `presets.json` / `preferences.json` / `.ai-key` /
+  `outputs`）也落在同一隔离根。
+- 单实例锁跟着 userData 走，所以新旧可同时运行。隔离根建立失败时进程**直接退出**，
+  不允许回落到现役 `Application Support`——回落等于读写旧版数据。
+- `KIKUSUB_ISOLATION_ROOT`（仅隔离包、仅绝对路径）可以把隔离根挪到临时目录，用于无窗口
+  冒烟；正式包不会因这个环境变量搬走用户数据。
+- 隔离包不建 `Application Support/KikuSub/models` 软链：首次启动向导里选现有模型目录即可。
+- 仍属全局副作用、试用时不要点：设置页「安装命令行工具」写 `~/.local/bin/kikusub`，
+  「一键配置技能」写 `~/.agents/skills/kikusub-subtitle`。
+
 #### 日志清理
 
 - `setup_logging()` 启动时调用 `prune_logs()`：只删 `*.log.N` 轮转备份，

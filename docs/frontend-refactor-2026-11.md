@@ -1,13 +1,12 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-25 23:05
+updated: 2026-11-26 00:20
 ---
 # KikuSub 前端重塑（2026-11）
 
-> **状态：Step 4.2 已通过验收；Step 4.2.1（译文轨状态条）已完成，下一步 Step 4.3。**
-> Step 3（令牌 / 外壳 / 转写页样板间）、Step 4.1（核对台纯结构拆分）、Step 4.2
-> （核对台视觉精修）均已验收通过。4.2.1 只动了检查器里那一小块「译文轨状态与操作区」，
-> 交互口径同样一条没动（§7.5.1）。
+> **状态：Step 5 收尾完成（2026-11-26）。** Step 3、4.1、4.2、4.2.1、4.3 均已验收；
+> 本轮排掉 `verify_chapter_edge` 的最后两条红，并把「与现役旧版双开」的试用版
+> `KikuSub-Next.app` 打了出来（§7.8）。`tools/shots/verify_*.mjs` 27/27 全绿。
 >
 > 本轮不是“把现有页面修漂亮”，而是换一套**界面语言 + 页面骨架 + 任务顺序**。
 > 视觉世界叫 **Cue Script（录音台本）**；完整令牌与组件规则见根目录 [DESIGN.md](../DESIGN.md)，
@@ -41,6 +40,12 @@ updated: 2026-11-25 23:05
 4. **不卸载、不重装、不改名旧版。** 不执行 `defaults write`、不改旧版的 Launch Services 注册、
    不动它的签名与图标。新旧共存靠新产物的独立标识实现，不靠改旧版。
 
+> **现成机制（2026-11-26）**：`bash tools/pack/build_trial.sh` 产出
+> `build/pack-next/KikuSub-Next.app`（bundle id `com.kikusub.desktop.next`，数据根
+> `~/Library/Application Support/KikuSub-Next`），实现上面第 1–2 条；正式发版脚本的默认
+> 产物与身份一字未改。机制与试用注意事项见 §7.8 与
+> [desktop-lifecycle §3.6](contracts/desktop-lifecycle.md)。
+
 ## 1. 当前状态
 
 | 项 | 状态 | 证据 / 位置 |
@@ -66,7 +71,9 @@ updated: 2026-11-25 23:05
 | **Step 4.3 组二 原文加工** | ✅ 完成 | 侧栏 ① ② 编号；AI 三页 note 槽与互相指路；见 §7.6 |
 | **Step 4.3 组三 交付** | ✅ 完成 | 「暂无译文轨」收敛成一次；成片预览按监看器；导出完成补回核对台；见 §7.6 |
 | **Step 4.3 组四 辅助/边界** | ✅ 完成 | 设置页去彩图标；内核未连接可手动重启；修 `.sb-item` 类名撞车；见 §7.6 |
-| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（392）/ `pytest -m "not integration"`（1058 passed / 2 skipped） |
+| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（401）/ `pytest -q`（1089 passed / 2 skipped）/ `verify_*.mjs`（27/27） |
+| **章节端点排雷** | ✅ 完成 | `verify_chapter_edge` 10/10；测试前置 + `ChapterTrack.visible` 两处修复，见 §7.8 |
+| **双开试用版** | ✅ 已打包 | `build/pack-next/KikuSub-Next.app` / `com.kikusub.desktop.next` / 独立数据根；见 §7.8 |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
@@ -812,8 +819,9 @@ tools/shots/readme-seed.json --states "import transcribe review translate export
 **明确不做 / 待评估**
 
 - 检查器 348px → 388px 与「舞台行」改造：仍按 §7.5 的结论留在后续评估。
-- `verify_chapter_edge`：8/10。修好「旗标已不在 2.5s 视窗里」的前置现场后，只剩
-  「拖到右缘 rAF 推进 / 抓手钉在右缘」两项；本轮没有碰章节端点代码，列为已知遗留。
+- ~~`verify_chapter_edge`：8/10（右缘 rAF 推进两项）~~ → **10/10（2026-11-26 已解决，
+  见 §7.8）**。根因是测试前置把视窗留在全景，加上 `ChapterTrack.visible` 在拖动中把
+  被拖条目筛掉；后者是 22eec77（重构前）就存在的真实缺陷，不是本轮引入。
 
 ## 8. 验收矩阵
 
@@ -867,17 +875,77 @@ node tools/shots/verify_review_overlays.mjs --mode dialog
 | 键盘 | ✅ `⌘1…⌘8` 依次切到 导入/转写/核对台/双引擎复核/① 锁轴/② 重排/双语翻译/导出；`⌘F` 打开查找（输入框就位）、`Esc` 关闭；`Esc` 不清当前行 |
 | 对比度 | ✅ `verify_phase2_shell`（明暗两套：正文 ≥7:1 / 11px ≥4.5:1 / 蓝铅笔 ≥4.5:1 / 底栏 ≥4.5:1） |
 | 动效 | ✅ 高频编辑零过渡；进度条只保留「确定填充」与「不确定呼吸」；`prefers-reduced-motion` 全停 |
-| `tools/shots/verify_*.mjs` | ✅ **25 / 26 全绿**（含 2 个浮层模式）；唯一红的是 `verify_chapter_edge` **8/10**（右缘 rAF 推进两项，已知遗留，见 §7.6） |
+| `tools/shots/verify_*.mjs` | ✅ Step 5 时 25/26；**2026-11-26 复跑 27/27 全绿**（含 2 个浮层模式，见 §7.8） |
 | `capture_matrix.sh` | ✅ 10 个状态 × 明暗两套；基线已按新外观刷新（21 张） |
 
 **基线更新**：`docs/images/shots/baseline/` 全部 21 张换成新外观（10 个状态 + AI 三页的
 light/dark/mincho + 设置两页 1440×900），`capture_matrix.sh --compare` 从此以新外观为准。
+
+**2026-11-26 复跑（§7.8）**：`npm run test:main` 401、`pytest -q` 1089 passed / 2 skipped、
+`tools/shots/verify_*.mjs` 27/27、`check:svelte` 4/4（基线 4）。
 
 **README 展示图**：**本轮不动** `README.md` / `README_EN.md` 的成品图。理由：那些图是
 main 分支面向用户的承诺，而 `feat/ui-redesign` 还没合入；等验收通过、合并前用
 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh --seed
 tools/shots/readme-seed.json --delay 12000 --states "import transcribe review translate export settings"`
 重出一次即可（命令与种子都已在 tools/shots/README.md 里）。
+
+### 7.8 Step 5 收尾：章节端点排雷 + 双开试用版（2026-11-26）
+
+**一、`verify_chapter_edge` 的 2 项失败：先修测试前置，再修真实缺陷**
+
+原先的 `8/10` 是「拖到右缘 rAF 推进」与「推进时抓手钉在右缘」。排查结论分两层：
+
+1. **测试前置被改坏（67e8434）**：为了在 18× 视窗里验证「单击旗标仍跳转」，脚本先点
+   「全景」把现场拉回来；但全景的 `viewSpan = duration = 60`，`clampStart` 没有可推进
+   的空间，rAF 推进器本来就不该动。pan 阶段复用同一现场，两条断言必红。**这不是产品问题。**
+2. **恢复窄窗后暴露真实缺陷（22eec77，重构前就有）**：`ChapterTrack.visible` 用**已落库**
+   的 `item.start/end` 做半屏裁剪，拖动中的端点只存在 `drag` 状态里。压住右缘平移超过
+   半屏后，这一条被筛掉，`chapter-track` 整块卸载，`drag` 与抓手一起消失——真实用户
+   松手会丢失这次拖动，不只是测试点不到。`git merge-base --is-ancestor 22eec77 74fd5dc`
+   可确认它在备份锚点之前，本轮重构没有碰过 `ChapterTrack.svelte`。
+
+修复：
+
+- `components/ChapterTrack.svelte`：`visible` 强制保留 `drag.id` 对应的条目，注释写明
+  边缘自动平移会越过已落库区间的裁剪线。
+- `tools/shots/verify_chapter_edge.mjs`：`flagClick` 之后重新放大到窄窗，恢复 pan 阶段的
+  前置现场；10 条断言一条没放宽。
+- 结果：**10/10**（本机 Node 26，无窗口截图路径）。
+
+**二、双开试用版 `KikuSub-Next.app`**
+
+- 新脚本 `tools/pack/build_trial.sh`；`build_app.sh` 增加构建期环境变量
+  （`KIKUSUB_APP_NAME` / `KIKUSUB_BUNDLE_ID` / `KIKUSUB_PACK_DIR` /
+  `KIKUSUB_DATA_DIR_NAME` / `KIKUSUB_ISOLATION`）。**默认值一字未改**，正常发版仍产出
+  `build/pack/KikuSub.app` + `com.kikusub.desktop`。
+- 产物：`build/pack-next/KikuSub-Next.app`；bundle id `com.kikusub.desktop.next`；
+  CFBundleName / 主可执行文件 / 包内 `package.json` 的 productName 均为 `KikuSub-Next`。
+- 隔离：包内 `Contents/Resources/app-isolation.json` 由 `desktop/main/isolation.cjs`
+  读取；主进程在 `ready` 前设定 `app.setName` 与 `userData` / `sessionData`，单实例锁
+  跟着 userData 走。用户数据根同时切到 `~/Library/Application Support/KikuSub-Next`，
+  `settings.json` / `presets.json` / `preferences.json` / `.ai-key` / `outputs` 全在
+  这一处；建立不起独立根时**拒绝启动**，绝不回落到共享目录。
+- 模型：装配不建 `Application Support` 的模型软链；首次启动向导里把模型目录指向现有
+  `models/` 即可共享权重，不必重下。
+- 全局副作用只剩两处（试用说明里必须写）：设置页「安装命令行工具」仍会改
+  `~/.local/bin/kikusub`，「一键配置技能」仍会覆盖 `~/.agents/skills/kikusub-subtitle`。
+  试用时**不要点**；其余读写都在 `KikuSub-Next` 数据根内。
+- 无窗口验证：用 `KIKUSUB_ISOLATION_ROOT=/tmp/...` 把隔离根挪到临时目录后跑
+  `KIKUSUB_NO_WINDOW=1 KIKUSUB_SHOT=...`，首启向导截图显示「数据与输出目录：/tmp/...」；
+  现役 `build/pack/KikuSub.app` 与 `~/Library/Application Support/KikuSub` 的文件元数据
+  及关键配置 sha256 前后零差异，现役进程 PID 未变。
+
+**三、2026-11-26 复跑**
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run check` | ✅ 0 error |
+| `npm run check:svelte` | ✅ 4/4（基线 4，未上升） |
+| `npm run build` | ✅ |
+| `npm run test:main` | ✅ **401** |
+| `pytest -q` | ✅ **1089 passed / 2 skipped** |
+| `tools/shots/verify_*.mjs` | ✅ **27 / 27 全绿**（含 2 个浮层模式） |
 
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
@@ -932,6 +1000,9 @@ tools/shots/readme-seed.json --delay 12000 --states "import transcribe review tr
 | 2026-11-25 | 设置页类别不用彩色块，改用与侧栏同一套线图标 | Cue Script 里一屏唯一的饱和色是主操作；旧彩块是上一套皮肤的残留 |
 | 2026-11-25 | 崩落后允许手动重启内核（`sidecar:restart`） | 自动重连 3 次用完后，桌面端不该只剩「重启应用」 |
 | 2026-11-25 | 底栏读数 `.sb-item` → `.st-item` | 与侧栏导航同名，脚本按类名数导航项时会被底栏读数污染 |
+| 2026-11-26 | 章节端点两条红的归因：测试前置回全景 + `visible` 筛掉拖动中的条目 | 前者是 67e8434 引入的测试回归；后者是 22eec77 起就有的真实缺陷，松手会丢拖动 |
+| 2026-11-26 | `visible` 强制保留 `drag.id` 条目 | 边缘自动平移时视窗会越过已落库区间的半屏裁剪线，条目一被筛掉整块轨道就卸载 |
+| 2026-11-26 | 试用版用包内 `app-isolation.json` 换 appName / userData / 数据根 | 正式包默认值不变，不靠临时改名脏配置；隔离根建不起来就拒绝启动 |
 
 ## 11. 交接清单（新会话）
 
@@ -939,7 +1010,8 @@ tools/shots/readme-seed.json --delay 12000 --states "import transcribe review tr
 2. 读本文 §0.1、§1、§2、§7、§9；读 [DESIGN.md](../DESIGN.md) 的 Colors/Typography/Layout/Components。
 3. Step 3、Step 4.1、Step 4.2、**Step 4.2.1、Step 4.3 四组均已完成**（§7.3 / §7.3.1 /
    §7.4 / §7.5 / §7.5.1 / §7.6）。不要再把逻辑塞回 ReviewView；每一步的视觉改动各自成 commit。
-   **已知遗留**：`verify_chapter_edge` 8/10（右缘 rAF 推进两项），详见 §7.6 末尾。
+   **已知遗留：无**——`verify_chapter_edge` 已于 2026-11-26 修绿（§7.8）。
+   双开试用版路径与试用注意事项见 §7.8。
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。
