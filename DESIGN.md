@@ -2,17 +2,17 @@
 name: KikuSub
 description: A cue-script interface for a local Japanese subtitle workstation.
 colors:
-  canvas: "#E7ECEF"
-  panel: "#F4F6F6"
-  sheet: "#FCFDFC"
+  canvas: "#EDF1F5"
+  panel: "#F7F9FB"
+  sheet: "#FFFFFF"
   ink: "#15191C"
   ink-2: "#4A545C"
   ink-3: "#566168"
-  blue-pencil: "#2D5FA6"
+  blue-pencil: "#0B63E5"
   vermilion: "#B8412F"
   approved: "#356B52"
   attention: "#7E5416"
-  hairline: "#C8D1D6"
+  hairline: "#CCD5DC"
   dark-canvas: "#0B0E11"
   dark-panel: "#12161A"
   dark-sheet: "#171C21"
@@ -88,7 +88,7 @@ components:
     padding: "0 12px"
     height: "28px"
   nav-item-active:
-    backgroundColor: "rgba(45, 95, 166, 0.09)"
+    backgroundColor: "rgba(11, 99, 229, 0.09)"
     textColor: "{colors.blue-pencil}"
     rounded: "{rounded.sm}"
     padding: "0 8px"
@@ -130,19 +130,21 @@ A cool paper ground, a sumi ink, and two pencils. The palette is Restrained: one
 
 ### Primary
 
-- **Blue Pencil** (`#2D5FA6`, 6.24:1 on sheet): primary actions, current selection, AI proposal marks, links. In dark, `#84A9E6` (7.19:1 on sheet) because a deep blue would disappear; filled primary buttons use `#2D5FA6` with white text (6.37:1) in both appearances.
+- **Blue Pencil** (`#0B63E5`, 5.34:1 on sheet; 5.06:1 on panel; 4.71:1 on canvas): primary actions, current selection, AI proposal marks, links. The 2026-11-25 acceptance pass replaced the old low-chroma steel blue (`#2D5FA6`) with a cleaner cobalt because the old value read grey and muddy on the light surfaces. In dark, `#84A9E6` (7.19:1 on sheet) because a deep blue would disappear. A filled primary button uses `#0B63E5` with white text in light (5.34:1) and the deeper `#2D5FA6` (6.37:1) in dark, where a bright fill would glare.
 - **Vermilion** (`#B8412F`, 5.37:1; dark `#E07A66`, 5.84:1): correction, "needs review", the active cue mark, destructive text. Never used for a primary action.
 
 ### Neutral
 
-- **Canvas** (`#E7ECEF`; dark `#0B0E11`): the desk around the sheet.
-- **Panel** (`#F4F6F6`; dark `#12161A`): sidebars, toolbars, inspectors.
-- **Sheet** (`#FCFDFC`; dark `#171C21`): the cue table and editable fields.
-- **Sumi** (`#15191C`; dark `#ECE8DF`): primary text, 17.3:1 / 14.0:1.
-- **Graphite** (`#4A545C`; dark `#B3B8B8`): secondary text, 7.59:1 / 8.55:1.
-- **Slate** (`#566168`; dark `#959FA8`): 11 px labels, counts and units; 6.23:1 / 6.37:1 on the
+- **Canvas** (`#EDF1F5`; dark `#0B0E11`): the desk around the sheet. Lightened one step and
+  stripped of the old green-grey cast so the daylight surface reads clean rather than muddy.
+- **Panel** (`#F7F9FB`; dark `#12161A`): sidebars, toolbars, inspectors.
+- **Sheet** (`#FFFFFF`; dark `#171C21`): the cue table and editable fields — the sheet is now
+  pure paper white, so the paper → sheet hierarchy comes from value, not from a grey wash.
+- **Sumi** (`#15191C`; dark `#ECE8DF`): primary text, 17.7:1 / 14.0:1.
+- **Graphite** (`#4A545C`; dark `#B3B8B8`): secondary text, 7.7:1 / 8.6:1.
+- **Slate** (`#566168`; dark `#959FA8`): 11 px labels, counts and units; 6.35:1 / 6.37:1 on the
   sheet. Step 3 darkened this one level so 11 px data no longer sits just above 4.5:1.
-- **Hairline** (`#C8D1D6`; dark `#2A3238`): 1 px rules. No 5% grey separators.
+- **Hairline** (`#CCD5DC`; dark `#2A3238`): 1 px rules. No 5% grey separators.
 
 ### Named Rules
 
@@ -199,12 +201,13 @@ The page skeleton is fixed: **titlebar → sidebar → page header → content �
 
 ## Elevation & Depth
 
-Flat by default. Depth is tonal: canvas → panel → sheet. The only shadows are the video frame (a physical screen in a dark room) and true popovers/menus. Cards do not cast shadows; a card is a sheet with a hairline, not a floating box.
+Flat by default. Depth is tonal: canvas → panel → sheet. The only shadows are the video frame (a physical screen in a dark room), true popovers/menus, and the selected segment of a segmented control (a native control lift, not a card). Cards do not cast shadows; a card is a sheet with a hairline, not a floating box.
 
 ### Shadow Vocabulary
 
 - **Viewer** (`0 0 0 1px rgba(255,255,255,.08), 0 18px 40px rgba(0,0,0,.45)`): the film frame only.
 - **Popover** (`0 12px 32px rgba(0,0,0,.45), 0 1px 0 rgba(255,255,255,.04) inset`): menus, command palettes, true overlays.
+- **Thumb** (`0 1px 2px rgba(15,23,30,.12), 0 0 0 .5px rgba(15,23,30,.10)`; dark `0 1px 2px rgba(0,0,0,.42), 0 0 0 .5px rgba(0,0,0,.38)`): the selected segment only — the macOS standard white raised capsule, never a card shadow.
 
 ### Named Rules
 
@@ -225,6 +228,14 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 - **Secondary:** panel fill, 1 px hairline, ink text.
 - **Ghost:** transparent, graphite text; hover raises to the hover wash.
 - **Danger:** vermilion text only, isolated by 16 px and a hairline; never adjacent to a primary action.
+
+### Segmented control
+
+- **Shape:** 28 px track with 2 px inset; the selected segment is a **pure-white raised capsule**
+  with a 0.5 px ring, a 1 px soft shadow and ink text — the macOS standard, not a blue-tinted slot.
+- **Rule:** the track is a neutral wash. Blue is reserved for the primary action, radio dots and
+  the single most important indicator; a selected segment is distinguished by elevation and ink,
+  not by a translucent blue fill.
 
 ### Navigation
 
