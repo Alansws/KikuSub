@@ -39,6 +39,8 @@
 | **A10** | 双源提案只改 B 的 digest → 409，字幕零变化 | `tests/test_ai_dual.py` |
 | **A11** | 手动分批时复制 / 回填只含本批；润色条数不符仍 422，翻译严格开关关闭时按时间轴对齐 | `tests/test_translation_align.py`、`desktop/test/cueBatch.test.mjs` |
 | **A12** | 断句重排局部替换只动本段，范围外尾部译文随条数平移；⌘Z 一次退回 | `tests/test_reshape.py` |
+| **A13** | 补译只写显式下标：名单外的译文逐字节不变，`before` 不符 409 零写入，一步 ⌘Z 退整批 | `tests/test_ai_gap.py` |
+| **A14** | 译文标点清理只改真正变过的条目 base，未改的「原文已改」标记保留；两轨一次提交一步撤销 | `desktop/test/punctuation.test.mjs`、`tools/shots/verify_punct_clean.mjs` |
 
 ---
 
@@ -89,11 +91,13 @@
 
 - 译文**永远不写进** `review_cues.text`（D-3）。它存在 `Session.translations[lang]`，
   与 `review_cues` **逐条对齐**，并带一份 `base`（生成时的原文快照）用来算过期。
-- 写轨只有两条路：`POST /api/translations`（应用一整版）与草稿恢复。两者都**只动轨**。
-  译文编辑现在与字幕共用**统一工作区历史**（`set_translation` / `patch_translation` /
-  `drop_translation` / 整轨替换都 `_record`），⌘Z 会按时间退回到对应状态。
-  `translation_undo[lang]` 仅保留给检查器里的「撤销译文」按钮（一次退回上一版），
-  不再是全局 ⌘Z 的存储。
+- 写轨只有三条路：`POST /api/translations`（应用整版 / 局部应用）、
+  `POST /api/translations/gap`（补译回填，见 §3.7.14）与草稿恢复。三条都**只动轨**；
+  前两条走 `core.i18n.merge_translation_texts()` 合并——只写本次显式列出的下标，其余
+  条目逐字节保留；草稿恢复是整轨写回。译文编辑与字幕共用**统一工作区历史**
+  （`set_translation` / `patch_translation` / `drop_translation` / 整轨替换都 `_record`），
+  ⌘Z 会按时间退回到对应状态。`translation_undo[lang]` 仅保留给检查器里的「撤销译文」
+  按钮（一次退回上一版），不再是全局 ⌘Z 的存储。
 - 条数必须相等、`i` 必须连续、digest 必须匹配；**不通过就整批拒绝**，
   绝不落一份对不齐的轨（`test_server_translations.py`）。
 - 双语分两种排版，**不能混用**（D-4，2026-11 修订）：
@@ -581,3 +585,44 @@
 - **来源徽标**：`entry: "cli"` 显示「命令行 Agent」；旧文件方式 `entry: "skill"` 仍显示「Agent 文件」。
 - **验收**：`tests/test_server_proposals.py`（状态 / reshape 提案 / stale）、
   `tools/shots/verify_external_proposals.mjs`（写提案 → 2 秒内提示并自动载入润色页）。
+
+#### 3.7.14 补译批次（gap fill，2026-11-25）
+
+用户的核对工作流：分章节转录 → 双语逐句听、逐句改 → 一章过完只剩十几条没有译文
+（局部转写新加的行，或者人工删掉的坏译文）。为了这十几条重翻整章，会把已经核对过的
+译文一起覆盖。补译批次就是为这条工作流单开的一条**一次性回填通道**。
+
+- **不走提案**：不生成 `*.ai-translate.json`（那会覆盖整章的翻译建议）、不绑定
+  `source.digest` 提案契约、不改 CLI / 技能的 schema。`core/ai_gap.py` 是唯一实现。
+- **复制只含待译条目**：`GET /api/ai/prompt?...&indices=285,287`。SRT 的序号是
+  **全片条号**（不是 1~N），时间戳沿用原文；前置说明（走 `{{RANGE}}` 注入口，用户模板
+  不用改）写明「只输出这些条目、序号原样保留、一条不多一条不少」；文末附
+  **上下文块**（每条待译句前后各 4 条原文 + 邻居已有译文，纯文本、最多 120 行、
+  标明「仅参考，不要输出」）。返回 `{indices, sparse:true, digest}`。
+- **回填严格 1:1**：`POST /api/ai/gap-from-srt {indices, text, digest}`。先按序号落位
+  （集合完全一致时）；序号被改写但条数一致时按顺序落位并给 warning；条数不一致整批 422
+  并点名缺哪条；空译文条目会被解析器丢弃 → 同样报「缺 #N」。**不做时间轴对齐**——
+  整段翻译的对齐会猜槽位，补译的每一条都有明确下标，猜错就是把 A 句译文写进 B 句。
+- **应用只写显式下标**：`POST /api/translations/gap {lang, items:[{i, before, after}]}`。
+  逐条校验 `before` 必须等于当前原文（复制之后原文改过 → 409，零写入）、`after` 非空、
+  条号去重 / 越界 422；合并走 `core.i18n.merge_translation_texts(skip_empty=True,
+  sync_unchanged_base=True)`，**名单外的槽位不进入写循环**，`base` 只对写入的条目重设；
+  一次 `set_translation` = 一步统一历史。
+- **提案应用的空槽位不再清掉已有译文（同一轮修正）**：`POST /api/translations` 的
+  `proposal` 通道现在 `skip_empty=True`（直接给 `texts` 数组仍是「每格都是最终值」）——
+  模型把两条合并成一条时，被合并槽位的 `after` 是空串，只表示
+  「本批没有这一条」，不表示删掉用户已核对的译文；响应里的 `kept_empty` 是提示数。
+  真正要清空一条译文仍走逐条 `PATCH`（空文本）。
+- **逐条取消采纳生效**：`/api/translations` 接受 `accept`（全片 1 基序号），只写被勾选的
+  条目；翻译页的 pin 不再是「点了没反应」。
+- **入口两个、状态一份**：检查器译文轨行的「补译 N 条」（一键复制并切到翻译页）与翻译页
+  顶部的补译卡片；状态在 `desktop/renderer/src/lib/gapFill.svelte.ts`，待译集合由
+  `desktop/renderer/src/lib/gapBatch.ts`（零运行时 import，有 parity 单测）计算，
+  默认范围 = 当前处理范围（章节），「原文已改」要显式勾选才纳入。
+- **四道锁**：① 只复制 / 解析这 N 条；② 按全片条号落位、不做时间轴猜测；
+  ③ 服务端只接受显式下标（不是前端裁剪）；④ `before` 校验 + 空值不覆盖 + 一步历史，
+  toast 报「写入 N / 保留 M」。
+- **回归**：`tests/test_ai_gap.py`（纯函数 / prompt / 解析 / 只写名单 / 409 / 一步历史 /
+  空槽位保护 / accept）、`tests/test_i18n.py`（merge 口径）、
+  `tools/shots/verify_gap_fill.mjs`（真实界面：复制 → 少翻一条报错 → 取消勾选只写一条 →
+  补最后一条 → 已核对译文不变）。
