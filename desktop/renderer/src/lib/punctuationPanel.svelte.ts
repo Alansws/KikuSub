@@ -149,10 +149,13 @@ export function setPunctTracks(tracks: CleanTracks) {
   persist();
 }
 
-/** 当前语种下有没有译文轨（模板 / 历史 / 检查器都按同一条轨判断）。 */
+/**
+ * 当前语种下有没有**可逐条对齐**的译文轨。
+ * 条数对不上时不给清（服务端也会拒绝）：宁可禁用入口，也不发一份错位的数组。
+ */
 export function hasTranslationTrack(): boolean {
   const track = app.translations[app.trackLang];
-  return Boolean(track && track.texts.length);
+  return Boolean(track && track.texts.length === app.cues.length);
 }
 
 /**
@@ -192,12 +195,11 @@ export interface PunctPlans {
 export function punctPlans(): PunctPlans {
   const tracks = effectiveTracks();
   const sourceTexts = app.cues.map((cue) => cue.text);
-  const targetTexts = hasTranslationTrack()
-    ? [...(app.translations[app.trackLang]?.texts ?? [])]
+  const rawTarget = hasTranslationTrack()
+    ? (app.translations[app.trackLang]?.texts ?? [])
     : [];
-  // 防御：译文轨理论上与原文条数一致；万一不一致，补空位后仍按同一套下标预演，
-  // 提交时服务端会按条数校验拒绝（绝不落一份错位的轨）。
-  while (targetTexts.length < sourceTexts.length) targetTexts.push('');
+  // 始终与原文等长：预演、统计、提交共用同一套下标。
+  const targetTexts = sourceTexts.map((_text, index) => String(rawTarget[index] ?? ''));
   const wantSource = tracks !== 'target';
   const wantTarget = tracks !== 'source' && hasTranslationTrack();
   return {
