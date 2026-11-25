@@ -68,9 +68,13 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              （纯函数、可被 node --test 直接加载），响应式状态与落地搬进
 #              `lib/appearanceState.svelte.ts`；store 只留解析后的 `app.theme`
 #              （核对台波形只认它）。3252 → 3217，预算随实测值下调。
+# 2026-11-25（Step 4.1 纯结构拆分）：先把 cue / 画面纯计算搬到 lib/reviewCues.ts
+#              （单独 commit，截图 PSNR inf），再把查找 / 替换会话搬到
+#              lib/reviewFind.svelte.ts、右键菜单与「新建音色」浮层搬到
+#              components/review/；ReviewView 2583 → 1769。两次比对均逐像素一致。
 BUDGET = {
     "lib/store.svelte.ts": 3217,
-    "views/ReviewView.svelte": 2583,
+    "views/ReviewView.svelte": 1769,
 }
 
 
