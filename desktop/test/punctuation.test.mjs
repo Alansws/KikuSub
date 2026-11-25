@@ -194,3 +194,98 @@ test('markedSpans 只标这次真要删的字符', () => {
     ['…'],
   );
 });
+
+// ---------------------------------------------------------------------------
+// 译文轨（target）：2026-11-25 用户要求「译文标点也要能清，但规则要适配」
+//
+// 关键差别：中文的句中逗号 / 顿号 / 省略号都是语义，删掉会把句子黏死，
+// 所以 target 档只做行首行尾 + 折叠重复 + 收空白。
+// ---------------------------------------------------------------------------
+
+/** 译文轨清理的简写。 */
+function tclean(text, extras) {
+  return cleanLine(text, { flavor: 'target', ...(extras || {}) }).text;
+}
+
+test('译文轨：行尾句读清掉，句中语义标点保留', () => {
+  assert.equal(tclean('呼…刚刚好舒服。'), '呼…刚刚好舒服');
+  assert.equal(tclean('今天，下雨了。'), '今天，下雨了');
+  assert.equal(tclean('他说：走吧。'), '他说：走吧');
+  assert.equal(tclean('呼…刚刚好舒服'), '呼…刚刚好舒服');
+  assert.equal(tclean('别碰我！'), '别碰我！');
+  assert.equal(tclean('真的吗？'), '真的吗？');
+  // 行尾省略号默认清（与原文口径一致），句中保留
+  assert.equal(tclean('啊…'), '啊');
+  assert.equal(tclean('好……'), '好');
+  assert.equal(tclean('等等...'), '等等');
+});
+
+test('译文轨：行首多余标点删掉，不补空格', () => {
+  assert.equal(tclean('，你好'), '你好');
+  assert.equal(tclean('。今天下雨'), '今天下雨');
+  assert.equal(tclean('、。 走吧'), '走吧');
+});
+
+test('译文轨：连续重复的语义标点折叠成一个', () => {
+  assert.equal(tclean('啊，，别'), '啊，别');
+  assert.equal(tclean('等等、、我说'), '等等、我说');
+  assert.equal(tclean('好；；算了'), '好；算了');
+  // 问号感叹号是强调，不折叠
+  assert.equal(tclean('真的？？'), '真的？？');
+  assert.equal(tclean('走吧！！'), '走吧！！');
+  // 英文三点省略号不是「重复的点」，不能被折叠成一个点
+  assert.equal(tclean('Well... maybe'), 'Well... maybe');
+});
+
+test('译文轨：省略号口径可切「保留」', () => {
+  assert.equal(tclean('啊…', { target: { ellipsis: false } }), '啊…');
+  assert.equal(tclean('呼…刚刚好舒服。', { target: { ellipsis: false } }), '呼…刚刚好舒服');
+  assert.equal(tclean('等等...', { target: { ellipsis: false } }), '等等...');
+  // 省略号后面还跟着句号：句号要清，省略号要留
+  assert.equal(tclean('等等...。', { target: { ellipsis: false } }), '等等...');
+  assert.equal(tclean('啊…。', { target: { ellipsis: false } }), '啊…');
+  // 默认「清」时两轮都清掉
+  assert.equal(tclean('啊…。'), '啊');
+});
+
+test('译文轨：数字与英文缩写点受保护', () => {
+  assert.equal(tclean('价格是 3.14。'), '价格是 3.14');
+  assert.equal(tclean('1,000 日元'), '1,000 日元');
+  // 英文缩写点：`U.S.` 的句点保留（只在 lang=en 时保护）
+  assert.equal(tclean('It is U.S.', { lang: 'en' }), 'It is U.S.');
+  assert.equal(tclean('Hello, world.', { lang: 'en' }), 'Hello, world');
+  assert.equal(tclean('Are you  ok?', { lang: 'en' }), 'Are you ok?');
+});
+
+test('译文轨：多行逐行处理，清空回退原文', () => {
+  const out = cleanCueText('啊…\n呼…刚刚好舒服。', { flavor: 'target' });
+  assert.equal(out.text, '啊\n呼…刚刚好舒服');
+  assert.equal(out.end, 2);
+  // 只由标点组成的一行不能清成空译文
+  assert.equal(tclean('。'), '。');
+  assert.equal(cleanLine('……', { flavor: 'target' }).reverted, true);
+});
+
+test('译文轨：markedSpans 只标这次真要删的字符', () => {
+  const hits = (text, extras) =>
+    markedSpans(text, { flavor: 'target', ...(extras || {}) })
+      .filter((seg) => seg.hit)
+      .map((seg) => seg.text);
+
+  assert.deepEqual(hits('呼…刚刚好舒服。'), ['。']);
+  assert.deepEqual(hits('啊…'), ['…']);
+  assert.deepEqual(hits('呼…刚刚好舒服'), []);
+  assert.deepEqual(hits('啊，，别'), ['，']);
+  assert.deepEqual(hits('，你好'), ['，']);
+  assert.deepEqual(hits('别碰我！'), []);
+});
+
+test('译文轨：planClean 对齐条数与统计', () => {
+  const plan = planClean(['啊…', '呼…刚刚好舒服', '别碰我！', '。'], {
+    flavor: 'target',
+  });
+  assert.deepEqual(plan.changed, [0]);
+  assert.deepEqual(plan.skipped, [3]);
+  assert.equal(plan.texts[1], '呼…刚刚好舒服');
+  assert.equal(plan.texts[3], '。');
+});

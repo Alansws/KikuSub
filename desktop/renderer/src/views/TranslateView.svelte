@@ -12,6 +12,7 @@
    * 写进译文平行轨，核对台可切到双语；原文与时间轴一个字节都不改。
    */
   import Icon from '../components/Icon.svelte';
+  import GapFillCard from '../components/GapFillCard.svelte';
   import AiBatchToolbar from '../components/ai/AiBatchToolbar.svelte';
   import AiApplyBar from '../components/ai/AiApplyBar.svelte';
   import ProposalMenu from '../components/ai/ProposalMenu.svelte';
@@ -197,6 +198,7 @@
 </script>
 
 <div class="ai aiw-page">
+  <GapFillCard />
   <AiBatchToolbar
     title="翻译"
     channel={ai.channel}

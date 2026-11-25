@@ -227,7 +227,7 @@
         data-punct-trigger
         aria-expanded={punctPanel.open}
         onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
-        title="清理整轨原文里多余的 、，。…（句中直接删掉、行尾省略号一并清；只动原文，条数与时间轴不变；⌘⇧L）"
+        title="清理整轨里多余的标点（可只清原文 / 只清译文 / 两轨一起；译文的句中语义标点保留，只清行尾与重复；条数与时间轴不变；⌘⇧L）"
         aria-label="清理标点"
       >
         <Icon name="punct" size={12} /><span class="act-label">清理标点</span>

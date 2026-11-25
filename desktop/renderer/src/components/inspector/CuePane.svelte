@@ -20,6 +20,7 @@
     requestCueTranslation,
   } from '../../lib/cueTranslate.svelte';
   import TtsControls from './TtsControls.svelte';
+  import { gapCountsNow, gapListNow, openGapFill } from '../../lib/gapFill.svelte';
   import {
     app,
     deleteCue,
@@ -52,6 +53,9 @@
   const trackLangs = $derived(Object.keys(app.translations).sort());
   const hasTrack = $derived(Boolean(app.translations[app.trackLang]));
   const pending = $derived(translationPendingCounts());
+  /** 补译批次：与翻译页卡片同一份范围（当前处理范围）与同一个勾选口径。 */
+  const gapInfo = $derived(gapCountsNow());
+  const gapCount = $derived(gapListNow().length);
 
   let draft = $state('');
   let draftTr = $state('');
@@ -228,6 +232,15 @@
     <!-- 计数与操作分两行：三颗链接 + 两个状态标签挤在一行会折字，
          面板宽度不够时「4 条」都会被拆成两行（2026-11-25 截图）。 -->
     <div class="track-links">
+      {#if gapCount > 0}
+        <button
+          class="link"
+          onclick={() => void openGapFill(true)}
+          title="只把待译条目复制给外部模型；回填只写这些条目，其余译文原样保留（当前处理范围：{gapInfo.total} 条）"
+        >
+          补译 {gapCount} 条
+        </button>
+      {/if}
       <button class="link" onclick={() => importTranslationFromExport()}>导入译文</button>
       <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
       <button class="link danger" onclick={removeTranslation}>删除译文</button>

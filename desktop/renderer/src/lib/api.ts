@@ -1554,6 +1554,8 @@ export const api = {
       to?: number;
       rangeFrom?: number;
       rangeTo?: number;
+      /** 补译批次：只复制这些全片 1 基条号（逗号拼接后发给服务端）。 */
+      indices?: number[];
     } = {},
   ) => {
     const q = new URLSearchParams({ kind, lang });
@@ -1563,6 +1565,7 @@ export const api = {
     if (opts.to !== undefined) q.set('to_index', String(opts.to));
     if (opts.rangeFrom !== undefined) q.set('range_from', String(opts.rangeFrom));
     if (opts.rangeTo !== undefined) q.set('range_to', String(opts.rangeTo));
+    if (opts.indices?.length) q.set('indices', opts.indices.join(','));
     return req<{
       prompt: string;
       count: number;
@@ -1577,6 +1580,11 @@ export const api = {
       category?: string;
       template_id: string;
       template_name: string;
+      /** 补译批次才有：本次只处理这些全片条号。 */
+      indices?: number[];
+      sparse?: boolean;
+      /** 复制时的源指纹；回填时带回，原文改过就 409。 */
+      digest?: string;
     }>(`/api/ai/prompt?${q}`);
   },
 
@@ -1637,6 +1645,16 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
+  /** 补译回复解析：只解析，不落盘、不改字幕；按序号落位、条数严格 1:1。 */
+  gapFromSrt: (body: { indices: number[]; text: string; digest?: string }) =>
+    req<{
+      items: { i: number; before: string; after: string }[];
+      indices: number[];
+      count: number;
+      digest: string;
+      warnings: string[];
+    }>('/api/ai/gap-from-srt', { method: 'POST', body: JSON.stringify(body) }),
+
   /** 把粘贴回来的 SRT 解析成提案（只解析，不落盘、不改字幕） */
   aiFromSrt: (body: {
     kind: 'translate' | 'polish';
@@ -1669,11 +1687,39 @@ export const api = {
   // ---- 译文平行轨 -----------------------------------------------------------
   getTranslations: () => req<TranslationsPayload>('/api/translations'),
 
-  applyTranslation: (body: { lang: string; texts?: string[]; proposal?: AiProposal }) =>
-    req<TranslationTrack & { partial?: boolean; applied?: number; range?: { from: number; to: number } }>(
-      '/api/translations',
-      { method: 'POST', body: JSON.stringify(body) },
-    ),
+  applyTranslation: (body: {
+    lang: string;
+    texts?: string[];
+    proposal?: AiProposal;
+    /** 逐条采纳的全片 1 基序号；缺省 = 全采纳。 */
+    accept?: number[];
+  }) =>
+    req<
+      TranslationTrack & {
+        partial?: boolean;
+        applied?: number;
+        changed?: number;
+        kept_empty?: number;
+        range?: { from: number; to: number };
+      }
+    >('/api/translations', { method: 'POST', body: JSON.stringify(body) }),
+
+  /**
+   * 补译回填：只写显式列出的下标，其余条目原样保留（服务端硬保证）。
+   * `before` 是复制时的原文；复制之后原文改过就 409，什么都不写。
+   */
+  applyGap: (body: {
+    lang: string;
+    items: { i: number; before: string; after: string }[];
+  }) =>
+    req<
+      TranslationTrack & {
+        gap?: boolean;
+        applied?: number;
+        kept?: number;
+        changed?: number;
+      }
+    >('/api/translations/gap', { method: 'POST', body: JSON.stringify(body) }),
 
   /** 按路径导入译文 SRT / VTT；按时间对齐到当前原文时间轴。 */
   importTranslation: (path: string, lang: string) =>
