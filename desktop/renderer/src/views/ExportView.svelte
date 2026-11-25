@@ -1155,25 +1155,10 @@
     display: block;
     height: 100%;
     border-radius: 3px;
-    background: linear-gradient(90deg, var(--accent), #8fa6ff);
+    /* 纯色填充（原来是一条蓝→紫��渐变 + 无限循环的高光）。导出进度自己会走，
+       不需要再加一层装饰性动效。 */
+    background: var(--accent);
     transition: width 260ms var(--ease);
-    position: relative;
-    overflow: hidden;
-  }
-  .run-bar i::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
-    animation: shimmer 1.4s linear infinite;
-  }
-  @keyframes shimmer {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(100%);
-    }
   }
   .run-meta {
     display: flex;

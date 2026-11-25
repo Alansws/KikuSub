@@ -101,13 +101,11 @@
   .meter-bar.empty {
     background: var(--meter-track);
   }
+  /* 「音量克隆权重未安装 / 未知」= 空槽，不是斜纹装饰：平铺轨道色 + 一圈内发丝线，
+     与已占用段靠明度区分（斜纹是上一套皮肤的签名，读起来像占位骨架）。 */
   .meter-bar.clone.empty {
-    background: repeating-linear-gradient(
-      135deg,
-      var(--meter-track) 0 4px,
-      transparent 4px 8px
-    );
-    box-shadow: inset 0 0 0 1px var(--separator-soft);
+    background: var(--meter-track);
+    box-shadow: inset 0 0 0 1px var(--line);
   }
   .legend {
     display: flex;

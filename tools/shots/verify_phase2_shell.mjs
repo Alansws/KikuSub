@@ -192,7 +192,7 @@ const EVAL = String.raw`
     };
     const bar = document.querySelector('.statusbar');
     const barBg = bar ? getComputedStyle(bar).backgroundColor : '';
-    const specNode = document.querySelector('.statusbar .sb-spec');
+    const specNode = document.querySelector('.statusbar .st-spec');
     const specInk = specNode ? getComputedStyle(specNode).color : '';
     const relocated = {
       statusSpec: (specNode?.textContent || '').trim(),
