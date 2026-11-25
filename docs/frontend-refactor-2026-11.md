@@ -1079,6 +1079,27 @@ TypeError: 'NoneType' object is not callable
 | `pytest -q` | ✅ **1096 passed / 2 skipped** |
 | `tools/shots/verify_*.mjs` | ✅ **27 / 27 全绿**（＋ overlays 的 menu / dialog 两种模式；新增 `verify_tts_panel_fit`；`verify_settings_ai_fold` 的 `.export-card` → `.export-body`） |
 
+#### 四、试用版重新打包（红线 9）
+
+Python 改了（`core/` + `server/`），所以按红线 9 先重打 sidecar 再装配：
+
+```bash
+bash tools/pack/build_sidecar.sh          # 01:17 完成，包内 sidecar 与构建产物 sha256 一致
+bash tools/pack/build_trial.sh            # → build/pack-next/KikuSub-Next.app（1.4G）
+```
+
+- 身份未变：`com.kikusub.desktop.next` / 数据根 `~/Library/Application Support/KikuSub-Next` /
+  包内 `app-isolation.json` 仍是 `{appName: KikuSub-Next, dataDirName: KikuSub-Next}`。
+- 现役隔离：`build/pack/KikuSub.app/Contents/Info.plist` sha256 打包前后一致
+  （`f0afca4a…e269e`），`~/Library/Application Support/KikuSub` 未被写入。
+- 无窗口冒烟：用 `KIKUSUB_ISOLATION_ROOT=/tmp/…` 把数据根挪到临时目录后跑
+  `…/MacOS/KikuSub-Next --no-sandbox --screenshot=…`，首启向导正常出现并显示临时数据根；
+  真实数据根未被这次验证写入。
+- 装配脚本的既有行为：若 `KikuSub-Next.app` 还有一个在跑的旧实例，`build_app.sh` 会先
+  TERM、8 秒不退出再 KILL（否则删包会把它的 cwd 和 sidecar 一起抽掉）。本次装配时确实
+  关掉了一个仍在运行的试用版实例；工作草稿是逐次自动落盘的（`*.autosave_draft.srt`），
+  重新打开即可接着干。
+
 **新增取证截图**（无窗口，全部 `read_image` 自检过）：
 
 - [step6-transcribe-running.jpg](images/refactor-2026-11/step6-transcribe-running.jpg)（运行中 47% 进度条）
