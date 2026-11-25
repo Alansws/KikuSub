@@ -191,11 +191,15 @@ preference, the **cue font**: `sans` (Hiragino Sans, default) or `mincho` (Hirag
 
 ## Layout
 
-The window is a single 1360×838 working surface (minimum 1080×680). The titlebar is 44 px, the status bar 24 px, the sidebar 232 px (collapsed 52 px), the review inspector 388 px. The review screen is a **stage row** (video + inspector) over a **timeline dock** (transport, ruler, waveform, cue lane, table). The cue table spans the full content width so the text columns get the room the old 348 px inspector used to take.
+The window is a single 1360×838 working surface (minimum 1080×680). The titlebar is 44 px, the status bar 24 px, the sidebar 232 px (collapsed 52 px), the review inspector **348 px** — a full-height column, not a row. The review screen is a **full-bleed stage band** (the film, 16:9, capped at 640 px wide) over a **timeline dock** (single-row transport, ruler, waveform, cue lane, cue table), all inside the content column beside the inspector.
+
+The 388 px in the Step 1 comp belonged to a **stage-row** layout (video and inspector side by side, table full width). The shell that shipped keeps the inspector as a column, so the table would lose 40 px of Japanese text for it — at the 1080 px minimum that is the difference between 164 px and 124 px of cue text. The width stays 348 until the stage-row layout itself is evaluated.
+
+All three zones of the timeline dock share **one 16 px gutter** — transport, waveform and cue sheet start on the same left edge, and the outer frame padding is spent only once.
 
 Other pages use a 1120 px measure, left-aligned, with a 320 px right rail for "what happens next". The import page is the exception: a 760 px continue card and a full-width drop target, because the job there is to choose a file, not to read a form.
 
-Spacing follows 4 / 8 / 12 / 16 / 24 / 32. Controls are 24 (inline), 28 (default), 32 (large), 36 (primary). Table rows are 30 px; the cue lane is 22 px; the waveform is 84 px. Groups are tight; sections are separated by 1 px hairlines and 16–24 px of air.
+Spacing follows 4 / 8 / 12 / 16 / 24 / 32. Controls are 24 (inline), 28 (default), 32 (large), 36 (primary). Table rows are 30 px (60 px when bilingual), the cue lane is **17 px** (11 px blocks), the waveform is **80 px** (drag the handle; 72–300 px, remembered per machine). Groups are tight; sections are separated by 1 px hairlines and 16–24 px of air.
 
 The page skeleton is fixed: **titlebar → sidebar → page header → content → status bar**. No page invents its own header height or left edge. The four navigation groups are stages, not eight equal steps.
 
@@ -246,17 +250,21 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 
 ### Cue table
 
-- **Shape:** full-width sheet; 30 px rows; 44 px margin + # + start + end + duration + Japanese + Chinese + state.
-- **State:** hover wash; selected row tint; active row carries a 2 px vermilion margin mark and a vermilion number. Status is a mark in the margin plus a small badge, never color alone.
-- **Type:** Japanese 13/20, Chinese 12/19, timecodes 11 mono, headers 11 uppercase.
+- **Shape:** a cue sheet (`.cue-sheet`: sheet white, 1 px `--rule`, 7 px radius) inset 16 px from the dock; 30 px rows (60 px bilingual); columns `44 px margin | start | end | duration | cue text | row actions`.
+- **Cue margin:** 44 px, separated by a 1 px rule. Marks and the cue number both live in it: **approved** = 11 px check (green); **needs review** = 5 px vermilion dot; **machine-written line** = 10 px blue pencil. One mark per row, priority needs-review → approved → pencil.
+  - The pencil means "this line already has a translation". It is drawn **only in 原文 mode**: in bilingual or target mode the translation is already on the sheet, so a pencil on every row is a stamp, not information.
+  - The active row (selected row, or the block under the playhead) carries a 2 px vermilion line on the margin's left edge and a vermilion number. Hover wash, selected tint, find-hit wash and skipped-hit strike stay as they were.
+- **Type:** Japanese 15/20 (13/20 at the minimum window), Chinese 12/16, timecodes **11 mono tabular**, headers 11 px labels (never the cue face, never ink).
 - **Rule:** the table is the product; do not hide it behind cards, tabs or a drawer.
 
 ### Inspector
 
-- **Shape:** 388 px panel, 42 px tabs, hairline sections; no nested cards.
-- **Current cue:** 21/30 Japanese sheet with a blue focus ring; 13/19 Chinese; badges for confidence/notes; one primary "update this line".
-- **A/B:** two aligned rows, full text, one "use B" action below; never a second competing primary.
+- **Shape:** 348 px panel, 42 px tabs, hairline sections; no nested cards.
+- **Tabs:** the selected tab is ink + a 2 px blue-pencil rule under it — not a tinted pill. The segmented control (原文 / 译文 / 双语) is the only control that uses the white raised capsule, so the two never read as the same thing. Counts in tabs are tabular numbers, not filled badges.
+- **Current cue:** 21/30-scale Japanese field on sheet white with a blue focus ring; 13/19 Chinese; one primary "update this line".
+- **A/B:** two aligned rows, full text, one "use B" action below; section CTAs are secondary (paper + hairline). Never a second competing primary.
 - **Danger:** delete sits alone at the bottom, after 16 px of air and a hairline.
+- **No repeated read-outs:** device, engine, cue count, character count and resolution live in the titlebar and status bar; transcription parameters and version live in the task report. The inspector never restates them.
 
 ### Empty states
 
@@ -272,6 +280,7 @@ One icon, one sentence naming the next action, one primary button, one quiet alt
 - Keep timecodes, durations and counts in tabular mono.
 - Test both appearances at 1360×838 and 1080×680.
 - Keep the 44 px margin, 30 px rows and 1 px hairlines consistent across pages.
+- Let a mark exist only where the fact is invisible elsewhere (that is why the pencil hides in bilingual mode).
 
 ### Don't
 

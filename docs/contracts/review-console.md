@@ -714,7 +714,7 @@
   | `components/inspector/CuePane.svelte` | 「当前条目」：显示模式行、稿纸卡、操作行、字幕剪贴板 |
   | `components/inspector/TtsControls.svelte` | 朗读控件：图标按钮 + 音色下拉 + 「⚙」面板（见 §3.4.2） |
   | `components/inspector/ReviewAssistant.svelte` | 纠偏助手的挂载点（复核 / AI 判定见 §3.4.5） |
-  | `components/inspector/InspectorMeta.svelte` | 只读信息：来源 / 质检速览 / 生效参数 / 输出 |
+  | `components/inspector/InspectorMeta.svelte` | 只读信息：来源 / 质检速览 / 生效参数 / 输出（**生效参数与「输出」已于 §3.4.21 删除**，这里只留来源、质检速览与任务报告入口） |
   | `components/DraftDock.svelte` | 底栏的暂存 / 恢复（2026-11-24 从检查器底部搬出） |
 
   拆分只搬家：状态与副作用仍只有在原处那一份（草稿草写与 `registerCueDraftCommit`、
@@ -729,6 +729,8 @@
   从显示模式到 AI 判定的整块 `bottom ≤ .ins-scroll.clientHeight`，检查器里**不再存在**
   `.save-dock`，且底栏 `.draft-dock` 有暂存入口与状态文案。只读的「生效参数 / 输出」在
   AI 已配置或双语稿下仍可能需要滚动——那是信息，不是操作。
+  （2026-11-25 Step 4.2 起这两段已从检查器删除，底栏与「任务报告」各说一次，见 §3.4.21；
+  同一轮把这条脚本的「底栏暂存入口」断言改成「底栏只读草稿状态」。）
 - **第一次打开这部片（没有本机现场快照）**：`lib/reviewStart.ts` 的
   `planInitialReviewView()` 给默认现场——**选中第 1 条字幕、播放头 seek 到它的起点、
   视野 `duration/50`（`INITIAL_VIEW_ZOOM=50`，和「聚焦」69× 同量级）**。
@@ -1066,7 +1068,8 @@
   AI 行 459–572、`采用 AI 版` 就在行尾、线索行 597–627，**判定按钮底边 ≤ 645 进视野**
   （种子页没有 AI Key 时这里是一条提示，真机上换成 28px 的「重新判定」，卡底约 640）；
   双语（编辑卡 +112）仍需滚动 ~110px，由上面那条 `scrollIntoView` 兜底。
-  只读的「生效参数 / 输出」照旧在滚动区里，不进这条预算。
+  只读的「生效参数 / 输出」照旧在滚动区里，不进这条预算（**2026-11-25 Step 4.2 已删除**，
+  见 §3.4.21；三版对照因此整体上移）。
 - **回归**：`verify_arbitration.mjs`（结果行 / 徽章 / 采用 + 新增几何断言：三行顺序
   与「AI 结果行底边 ≤ `.ins-scroll.clientHeight`」）、
   `verify_arbitration_dialog.mjs`（三行各自的复制、唯一展开入口、追问与清空重判）、
@@ -1106,3 +1109,71 @@
   `tests/test_ai_translate_cue.py`、`tests/test_server_ai.py`。
 - **预算**：stale / pending 纯逻辑搬进 `lib/translationStatus.ts`、rebase 就地更新搬进
   `lib/translationBase.ts`；`store.svelte.ts` 只多两行接线，预算 3255 → 3252。
+
+#### 3.4.21 核对台视觉精修：44px 页边接通 + 检查器去重（2026-11-25，界面重构 Step 4.2）
+
+> 触发：Step 4.1 把 `ReviewView.svelte` 从 2583 行拆到 1769 行之后，核对台第一次可以
+> 只改外观而不碰状态机。用户这一轮的要求是「把核对台做成真正的 Cue Script 录音台本」：
+> 接通字幕表的 44px 页边、按主次重整右侧检查器、统一波形控制条的钴蓝与白色胶囊、
+> 并把外框留白压到最小。**红线 5/6/7/8 一步没动**：单击跳转 vs 4px 框选、
+> 进度条 click-to-seek、`duration/69` 步进、50 步统一历史、导出走 `setExport*` 全部原样
+> （上述脚本同轮全绿）。
+
+- **页边（44px）真正接进字幕表**：表头与每一行共用 `--cue-margin-w` 一列，右缘一条
+  1px `--rule` 竖线；记号与序号都在这一列里，当前句在页边落 2px 朱线、序号转朱。
+  - **记号只有三种，且全部来自真实状态**（`lib/reviewMargin.ts`，8 条 `node --test`）：
+    `warn` = 这句落在质检队列里且未处理（朱点）；`ok` = 对应的质检项已处理
+    （done / skipped，打勾）；`ai` = 这一行已有译文（蓝铅笔）。
+  - **优先级 `warn > ok > ai`**：一条字幕只留一个记号，先说「需要人动手」。
+  - **蓝铅笔只在「原文」模式下点**：双语 / 译文模式里译文已经摊在表里，再点一遍
+    等于给每一行都盖一个章（12 条稿就是 12 个铅笔 = 噪音）。它在原文模式里才是信息：
+    不看译文也知道哪些句子已经译过。
+  - 质检项按**时间与字幕相交**匹配（`coverage` / `missed` / `nonverbal` 这类
+    「那里本来就没有字幕」的项匹配不到任何行，页边自然不画）；队列总数仍由
+    「质检待核」页签的计数表达。标记的悬停说明也只写在一处（`cueMarkTitle`）。
+  - 当前行 = `play.selected` 或播放头所在的那一块（与表格高亮同口径），
+    多选时只有当前行落朱线。
+- **表格变成一张台本纸**：`.table-area` 用 `.cue-sheet` 原语（纸白 + 1px `--rule` +
+  7px 圆角），左右只留 16px 页边，宽度让给字幕；表头 28px / 11px 标签字，
+  时间码 11px mono + `tabular-nums`（Data 档），行分割线用 `--line`，
+  列宽 `44 | 84 | 84 | 46 | 1fr | 44`（≤1400 收 78/78/46/40，≤1220 收 72/72/44/34）。
+  表头里复用 `.c-text` 的那一格必须回到 11px 标签色（否则继承台本字与正文墨）。
+- **检查器按主次重整（`distill`）**：删掉底部「生效参数（设备 / 引擎 / 版本 / 参数）」
+  与「输出（文件 / 条数 / 字数）」两段——设备与引擎在底栏、条数与字数在底栏、
+  文件名在标题栏，同一组读数出现三次正是这次要去的噪音。留下的三件事：
+  **质检速览**（只在有漏检 / 低置信时出现一行）、**当前字幕的来源**（只在导入 /
+  恢复草稿时出现）、**任务报告入口**（参数与版本的完整一份在报告里）。
+- **页签换成台本的底下划线**：42px、选中 = 深墨 + 2px 蓝铅笔底线（不再涂一层
+  `accent-soft`）；计数是等宽数字，不是蓝色徽标。理由：同一屏里 `.seg`
+  （原文/译文/双语、产出的分段）已经占用了「白色凸起胶囊」，页签再用第三种选中语法
+  会把「哪个控件是分段」搞混。
+- **分段控件回到全局语法**：删掉 `CuePane` 里那条 `accent-soft` 覆盖，改用
+  `app.css` 的灰槽 + 纯白凸起胶囊 + 深墨文字（DESIGN.md §Segmented control）。
+- **复核 / AI 两块的 CTA 改成二级按钮**：`.so-run` / `.arb-run` 原来是通栏的
+  蓝底横幅（一屏三条蓝横幅就分不出主操作）。现在纸面 + 发丝线、左对齐；
+  一屏唯一的实心蓝仍然是「更新此行」。
+- **走带 / 时间轴 / 表格共用 16px 页边**：`.timeline` 内边距 6→2、走带 `padding`
+  26→16、表格 `margin` 6→4，外框留白只留一次。走带里的每个控件声明
+  `flex: 0 0 auto` + `nowrap`（1080×680 下「全景 / 聚焦 / 跟随中」曾被压成竖排三行）；
+  ≤1220px 先把缩放滑杆让出去（± 与倍率读数仍在，滚轮 / 捏合仍可缩放）。
+- **播放头浮标不再盖刻度标签**：`paintRuler` 新增可选 `avoid` 区间，
+  浮标底下的刻度标签直接不画（原来 4.72s 处会读成「00:04.72005」），
+  与「太挤就不画字」同一条纪律。刻度标签字号 12→11px（Data 档）。
+- **浮层**：右键菜单 = 原生菜单形状（4px 内边距、28px 行、悬停整行强调色 + 白字、
+  右侧说明同色半透明）；「以此句音频新建音色」= 360px 小表（10px 圆角、15/600 标题、
+  28px 输入框、取消在左主操作在右）；选区工具条 = 纸白浮条 + popover 阴影
+  （不再是铺满一行的蓝底）。
+- **顺手修掉一个真 bug**：Step 4.1 把查找栏抽进 `ReviewTable` 时，
+  `bind:value={findState.query}` 被写成了单向 `value=`，于是 ⌘F 能打开、能打字，
+  但**命中永远是 0**（输入框里的字没有写回状态）。现在输入框走
+  `setQuery` / `setReplacement` 两个 setter（`lib/reviewFind.svelte.ts`），
+  真实界面已验证：输入「雨」→ 2/2、Enter 跳到第 4 条并高亮。
+- **预算**：`ReviewView.svelte` 1769 行（持平，新增逻辑全在 `lib/reviewMargin.ts`）；
+  `store.svelte.ts` 3217 未动。
+- **回归**：`desktop/test/reviewMargin.test.mjs`（8 条）；`verify_review_transport` /
+  `verify_cue_selection` / `verify_review_viewport` / `verify_cue_clipboard` /
+  `verify_review_defaults` / `verify_review_overlays`（menu + dialog）/
+  `verify_arbitration` / `verify_phase2_shell`（46 条）/ `verify_reshape_flow` 同轮全绿。
+  `verify_review_defaults` 里「底栏有暂存入口」那条从 Step 3 起就是红的
+  （底栏已改成只读、暂存进了「文件」菜单），本轮把断言改成
+  「底栏有只读草稿状态 + 底栏没有按钮」。
