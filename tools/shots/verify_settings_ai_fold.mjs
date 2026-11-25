@@ -141,7 +141,7 @@ const EVAL_EXPORT = (toBottom) => String.raw`
       label: text(button),
       disabled: Boolean(button.disabled),
     }));
-    const videoButtons = [...document.querySelectorAll('.export-card .seg')]
+    const videoButtons = [...document.querySelectorAll('.export-body .seg')]
       .map((seg) => [...seg.querySelectorAll('button')].map((button) => ({
         label: text(button),
         disabled: Boolean(button.disabled),

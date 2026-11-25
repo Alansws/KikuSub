@@ -1,12 +1,15 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-26 00:20
+updated: 2026-11-26 00:58
 ---
 # KikuSub 前端重塑（2026-11）
 
-> **状态：Step 5 收尾完成（2026-11-26）。** Step 3、4.1、4.2、4.2.1、4.3 均已验收；
-> 本轮排掉 `verify_chapter_edge` 的最后两条红，并把「与现役旧版双开」的试用版
-> `KikuSub-Next.app` 打了出来（§7.8）。`tools/shots/verify_*.mjs` 27/27 全绿。
+> **状态：Step 6 真机实测收口完成（2026-11-26）。** Step 3、4.1、4.2、4.2.1、4.3、5 均已验收；
+> 用户用 `KikuSub-Next.app` 跑通真实片源后报回 **1 个崩溃 Bug + 4 处界面/排版问题**，
+> 本轮全部根治：ASR 空闲卸载租约（§7.9 一）、导出页/转写页去套娃（§7.9 二 1-2）、
+> 朱红质检徽标（二 3）、朗读 ⚙ 面板 348px 溢出（二 4）、检查器底部收尾区（二 5）。
+> `tools/shots/verify_*.mjs` 27 个脚本全绿（新增 `verify_tts_panel_fit`，`verify_review_overlays` 的
+> menu / dialog 两个模式另各跑一次也绿）。
 >
 > 本轮不是“把现有页面修漂亮”，而是换一套**界面语言 + 页面骨架 + 任务顺序**。
 > 视觉世界叫 **Cue Script（录音台本）**；完整令牌与组件规则见根目录 [DESIGN.md](../DESIGN.md)，
@@ -71,9 +74,11 @@ updated: 2026-11-26 00:20
 | **Step 4.3 组二 原文加工** | ✅ 完成 | 侧栏 ① ② 编号；AI 三页 note 槽与互相指路；见 §7.6 |
 | **Step 4.3 组三 交付** | ✅ 完成 | 「暂无译文轨」收敛成一次；成片预览按监看器；导出完成补回核对台；见 §7.6 |
 | **Step 4.3 组四 辅助/边界** | ✅ 完成 | 设置页去彩图标；内核未连接可手动重启；修 `.sb-item` 类名撞车；见 §7.6 |
-| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（401）/ `pytest -q`（1089 passed / 2 skipped）/ `verify_*.mjs`（27/27） |
+| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（401）/ `pytest -q`（**1096** passed / 2 skipped）/ `verify_*.mjs`（27/27） |
 | **章节端点排雷** | ✅ 完成 | `verify_chapter_edge` 10/10；测试前置 + `ChapterTrack.visible` 两处修复，见 §7.8 |
 | **双开试用版** | ✅ 已打包 | `build/pack-next/KikuSub-Next.app` / `com.kikusub.desktop.next` / 独立数据根；见 §7.8 |
+| **真机崩溃 Bug（Anime Whisper 第二版）** | ✅ 已根治 | 空闲卸载与跑片竞态；`EngineIdleReleaser.hold()` 租约 + 解码自愈兜底；见 §7.9 一 |
+| **Step 6 去套娃 / 执行栏 / 徽标 / 溢出** | ✅ 完成 | 导出页与转写页零白框套娃；转写页 Docked 执行栏三态；质检朱红胶囊；朗读面板两行布局；见 §7.9 二 |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
@@ -846,6 +851,11 @@ KIKUSUB_DEV_SEED=tools/shots/seed.json KIKUSUB_SHOT_DELAY=6000 \
 # 核对台浮层（Step 4.1 起）
 node tools/shots/verify_review_overlays.mjs --mode menu
 node tools/shots/verify_review_overlays.mjs --mode dialog
+
+# Step 6 起的专项回归（都走无窗口截图路径）
+node tools/shots/verify_tts_panel_fit.mjs            # 朗读 ⚙ 面板 348px 不溢出（11 项）
+node tools/shots/capture_transcribe_states.mjs       # 执行栏三态 + 进度条（17 项）
+node tools/shots/capture_review_inspector.mjs        # 徽标 / 面板 / 底部收尾区（11 项）
 ```
 
 ### 8.2 视觉验收
@@ -947,6 +957,137 @@ tools/shots/readme-seed.json --delay 12000 --states "import transcribe review tr
 | `pytest -q` | ✅ **1089 passed / 2 skipped** |
 | `tools/shots/verify_*.mjs` | ✅ **27 / 27 全绿**（含 2 个浮层模式） |
 
+### 7.9 Step 6 真机实测收口（2026-11-26）
+
+用户用 `KikuSub-Next.app` 跑完整业务流（双开正常、旧版 `KikuSub.app` 毫发无损）后，
+在真实片源上报回 **1 个功能崩溃 Bug + 4 处界面/排版问题**。本轮逐条根治。
+
+#### 一、崩溃 Bug：`'NoneType' object is not callable`（第二版 + Anime Whisper）
+
+**真机复现**：Qwen3-ASR + CTC 整片转出 246 条主稿 → 转写页把产出切到「第二版（对照）」→
+引擎选 Anime Whisper（期间改过 2 项专家参数）→ 点「生成第二版」→ **转录即将落盘时**
+底部报 `! 转写失败 'NoneType' object is not callable`。
+
+**定位**：`~/Library/Application Support/KikuSub-Next/outputs/logs/kikusub.log`
+（2026-11-26 00:36:08）拿到了精确 traceback：
+
+```
+File "server/jobs.py", line 960, in _run_transcribe
+File "core/pipeline.py", line 433, in run_transcription
+File "core/pipeline.py", line 417, in _run_engine
+File "core/transcribe.py", line 1839, in transcribe_file
+File "core/transcribe.py", line 1991, in _decode
+File "core/transcribe.py", line 1708, in _decode_chunk
+TypeError: 'NoneType' object is not callable
+```
+
+`core/transcribe.py:1708` 是 `res = self._pipe(...)`。同一秒的日志给出了凶手：
+
+```
+00:36:08,322 [kikusub-asr-idle] core.transcribe: Anime Whisper 权重已卸载（让位给对齐层）
+00:36:08,322 [kikusub-asr-idle] core.engine_idle: ASR 引擎空闲卸载 | whisper | 空闲 181s
+```
+
+**根因**：`core/engine_idle.py` 只按「最后一次 `touch`」判空闲（默认 180s），而
+`server/jobs.py` 的 `_run_transcribe` **只在任务跑完时** `touch`。本次 whisper 的上一次
+`touch` 是 00:33:07（更早一次「另一引擎复核」结束时），整片任务 00:33:57 开始后
+81 秒就到了 180s 阈值——空闲巡检线程把**正在解码的**权重卸了，`_pipe` 变 None，
+下一段解码就是那句 `NoneType`。与「第二版」「改过参数」「PyInstaller sidecar」都无关：
+单引擎整片、只要前 180s 内有过一次复核、且本轮跑超过 180s 就会中。Qwen 的 `unload()`
+同理。
+
+**修复**（`core,server` 一层）：
+
+1. `core/engine_idle.py` 新增**租约**：`hold(key)` / `acquire` / `relinquish` / `busy`。
+   `sweep()` / `release_others()` / `release_now()` 一律跳过有租约的引擎；租约退出时
+   `touch`，空闲窗口从「这轮结束」重新计时（原来是从「这轮开始」的旧时间戳算）。
+2. `server/jobs.py`：`_run_transcribe`、`_run_compare`、`_run_dual` 的两遍都用
+   `with self._idle.hold(...)` 包住真正跑片的那一段。
+3. `core/transcribe.py::_decode_chunk` 加一道自愈兜底：`_pipe is None` 时重新 `load()`
+   一次再解码（真被外力卸掉也把这一趟跑完，而不是整片判死），仍失败才抛可读错误。
+
+**回归**（两条，都先证明「没有修复会红」）：
+
+- `tests/test_engine_idle_lease.py`（7 例，轻量）：无租约时巡检会卸、有租约时 600s
+  也不卸、退出即重新计时、空 key 是空操作、`release_others` 只卸载空闲的、真线程下
+  200 轮不漏；
+- `tests/test_server_alt_review_idle.py`（服务端整条路径）：主稿存在 → 用 whisper 跑
+  「第二版」→ runner 每段推进 70s 并**顺手调一次 `idle.sweep()`**（等价于后台线程）→
+  断言任务 `done`、whisper 一次没被卸、第二版落进第二列、主稿一个字没动。
+  把 `with hold(...)` 换成 `if True:` 后这条用例立刻复现真机的 `NoneType` 崩溃。
+
+#### 二、界面/排版四项
+
+**1) 彻底消除「灰底叠白框」和「框里套框」（导出页 / 转写页 / 顺查全站）**
+
+- 导出页原来是**灰画布 → 大白框 → 小白框**三层：`.track-note`（白底 + 边框）、
+  `.range-row`（白卡）、`.export-card`（白卡 + 1px 边框 + 投影），再在其内部套
+  3 个导出形式白卡 + 6 个字幕样式白卡 + 4 个码率白卡。
+- 现在 `.export-card` 改名 `.export-body` 并**去掉全部外壳**（无底色 / 无边框 / 无投影
+  / 无圆角），页面段落靠**标题 + 1px 发丝线**自然分段；提示条去掉边框与底色退成一行
+  说明；导出形式 / 字幕样式 / 码率预设置改成**只保留一层**的描边块：透明底 +
+  `--line` 描边，悬停淡底，选中蓝描边 + 极淡蓝底。运行 / 完成状态块也从「白卡 +
+  渐变」改成单层淡底（顺带删掉 `linear-gradient`，DESIGN 明确不要渐变）。
+- 转写页本来就没有卡片套娃，但底部执行栏是「半透明模糊白条贴片」，见下一条。
+
+**2) 转写页底部执行栏重做成 Docked 栏 + 三态**
+
+- 旧结构：`.dock-wrap` 是 `position: sticky` 摆在滚动内容**内部**，里面 `RunDock` 自己
+  带 `background: var(--bg-toolbar)` + `backdrop-filter`，于是那条 90px 高的半透明白条
+  贴在灰画布上，两侧还内缩，看起来是一张贴片。
+- 现在：`.dock-wrap` 是 pane 的**最后一个 flex 子项**（`flex: 0 0 auto`），通栏、
+  `color-mix(paper, canvas)` 的极浅色带 + 一条上发丝线；`.dock-inner` 与
+  `.page-wrap` 用同一套几何（1120 内容列 + 32px 内边距），复述文字与上面三步严格同左缘
+  （截图断言 ±1px）。`RunDock` 自己不再有任何底色/模糊/圆角。
+- 三态：待开始 = 两行（复述 + 说明）；进行中 = 状态行（spinner + 阶段 + 等宽百分比）
+  + **4px 水平进度条**（中性槽 + 蓝铅笔实心填充，`aria-valuenow` 同步）+ 复述行，
+  主按钮换「中途打断」；失败 = 朱红状态行（原因单行省略、`title` 里有全文）+ 主按钮
+  保留（可直接重跑同配置）。`prefers-reduced-motion` 停掉 track 过渡与 spinner。
+
+**3) 「质检待核」数字徽标**：页签里原本是 `--ink-3` 极淡灰等宽数字（代码注释还写着
+「计数是读数，不是徽标」）。待核数不是读数而是「还有几句要你动手」，与字幕表页边的
+待核朱点同义 → 改成**朱红微胶囊**（`--danger` 文字压在 `--danger-soft` 底上：
+日间 4.9:1 / 夜间 5.6:1，均过 4.5），`0` 时仍然不渲染。「章节 3」保持等宽灰数字
+（它是纯读数），两者语义由此分开。
+
+**4) 朗读 ⚙ 展开面板 348px 溢出**：真机在有 OmniVoice 克隆音色时展开，
+面板宽 363px、撑出检查器右缘 32px 被裁掉（第一个按钮只剩半截）。
+根因：`.tts-panel` 是 `flex: 1 0 100%`，basis 只有 306px（348 − 16×2 内边距 − 滚动条），
+但 flex 项的自动最小尺寸默认 `min-content`，而那五个按钮的 min-content 加起来 363px，
+`flex-shrink: 0` 让它顶着 min-content 溢出。修复：`min-width: 0`（根因）+ 头部只留
+「朗读 · 引擎 · 收起」、音色细节读数单独一行 + 动作按钮拆成两行规整布局
+（第一行 语速/上传/截取 三等分，第二行 音色库/管理）。
+回归：`tools/shots/verify_tts_panel_fit.mjs`（11 条断言，1080×680 视口）：
+`scrollWidth <= clientWidth`、面板内每个按钮 / 下拉框的 boundingBox 都在检查器左右缘内、
+「音色库 1」与「管理」真的可见。
+
+**5) 检查器底部收尾区**：原来「AI 优化未启用 + 去设置」是一个悬在空白上的白底按钮，
+下面「漏检 / 知识库 / 任务报告」散成两段，再下面就是一大块空洞。
+现在：`AI 优化未启用 … 去设置 ›` 收成一行（动作退成蓝铅笔文字链接）；
+`InspectorMeta` 改成 `.meta-foot` 收尾区——`margin-top: auto` 钉在检查器底缘、
+一条上发丝线、**一行收口**（状态 chips 在左、「任务报告 ›」在右、说明最多一行小字）。
+空白因此落在内容与收尾区之间（读作留白），而不是吊在最后一行下面。
+
+#### 三、2026-11-26 复跑
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run check` | ✅ 0 error |
+| `npm run check:svelte` | ✅ 4/4（基线 4，未上升） |
+| `npm run build` | ✅ |
+| `npm run test:main` | ✅ 401 |
+| `pytest -q` | ✅ **1096 passed / 2 skipped** |
+| `tools/shots/verify_*.mjs` | ✅ **27 / 27 全绿**（＋ overlays 的 menu / dialog 两种模式；新增 `verify_tts_panel_fit`；`verify_settings_ai_fold` 的 `.export-card` → `.export-body`） |
+
+**新增取证截图**（无窗口，全部 `read_image` 自检过）：
+
+- [step6-transcribe-running.jpg](images/refactor-2026-11/step6-transcribe-running.jpg)（运行中 47% 进度条）
+- [step6-transcribe-error.jpg](images/refactor-2026-11/step6-transcribe-error.jpg)（失败态：正是真机那句报错）
+- [step6-transcribe-idle.jpg](images/refactor-2026-11/step6-transcribe-idle.jpg)（待开始）
+- [step6-review-inspector.jpg](images/refactor-2026-11/step6-review-inspector.jpg)（徽标 + 朗读面板 + 收尾区）
+- [step6-review-inspector-dark.jpg](images/refactor-2026-11/step6-review-inspector-dark.jpg)（夜间同屏）
+- [step6-export-light.jpg](images/refactor-2026-11/step6-export-light.jpg) / [step6-export-dark.jpg](images/refactor-2026-11/step6-export-dark.jpg)（日/夜）
+
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
 > 本节此前是三个待问项；现已冻结为决定，后续会话不再重复询问。
@@ -1003,6 +1144,12 @@ tools/shots/readme-seed.json --delay 12000 --states "import transcribe review tr
 | 2026-11-26 | 章节端点两条红的归因：测试前置回全景 + `visible` 筛掉拖动中的条目 | 前者是 67e8434 引入的测试回归；后者是 22eec77 起就有的真实缺陷，松手会丢拖动 |
 | 2026-11-26 | `visible` 强制保留 `drag.id` 条目 | 边缘自动平移时视窗会越过已落库区间的半屏裁剪线，条目一被筛掉整块轨道就卸载 |
 | 2026-11-26 | 试用版用包内 `app-isolation.json` 换 appName / userData / 数据根 | 正式包默认值不变，不靠临时改名脏配置；隔离根建不起来就拒绝启动 |
+| 2026-11-26 | **跑片必须持 `EngineIdleReleaser.hold()` 租约** | 空闲卸载只认「最后一次 touch」，整片跑过 180s 就会把自己正在用的引擎卸掉 → `'NoneType' object is not callable` |
+| 2026-11-26 | 去套娃：导出页取消所有分区白卡外壳，只剩标题 + 发丝线 | 用户真机反馈「灰底 → 大白框 → 小白框」三层；DESIGN 本来就禁止卡片套卡片 |
+| 2026-11-26 | 选项块（导出形式 / 字幕样式 / 码率）只留一层描边 | 白卡叠白卡时选择项读成「一张张贴纸」；一层描边 + 悬停淡底即可表达可选 |
+| 2026-11-26 | 转写页执行栏改成 pane 内最后一个 flex 子项（Docked），不再 sticky-in-scroll | sticky 在滚动容器内部 + 半透明模糊底色 = 贴在灰画布上的白条 |
+| 2026-11-26 | 「质检待核」数字改朱红微胶囊，「章节」计数仍是等宽灰数字 | 前者是「要你动手」，与页边待核朱点同义；后者是纯读数。DESIGN 里「计数不是徽标」的规则据此加一个例外 |
+| 2026-11-26 | `.tts-panel` 必须 `min-width: 0`，动作按钮拆两行 | `flex: 1 0 100%` + 自动最小尺寸（min-content）会把 363px 的面板顶出 348px 检查器 |
 
 ## 11. 交接清单（新会话）
 

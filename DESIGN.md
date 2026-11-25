@@ -260,7 +260,7 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 ### Inspector
 
 - **Shape:** 348 px panel, 42 px tabs, hairline sections; no nested cards.
-- **Tabs:** the selected tab is ink + a 2 px blue-pencil rule under it — not a tinted pill. The segmented control (原文 / 译文 / 双语) is the only control that uses the white raised capsule, so the two never read as the same thing. Counts in tabs are tabular numbers, not filled badges.
+- **Tabs:** the selected tab is ink + a 2 px blue-pencil rule under it — not a tinted pill. The segmented control (原文 / 译文 / 双语) is the only control that uses the white raised capsule, so the two never read as the same thing. Counts in tabs are tabular numbers, not filled badges — **with one deliberate exception (2026-11-26):** the QA pending count (`质检待核 4`) is not a read-out, it is "four lines still need your hand", the same fact the cue margin's vermilion dot carries. So it is a vermilion micro-capsule (11 px tabular figures on `--danger-soft`, an inset 1 px vermilion ring at 24 %, 15 px tall, 8 px radius); it is omitted at zero. The chapter count stays a plain tabular read-out, which is what keeps the two from reading as the same signal.
 - **Current cue:** 21/30-scale Japanese field on sheet white with a blue focus ring; 13/19 Chinese; one primary "update this line".
 - **A/B:** two aligned rows, full text, one "use B" action below; section CTAs are secondary (paper + hairline). Never a second competing primary.
 - **Danger:** delete sits alone at the bottom, after 16 px of air and a hairline.
@@ -326,6 +326,30 @@ the full drop target only appears when no project is open. The dual-engine revie
 The sidebar marks the two 原文 pages with paragraph ordinals `①` `②` — a visible mark only; it
 never enters the label or the accessible name, because shortcuts, menus and tests match by name.
 The settings category list uses the same line icons as the main sidebar (no coloured tiles).
+
+**Step 6 additions (2026-11-26).** Three rulings came out of a real-source run of
+`KikuSub-Next.app`:
+
+- **No card shells on workflow pages.** The export page had drifted into
+  canvas → big white frame → small white frames (the note bar, the range row, the export
+  card, then 3 mode cards + 6 style cards + 4 bitrate cards inside it). The ruling: a
+  workflow page is **one ground**; sections are a **title + a 1 px hairline**, never a card;
+  an option group keeps **exactly one** interactive layer — transparent with a `--line`
+  outline, a hover wash, and a blue outline + `--accent-soft` when selected. Nothing on the
+  export page has a background, a border, a radius or a shadow at the section level.
+- **The transcribe run bar is docked, not stuck on.** It is the pane's last flex child
+  (never `position: sticky` inside the scroller), full-bleed, `color-mix(paper, canvas)`
+  with one top hairline, and its content column shares the page's 1120 px / 32 px gutter
+  geometry so the recap line sits on the same left edge as the three steps above it. The bar
+  itself carries no fill, blur or radius; running shows a 4 px determinate track (neutral
+  groove + solid cobalt fill, `aria-valuenow` in step) and the actions collapse to a single
+  "stop" danger button.
+- **The inspector ends in a footer, not in air.** `.meta-foot` is pinned to the bottom edge
+  with `margin-top: auto` and one hairline: status chips on the left, the one "task report"
+  link on the right, at most one line of small print. Slack then reads as breathing room
+  between content and footer instead of an unfinished panel. The "AI optimisation is off"
+  state is a single line (copy + a blue-pencil text link), never a lone white button
+  floating in that slack.
 
 **Parallel install and data isolation.** The user's current installed `KikuSub.app` is their daily
 driver and must keep working untouched. A redesign build is only ever a *separate* artefact

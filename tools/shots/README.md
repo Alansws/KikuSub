@@ -335,6 +335,56 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_layout.
 > 不要在脚本里加 `zoom200` / `KIKUSUB_ZOOM=2` 用例（只会稳定报假红）。
 > `KIKUSUB_ZOOM` 取证开关仍在，但要手动看一眼时才用。
 
+## 转写页执行栏三态（2026-11-26 真机实测收口）
+
+`capture_transcribe_states.mjs`。`capture_matrix.sh` 的 `transcribe` 只能截到「待开始」，
+而用户真机反馈的关键两态（**运行中的水平进度条**、**失败报错**）要真跑一次 Anime Whisper
+才出现。脚本用 `KIKUSUB_DEV_SEED` 的 `job` 字段灌一份任务快照（页面走的仍是真实的
+`TranscribeView` → `RunDock` 渲染），一次拍三张并断言：
+
+- 运行中：`.dock .meter` 存在、`aria-valuenow=47`、填充宽 / 轨宽 ≈ 47%（±2%）、
+  主按钮是「中途打断」；
+- 失败：`.status.err` 存在、失败原因可见、**没有**进度条（不假装还在跑）、主按钮仍可重跑；
+- 底部栏几何：色带（`.dock-wrap`）与内容区左右同宽（不是内缩贴片）、
+  贴住内容区底缘、内容列与 `.page-wrap` 同一左缘（±1px）。
+
+```bash
+node tools/shots/capture_transcribe_states.mjs --out /tmp/transcribe-states
+node tools/shots/capture_transcribe_states.mjs --theme dark --size 1440x960
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/capture_transcribe_states.mjs
+```
+
+## 朗读 ⚙ 面板在 348px 检查器里不溢出（2026-11-26 真机报障）
+
+`verify_tts_panel_fit.mjs`。真机有 OmniVoice 克隆音色时点开 `朗读 ⚙`，面板 363px 撑出
+348px 检查器右缘被裁掉（最右按钮只剩半截）。根因是 `.tts-panel` 的 `flex: 1 0 100%`
+遇上了 flex 项的自动最小尺寸（min-content），修复是 `min-width: 0` + 动作按钮拆两行。
+
+脚本在 1080×680（最小窗口）下断言：`scrollWidth <= clientWidth`（面板 / 检查器 / 滚动区
+三处）、面板内每个按钮与下拉框的 boundingBox 都在检查器左右缘内、
+「音色库 1」「管理」真的可见、「4.7s 参考 · 克隆 · 音量已对齐」没被截成「音量已…」。
+种子只往 `tts` 里灌一个假克隆音色——真建一个要装 3.3GB OmniVoice 权重。
+
+```bash
+node tools/shots/verify_tts_panel_fit.mjs
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_tts_panel_fit.mjs
+```
+
+## 核对台检查器取证（徽标 / 朗读面板 / 底部收尾区）
+
+`capture_review_inspector.mjs`。2026-11-26 真机报障的三件事同框取证：
+「质检待核 4」朱红微胶囊、展开的朗读 ⚙ 面板、被 `margin-top: auto` 钉在底缘的
+`.meta-foot` 收尾区（真空洞不再吊在最后一行下面）。
+
+断言：徽标显示 4 且颜色不是 `--ink-3` 灰、有底色、圆角 ≥ 7px（胶囊）；
+面板内按钮全在检查器内；检查器无横向溢出；收尾区存在且贴底（与滚动区底缘差 ≤ 18px）、
+漏检 / 低置信 chips 与「任务报告」入口都在收尾区里。
+
+```bash
+node tools/shots/capture_review_inspector.mjs --out /tmp/review-inspector
+node tools/shots/capture_review_inspector.mjs --theme dark --size 1360x838
+```
+
 ## 基线
 
 `docs/images/shots/baseline/` 现在有两组基线：
