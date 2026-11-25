@@ -7,7 +7,7 @@ colors:
   sheet: "#FCFDFC"
   ink: "#15191C"
   ink-2: "#4A545C"
-  ink-3: "#5E6A72"
+  ink-3: "#566168"
   blue-pencil: "#2D5FA6"
   vermilion: "#B8412F"
   approved: "#356B52"
@@ -140,6 +140,8 @@ A cool paper ground, a sumi ink, and two pencils. The palette is Restrained: one
 - **Sheet** (`#FCFDFC`; dark `#171C21`): the cue table and editable fields.
 - **Sumi** (`#15191C`; dark `#ECE8DF`): primary text, 17.3:1 / 14.0:1.
 - **Graphite** (`#4A545C`; dark `#B3B8B8`): secondary text, 7.59:1 / 8.55:1.
+- **Slate** (`#566168`; dark `#959FA8`): 11 px labels, counts and units; 6.23:1 / 6.37:1 on the
+  sheet. Step 3 darkened this one level so 11 px data no longer sits just above 4.5:1.
 - **Hairline** (`#C8D1D6`; dark `#2A3238`): 1 px rules. No 5% grey separators.
 
 ### Named Rules

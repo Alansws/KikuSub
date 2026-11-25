@@ -1,10 +1,11 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-25 21:05
+updated: 2026-11-25 21:13
 ---
 # KikuSub 前端重塑（2026-11）
 
-> **状态：Step 2 已拍板（Cue Script 通过）；Step 3 进行中——令牌 / 外壳 / 转写页样板间。**
+> **状态：Step 3 已完成（令牌 / 外壳 / 转写页样板间），停在用户确认点，等你验收截图。**
+> 核对台（`ReviewView.svelte`）本轮**未动**，留给 Step 4。
 >
 > 本轮不是“把现有页面修漂亮”，而是换一套**界面语言 + 页面骨架 + 任务顺序**。
 > 视觉世界叫 **Cue Script（录音台本）**；完整令牌与组件规则见根目录 [DESIGN.md](../DESIGN.md)，
@@ -52,7 +53,12 @@ updated: 2026-11-25 21:05
 | 机械检测 | ✅ 已跑 | `impeccable detect`；见 §5.4 |
 | 用户拍板（§9） | ✅ 已确认（2026-11-25） | §9 已冻结为决定，不再是待问项 |
 | 旧版共存 / 数据隔离铁律 | ✅ 已写入 | §0.1 |
-| 生产代码 | 🚧 Step 3 进行中 | 只动令牌 / 外壳 / 转写页；核对台未动 |
+| **Step 3A 令牌** | ✅ 完成 | `app.css` 换成 Cue Script；外观模型 `auto/light/dark` + `data-cue-font` |
+| **Step 3B 外壳** | ✅ 完成 | 整幅标题栏 44px、侧栏 232/52 四段、底栏 24px 只读、菜单补齐 |
+| **Step 3C 转写页样板间** | ✅ 完成 | 01/02/03 + 44px 页边 + 右栏 + 任务条；见 §5.6 |
+| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（5/5 基线）/ `build` / `test:main`（378）/ `pytest`（1058） |
+| 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（43 项）+ `verify_transcribe_flow`（21 项） |
+| 核对台 | ⛔ 未动 | 留到 Step 4（先纯拆分再精修） |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
 
 ### 1.1 这轮和上一轮的区别
@@ -241,21 +247,30 @@ updated: 2026-11-25 21:05
 | Attention | `#7E5416` | `#D2A15E` | 低置信/提醒 |
 | Hairline | `#C8D1D6` | `#2A3238` | 1 px 分隔 |
 
-实测对比度：浅色下 Sumi 17.3:1、Graphite 7.6:1、Blue 6.24:1、Vermilion 5.37:1；
-深色下 Sumi 14.0:1、Graphite 8.6:1、Blue 7.19:1、Vermilion 5.84:1。均过 WCAG AA。
-小字（11 px）距离 HIG 建议的 7:1 还有一段：Step 3 会把 `ink-3` 与状态色再压深一档，
-但不牺牲“蓝=操作 / 朱=更正”的职责。
+实测对比度（Step 3 落地后由 `verify_phase2_shell.mjs` 在真实渲染器里算，不是估的）：
+
+| 令牌 | 浅色 on 纸面 | 深色 on 纸面 |
+| --- | --- | --- |
+| `--ink` 正文 | 16.3:1 | 14.9:1 |
+| `--ink-2` 次级 | 7.13:1 | 9.06:1 |
+| `--ink-3` 11px 标签 | **5.86:1** | **6.75:1** |
+| `--accent-text` 蓝铅笔 | 5.87:1 | 7.62:1 |
+| `--danger` 朱笔 | 5.05:1 | 6.18:1 |
+| `--line` 发丝线 | 1.33:1（可见即可，非文字） | 1.54:1 |
+
+Step 3 把 `--ink-3` 从 `#5E6A72`（5.45:1）压深到 `#566168`（6.23:1 on 台本），
+深色从 `#858F96`（5.2:1）提到 `#959FA8`（6.37:1）：11px 数据不再贴着 4.5 的底线。
 
 ### 4.2 字阶
 
-| 角色 | 字号/行高 | 用途 |
-| --- | --- | --- |
-| Display | 22/30 · 620 | 页面标题 |
-| Heading | 15/22 · 600 | 分区标题 |
-| Body | 13/19 · 400 | 正文、控件 |
-| Cue | 21/30 · 500 | 检查器当前句；表格 13/20 |
-| Data | 11/16 · mono | 时间码、时长、计数 |
-| Label | 11/16 · 0.07em | 列头、阶段、快捷键 |
+| 角色      | 字号/行高          | 用途              |
+| ------- | -------------- | --------------- |
+| Display | 22/30 · 620    | 页面标题            |
+| Heading | 15/22 · 600    | 分区标题            |
+| Body    | 13/19 · 400    | 正文、控件           |
+| Cue     | 21/30 · 500    | 检查器当前句；表格 13/20 |
+| Data    | 11/16 · mono   | 时间码、时长、计数       |
+| Label   | 11/16 · 0.07em | 列头、阶段、快捷键       |
 
 ### 4.3 形状与间距
 
@@ -313,8 +328,14 @@ updated: 2026-11-25 21:05
 - `cramped-padding`：**5**，全部是表格行 / 视频画面 / 分段控件 / 三栏表这类“本来就不该有内边距”的容器。
 - `numbered-section-labels`：**0**（`01/02/03` 只出现在有顺序含义的任务条，不作为装饰）。
 
-这些判断不是“忽略告警”，而是按 Operate 模式的密度/表格语义逐条判定；Step 3 会在真实 Svelte 里
-再跑一次，并把仍存的最小字号/对比度写进验收。
+这些判断不是“忽略告警”，而是按 Operate 模式的密度/表格语义逐条判定。
+
+**Step 3 的检测口径变了**（2026-11-25）：`impeccable detect` 对 `.css` / `.svelte`
+只跑正则规则，元素级规则（`tiny-text` / `low-contrast`）需要解析后的页面。
+生产界面必须在 Electron 里才成立（依赖 preload），所以这一轮**用更强的证据替代**：
+`tools/shots/verify_phase2_shell.mjs` 在真实渲染器里读计算样式、按 WCAG 公式算比值，
+逐项断言正文 ≥7、11px 标签 ≥4.5、蓝铅笔 ≥4.5、发丝线 ≥1.25（数值见 §4.1）。
+元素级 detector 留给 Step 5：届时用打包产物 + `--screenshot` 路径做一次完整扫描。
 
 ### 5.5 原型没有覆盖的
 
@@ -322,6 +343,26 @@ updated: 2026-11-25 21:05
 - 加载/失败/取消/模型下载/代理生成/Sidecar 冷启动等边界态。
 - 长片（2 小时、500+ 条）滚动性能、虚拟列表、列宽拖拽。
 - 这些不是“设计没做”，而是**必须在真实 Electron 里验证**，留给 Step 3–5。
+
+### 5.6 Step 3 生产截图（真实 Electron，无窗口）
+
+这些不是原型，是 `--screenshot` 从真实应用里取帧（1440×900 @2x，转 JPG）。
+生成命令：`bash tools/shots/capture_matrix.sh --theme light|dark|mincho --states "transcribe review"`
+（沙箱里加 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`）。
+
+| 看什么 | 图 |
+| --- | --- |
+| 转写页·日间校样（1360×838） | [step3-transcribe-light.jpg](images/refactor-2026-11/step3-transcribe-light.jpg) |
+| 转写页·夜间配音 | [step3-transcribe-dark.jpg](images/refactor-2026-11/step3-transcribe-dark.jpg) |
+| 转写页·最小窗口（1080×680，右栏必须在） | [step3-transcribe-light-1080.jpg](images/refactor-2026-11/step3-transcribe-light-1080.jpg) |
+| 外壳 + 核对台（本轮未动核对台本身） | [step3-shell-review-light.jpg](images/refactor-2026-11/step3-shell-review-light.jpg) |
+| 设置 → 外观与朗读（外观三选一 + 字幕字体） | [step3-appearance-light.jpg](images/refactor-2026-11/step3-appearance-light.jpg) |
+| 明朝字幕字体（同一套浅色，只换字幕字） | [step3-cue-mincho.jpg](images/refactor-2026-11/step3-cue-mincho.jpg) |
+
+看四件事：① 标题栏是否横跨整窗、面包屑是否说清「第几段 / 哪一页 / 这一页什么状态」；
+② 三个步骤是否在同一条纸上、左侧 44px 页边是否承担了段号；③ 右栏是否只回答「我现在有什么」；
+④ 底栏是否只剩读数。明朝那张要对比字幕（检查器大句 + 表格日文）已经换成 Hiragino Mincho，
+而配色、字号、行高一个都没动。
 
 ## 6. macOS HIG 审查（apple-design）
 
@@ -332,7 +373,7 @@ updated: 2026-11-25 21:05
 | --- | --- | --- | --- |
 | 1 | 大屏上减少嵌套、保持舒适密度 | `designing-for-macos.md › Best practices`：“Leverage large displays to present more content in fewer nested levels…” | 舞台行 + 全宽表格替代“右侧栏挤窄表格”；不做卡片套卡片 |
 | 2 | 工具栏只放一个主操作，且在右侧 | `toolbars.md › Item groupings`：“Only specify one primary action, and put it on the trailing side of the toolbar.” | 顶栏右侧只留“导出”主按钮；其余进 More |
-| 3 | 工具栏的每个命令都要能在菜单栏找到 | `toolbars.md › Platform considerations › Desktop (macOS)`：“Make every toolbar item available as a command in the menu bar.” | **Step 3 必做**：导出/暂存/查找/侧栏写入菜单，补快捷键说明 |
+| 3 | 工具栏的每个命令都要能在菜单栏找到 | `toolbars.md › Platform considerations › Desktop (macOS)`：“Make every toolbar item available as a command in the menu bar.” | ✅ Step 3 已补：「文件 → 暂存工作草稿 ⌘S / 恢复工作草稿… / 字幕与代理（导入原文·译文 / 压制代理 / 删除两轨）」「显示 → 撤销历史…」；顺手修了 `menu:punct` 在 preload 里没转发、菜单「清理标点…」是死键的旧 bug |
 | 4 | 侧栏不超过两级；别把关键动作放底部 | `sidebars.md › Best practices`：“In general, show no more than two levels…”；“Avoid putting critical information or actions at the bottom of a sidebar.” | 四段是一级；底部只留提示词库/设置，导出不在这里 |
 | 5 | 底栏只放只读信息，不放关键动作 | `windows.md › Platform considerations › Desktop (macOS)`：“Avoid putting critical information or actions in a bottom bar…” | 原型已把“暂存”从底栏移除，改成只读“草稿未暂存 · ⌘S”；保存进菜单/工具栏 |
 | 6 | 表格要有清楚的选中反馈、可读的列头与截断策略 | `lists-and-tables.md › Best practices`：“Provide appropriate feedback when people select a list item.”；“Use descriptive column headings…” | 选中行 tint + 页边朱线；列头 11 px；长文本省略号；保留 30 px 行高 |
@@ -351,7 +392,7 @@ updated: 2026-11-25 21:05
 | 0 | 备份 + 分支 + 产品事实 | ✅ | 备份分支/tag；`feat/ui-redesign`；[PRODUCT.md](../PRODUCT.md) |
 | 1 | 方案 + DESIGN.md + 高保真原型 | ✅ | 本文；[DESIGN.md](../DESIGN.md)；8 张截图；HIG 审查；detector |
 | 2 | 用户拍板（§9 三问） | ✅ 已拍板 | 用户 2026-11-25 确认；见 §9 |
-| 3 | 令牌 + 外壳 + 样板间（建议转写页） | 🚧 本轮 | `app.css` 令牌/基础控件；标题栏/侧栏/底栏；转写页整页；`check:svelte` + 截图 |
+| 3 | 令牌 + 外壳 + 样板间（转写页） | ✅ 完成 | `app.css` 令牌/基础控件；标题栏/侧栏/底栏；转写页整页；§7.3 验证全绿 + §5.6 截图 |
 | 4 | 核对台拆分 + 精修；AI 两页；其余页 | 待做 | 先纯拆分（ReviewView 只降不升）再视觉；AI 三页；设置/边界态 |
 | 5 | 终局审计 + 动效 + 基线 | 待做 | `check` / `check:svelte` / `build` / `verify_*` / `capture_matrix`；基线刷新 |
 
@@ -369,6 +410,73 @@ updated: 2026-11-25 21:05
 **本轮刻意不碰**：`ReviewView.svelte` 与核对台内部（表格 / 检查器 / 波形 / 舞台）、
 `PolishView` / `ReshapeView` / `TranslateView` / `ExportView` 的布局（只改页面标题文案）、
 `core/` 与 `server/`。
+
+### 7.3 Step 3 落地记录（2026-11-25）
+
+**3A 令牌与外观**
+
+- `desktop/renderer/src/app.css` 整体重写：冷纸/纸面/台本三层表面、蓝铅笔/朱笔两色、
+  1px 发丝线、尺寸骨架（标题栏 44 / 底栏 24 / 侧栏 232·52 / 检查器 388 / 行 30 /
+  cue 页边 44 / 波形 84）、字阶（13/19 正文、11/16 数据与标签）、圆角 3/5/7/10。
+  新增 `--rule`（实色发丝线）、`.cue-sheet` / `.cue-margin` / `.cue-mark` 三个 cue 页边原语
+  ——**只落几何与语义，核对台接线在 Step 4**。
+- 外观模型：`lib/themes.ts` 收敛为 `light | dark` + `AppearanceId = auto|light|dark` +
+  `CueFontId = sans|mincho`；`lib/appearance.ts` 放读取/迁移/写 DOM 的纯函数（8 条单测）；
+  `lib/appearanceState.svelte.ts` 放响应式状态与落地，并把解析值镜像回 `app.theme`
+  （核对台波形只认它，避免动 `ReviewView.svelte`）。
+- 主进程：`window:set-theme` → `window:set-appearance`（`nativeTheme.themeSource` 在 auto 时
+  真正设为 `system`）；偏好落 `preferences.appearance`，旧 `preferences.theme` 只读迁移。
+- 设置 → 外观与朗读：三张外观卡（跟随系统 / 日间校样 / 夜间配音）+ 两张字幕字体卡；
+  旧的 `ThemePicker` / `ThemePreviewCard` 删除。`theme-preview.test.mjs` 改成对账两块外观 +
+  断言「明朝只允许声明 `--font-cue`」。
+
+**3B 外壳**
+
+- `App.svelte`：`titlebar` 升到 `.shell` 顶层（横跨整窗），下面才是 `sidebar + main`；
+  原生红绿灯永远落在标题栏左侧 87px 安全区里，侧栏不再为它让位。
+- `Toolbar.svelte` → 标题栏：文档（片名 + 规格 + 代理状态）/ 面包屑（段号 + 页名 + 本页状态）/
+  动作区（引擎胶囊、核对台动作、撤回/重做/历史、外观、检查器）。
+- `Sidebar.svelte`：四段 `01 准备 / 02 核对 / 03 原文 / 04 交付`，段标等宽小字；
+  名字与分组来自新文件 `lib/viewMeta.ts`（标题栏面包屑、菜单、快捷键面板共用一份）。
+- `StatusBar.svelte` 24px 只读；`DraftDock` 只报「已暂存 20:22 · 12 条」，
+  暂存 / 恢复进「文件」菜单（⌘S）。
+- `main.cjs`：红绿灯 `y` 18 → 16（44px 标题栏中线 22 = 灯中线），菜单视图名同步新命名。
+
+**3C 转写页样板间**
+
+- `TranscribeView.svelte`：`PageHeader`（转写 + 任务报告/快捷键）+ 三步（左侧 44px 页边的
+  `01/02/03`）+ 320px 右栏 + 吸附任务条；不再使用卡片。
+- `EngineChoiceCards` → `EngineChoiceList`（两行主力 + 其他引擎 chips）；
+  `RunDock` / `TranscriptState` / `ExpertParamsDrawer` 按新令牌重排。
+- 所有既有行为保持不变：产出三档、写入方式、区间、绝对时间轴、人声分离、格式、
+  双引擎流向、专家参数折叠、任务报告入口。分段控件补 `aria-pressed`。
+
+**验证（全部无窗口）**
+
+```text
+npm run check          ✅
+npm run check:svelte   ✅ 5/5（基线持平）
+npm run build          ✅
+npm run test:main      ✅ 378 passed（新增 appearance 8 条、theme-preview 2 条）
+pytest -q -m "not integration"  ✅ 1058 passed / 2 skipped
+node tools/shots/verify_phase2_shell.mjs     ✅ 43 项（结构/对比度/舞台/紧凑模式）
+node tools/shots/verify_transcribe_flow.mjs  ✅ 21 项（产出/区间/跨页/章节/推荐）
+```
+
+**顺手修的旧问题**
+
+- 菜单「清理标点…」是死键：主进程发了 `menu:punct`，`preload.cjs` 的 `onMenu` 从来没转发。
+- `capture_settings_matrix.sh` 不带 `--user-data-dir`，截图会写用户真实的
+  `~/Library/Application Support/KikuSub`（违反 §0.1）；已隔离，并支持 `KIKUSUB_SHOT_ELECTRON_ARGS`。
+- `capture_matrix.sh` / `capture_ai_workbench.mjs` 的 `--theme mincho` 改走
+  `data-cue-font`（旧参数名与文件名后缀保留）。
+
+**明确留给后面**
+
+- 核对台：表格 44px 页边接线、检查器、波形（Step 4，先纯拆分）。
+- AI 三页 / 导入 / 导出 / 双语 / 设置其余页的视觉（Step 4）；设置左侧页签仍用旧的彩色图标。
+- 元素级 `impeccable detect`（需要打包产物，Step 5）。
+- 真实键盘全路径 / VoiceOver / 菜单逐项点击（无窗口条件下做不到，Step 5 用静默断言补）。
 
 ### 7.2 Step 4 的红线
 
@@ -443,13 +551,17 @@ KIKUSUB_DEV_SEED=tools/shots/seed.json KIKUSUB_SHOT_DELAY=6000 \
 | 2026-11-25 | **三问拍板：接受 Cue Script / 保留两页 / 外观跟随系统 + 独立字幕字体** | 用户正式确认（§9） |
 | 2026-11-25 | **旧版双开共存铁律** | 现役旧版是主力生产工具；新版只能以独立产物名/独立 bundleId/独立数据根并行 |
 | 2026-11-25 | 第三套「明朝墨」配色作废，明朝降为 `--font-cue` | 一套配色只服务一个明暗语义；字体偏好与明暗正交 |
+| 2026-11-25 | 标题栏横跨整窗，侧栏从 y=44 开始 | 红绿灯永远落在标题栏里；消除「竖线穿过黄绿灯」这一整类几何补丁 |
+| 2026-11-25 | 底栏只读 + 暂存/恢复进「文件」菜单（⌘S） | HIG：关键动作不放底栏；每个工具栏能力都要有菜单命令 |
+| 2026-11-25 | 44px cue 页边只落 CSS 原语，核对台 Step 4 接线 | 本轮不动 `ReviewView.svelte`，但几何/语义先冻结，避免到时候各页各发明 |
+| 2026-11-25 | 转写页三步各占 44px 页边写段号 | 段号不是装饰：三步有先后；同时让签名动作在样板间第一次出现 |
 
 ## 11. 交接清单（新会话）
 
 1. `git status` 必须在 `feat/ui-redesign`、干净；备份分支/tag 已存在且未动（§0.1）。
 2. 读本文 §0.1、§1、§2、§7、§9；读 [DESIGN.md](../DESIGN.md) 的 Colors/Typography/Layout/Components。
-3. Step 3 已完成的部分从 §7 状态列读起；**不要直接改 ReviewView**，核对台留给 Step 4
-   （先纯拆分再精修，见 §7.2）。
+3. Step 3 已完成（§7.3 有落地记录与验证命令）；**下一步是 Step 4**，且**不要直接改
+   ReviewView**：先纯拆分再精修（§7.2），拆分那一步单独 commit、逐像素比对。
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。
