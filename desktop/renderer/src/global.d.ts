@@ -73,6 +73,8 @@ declare global {
       getSidecar(): Promise<SidecarHandshake | null>;
       onSidecarReady(cb: (payload: SidecarHandshake) => void): () => void;
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
+      /** 手动重启内核（崩溃自动重连用完之后的手动出口）。 */
+      restartSidecar(): Promise<boolean>;
       pickMedia(): Promise<string | null>;
       pickSubtitle(defaultDir?: string, title?: string): Promise<string | null>;
       /** TTS 克隆音色的参考音频（wav/mp3/…），返回绝对路径。 */

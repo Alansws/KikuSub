@@ -231,6 +231,23 @@
     };
   });
 
+  /**
+   * 「内核未连接」遮罩上的手动出口：崩溃自动重连 3 次用完之后，用户不该只能重启 App。
+   * 成功只是把遮罩换回「正在启动转写内核…」；真正的连接状态仍由 sidecar:ready 决定。
+   */
+  let retrying = $state(false);
+  async function retryKernel() {
+    retrying = true;
+    try {
+      const ok = await window.kikusub.restartSidecar();
+      if (ok) app.connecting = true;
+    } catch {
+      /* 主进程拒绝（正在退出等）：保持遮罩，不假装成功 */
+    } finally {
+      retrying = false;
+    }
+  }
+
   function finishFirstRun() {
     if (setup) setup = { ...setup, firstRun: false };
   }
@@ -806,7 +823,13 @@
     <div class="overlay-card error">
       <Icon name="warn" size={18} />
       <div>内核未连接</div>
-      <div class="hint">状态栏会显示重连状态；持续失败请到「设置 → 日志与诊断」复制日志反馈。</div>
+      <div class="hint">
+        崩溃后会自动重连 3 次；都没成时点下面这颗按钮再拉一次。持续失败请到
+        「设置 → 日志与诊断」复制日志反馈。
+      </div>
+      <button class="btn retry" onclick={retryKernel} disabled={retrying}>
+        {retrying ? '正在重启内核…' : '重启内核'}
+      </button>
     </div>
   </div>
 {/if}
@@ -860,6 +883,9 @@
     font-size: 12px;
     max-width: 260px;
     text-align: center;
+  }
+  .overlay-card .retry {
+    margin-top: var(--sp-2);
   }
   .spinner {
     width: 18px;

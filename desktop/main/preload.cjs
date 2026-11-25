@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('kikusub', {
   getSidecar: () => ipcRenderer.invoke('sidecar:get'),
   onSidecarReady: (cb) => on('sidecar:ready', cb),
   onSidecarDown: (cb) => on('sidecar:down', cb),
+  /** 用户在「内核未连接」遮罩上手点「重启内核」。 */
+  restartSidecar: () => ipcRenderer.invoke('sidecar:restart'),
 
   // 原生对话框
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),

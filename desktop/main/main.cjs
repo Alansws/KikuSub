@@ -1468,6 +1468,20 @@ ipcMain.handle('dialog:pick-directory', (_e, payload) =>
 
 ipcMain.handle('sidecar:get', () => sidecar);
 
+/**
+ * 用户手动重试内核（「内核未连接」遮罩上的按钮）。
+ *
+ * 崩溃自动重连只给 3 次（见 sidecar:down），用完之后只剩一句「请重启应用」。
+ * 这里把计数清零再拉一次：不重启整个 App 就能救回一个卡死的内核。
+ */
+ipcMain.handle('sidecar:restart', () => {
+  if (quitting) return false;
+  sidecarRestarts = 0;
+  restartPending = false;
+  restartSidecar();
+  return true;
+});
+
 // ---- 首次启动 / 模型目录 ----
 ipcMain.handle('setup:get', () => ({
   firstRun: firstRunPending,
