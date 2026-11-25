@@ -1219,13 +1219,14 @@ bash tools/pack/build_trial.sh            # → build/pack-next/KikuSub-Next.app
 | `npm run check` | ✅ 0 error |
 | `npm run check:svelte` | ✅ 4/4（基线 4，未上升） |
 | `npm run build` | ✅ |
-| `npm run test:main` | ✅ 见下表 |
-| `pytest -q` | ✅ 1096 passed / 2 skipped |
-| `tools/shots/verify_*.mjs` | ✅ 27/27（含 2 个浮层模式） |
+| `npm run test:main` | ✅ **402** |
+| `pytest -q` | ✅ **1096 passed / 2 skipped** |
+| `tools/shots/verify_*.mjs` | ✅ **28/28**（27 个脚本；`verify_review_overlays` 的 menu / dialog 各算一次） |
+| `capture_matrix --compare` | ✅ transcribe / review / export / settings 全 `average:inf`；import 45.2dB（该页有运行期时间戳） |
 | `verify_phase2_shell` 对比度 | 亮 15.75 / 5.66 / 4.76 / 5.34 / 发丝 1.33；暗 12.03 / 5.71 / 6.28（正文 / 11px / 蓝铅笔） |
 | 无窗口截图矩阵 | 10 个状态 × 明暗两套 + 1080×680 最小窗口 + 朗读面板 |
 
-**基线更新**：`docs/images/shots/baseline/` 全部 21 张换成新外观。
+**基线更新**：`docs/images/shots/baseline/` 全部 21 张换成新外观（单独一个 `chore(shots)` commit）。
 
 **新增取证截图**（无窗口，全部 `read_image` 自检过）：
 
@@ -1237,6 +1238,29 @@ bash tools/pack/build_trial.sh            # → build/pack-next/KikuSub-Next.app
 - [step7-light-transcribe.jpg](images/refactor-2026-11/step7-light-transcribe.jpg)
 - [step7-light-export.jpg](images/refactor-2026-11/step7-light-export.jpg)
 - [step7-light-inspector.jpg](images/refactor-2026-11/step7-light-inspector.jpg)（朗读面板重排）
+
+#### 九、试用版重新打包（Step 7 收口）
+
+Python 一行未改，所以 sidecar 不需要重打；只重装前端与装配：
+
+```bash
+bash tools/pack/build_trial.sh     # → build/pack-next/KikuSub-Next.app（1.4G，02:19 完成）
+```
+
+- 身份未变：`com.kikusub.desktop.next` / CFBundleName `KikuSub-Next` /
+  包内 `app-isolation.json` 仍是 `{appName: KikuSub-Next, dataDirName: KikuSub-Next}` /
+  数据根 `~/Library/Application Support/KikuSub-Next`。
+- **现役隔离核对**（装配前后各取一次）：
+  `build/pack/KikuSub.app/Contents/Info.plist` sha256 恒为 `f0afca4a…4269e`；
+  `~/Library/Application Support/KikuSub` 的目录 mtime 未变，
+  根目录 4 个 `.json` 的 sha256 前后逐字节一致；
+  现役进程（PID 44777 及其 helper）在装配后仍在运行。
+- **无窗口冒烟**：用 `KIKUSUB_ISOLATION_ROOT=/tmp/trial-smoke/root` 把数据根挪到临时目录后跑
+  `…/MacOS/KikuSub-Next --no-sandbox --screenshot=…`，首启向导正常出现，
+  且「模型目录 / 数据与输出目录」都指向 `/tmp/trial-smoke/root`（真实数据根未被这次验证写入）。
+- 装配脚本的既有行为：若 `KikuSub-Next.app` 还有一个在跑的旧实例，会先 TERM、
+  等不到退出再 KILL（本次强制结束了一个仍在运行/停在退出清场里的旧实例）。
+  工作草稿是逐次自动落盘的（`*.autosave_draft.srt`），重新打开即可接着干。
 
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
