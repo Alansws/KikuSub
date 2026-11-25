@@ -1,6 +1,6 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-25 21:38
+updated: 2026-11-25 21:50
 ---
 # KikuSub 前端重塑（2026-11）
 
@@ -57,9 +57,10 @@ updated: 2026-11-25 21:38
 | **Step 3B 外壳** | ✅ 完成 | 整幅标题栏 44px、侧栏 232/52 四段、底栏 24px 只读、菜单补齐 |
 | **Step 3C 转写页样板间** | ✅ 完成 | 01/02/03 + 44px 页边 + 右栏 + 任务条；见 §5.6 |
 | **Step 3 验收修正** | ✅ 完成 | 日间蓝提纯为钴蓝 `#0B63E5`；分段选中态改白色凸起胶囊；选中卡片改纸白 + 蓝边；见 §7.3.1 |
+| **Step 4.1 纯结构拆分** | ✅ 完成 | ReviewView 2583 → 1769；查找 / 浮层 / 纯计算分到 lib 与 components；0.000000% 像素差；见 §7.4 |
 | 生产验证 | ✅ 全绿 | `check` / `check:svelte`（5/5 基线）/ `build` / `test:main`（378）/ `pytest`（1058）/ `verify_phase2_shell`（46 项） |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
-| 核对台 | ⛔ 未动 | 留到 Step 4（先纯拆分再精修） |
+| 核对台 | 🟡 4.1 已拆分 | 视觉精修留 4.2；4.1 只搬结构，截图逐像素一致 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
 
 ### 1.1 这轮和上一轮的区别
@@ -411,7 +412,7 @@ Step 3 把 `--ink-3` 从 `#5E6A72`（5.45:1）压深到 `#566168`（6.35:1 on �
 | 1 | 方案 + DESIGN.md + 高保真原型 | ✅ | 本文；[DESIGN.md](../DESIGN.md)；8 张截图；HIG 审查；detector |
 | 2 | 用户拍板（§9 三问） | ✅ 已拍板 | 用户 2026-11-25 确认；见 §9 |
 | 3 | 令牌 + 外壳 + 样板间（转写页） | ✅ 完成 | `app.css` 令牌/基础控件；标题栏/侧栏/底栏；转写页整页；§7.3 验证全绿 + §5.6 截图 |
-| 4 | 核对台拆分 + 精修；AI 两页；其余页 | 待做 | 先纯拆分（ReviewView 只降不升）再视觉；AI 三页；设置/边界态 |
+| 4 | 核对台拆分 + 精修；AI 两页；其余页 | 🟡 4.1 完成，4.2 待做 | 4.1：ReviewView 2583 → 1769，0.000000% 像素差（§7.4）；4.2 才做视觉 |
 | 5 | 终局审计 + 动效 + 基线 | 待做 | `check` / `check:svelte` / `build` / `verify_*` / `capture_matrix`；基线刷新 |
 
 ### 7.1 Step 3 的具体顺序
@@ -522,11 +523,55 @@ node tools/shots/verify_transcribe_flow.mjs  ✅ 21 项（产出/区间/跨页/�
 
 ### 7.2 Step 4 的红线
 
-- **4.1 先拆分，不改 CSS**：把 ReviewView 的顶部运控、右栏检查器、波形工具条拆成子组件；
-  纯逻辑进 `lib/`；`tests/test_big_file_budget.py` 只降不升；单独 commit。
+- **4.1 先拆分，不改 CSS**：✅ 已完成（§7.4）。顶部运控 / 右栏检查器 / 波形工具条此前已是子组件；
+  本轮把剩下的查找会话、右键菜单、新建音色浮层与纯 cue 计算分出去；`tests/test_big_file_budget.py` 只降不升。
 - **4.2 再精修**：按转写页样板重排核对台；核心区尺寸/行高/单击阈值/duration/69 不动。
 - **4.3 AI 两页**：锁轴先做（风险低），重排后做（风险高）；三栏同基线、diff 蓝/朱、应用条。
 - **4.4 其余页**：双引擎、双语、导出、设置、导入；最后补空态/失败/加载。
+
+### 7.4 Step 4.1 落地记录：ReviewView 纯结构拆分（2026-11-25）
+
+**目标**：只拆结构，不碰视觉；守住红线 11（两个大文件只降不升）与红线 6（交互零回归）。
+拆前 **2583** 行，拆后 **1769** 行（−814，−31.5%）；`store.svelte.ts` 3217 未动。
+
+**两个 commit**
+
+1. `b65b53e` 纯逻辑先抽（单独 commit，行为不变）：
+   - `lib/reviewCues.ts`：二分查时间、画面分块拼行、硬换行拆分 / 表格单行化；
+     新增 6 条 `node --test`（`time === end` 不算命中、双语分块、译文缺失回退等）。
+   - `lib/reviewViewport.ts`：`snapshotOf()` 收口现场快照；
+     `lib/waveformCanvas.ts`：`binsForWidth()` 收口包络采样点数。
+2. `2b964fb` 结构拆分（本记录的上一条 commit）：
+   - `components/review/ReviewContextMenu.svelte`：右键菜单（切割 / 合并 / 添加 /
+     新建音色 / 试听）；打开位置与「合并目标」仍由 ReviewView 判定。
+   - `components/review/ReviewVoiceDialog.svelte`：「以此句音频新建音色」浮层，
+     含命名 / 参考文本 / 提取请求 / 焦点管理。
+   - `lib/reviewFind.svelte.ts`：查找替换整轮会话（命中 / 跳过 / 当前处 / 替换全部）；
+     纯计算仍在 `lib/findMatches.ts`。
+   - `lib/portal.ts`：两个浮层共用的 body portal（修过「菜单离鼠标太远」）。
+   - `tests/test_big_file_budget.py`：ReviewView 预算 **2583 → 1769**。
+   - `desktop/test/svelte-check-baseline.json`：**5 → 4**（find props 类型推断收敛，只降不升）。
+
+**验收（全部无窗口，独立 `--user-data-dir`）**
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run check` | ✅ |
+| `npm run check:svelte` | ✅ **4/4**（基线 4，较 5 下调 1） |
+| `npm run build` | ✅ |
+| `npm run test:main` | ✅ **384**（378 + reviewCues 6） |
+| `pytest -q -m "not integration"` | ✅ **1058 passed / 2 skipped**（31 deselected） |
+| `verify_review_transport.mjs` | ✅ 全部通过 |
+| `verify_reshape_flow.mjs` | ✅ 全部通过 |
+| `verify_review_overlays.mjs --mode menu/dialog` | ✅ **12 项 × 2**（新增） |
+| 拆分前后像素 | ✅ **0 / 4,558,720 = 0.000000%**（PSNR `inf`；转写页同样 `inf`） |
+
+像素比对方法：同一 `capture_matrix.sh --theme light --states "review transcribe"`、
+同种子、1440×900、`--delay 8000` 让工具栏过渡落定；PNG 解码成 RGB24 后逐字节比较。
+`--delay 4500` 偶发 13 个像素的工具栏描边过渡差，属于截图时机而非代码；8s 后稳定为 0。
+
+**明确不做**：不动核对台的布局、颜色、行高、单击阈值、`duration/69`、50 步历史；
+这些留给 Step 4.2。新组件只搬现有 DOM / CSS，默认页面与浮层截图已 `read_image` 目检。
 
 ## 8. 验收矩阵
 
@@ -547,6 +592,10 @@ bash tools/shots/capture_matrix.sh --out /tmp/kikusub-shots
 # 或单页
 KIKUSUB_DEV_SEED=tools/shots/seed.json KIKUSUB_SHOT_DELAY=6000 \
   npx electron . --screenshot=/tmp/kikusub-shot.png
+
+# 核对台浮层（Step 4.1 起）
+node tools/shots/verify_review_overlays.mjs --mode menu
+node tools/shots/verify_review_overlays.mjs --mode dialog
 ```
 
 ### 8.2 视觉验收
@@ -558,7 +607,7 @@ KIKUSUB_DEV_SEED=tools/shots/seed.json KIKUSUB_SHOT_DELAY=6000 \
 
 ### 8.3 红线复述
 
-- `ReviewView.svelte` / `store.svelte.ts` 只降不升；先拆逻辑/子组件。
+- `ReviewView.svelte`（1769）/ `store.svelte.ts`（3217）只降不升；先拆逻辑/子组件。
 - 单击 vs 4 px 框选、`duration/69` 缩放、50 步统一历史、`setExport*`、无窗口、无 200%。
 - 主题只走 `html[data-theme]` 令牌；组件不写主题色；分隔线不用 5% 灰。
 
@@ -598,13 +647,14 @@ KIKUSUB_DEV_SEED=tools/shots/seed.json KIKUSUB_SHOT_DELAY=6000 \
 | 2026-11-25 | 44px cue 页边只落 CSS 原语，核对台 Step 4 接线 | 本轮不动 `ReviewView.svelte`，但几何/语义先冻结，避免到时候各页各发明 |
 | 2026-11-25 | 转写页三步各占 44px 页边写段号 | 段号不是装饰：三步有先后；同时让签名动作在样板间第一次出现 |
 | 2026-11-25 | **日间蓝提纯 `#2D5FA6 → #0B63E5`；分段改白色凸起胶囊；选中卡改纸白 + 蓝边** | 用户验收：旧蓝脏暗；收回大面积半透明蓝底，蓝色只聚焦主操作 / 圆点 / 关键指示器 |
+| 2026-11-25 | **Step 4.1：ReviewView 先抽纯逻辑，再拆浮层 / 查找会话** | 2583 → 1769；拆分前后 0.000000% 像素差；4.2 才做视觉精修 |
 
 ## 11. 交接清单（新会话）
 
 1. `git status` 必须在 `feat/ui-redesign`、干净；备份分支/tag 已存在且未动（§0.1）。
 2. 读本文 §0.1、§1、§2、§7、§9；读 [DESIGN.md](../DESIGN.md) 的 Colors/Typography/Layout/Components。
-3. Step 3 已完成并通过验收修正（§7.3 落地记录、§7.3.1 蓝色修正，截图已重拍）；**下一步是 Step 4**，且**不要直接改
-   ReviewView**：先纯拆分再精修（§7.2），拆分那一步单独 commit、逐像素比对。
+3. Step 3 与 **Step 4.1 均已完成**（§7.3 / §7.3.1 / §7.4）；**下一步是 Step 4.2 视觉精修**。
+   不要再把逻辑塞回 ReviewView；4.1 的 0.000000% 像素基线是 4.2 的起点，视觉改动要单独 commit。
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。
