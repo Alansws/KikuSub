@@ -1,10 +1,18 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-26 00:58
+updated: 2026-11-26 01:59
 ---
 # KikuSub 前端重塑（2026-11）
 
-> **状态：Step 6 真机实测收口完成（2026-11-26）。** Step 3、4.1、4.2、4.2.1、4.3、5 均已验收；
+> **状态：Step 7 视觉终局完成（2026-11-26）。** Step 3、4.1、4.2、4.2.1、4.3、5、6 均已验收；
+> 用户在真机上跑完 24 分钟全片后提出 6 条视觉/交互整改，本轮全部落地：
+> 暗色改 FCP 式四阶碳灰（§7.10 一）、亮色翻转成纸白台面 + 凹陷填充（一）、
+> 标题栏外观一键直切（二）、侧栏去 ①②（三）、朗读面板重排（四）、导出页三处细节（五）、
+> 单栏页面居中（六）；顺带修掉紧凑模式四条从未生效的死样式（七）。
+>
+> 以下是 Step 6 的记录：
+>
+> Step 3、4.1、4.2、4.2.1、4.3、5 均已验收；
 > 用户用 `KikuSub-Next.app` 跑通真实片源后报回 **1 个崩溃 Bug + 4 处界面/排版问题**，
 > 本轮全部根治：ASR 空闲卸载租约（§7.9 一）、导出页/转写页去套娃（§7.9 二 1-2）、
 > 朱红质检徽标（二 3）、朗读 ⚙ 面板 348px 溢出（二 4）、检查器底部收尾区（二 5）。
@@ -79,6 +87,12 @@ updated: 2026-11-26 00:58
 | **双开试用版** | ✅ 已打包 | `build/pack-next/KikuSub-Next.app` / `com.kikusub.desktop.next` / 独立数据根；见 §7.8 |
 | **真机崩溃 Bug（Anime Whisper 第二版）** | ✅ 已根治 | 空闲卸载与跑片竞态；`EngineIdleReleaser.hold()` 租约 + 解码自愈兜底；见 §7.9 一 |
 | **Step 6 去套娃 / 执行栏 / 徽标 / 溢出** | ✅ 完成 | 导出页与转写页零白框套娃；转写页 Docked 执行栏三态；质检朱红胶囊；朗读面板两行布局；见 §7.9 二 |
+| **Step 7 色板重写（FCP 碳灰 / 纸白台面）** | ✅ 完成 | 暗色四阶 `stage→canvas→inspector→paper→raise`；亮色 `canvas=#FFF` + `well` 凹陷填充；新增两条命名规则；见 §7.10 一 |
+| **Step 7 标题栏一键直切** | ✅ 完成 | `flipAppearance()` 两态翻转，`auto` 只留设置；补一条单测；见 §7.10 二 |
+| **Step 7 侧栏去 ①②** | ✅ 完成 | `ordinal` 字段整条删除；页内指路保留文案；见 §7.10 三 |
+| **Step 7 朗读面板重排** | ✅ 完成 | 去重复标题与 `×`、`管理` 换铅笔、两行等分网格、面板退成 well；见 §7.10 四 |
+| **Step 7 导出页细节 + 居中** | ✅ 完成 | 发丝线呼吸、裸蓝字改 `.btn.soft`、单栏页面 `--measure-page` 居中；见 §7.10 五/六 |
+| **Step 7 死样式修复** | ✅ 完成 | 紧凑模式 `.player/.table-area/.transport` 从父组件搬回各自组件；ReviewView 1764；见 §7.10 七 |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
@@ -1109,6 +1123,121 @@ bash tools/pack/build_trial.sh            # → build/pack-next/KikuSub-Next.app
 - [step6-review-inspector-dark.jpg](images/refactor-2026-11/step6-review-inspector-dark.jpg)（夜间同屏）
 - [step6-export-light.jpg](images/refactor-2026-11/step6-export-light.jpg) / [step6-export-dark.jpg](images/refactor-2026-11/step6-export-dark.jpg)（日/夜）
 
+### 7.10 Step 7 视觉终局：FCP 式深碳灰 + 纸白台面（2026-11-26）
+
+用户用 `KikuSub-Next.app` 实机跑完 24 分钟全片（246 条一次通过，空闲卸载崩溃已根治）后，
+对**配色质感、单栏布局与 3 处交互细节**提出 6 条明确整改。这一轮只动渲染层的令牌、页面骨架
+与控件语法：**没有碰 `core/` / `server/`，没有新增功能**。
+
+#### 一、色板重写：暗色 = 剪辑台碳灰，亮色 = 纸白台面（§1、§2）
+
+**问题**：暗色四阶只差 5–7 个色阶，缩到一张截图里就是「一块近黑到底」；亮色则是
+「冷灰画布 `#EDF1F5` + 纯白卡片」，于是每个分区都读成「灰底上贴了一张白框」。
+
+**决定（DESIGN.md 新增两条命名规则）**：
+
+- **The No White Frame Rule**：白底只允许出现在**台本纸 / 浮层 / 输入框**三类对象上；
+  页内分区一律「标题 + 发丝线」或**凹陷填充（well）**。全站不再有白框叠白框、也没有灰底贴白框。
+- **The Two-State Switch Rule**：界面里的开关必须一次点击就到达另一面（见 二）。
+
+**亮色令牌（翻转层级）**：`--canvas #FFFFFF`（纸白台面）/ `--paper #F0F2F4`（铬件：
+侧栏 / 标题栏 / 底栏 / 时间轴坞）/ `--bg-inspector #F7F8F9`（第三块）/ `--raise #FFFFFF`
+（台本纸 / 浮层 / 输入框）/ `--well = --fill`（5% 中性墨，无边框的凹陷填充）/
+`--rule #DBE1E6`（白纸上的发丝线）。三块并排时每两块之间都有可读明度差。
+
+**暗色令牌（FCP 式四阶）**：`--stage-bg #0B0D0F`（画面所在的房间，全应用最深）→
+`--canvas #1A1C1F`（工作区）→ `--bg-inspector #1F2226`（检查器）→ `--paper #24272B`
+（铬件）→ `--raise #2C3136`（台本纸 / 浮层）。相邻两阶差 ~9–11 个色阶：
+够分区、不够成条纹。**暗色的凹陷填充是「提一档」**（6.5% 白）——同一个令牌在暗色里
+反向工作，因为暗底上「可点的一块」是更亮的一块。
+
+**组件层同步改造**（不再逐处写主题色，全部走令牌）：输入框 / 下拉 / 分段槽 / 选项块 /
+设置分组 / 空态 / 模板卡 / 引擎行改成 wells；`.card` 退成凹陷说明块；新增 `.btn.soft`
+（Tinted 次级小按钮）；页头 ghost 动作补淡填充（它们原来是裸字）。
+
+#### 二、标题栏外观按钮：一键直切（§3，用户第 2 条）
+
+旧实现 `auto → light → dark → auto` 循环：跟随系统且系统是浅色时，想变暗要点两下。
+现在 `flipAppearance(current: ThemeId)` 取**解析后的明暗**翻面，一次点击即到另一面；
+`auto` 只留在「设置 → 外观」。图标跟着当前面（☀︎/☾），`title` 直接写「点击切到夜间配音」。
+`themes.ts` 的 `nextAppearance` 删除，`test/appearance.test.mjs` 补一条两态直切断言。
+
+#### 三、侧栏去掉 `①` `②`（§4，用户第 3 条）
+
+`viewMeta.ts` 的 `ordinal` 字段整条删除，`Sidebar.svelte` 的 `.sb-ord` 与它的样式一起删掉。
+页内两句互相指路保留，但去掉悬空的编号（`断句本身错了？去重排润色 →`）；
+`PromptView` 两个按钮的 `title` 改成带快捷键的口径。侧栏回到统一的「干净图标 + 纯净标题」。
+
+#### 四、朗读 ⚙ 面板重排（§5，用户第 4 条）
+
+- 删掉面板里重复的 `朗读` 标题（触发按钮就在上一行）与 `×`；只留一颗 20px 高的
+  **「收起」文字按钮**，不再有两个关闭动作叠在一起。
+- `管理` 的图标从 `gear`（与触发按钮同一个齿轮）换成 `pencil`（编辑这个音色）。
+- 内容改成**等分网格铺满宽度**：第一行 `1.0× | 上传 | 截取`（三列等分），第二行
+  `音色库 1 | 管理`（两列等分）；下拉与按钮同高同语言（24px + 一层细描边），
+  右侧不再空出一块。
+- 面板本体从「白卡 + 描边」退成 **well**（检查器里的白框套白框就此消失）。
+- `verify_tts_panel_fit.mjs` 11 项全绿（1080×680、348px 检查器）。
+
+#### 五、导出页三处细节（§6，用户第 5 条）
+
+1. **主按钮下方的发丝线**：`.sec` 原来只有上内边距，下一段的 `border-top` 直接贴住
+   「导出字幕」的底边。改成线上下各留生气（上 20 / 下 24），按钮不再撞线。
+2. **孤立的裸蓝字链接**：「去双语翻译」收进一条完整的提示条（well + 内嵌 `.btn.soft`）；
+   `最近：<文件名>` 从一个蓝链接变成等宽淡灰胶囊（它是读数不是动作）；
+   转写页「管理引擎…」由 ghost 改为 `.btn.soft`。同类孤立的页头动作（任务详报 /
+   回到核对台 / 去转写页…）统一补淡填充（`PageHeader` 里一条 scoped 规则），
+   标题栏里的图标 ghost 仍保持透明。
+3. 顺查全站：`.mode / .preset / .style-preset / .appearance-card / .font-card /
+   .aiw-card / .aiw-blank-card / .aiw-empty / PromptView 的 .card / .set-group /
+   .voice-list / .voice-panel` 全部换成「只保留一层」的语法。
+
+#### 六、单栏页面居中（§7，用户第 6 条）
+
+- 新增 `--measure-page: 1040px` + `--measure-card: 760px` 两个令牌，导入 / 导出 /
+  提示词库 / 设置 / 任务详报五个单栏页面统一 `justify-content: center`。
+  因为**共用同一个 max-width**，它们在同一窗口宽度下仍然共享同一条左缘——
+  原先把「左对齐」当解法的那个理由（各页 1120 / 1000 / 960 三档漂移）不再成立。
+- 转写页是唯一的双栏页：正文 1120 居中，页头补一条 `max-width: 1120px` 让它与正文同左缘
+  （原来标题比正文左偏一个滚动条宽度）。
+- AI 三页（锁轴 / 重排 / 双语翻译）是**满屏网格**，表格保持通栏；它们的页标题行
+  页边从 14px 收到 24px，与其它页面同一条左缘；三页的空态（`.aiw-empty` /
+  `.aiw-blank-card`）改成居中的 well 块。
+
+#### 七、顺手修掉的一个真实缺陷（滚动条宽度级别的死代码）
+
+`ReviewView.svelte` 的紧凑模式媒体查询里写着 `.player / .table-area / .transport /
+.tl-tools` 四条规则，但这些元素都在子组件里——**Svelte 的 scoped 样式跨不过组件边界**，
+所以从 Step 4.1/4.2 拆组件起它们就再没生效过（紧凑模式的「播放器按一屏定宽」与
+「表格保底 200px」实际上一直没上）。本轮把这四条搬回 `ReviewStage` / `ReviewTable` /
+`ReviewTransport`，删掉父组件里的死规则（ReviewView 1775 → 1764，预算 1769 之内）。
+
+#### 八、2026-11-26 Step 7 复跑
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run check` | ✅ 0 error |
+| `npm run check:svelte` | ✅ 4/4（基线 4，未上升） |
+| `npm run build` | ✅ |
+| `npm run test:main` | ✅ 见下表 |
+| `pytest -q` | ✅ 1096 passed / 2 skipped |
+| `tools/shots/verify_*.mjs` | ✅ 27/27（含 2 个浮层模式） |
+| `verify_phase2_shell` 对比度 | 亮 15.75 / 5.66 / 4.76 / 5.34 / 发丝 1.33；暗 12.03 / 5.71 / 6.28（正文 / 11px / 蓝铅笔） |
+| 无窗口截图矩阵 | 10 个状态 × 明暗两套 + 1080×680 最小窗口 + 朗读面板 |
+
+**基线更新**：`docs/images/shots/baseline/` 全部 21 张换成新外观。
+
+**新增取证截图**（无窗口，全部 `read_image` 自检过）：
+
+- [step7-dark-review.jpg](images/refactor-2026-11/step7-dark-review.jpg)（碳灰四阶 + 检查器 + 台本表）
+- [step7-dark-transcribe.jpg](images/refactor-2026-11/step7-dark-transcribe.jpg)
+- [step7-dark-import.jpg](images/refactor-2026-11/step7-dark-import.jpg)
+- [step7-dark-export.jpg](images/refactor-2026-11/step7-dark-export.jpg)
+- [step7-light-import.jpg](images/refactor-2026-11/step7-light-import.jpg)（纸白台面 + 居中）
+- [step7-light-transcribe.jpg](images/refactor-2026-11/step7-light-transcribe.jpg)
+- [step7-light-export.jpg](images/refactor-2026-11/step7-light-export.jpg)
+- [step7-light-inspector.jpg](images/refactor-2026-11/step7-light-inspector.jpg)（朗读面板重排）
+
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
 > 本节此前是三个待问项；现已冻结为决定，后续会话不再重复询问。
@@ -1170,15 +1299,24 @@ bash tools/pack/build_trial.sh            # → build/pack-next/KikuSub-Next.app
 | 2026-11-26 | 选项块（导出形式 / 字幕样式 / 码率）只留一层描边 | 白卡叠白卡时选择项读成「一张张贴纸」；一层描边 + 悬停淡底即可表达可选 |
 | 2026-11-26 | 转写页执行栏改成 pane 内最后一个 flex 子项（Docked），不再 sticky-in-scroll | sticky 在滚动容器内部 + 半透明模糊底色 = 贴在灰画布上的白条 |
 | 2026-11-26 | 「质检待核」数字改朱红微胶囊，「章节」计数仍是等宽灰数字 | 前者是「要你动手」，与页边待核朱点同义；后者是纯读数。DESIGN 里「计数不是徽标」的规则据此加一个例外 |
+| 2026-11-26 | **暗色改成 FCP 式四阶碳灰（stage→canvas→inspector→paper→raise）** | 原来的四阶只差 5–7 个色阶，截图里读成「一块近黑到底」；剪辑台的多阶灰让画面与波形自然跳出来 |
+| 2026-11-26 | **亮色翻转：台面纸白、选项块/信息条/输入区改无边框凹陷填充** | 用户原话「灰底上贴白框」「白框套白框」；白底只留台本纸/浮层/输入框 |
+| 2026-11-26 | 标题栏外观 = 两态直切，`auto` 只留设置页 | 旧三态循环让「跟随系统 + 系统浅色」的用户要点两下才变暗 |
+| 2026-11-26 | 侧栏删除 `①` `②`（`ordinal` 字段一并删） | 带圈数字与线性图标挤在一列，读起来像两个图标叠在一起 |
+| 2026-11-26 | 朗读面板只留一颗「收起」，`管理` 用铅笔 | 同一面板里出现两个关闭动作、两个齿轮，是「控件撞车」 |
+| 2026-11-26 | 单栏页面统一 `--measure-page` 居中（1040 / 导入 760） | 大窗口下贴左 + 右侧空白读成没做完；共用同一 max-width 就不会再漂左缘 |
+| 2026-11-26 | 孤立次级动作一律 `.btn.soft`（或整条提示条内嵌按钮） | 裸蓝字飘在行末既不像动作、又抢主按钮的蓝 |
 | 2026-11-26 | `.tts-panel` 必须 `min-width: 0`，动作按钮拆两行 | `flex: 1 0 100%` + 自动最小尺寸（min-content）会把 363px 的面板顶出 348px 检查器 |
 
 ## 11. 交接清单（新会话）
 
 1. `git status` 必须在 `feat/ui-redesign`、干净；备份分支/tag 已存在且未动（§0.1）。
 2. 读本文 §0.1、§1、§2、§7、§9；读 [DESIGN.md](../DESIGN.md) 的 Colors/Typography/Layout/Components。
-3. Step 3、Step 4.1、Step 4.2、**Step 4.2.1、Step 4.3 四组均已完成**（§7.3 / §7.3.1 /
-   §7.4 / §7.5 / §7.5.1 / §7.6）。不要再把逻辑塞回 ReviewView；每一步的视觉改动各自成 commit。
-   **已知遗留：无**——`verify_chapter_edge` 已于 2026-11-26 修绿（§7.8）。
+3. Step 3、Step 4.1、Step 4.2、**Step 4.2.1、Step 4.3 四组、Step 5、Step 6、Step 7 均已完成**
+   （§7.3 / §7.3.1 / §7.4 / §7.5 / §7.5.1 / §7.6 / §7.8 / §7.9 / §7.10）。
+   不要再把逻辑塞回 ReviewView；每一步的视觉改动各自成 commit。
+   **已知遗留：无**——`verify_chapter_edge` 已于 2026-11-26 修绿（§7.8）；
+   紧凑模式四条死样式已于 Step 7 归位（§7.10 七）。
    双开试用版路径与试用注意事项见 §7.8。
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放

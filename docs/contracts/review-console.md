@@ -69,20 +69,27 @@
   不应依赖“先敲空格开始播放”。
 - 字幕轨道配色走 `app.css` 的 `--cue-lane / --cue-wash / --cue-block / --cue-block-hover /
   --cue-block-active / --cue-edge`，亮暗两套；禁止退回 `--separator` 那种 5% 灰。
-- **主题是「令牌 + 注册表」，不是组件分支**：外观 id 只有 `light` / `dark`（青空，浅 + 深）
-  与 `mincho`（明朝墨，单色），落在 `<html data-theme>` 上；名字、所属主题与 scheme 的映射在
-  `renderer/src/lib/themes.ts`，切换入口是设置页「主题 / 明暗」。持久化走
-  `localStorage['kikusub.theme']`，另用 `kikusub.mode` 记住青空上次的明暗（切回青空时恢复）。
-  **加主题 = `app.css` 写一块 `html[data-theme='<id>']` 覆盖 + 注册表加一条**，组件里不要再写
-  `data-theme` 判断。字幕字体是 `--font-cue`（只有主题换它：明朝墨用明朝，译文轨仍走
-  `--font-sans`），主操作实心色是 `--btn-primary-bg`、开关/勾选/滑杆的「开」色是
-  `--control-on`，两者当前都等于 accent（**主题色统一**：按钮、滑杆、开关都跟着主题走，
-  不要再给某套主题单独换成墨色——产品上已经否过一次）。
+- **主题是「令牌 + 注册表」，不是组件分支**（2026-11-25 起）：**偏好** 有三个值
+  `auto` / `light` / `dark`，**解析后**只有 `light` / `dark` 两个色板，落在
+  `<html data-theme>` 上；名字、解析与映射在 `renderer/src/lib/themes.ts`，
+  `auto` 跟随系统的逻辑在 `lib/appearanceState.svelte.ts`。持久化走
+  `localStorage['kikusub.appearance']`（旧 key `kikusub.theme` / `kikusub.mode` 只在读取时
+  迁移一次，读完即删）。**加色板 = `app.css` 写一块 `html[data-theme='<id>']` 覆盖 +
+  注册表加一条**，组件里不要再写 `data-theme` 判断。
+  - **标题栏外观按钮与 ⇧⌘A 是两态直切**（`flipAppearance()`：取解析后的明暗翻面），
+    `auto` 只留在「设置 → 外观」。旧的 `auto → light → dark → auto` 循环已删除——
+    跟随系统且系统浅色时要按两下才变暗，是用户明确要求在 2026-11-26 修掉的。
+  - 字幕字体是与明暗正交的偏好：`html[data-cue-font='mincho']` 只换 `--font-cue`，
+    不换任何颜色；译文轨仍走 `--font-sans`。
+  - 主操作实心色是 `--btn-primary-bg`、开关/勾选/滑杆的「开」色是 `--control-on`，
+    两者当前都等于 accent（**主题色统一**：按钮、滑杆、开关都跟着主题走，不要再给某套
+    主题单独换成墨色——产品上已经否过一次）。
 - **侧栏（红绿灯列）必须跟着应用主题走**：窗口是 `hiddenInset + vibrancy:'sidebar'`，
   原生毛玻璃的明暗由系统外观决定，不受 `<html data-theme>` 控制。渲染层切主题时要
-  通过 preload 的 `setTheme()` 通知主进程 `nativeTheme.themeSource`；主进程只认 scheme
+  通过 preload 的 `setAppearance()` 通知主进程 `nativeTheme.themeSource`；主进程只认 scheme
   （`dark` → dark，其余 → light），同时把外观 id 写进 `preferences.json` 供冷启动首帧使用。
-  侧栏 `--bg-sidebar` 必须足够不透明（深色当前 `rgba(10,12,16,.92)`），否则浅色系统下会透成灰白。
+  侧栏 `--bg-sidebar` 必须足够不透明（深色当前 `rgba(31,34,38,.86)`、浅色
+  `rgba(240,242,244,.74)`），否则浅色系统下会透成灰白。
   `main.ts` 在挂载前先应用 localStorage 里的主题，避免冷启动闪一下浅色。
 - 修改后必须 `cd desktop && npm run build`，并至少实际验证：单击跳转、抖动单击不建选区、
   刻度/播放头/进度条拖动、字幕块整体与两端拖动、⌘Z 一次回退整块、播放头同步表格与检查器。
@@ -855,10 +862,12 @@
     写 `height:100%; width:auto` 同样会破比例，实测 **856×486 = 1.76**。
   - 实测两态分别是 **640×360（1.778）** 与 **856×482（1.778）**。
 - **检查器「当前条目」的台词框恢复输入框质感**（不恢复套娃卡片）：
-  `.cue-card` 外层仍然只有一条 1px 上分割线；`.cue-text` 本体是
-  `background: var(--raise)`（浅色 #fff / 深色 #181c23 / 明朝墨 #fff）+
-  1px `--line` 边框 + `--rad-control` 圆角，聚焦走 **`.cue-card:focus-within`**
-  → 强调色边框 + `0 0 0 3px var(--accent-soft)` 光晕。
+  `.cue-card` 外层仍然只有一条 1px 上分割线。
+  **2026-11-26 更新**：`.cue-text` 本体改成**无边框凹陷填充**
+  `background: var(--well)` + `1px transparent` 边框 + `--rad-control` 圆角，
+  悬停 `--well-hover`，聚焦走 **`.cue-card:focus-within`** → 升成 `--raise`
+  （浅色纸白 / 暗色一阶碳灰）+ 强调色边框 + `0 0 0 3px var(--accent-soft)` 光晕。
+  白框不再常驻（检查器里的「白框套白框」正是 Step 7 要消灭的形态）。
   时间码 `.cue-tc` 留在框外上方，框内只放可编辑台词。
   为什么不用 `:focus-visible`：点进输入框也要亮（那是「这一句现在可改」的提示），
   而且无窗口截图里窗口没有键盘焦点（`document.hasFocus() === false`），
@@ -1227,3 +1236,28 @@
   都不会再被底栏读数污染。
 - 同类检查仍然有效：`verify_phase2_shell`（侧栏 232/52、四段分组、激活态）、
   `verify_settings_layout`（三种窗口下四页不越界 / 不重叠 / 不截断）。
+
+#### 3.4.24 色板重写与表面语法（2026-11-26，界面重构 Step 7）
+
+- **暗色是「剪辑台的四阶碳灰」，不是把浅色反过来**：
+  `--stage-bg #0B0D0F`（画面房间）→ `--canvas #1A1C1F`（工作区）→
+  `--bg-inspector #1F2226`（检查器）→ `--paper #24272B`（侧栏 / 标题栏 / 底栏 / 时间轴坞）→
+  `--raise #2C3136`（台本纸 / 浮层 / 输入框）。相邻阶差 ~9–11 色阶。
+- **凹陷填充 `--well`（= `--fill`，悬停 `--well-hover` = `--fill-strong`）**：
+  浅色是 5% 中性墨压在纸白上（比台面**暗**一档），暗色是 6.5% 白压在碳灰上
+  （比台面**亮**一档）——同一个令牌在两个房间里都读成「可点 / 可选的一块」。
+- **`--bg-inspector` 是独立的一档**：浅色 `#F7F8F9`、暗色 `#1F2226`。三块并排
+  （侧栏 / 工作区 / 检查器）时每两块之间都有可读明度差，靠明度分区而不是靠描边。
+- **白底只允许出现在台本纸 / 浮层 / 输入框**：页内分区一律「标题 + 发丝线」或 well。
+  选项块（导出形式 / 字幕样式 / 码率 / 引擎行 / 外观卡）一层填充、无边框，
+  选中加 `--accent-line` 细须 + `--accent-soft`；输入框无边框、聚焦才升白 + 蓝须。
+- **核对台是三块不同明度的面**：舞台（`--stage-bg`）→ 走带 + 时间轴坞（`--paper`）→
+  台本表（`--raise`）。`.review` 负责坞底、`.stage` 负责房间，表格仍是 `.cue-sheet` 原语。
+- **单栏页面居中**：`--measure-page: 1040px`（导入页例外 `--measure-card: 760px`），
+  导入 / 导出 / 提示词库 / 设置 / 任务详报统一 `justify-content: center`；
+  转写页正文 1120 居中且页头同左缘；AI 三页是满屏网格（表格通栏，页标题行 24px 页边）。
+- **守卫**：`tests/test_big_file_budget.py`（ReviewView 1764 / store 3217）、
+  `desktop/test/theme-preview.test.mjs`（缩略图与 app.css 逐项对账）、
+  `tools/shots/verify_phase2_shell.mjs`（明暗两套对比度 + 舞台几何）。
+  紧凑模式的 `.player / .table-area / .transport` 规则已从父组件搬回各自的组件
+  （Svelte 的 scoped 样式跨不过组件边界，写在父组件里等于没写）。
