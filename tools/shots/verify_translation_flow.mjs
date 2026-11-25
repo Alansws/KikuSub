@@ -51,7 +51,12 @@ const EVAL = String.raw`
     };
     const text = (el) => (el ? el.textContent.trim() : null);
     const rows = () => [...document.querySelectorAll('.row')];
-    const meta = () => [...document.querySelectorAll('.track-meta span')].map((s) => s.textContent.trim());
+    // Step 4.2.1：整轨读数并成一条状态条（.track-bar），断言仍按「一段文字里包含某句」检查
+    const meta = () => {
+      const bar = document.querySelector('.track-bar .tb-status');
+      const value = bar ? bar.textContent.replace(/\s+/g, ' ').trim() : '';
+      return value ? [value] : [];
+    };
     const subLine = (i) => text(rows()[i]?.querySelector('.line.sub'));
     const setVal = (el, value) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
@@ -59,7 +64,7 @@ const EVAL = String.raw`
       el.dispatchEvent(new Event('input', { bubbles: true }));
     };
 
-    if (!(await until(() => rows().length >= 4 && meta().length >= 2))) {
+    if (!(await until(() => rows().length >= 4 && meta().length === 1))) {
       return JSON.stringify({ error: '种子没有落地', rows: rows().length, meta: meta() });
     }
     await sleep(400);

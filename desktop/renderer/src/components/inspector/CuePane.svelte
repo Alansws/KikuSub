@@ -9,6 +9,10 @@
    * TTS 只有一个图标按钮 + 音色下拉常驻在操作行里（`TtsControls`）；语速、上传 /
    * 截取 / 音色库 / 管理收进它自己按需展开的面板——原来的底部「TTS 对照」大卡片
    * 在标准窗口高度下会被底部保存栏截断，用户得滚动才看得见。
+   *
+   * 2026-11-25（Step 4.2.1）：显示模式行与「#1 单句编辑」之间的整轨读数与三个裸链接
+   * 压成一条单行的 `TrackBar`（读在左、入口在右、删除进菜单），下方用一条发丝线
+   * 把「整轨」与「这一句」分开。整轨逻辑全在那个组件里，这里只剩显示模式与单句编辑。
    */
   import { onMount, tick } from 'svelte';
   import Icon from '../Icon.svelte';
@@ -20,21 +24,17 @@
     requestCueTranslation,
   } from '../../lib/cueTranslate.svelte';
   import TtsControls from './TtsControls.svelte';
-  import { gapCountsNow, gapListNow, openGapFill } from '../../lib/gapFill.svelte';
+  import TrackBar from './TrackBar.svelte';
   import {
     app,
     deleteCue,
     focusRange,
-    importTranslationFromExport,
     isTranslationStale,
     play,
     previewRange,
-    removeTranslationTrack,
     setTrackLang,
     setTrackMode,
     translationAt,
-    translationPendingCounts,
-    undoTranslation,
     updateCue,
     updateTranslation,
   } from '../../lib/store.svelte';
@@ -52,10 +52,6 @@
   const cue = $derived(app.cues[play.selected] ?? null);
   const trackLangs = $derived(Object.keys(app.translations).sort());
   const hasTrack = $derived(Boolean(app.translations[app.trackLang]));
-  const pending = $derived(translationPendingCounts());
-  /** 补译批次：与翻译页卡片同一份范围（当前处理范围）与同一个勾选口径。 */
-  const gapInfo = $derived(gapCountsNow());
-  const gapCount = $derived(gapListNow().length);
 
   let draft = $state('');
   let draftTr = $state('');
@@ -167,14 +163,9 @@
     clearCueTranslate();
   }
 
-  async function removeTranslation() {
-    const lang = app.trackLang;
-    if (!lang || !app.translations[lang]) return;
-    await removeTranslationTrack(lang);
-  }
 </script>
 
-  <div class="display-row">
+<div class="display-row">
     <div class="seg">
       <button class:on={app.track === 'source'} onclick={() => setTrackMode('source')}>原文</button>
       <button
@@ -191,16 +182,6 @@
       >
     </div>
     <div class="row-end">
-      {#if !hasTrack}
-        <!-- 没有译文轨时不再单独占一行说「还没有译文字幕」：译文 / 双语两个按钮本来就
-             是灰的，导入入口就放在这一行右端（省下一条 24px 的空态行）。 -->
-        <button
-          class="link import-link"
-          onclick={() => importTranslationFromExport()}
-          disabled={!app.cues.length}
-          title="选择与当前原文逐条对齐的译文 SRT / VTT"
-        >导入译文…</button>
-      {/if}
       <select
         class="lang-sel"
         value={app.trackLang}
@@ -216,37 +197,9 @@
       </select>
     </div>
   </div>
-  {#if hasTrack}
-    <div class="track-meta">
-      <span>{app.translations[app.trackLang]?.count ?? 0} 条</span>
-      {#if pending.gap > 0}
-        <span class="todo">{pending.gap} 条待译</span>
-      {/if}
-      {#if pending.stale > 0}
-        <span class="warn">{pending.stale} 条原文已改</span>
-      {/if}
-      {#if !pending.gap && !pending.stale}
-        <span class="ok">全部同步</span>
-      {/if}
-    </div>
-    <!-- 计数与操作分两行：三颗链接 + 两个状态标签挤在一行会折字，
-         面板宽度不够时「4 条」都会被拆成两行（2026-11-25 截图）。 -->
-    <div class="track-links">
-      {#if gapCount > 0}
-        <button
-          class="link"
-          onclick={() => void openGapFill(true)}
-          title="只把待译条目复制给外部模型；回填只写这些条目，其余译文原样保留（当前处理范围：{gapInfo.total} 条）"
-        >
-          补译 {gapCount} 条
-        </button>
-      {/if}
-      <button class="link" onclick={() => importTranslationFromExport()}>导入译文</button>
-      <button class="link" onclick={() => undoTranslation()}>撤销译文</button>
-      <button class="link danger" onclick={removeTranslation}>删除译文</button>
-    </div>
-  {/if}
-
+  <!-- 整轨：一行读数 + 一个入口（低频动作进 ⋯ 菜单）。
+       下面 `.cue-card` 的上边线就是「整轨 / 这一句」的分界。 -->
+  <TrackBar />
 
 {#snippet translateHeader()}
   <div class="edit-label">
@@ -434,22 +387,6 @@
     gap: 6px;
     min-width: 0;
   }
-  .import-link {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: var(--accent);
-    font: inherit;
-    font-size: 12px;
-    padding: 0;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-  .import-link:disabled {
-    color: var(--text-3);
-    opacity: 0.55;
-    cursor: default;
-  }
   .lang-sel {
     height: var(--ctl-h);
     border: 1px solid var(--line);
@@ -464,62 +401,6 @@
     border-color: var(--accent);
     outline: none;
   }
-  .track-meta {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--sp-2);
-    margin-top: var(--sp-2);
-    font-size: 11.5px;
-    line-height: 16px;
-    color: var(--ink-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .track-meta > span {
-    white-space: nowrap;
-  }
-  /* 一行「读数 + 动作」：读数在左，动作靠右。三个低频链接不再各占一行高度。 */
-  .track-links {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: var(--sp-3);
-    margin-top: 1px;
-    font-size: 11.5px;
-    line-height: 16px;
-  }
-  .track-meta .ok {
-    color: var(--success);
-  }
-  .track-meta .warn {
-    color: var(--warn);
-  }
-  /* 待译 = 还没翻，不是错误；用 accent，别跟「原文已改」的 warn 混成一色。 */
-  .track-meta .todo {
-    color: var(--accent);
-  }
-  .track-links .link {
-    border: 0;
-    background: transparent;
-    color: var(--ink-3);
-    font: inherit;
-    font-size: 11.5px;
-    cursor: pointer;
-    padding: 0;
-    white-space: nowrap;
-  }
-  .track-links .link:hover {
-    color: var(--accent-text);
-  }
-  .track-links .link:disabled {
-    color: var(--text-3);
-    opacity: 0.55;
-    cursor: default;
-  }
-  .track-links .link.danger {
-    color: var(--danger);
-  }
-
   /* 当前句：全屏最大的字。2026-11-24（Phase 2）去卡片化——它原来是
      「白底 + 1px 灰框 + 2px 蓝左线 + 8px 圆角」的一层套娃，检查器里还有三四个
      同款，叠起来就是「网页表单」。现在**外层**只用一条 1px 上分割线分段，

@@ -46,6 +46,9 @@
     plus: '<path d="M8 3v10"/><path d="M3 8h10"/>',
     minus: '<path d="M3 8h10"/>',
     close: '<path d="M4.2 4.2 11.8 11.8"/><path d="M11.8 4.2 4.2 11.8"/>',
+    // 溢出菜单的「⋯」：三颗实心点，垂直居中靠几何而不是字体基线
+    // （Step 4.2.1 起检查器的译文轨菜单也用它）。
+    more: '<circle cx="3.3" cy="8" r="1.6" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/><circle cx="12.7" cy="8" r="1.6" fill="currentColor" stroke="none"/>',
     'chevron-left': '<path d="M10 3.5 5.5 8 10 12.5"/>',
     'chevron-right': '<path d="M6 3.5 10.5 8 6 12.5"/>',
     'chevron-down': '<path d="M3.5 6 8 10.5 12.5 6"/>',

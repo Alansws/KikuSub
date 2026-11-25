@@ -83,7 +83,7 @@ const EVAL = String.raw`
     const out = { initialSub: [subLine(1), subLine(3)] };
 
     // ---- 1) 进翻译页：卡片只报两条待译
-    nav('翻译')?.click();
+    nav('双语翻译')?.click();
     const shown = await until(() => card());
     if (!shown) return JSON.stringify({ error: '补译卡片没出现' });
     await sleep(250);
@@ -120,7 +120,7 @@ const EVAL = String.raw`
     out.afterFirstSub = [subLine(1), subLine(3)];
 
     // ---- 4) 回翻译页补最后一条
-    nav('翻译')?.click();
+    nav('双语翻译')?.click();
     if (!(await until(() => card()))) {
       return JSON.stringify({ ...out, error: '回翻译页后卡片没出现' });
     }
