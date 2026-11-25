@@ -38,7 +38,7 @@
   import { closePunctPanel, openPunctPanel, punctPanel } from '../lib/punctuationPanel.svelte';
   import { stageOf } from '../lib/viewMeta';
   import { appearanceName } from '../lib/themes';
-  import { appearance, toggleAppearance } from '../lib/appearanceState.svelte';
+  import { toggleAppearance } from '../lib/appearanceState.svelte';
 
   function clock(seconds: number) {
     return new Date(seconds * 1000).toLocaleTimeString('zh-CN', {
@@ -119,12 +119,16 @@
     }
   });
 
-  /** 外观按钮的图标跟着**解析后**的明暗走；auto 用半明半暗的圆。 */
-  const appearanceIcon = $derived(
-    appearance.preference === 'auto' ? 'appearance-auto' : app.theme === 'dark' ? 'moon' : 'sun',
-  );
+  /**
+   * 外观按钮是**两态开关**：图标 = 现在就是夜间（月亮）/ 现在就是日间（太阳），
+   * 标题 = 点下去会变成什么。`auto` 不再有自己的第三个图标——按钮只回答
+   * 「从眼前的画面翻到另一面」，跟随系统在设置 → 外观里。
+   */
+  const appearanceIcon = $derived(app.theme === 'dark' ? 'moon' : 'sun');
   const appearanceTitle = $derived(
-    `外观：${appearanceName(appearance.preference)}（现在 ${app.theme === 'dark' ? '夜间配音' : '日间校样'}）· ⇧⌘A 切换`,
+    `现在：${app.theme === 'dark' ? appearanceName('dark') : appearanceName('light')} · 点击切到${
+      app.theme === 'dark' ? appearanceName('light') : appearanceName('dark')
+    }（⇧⌘A）`,
   );
 
   function runProxy() {

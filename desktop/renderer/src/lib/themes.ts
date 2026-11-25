@@ -37,8 +37,8 @@ export const APPEARANCES: AppearanceOption[] = [
     name: '跟随系统',
     note: '白天日间校样，入夜自动切夜间配音间；一般不用动它',
   },
-  { id: 'light', name: '日间校样', note: '冷纸桌面 · 墨 · 蓝铅笔，适合白天与交付前通读' },
-  { id: 'dark', name: '夜间配音', note: '近黑画布 · 暖纸白字，画面是唯一亮面' },
+  { id: 'light', name: '日间校样', note: '纸白台面 · 墨 · 蓝铅笔，适合白天与交付前通读' },
+  { id: 'dark', name: '夜间配音', note: '碳黑剪辑台 · 暖纸白字，画面是唯一亮面' },
 ];
 
 export interface CueFontOption {
@@ -75,11 +75,19 @@ export const appearanceName = (id: AppearanceId): string =>
 export const cueFontName = (id: CueFontId): string =>
   CUE_FONTS.find((item) => item.id === id)?.name ?? id;
 
-/** `auto` 之后循环：跟随系统 → 日间 → 夜间 → 跟随系统。⇧⌘A 与工具栏月亮走这一条。 */
-export function nextAppearance(id: AppearanceId): AppearanceId {
-  if (id === 'auto') return 'light';
-  if (id === 'light') return 'dark';
-  return 'auto';
+/**
+ * 标题栏按钮 / ⇧⌘A：**直接两态翻转**。
+ *
+ * 2026-11-26 用户反馈：之前这里在 `auto → light → dark → auto` 之间循环，
+ * 于是「跟随系统且系统是浅色」时，想切到夜间要先点一下（先变成显式 light，
+ * 视觉上没变化）再点第二下。工具栏按钮不该考这个脑筋。
+ *
+ * 现在只回答一个问题：**从眼前的画面翻到另一面**。所以取的是解析后的
+ * `current`（`auto` 已经解析成光/暗），返回它的反面并写成显式偏好。
+ * 「跟随系统」只留在设置 → 外观里，不再进这条循环。
+ */
+export function flipAppearance(current: ThemeId): ThemeId {
+  return current === 'dark' ? 'light' : 'dark';
 }
 
 /**
@@ -99,7 +107,7 @@ export interface AppearanceShot {
   note: string;
   canvas: string;
   paper: string;
-  /** 内容卡（= app.css 的 --raise）。 */
+  /** 台本纸 / 内容卡（= app.css 的 --raise）。 */
   card: string;
   ink: string;
   accent: string;
@@ -110,9 +118,9 @@ export const APPEARANCE_SHOTS: AppearanceShot[] = [
   {
     id: 'light',
     name: '日间校样',
-    note: '冷纸 · 墨 · 蓝铅笔',
-    canvas: '#edf1f5',
-    paper: '#f7f9fb',
+    note: '纸白台面 · 铬件浅灰 · 蓝铅笔',
+    canvas: '#ffffff',
+    paper: '#f0f2f4',
     card: '#ffffff',
     ink: '#15191c',
     accent: '#0b63e5',
@@ -121,13 +129,13 @@ export const APPEARANCE_SHOTS: AppearanceShot[] = [
   {
     id: 'dark',
     name: '夜间配音',
-    note: '近黑画布 · 暖纸白字',
-    canvas: '#0b0e11',
-    paper: '#12161a',
-    card: '#171c21',
-    ink: '#ece8df',
+    note: '碳灰四阶 · 暖纸白字',
+    canvas: '#1a1c1f',
+    paper: '#24272b',
+    card: '#2c3136',
+    ink: '#e9e6df',
     accent: '#84a9e6',
-    line: 'rgba(236, 232, 223, 0.16)',
+    line: 'rgba(236, 232, 223, 0.15)',
   },
 ];
 

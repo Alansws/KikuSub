@@ -344,7 +344,7 @@
           toggleSidebar();
           break;
         case 'appearance':
-          // ⇧⌘A：跟随系统 → 日间校样 → 夜间配音 → 跟随系统
+          // ⇧⌘A：直接翻转（日间校样 ⇄ 夜间配音）；跟随系统只在设置 → 外观
           toggleAppearance();
           break;
         case 'history':

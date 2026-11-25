@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { flipAppearance } from '../renderer/src/lib/themes.ts';
 import {
   APPEARANCE_KEY,
   CUE_FONT_KEY,
@@ -88,4 +89,11 @@ test('applyToDocument 只写两个 data 属性（主题走 data-theme，字体�
   const root = { dataset: {} };
   applyToDocument('dark', 'mincho', root);
   assert.deepEqual(root.dataset, { theme: 'dark', cueFont: 'mincho' });
+});
+
+test('标题栏外观按钮是两态直切：日间 ⇄ 夜间（不再经过 auto）', () => {
+  // 2026-11-26 用户反馈：旧的三态循环让「跟随系统 + 系统浅色」的用户
+  // 要点两下才变暗。工具栏只回答「翻到另一面」，「跟随系统」留在设置页。
+  assert.equal(flipAppearance('light'), 'dark');
+  assert.equal(flipAppearance('dark'), 'light');
 });

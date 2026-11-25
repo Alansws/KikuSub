@@ -18,9 +18,9 @@ import {
   writeCueFont,
 } from './appearance';
 import {
+  flipAppearance,
   isAppearanceId,
   isCueFontId,
-  nextAppearance,
   resolveTheme,
   type AppearanceId,
   type CueFontId,
@@ -59,9 +59,14 @@ export function setAppearance(id: AppearanceId) {
   apply(id);
 }
 
-/** ⇧⌘A / 标题栏外观按钮：跟随系统 → 日间校样 → 夜间配音 → 跟随系统。 */
+/**
+ * ⇧⌘A / 标题栏外观按钮：**一点即切**（日间校样 ⇄ 夜间配音）。
+ *
+ * 取「当前解析后的明暗」再翻面，所以 `auto` 下点一次也是真的换外观，
+ * 不是先锁成显式 light 再点第二次。「跟随系统」只在设置 → 外观里选。
+ */
 export function toggleAppearance() {
-  apply(nextAppearance(appearance.preference));
+  apply(flipAppearance(app.theme));
 }
 
 /** 字幕字体：黑体 / 明朝。只换 --font-cue，不动任何颜色。 */

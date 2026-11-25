@@ -1233,8 +1233,9 @@ function buildMenu() {
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
         { label: '切换侧边栏', accelerator: 'Ctrl+CmdOrCtrl+S', click: send('menu:sidebar') },
-        // 外观默认跟随系统（HIG）；⇧⌘A 只在三个偏好之间循环，真正的三选一在设置页。
-        { label: '切换外观（跟随系统 / 日间校样 / 夜间配音）', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:appearance') },
+        // 外观默认跟随系统（HIG）；⇧⌘A 只在日间 ⇄ 夜间之间翻转，
+        // 「跟随系统 / 日间 / 夜间」三选一在设置 → 外观（2026-11-26 用户拍板）。
+        { label: '切换外观（日间校样 ⇄ 夜间配音）', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:appearance') },
         { type: 'separator' },
         { role: 'togglefullscreen', label: '进入全屏幕' },
         { role: 'toggleDevTools', label: '开发者工具' },
