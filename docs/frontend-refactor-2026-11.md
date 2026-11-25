@@ -1470,6 +1470,21 @@ KIKUSUB_ISOLATION_ROOT=/tmp/x/root KIKUSUB_NO_WINDOW=1 \
 git push -u origin feat/ui-redesign      # 只推分支，不推任何 tag
 ```
 
+**推送前安全核查（2026-11-26 逐项做过，结论留档）**
+
+| 检查 | 结果 |
+| --- | --- |
+| `.github/workflows/ci.yml` 的触发面 | `on.push.branches: [main, app/macos]` + `on.push.tags: ["v*"]`；推 `feat/ui-redesign` **不触发任何 job**（也不在 PR 里），`release-tag` 闸门不受影响 |
+| 是否推 tag | **不推**。`release-tag` 要求「tag == `desktop/package.json` version」且「tag 提交在 `main` 上」，封板版不满足第二条 |
+| `git status` | 干净（无未跟踪、无脏文件） |
+| 是否含打包产物 | `git ls-files` 里没有 `build/`、`desktop/renderer/dist/`、`node_modules/`、`pack-next`、`.impeccable/`、`.venv/` |
+| 最大被跟踪文件 | 210 KB（`desktop/package-lock.json`）；全仓无 >1 MB 的入库文件 |
+| 密钥 / 凭证 | 无。唯一命中是 `docs/sprints/…/设计稿.html` 里的占位符 `sk-xxxxxxxx…`（HTML 示意，非真实密钥） |
+| 本机隐私路径 | 本分支相对 `main` 的 diff 里 **0 处** `/Users/sws`；历史文档里的旧路径未在本分支新增 |
+| `docs/images/` | 全部是 `.png/.jpg`，无 sidecar 文本；图片 EXIF 里无路径；取证图只用 `kikusub-shot-media.mp4` 这种脱敏测试素材 |
+| 远端是否已存在该分支 | 否（`git ls-remote --heads` 只有 `app/macos` / `main` / `review/final-polish` / `workbuddy/…`），不会覆盖任何东西 |
+| `git push --dry-run` | `* [new branch] feat/ui-redesign -> feat/ui-redesign`，凭证可用 |
+
 - **为什么不推 tag**：`.github/workflows/ci.yml` 的 `release-tag` job 触发条件是
   `startsWith(github.ref, 'refs/tags/v')`，它检查「tag 名 == `desktop/package.json` 的 version」
   且「tag 提交在 `main` 上」。封板版不在 `main` 上，任何 `v*` tag 都会让那条闸门直接红。
