@@ -105,6 +105,8 @@ export function paintReviewCanvas(input: WaveformPaintInput): void {
     separatorStrong: sepStrong,
     text: text3,
     xOf,
+    // 播放头浮标约 62px 宽、以播放头为中（靠边时 HTML 侧会夹住，这里按 72px 覆盖算）
+    avoid: [xOf(input.playTime) - 36, xOf(input.playTime) + 36],
   });
 
   // 波形：逐像素取该像素覆盖的所有采样点的最大值（纯绘制见 lib/waveformDraw）。

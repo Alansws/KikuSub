@@ -114,76 +114,91 @@
     border: 0;
     padding: 0;
     margin: 0;
-    background: rgba(0, 0, 0, 0.28);
-    backdrop-filter: blur(1px);
+    background: color-mix(in srgb, var(--canvas) 42%, rgba(0, 0, 0, 0.24));
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
     cursor: default;
   }
+  /* 一张小表：10px 圆角、纸白、1px 发丝线、popover 阴影。
+     标题 15/600（Heading 档），说明 11.5 第二级灰；动作用 28px 的 ·
+     取消在左、主操作在右（macOS 的确认表都是这个顺序）。 */
   .vd {
     position: fixed;
     z-index: 81;
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: min(340px, calc(100vw - 48px));
-    padding: 14px var(--sp-4) var(--sp-3);
-    border-radius: 8px;
-    background: var(--bg-content);
-    border: 1px solid var(--separator);
+    width: min(360px, calc(100vw - 48px));
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+    border-radius: var(--rad-panel);
+    background: var(--raise);
+    border: 1px solid var(--line);
     box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
   .vd-head {
-    font-size: 13px;
+    font-size: var(--fs-heading);
+    line-height: var(--lh-heading);
     font-weight: 600;
-    color: var(--text);
+    color: var(--ink);
+    letter-spacing: -0.005em;
   }
   .vd-sub {
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: -5px;
-    font-size: 11px;
-    color: var(--text-3);
+    margin-top: -6px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    line-height: 16px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
   }
   .vd-dur {
-    padding: 0 5px;
+    padding: 0 var(--sp-1);
     border-radius: 3px;
-    background: var(--separator-soft);
+    background: var(--fill);
   }
   .vd-field {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
-    font-size: 11px;
-    color: var(--text-3);
+    font-size: var(--fs-label);
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
   }
   .vd-field input,
   .vd-field textarea {
     width: 100%;
     box-sizing: border-box;
+    min-height: var(--ctl-h-lg);
     border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--bg-inset, var(--raise));
-    color: var(--text);
+    border-radius: var(--rad-control);
+    background: var(--raise);
+    color: var(--ink);
     font: inherit;
-    font-size: 12px;
-    padding: 5px 7px;
+    font-family: var(--font-cue);
+    font-size: 13px;
+    line-height: 19px;
+    padding: 5px var(--sp-2);
     resize: vertical;
+  }
+  .vd-field input {
+    font-family: var(--font-sans);
   }
   .vd-field input:focus,
   .vd-field textarea:focus {
     outline: none;
-    border-color: var(--accent-line);
-    box-shadow: 0 0 0 2px var(--accent-soft);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .vd-note {
     margin: 0;
-    font-size: 11px;
-    line-height: 16px;
-    color: var(--text-3);
+    font-size: 11.5px;
+    line-height: 17px;
+    color: var(--ink-3);
   }
   .vd-actions {
     display: flex;

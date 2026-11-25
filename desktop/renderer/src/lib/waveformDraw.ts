@@ -79,12 +79,20 @@ export interface RulerInput {
   separatorStrong: string;
   text: string;
   xOf: (time: number) => number;
+  /**
+   * 播放头浮标在画布上的覆盖范围 `[left, right]`（px，含浮标自身的留白）。
+   * 浮标是叠在画布上的 HTML 芯片，会盖住刻度标签的一半，读起来像
+   * 「00:04.72005」。落在它底下的标签直接不画——和「太挤就不画字」是同一条纪律：
+   * 宁可少一个标签，也不要出现半截字。
+   */
+  avoid?: [number, number] | null;
 }
 
 /** 顶部时间刻度 + 刻度条底线。 */
 export function paintRuler(ctx: CanvasRenderingContext2D, input: RulerInput) {
   const step = pickRulerStep(input.viewSpan);
-  ctx.font = '12px "SF Mono", ui-monospace, Menlo, monospace';
+  // 11px = DESIGN.md 的 Data 档：刻度标签与时间码、计数同一档，不抢字幕
+  ctx.font = '11px "SF Mono", ui-monospace, Menlo, monospace';
   ctx.textBaseline = 'top';
   const first = Math.ceil(input.viewStart / step) * step;
   // 已画标签的右边界：夹回来的最后一个标签不许再压到前一个上。
@@ -98,8 +106,9 @@ export function paintRuler(ctx: CanvasRenderingContext2D, input: RulerInput) {
       const label = rulerLabel(t, step);
       const lw = ctx.measureText(label).width;
       const lx = rulerLabelX(x, lw, input.width);
-      // 太挤就只画刻度不画字：宁可少一个标签，也不要出现叠字。
-      if (lx >= lastLabelRight + RULER_LABEL_GAP) {
+      const hidden = input.avoid ? lx < input.avoid[1] && lx + lw > input.avoid[0] : false;
+      // 太挤 / 被播放头浮标压住就只画刻度不画字：宁可少一个标签，也不要出现叠字。
+      if (!hidden && lx >= lastLabelRight + RULER_LABEL_GAP) {
         ctx.fillStyle = input.text;
         ctx.fillText(label, lx, 1);
         lastLabelRight = lx + lw;

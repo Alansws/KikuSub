@@ -83,6 +83,23 @@ export function createReviewFind() {
     findState.pos = 0;
   }
 
+  /**
+   * 查找词 / 替换词由输入框写回 `findState`，再开新一轮。
+   *
+   * 2026-11-25（Step 4.2）修：字幕表整块拆成组件时，`bind:value={findState.query}`
+   * 被改成了单向 `value=`，于是 ⌘F 能打开、能打字，但**命中永远是 0**——
+   * 输入框里的字没有写回状态。输入框必须走这两个 setter，别再退回单向绑定。
+   */
+  function setQuery(value: string) {
+    if (findState.query === value) return;
+    findState.query = value;
+    resetSession();
+  }
+
+  function setReplacement(value: string) {
+    findState.replacement = value;
+  }
+
   function bindInput(node: HTMLInputElement | null) {
     input = node;
   }
@@ -363,6 +380,8 @@ export function createReviewFind() {
 
   return {
     bindInput,
+    setQuery,
+    setReplacement,
     resetSession,
     go,
     replaceCurrent,

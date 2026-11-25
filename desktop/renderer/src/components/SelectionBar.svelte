@@ -104,21 +104,23 @@
   .tl-spacer {
     flex: 1;
   }
+  /* 悬浮在工具行上层：出现/消失不能让波形上下跳，
+     否则刚拖完选区的下一次点击会落到别的位置。
+     形态是**一张浮起来的纸条**（纸白 + 1px 发丝线 + popover 阴影），不是一层蓝底：
+     它不是「选中状态」，而是「这段时间现在可以做三件事」的工具条。 */
   .sel-bar {
     animation: selIn 140ms var(--ease);
     display: flex;
     align-items: center;
     gap: 5px;
-    /* 悬浮在工具行上层：出现/消失不能让波形上下跳，
-       否则刚拖完选区的下一次点击会落到别的位置。 */
     position: absolute;
-    inset: 0;
+    inset: 2px;
     z-index: 2;
-    background: color-mix(in srgb, var(--accent) 8%, var(--paper));
-    box-shadow: inset 0 0 0 1px var(--accent-ring);
-    border-radius: 4px;
-    padding: 0 6px 0 9px;
-    height: 30px;
+    background: var(--raise);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow-pop);
+    border-radius: var(--rad-control);
+    padding: 0 var(--sp-2) 0 9px;
   }
   @keyframes selIn {
     from {
@@ -129,15 +131,15 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--fs-mono);
     line-height: 16px;
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
     white-space: nowrap;
   }
   .sel-info b {
-    color: var(--accent);
+    color: var(--ink);
     font-weight: 600;
     margin-left: 3px;
   }
@@ -148,8 +150,8 @@
     display: inline-flex;
     align-items: center;
     gap: var(--sp-1);
-    font-size: 12px;
-    color: var(--text-2);
+    font-size: 11.5px;
+    color: var(--ink-3);
     white-space: nowrap;
     cursor: default;
   }
@@ -157,9 +159,9 @@
     margin: 0;
   }
   .tiny {
-    height: 22px;
+    height: 24px;
     font-size: 12px;
-    padding: 0 7px;
+    padding: 0 var(--sp-2);
     background: var(--raise);
   }
   .btn.primary.tiny {

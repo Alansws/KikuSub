@@ -183,6 +183,8 @@
 <style>
   /* 单行走带条 34px（2026-11-24 Phase 2）：左 = 播放 + 等宽时间码 + 进度 + 时长，
      右 = 缩放 / 全景 / 聚焦 / 跟随。原来拆两行（32 + 30 + 间距）白吃掉 35px 垂直高度。 */
+  /* 走带与时间轴、字幕表共用一条 16px 页边（2026-11-25 Step 4.2）。
+     原来这里是 26px：比时间轴宽 10px，播放按钮那一路左缘和波形对不齐。 */
   .transport {
     position: relative;
     display: flex;
@@ -190,8 +192,8 @@
     gap: 9px;
     height: 34px;
     flex: 0 0 34px;
-    margin-top: 6px;
-    padding: 0 26px;
+    margin-top: var(--sp-1);
+    padding: 0 var(--sp-4);
   }
   .playbtn {
     width: 24px;
@@ -238,7 +240,8 @@
     font-variant-numeric: tabular-nums;
   }
   .tp-track {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 60px;
     height: 16px; /* 比视觉轨道高：4px 的细线根本捏不住 */
     position: relative;
     cursor: pointer;
@@ -303,12 +306,16 @@
     flex: 0 0 1px;
     background: var(--separator);
   }
+  /* 这一行在小窗口里会挤：每个控件声明「不收缩、不折字」，
+     让可收缩的只剩进度条本身（否则「全景」会被压成竖排两个字）。 */
   .zoom-group {
     display: flex;
     align-items: center;
     gap: var(--sp-1);
+    flex: 0 0 auto;
   }
   .zbtn {
+    flex: 0 0 20px;
     width: 20px;
     height: 20px;
     padding: 0;
@@ -358,7 +365,7 @@
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .zoom-x {
-    font-size: 12px;
+    font-size: var(--fs-mono);
     line-height: 16px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
@@ -367,14 +374,16 @@
     font-family: var(--font-mono);
   }
   .mini-text {
+    flex: 0 0 auto;
     height: 24px;
     padding: 0 7px;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--rad-control);
     background: transparent;
     color: var(--ink-2);
     font: inherit;
     font-size: 12px;
+    white-space: nowrap;
     cursor: default;
     transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   }
@@ -385,39 +394,54 @@
   .grow {
     flex: 1;
   }
+  /* 跟随是「开关」，不是「选中项」：开 = 白色凸起胶囊（分段控件同一套语法）+
+     一颗蓝点，关 = 透明 + 灰点。蓝底只在主操作上，这里不涂。 */
   .follow-pill {
+    flex: 0 0 auto;
     height: 24px;
+    white-space: nowrap;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     padding: 0 var(--sp-2);
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--rad-control);
     background: transparent;
-    color: var(--ink-2);
+    color: var(--ink-3);
     font: inherit;
-    font-size: 12px;
+    font-size: 11.5px;
     font-weight: 500;
     cursor: default;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   }
   .follow-pill i {
     width: 5px;
     height: 5px;
     border-radius: 50%;
-    background: var(--ink-3);
+    background: var(--ink-muted);
+  }
+  .follow-pill:hover {
+    color: var(--ink-2);
   }
   .follow-pill.on {
-    background: var(--accent-soft);
-    color: var(--accent);
+    background: var(--seg-thumb);
+    color: var(--ink);
+    box-shadow: var(--seg-thumb-shadow);
   }
   .follow-pill.on i {
     background: var(--accent);
   }
-  .follow-pill:hover {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
   .tl-spacer {
     flex: 1;
+  }
+  /* 小窗口（≤1220）先把缩放滑杆让出去：± 与倍率读数仍在，一条滑杆排不下时
+     它是最先可以让位的东西（滚轮 / 捏合仍然缩放）。 */
+  @media (max-width: 1220px) {
+    .zoom-slider {
+      display: none;
+    }
+    .transport {
+      gap: 7px;
+    }
   }
 </style>

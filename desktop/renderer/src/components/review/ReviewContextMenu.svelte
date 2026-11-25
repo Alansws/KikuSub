@@ -165,31 +165,35 @@
   }
   .ctx-sep {
     height: 1px;
-    margin: 3px var(--sp-1);
-    background: var(--separator-soft);
+    margin: var(--sp-1) 6px;
+    background: var(--line);
   }
+  /* 原生上下文菜单的形状：纸白、4px 内边距、6px 圆角、popover 阴影；
+     悬停 = 整行强调色 + 白字（macOS 的菜单高亮就是这个），
+     右侧说明在同一行里退成半透明的白，不换行、不抖动。 */
   .ctx-menu {
     position: fixed;
     z-index: 71;
-    width: 244px;
+    width: 248px;
     padding: var(--sp-1);
-    border-radius: 4px;
-    background: var(--bg-content);
-    border: 1px solid var(--separator);
+    border-radius: 6px;
+    background: var(--raise);
+    border: 1px solid var(--line);
     box-shadow: var(--shadow-pop);
   }
   .ctx-head {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
     gap: var(--sp-2);
-    padding: var(--sp-1) 7px 5px;
-    margin-bottom: 3px;
-    border-bottom: 1px solid var(--separator-soft);
-    font-size: 12px;
-    color: var(--text-3);
+    padding: var(--sp-1) var(--sp-2) 5px;
+    margin-bottom: var(--sp-1);
+    border-bottom: 1px solid var(--line);
+    font-size: var(--fs-mono);
+    line-height: 14px;
+    color: var(--ink-3);
     font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
   }
   .ctx-item {
     appearance: none;
@@ -200,29 +204,34 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 7px;
-    padding: 6px 7px;
+    gap: var(--sp-2);
+    height: 28px;
+    padding: 0 var(--sp-2);
     border-radius: 4px;
     cursor: pointer;
     text-align: left;
   }
   .ctx-item:hover {
-    background: var(--accent-soft);
-    color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .ctx-label {
     flex: 0 0 auto;
-    font-size: 12px;
+    font-size: 12.5px;
     white-space: nowrap;
   }
   .ctx-hint {
     flex: 1;
     min-width: 0;
-    font-size: 12px;
-    color: var(--text-3);
+    font-size: 11px;
+    color: var(--ink-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     text-align: right;
+  }
+  .ctx-item:hover .ctx-hint {
+    color: var(--on-accent);
+    opacity: 0.78;
   }
 </style>
