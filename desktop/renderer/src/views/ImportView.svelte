@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
-  import { app, openMedia, openSubtitle, toast } from '../lib/store.svelte';
+  import { app, openMedia, openSubtitle, setView, toast } from '../lib/store.svelte';
   import { mediaThumbUrl } from '../lib/api';
   import { formatBytes, formatDuration } from '../lib/time';
 
@@ -15,6 +15,27 @@
   }
 
   type RecentView = 'list' | 'grid';
+
+  /**
+   * 已经有工程时本页不该只有一块拖放区（Step 4.3 修的断层）：用户回来问的是
+   * 「我上次干到哪了、接着干还是换片」，所以顶部先给一张**继续当前工程**卡，
+   * 拖入降为第二动作（紧凑一条）。没有工程时才让拖放区当主视觉。
+   */
+  const media = $derived(app.media);
+  const cueCount = $derived(app.cues.length);
+  /** 下次进入核对台时的落点：有字幕就接着核，没字幕先去转写。 */
+  const nextView = $derived(cueCount ? 'review' : 'transcribe');
+  const nextLabel = $derived(cueCount ? '继续核对' : '去转写');
+  const nextKey = $derived(cueCount ? '⌘3' : '⌘2');
+  const resumeMeta = $derived(
+    [
+      app.media?.duration ? formatDuration(app.media.duration) : '',
+      cueCount ? `${cueCount} 条字幕` : '还没有字幕',
+      app.report ? '任务报告已生成' : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  );
 
   let recents = $state<Recent[]>([]);
   /** 「最近打开」的呈现方式：列表（信息密度高）或图标（封面画廊）。 */
@@ -140,13 +161,52 @@
     subtitle="把视频拖进窗口，或按 ⌘O 选择文件。导入不会复制文件——只记录路径。"
   />
 
-  <button class="dropzone" onclick={pick}>
-    <span class="dz-ico"><Icon name="tray" size={20} /></span>
-    <span class="dz-title">拖入视频或字幕</span>
-    <span class="dz-sub">
-      <code>.mkv</code> <code>.mp4</code> <code>.mov</code> <code>.srt</code> <code>.vtt</code>
-    </span>
-  </button>
+  {#if media}
+    <!-- 顶部：继续当前工程。它回答「我上次干到哪了」，是回到本页唯一的主动作。 -->
+    <section class="resume" aria-label="当前工程">
+      <span class="resume-cover">
+        <Icon name="film" size={16} />
+        {#if thumbsReady}
+          <img
+            class="resume-img"
+            src={mediaThumbUrl(media.path, String(media.size))}
+            alt=""
+            loading="lazy"
+            draggable="false"
+            onerror={(e) => e.currentTarget.remove()}
+          />
+        {/if}
+      </span>
+      <span class="resume-main">
+        <span class="resume-name" title={media.path}>{media.name}</span>
+        <span class="resume-meta">{resumeMeta}</span>
+      </span>
+      <div class="resume-actions">
+        <button class="btn primary" onclick={() => setView(nextView)}>
+          {nextLabel}
+          <kbd class="key">{nextKey}</kbd>
+        </button>
+        <button class="btn ghost" onclick={pick} title="选择另一个视频（⌘O）">换片…</button>
+      </div>
+    </section>
+
+    <!-- 第二动作：紧凑的一条拖放区，不再用整块画布抢主动作的位置 -->
+    <button class="dropstrip" onclick={pick}>
+      <Icon name="tray" size={14} />
+      <span>换一个片子：拖进来，或按 ⌘O 选择</span>
+      <span class="dz-sub">
+        <code>.mkv</code> <code>.mp4</code> <code>.mov</code> <code>.srt</code> <code>.vtt</code>
+      </span>
+    </button>
+  {:else}
+    <button class="dropzone" onclick={pick}>
+      <span class="dz-ico"><Icon name="tray" size={20} /></span>
+      <span class="dz-title">拖入视频或字幕</span>
+      <span class="dz-sub">
+        <code>.mkv</code> <code>.mp4</code> <code>.mov</code> <code>.srt</code> <code>.vtt</code>
+      </span>
+    </button>
+  {/if}
 
   <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
     MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
@@ -282,9 +342,117 @@
     overflow-y: auto;
     padding: var(--sp-8) var(--sp-10) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 720px);
+    grid-template-columns: minmax(0, 760px);
     justify-content: center;
     align-content: start;
+    background: var(--canvas);
+  }
+
+  /* ---------- 继续当前工程（有片时本页唯一的主动作） ---------- */
+  .resume {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-3);
+    background: var(--raise);
+    border: 1px solid var(--rule);
+    border-radius: var(--rad-card);
+    margin-top: var(--sp-1);
+  }
+  .resume-cover {
+    position: relative;
+    flex: 0 0 96px;
+    width: 96px;
+    height: 54px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--fill);
+    display: grid;
+    place-items: center;
+    color: var(--ink-3);
+  }
+  .resume-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .resume-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .resume-name {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 20px;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 读数（时长 / 条数 / 报告）走 Data 档：切页比对时数字要对得齐。 */
+  .resume-meta {
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .resume-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+  /* 快捷键提示挂在主按钮里，写成 11px mono（与侧栏 kbd 同一套），不当副标题。 */
+  .key {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.18);
+    color: inherit;
+    letter-spacing: 0;
+  }
+
+  /* 换片：一条 40px 的拖放带，比整块画布轻，但不埋进菜单里。 */
+  .dropstrip {
+    appearance: none;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    height: 40px;
+    margin-top: var(--sp-2);
+    padding: 0 var(--sp-3);
+    border: 1px dashed var(--line);
+    border-radius: var(--rad-control);
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 12.5px;
+    text-align: left;
+    transition:
+      border-color var(--dur) var(--ease),
+      color var(--dur) var(--ease),
+      background var(--dur) var(--ease);
+  }
+  .dropstrip:hover {
+    border-color: var(--accent-line);
+    color: var(--ink-2);
+    background: var(--accent-soft);
+  }
+  .dropstrip .dz-sub {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 4px;
   }
 
   .note {
