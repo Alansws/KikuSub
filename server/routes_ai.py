@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from core import ai_arbitrate
 from core import ai_client
+from core import ai_gap
 from core import ai_local_model
 from core import ai_polish
 from core import ai_proposal as proposals
@@ -691,6 +692,7 @@ def get_manual_prompt(
     to_index: int | None = None,
     range_from: int | None = None,
     range_to: int | None = None,
+    indices: str = "",
     session: Session = Depends(get_session),
 ) -> dict:
     """「一键复制提示词」：把当前字幕整成 SRT 塞进所选模板，供用户粘到任意聊天窗。
@@ -718,6 +720,66 @@ def get_manual_prompt(
         raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
     full = (first, last) == (1, total)
     content_full = (start, end) == (first, last)
+
+    # 补译批次（2026-11-25）：只复制「待译」的 N 条，而不是整段。
+    # 序号用全片条号，回填才能按条号落位；模板仍然用用户当前选中的那一个。
+    try:
+        sparse = ai_gap.normalize_indices(indices, total) if (indices or "").strip() else []
+    except ai_gap.GapError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    if sparse:
+        if kind != "translate":
+            raise HTTPException(status_code=422, detail="补译批次只支持翻译；润色请走整段")
+        if any(index < first or index > last for index in sparse):
+            raise HTTPException(
+                status_code=422,
+                detail=f"补译条号超出当前处理范围（第 {first}–{last} 条）",
+            )
+        track = session.translations.get(lang)
+        track_texts = (
+            list(track.texts)
+            if track is not None and len(track.texts) == total
+            else None
+        )
+        scope_label = (
+            f"处理范围第 {first}–{last} 条，全片共 {total} 条"
+            if not full
+            else f"全片共 {total} 条"
+        )
+        gap_srt = ai_gap.gap_srt(cues, sparse)
+        hint = ai_gap.gap_instructions(total, sparse, scope_label)
+        prompt, template = prompt_store.render_prompt(
+            gap_srt,
+            ai_translate.lang_name(lang),
+            template_id=template_id or None,
+            category=prompt_store.CATEGORY_TRANSLATE,
+            range_text=hint,
+            settings_path=settings_path(request),
+        )
+        if template is None:
+            raise HTTPException(status_code=500, detail="提示词库为空")
+        context = ai_gap.context_block(cues, track_texts, sparse)
+        if context:
+            prompt = prompt.rstrip() + "\n\n" + context
+        return {
+            "prompt": prompt,
+            "count": len(sparse),
+            "total": total,
+            "lang": lang,
+            "chars": len(prompt),
+            "mode": "single",
+            "from": sparse[0],
+            "to": sparse[-1],
+            "range_from": first,
+            "range_to": last,
+            "indices": sparse,
+            "sparse": True,
+            "digest": ai_gap.digest_of(cues, sparse),
+            "template_id": template["id"],
+            "template_name": template["name"],
+            "category": prompt_store.CATEGORY_TRANSLATE,
+        }
+
     if kind == "polish":
         # 润色也支持「复制提示词 → 网页版模型 → 粘回来」；不绑定 AI 优化。
         indices = list(range(start - 1, end))
@@ -863,6 +925,51 @@ def proposal_from_pasted_srt(
         "range_to": last,
         "expected": end - start + 1,
         "alignment": alignment,
+    }
+
+
+class GapFromSrtRequest(BaseModel):
+    """补译回填的解析请求：条号集合 + 粘贴内容 +（可选）复制时的源指纹。"""
+
+    indices: list[int] = Field(min_length=1)
+    text: str = Field(min_length=1)
+    digest: str = ""
+
+
+@router.post("/api/ai/gap-from-srt")
+def gap_from_pasted_srt(
+    payload: GapFromSrtRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """把补译回复解析成 ``[{i, before, after}]``（**只解析，不落盘、不改字幕**）。
+
+    与 ``/api/ai/from-srt`` 的区别：这里按序号落位、条数严格 1:1，不做时间轴对齐。
+    时间轴对齐是「整段翻译」的容错通道，但它会猜槽位；补译的每一条都对应一个
+    明确的待译下标，猜错就会把 A 句译文写进 B 句。
+    """
+    cues = session.review_cues
+    if not cues:
+        raise HTTPException(status_code=409, detail="当前没有字幕")
+    total = len(cues)
+    try:
+        indices = ai_gap.normalize_indices(payload.indices, total)
+        if not indices:
+            raise ai_gap.GapError("补译批次是空的：先点「复制待译」再粘贴回复")
+        digest = ai_gap.digest_of(cues, indices)
+        if payload.digest and payload.digest != digest:
+            raise ai_gap.GapError(
+                "原文在复制之后改过了：请重新复制提示词，再把结果粘回来",
+                status=409,
+            )
+        items, warnings = ai_gap.parse_gap_reply(payload.text, cues, indices)
+    except ai_gap.GapError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "items": items,
+        "indices": indices,
+        "count": len(items),
+        "digest": digest,
+        "warnings": warnings,
     }
 
 

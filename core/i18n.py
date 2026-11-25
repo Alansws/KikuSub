@@ -157,6 +157,67 @@ def rebase_punctuation_base(cues: list[SubtitleCue], base: list[str]) -> tuple[l
     return out, rebased
 
 
+def merge_translation_texts(
+    source_texts: list[str],
+    texts: list[str] | None,
+    base: list[str] | None,
+    updates: dict[int, str],
+    *,
+    skip_empty: bool = True,
+    sync_unchanged_base: bool = True,
+) -> tuple[list[str], list[str], list[int], int]:
+    """把若干条新译文合并进一条整片轨（**纯函数**，不读会话）。
+
+    为什么需要：整轨替换会把不在本次范围内的槽位一起写掉。补译（只回填几条）、
+    局部应用（只写本段）、批量替换（只写改过的）都需要「其余条目原样保留」，
+    所以合并口径必须只有一份实现。
+
+    参数：
+
+    - ``source_texts``：当前原文（逐条）；``texts`` / ``base`` 是现有轨，``None``
+      或条数对不上时按「整轨重建」处理（范围外为空位）；
+    - ``updates``：本次要写的 ``{下标(0 基): 文本}``；
+    - ``skip_empty``：空文本是否算「本次没有提供译文」。**提案应用 / 补译**为
+      ``True``——模型把两条合并成一条时，被合并槽位的 ``after`` 是空串，绝不能
+      用它清掉用户已经核对过的译文；**整轨替换**为 ``False``（每一格都是用户给的
+      最终值，允许清空）；
+    - ``sync_unchanged_base``：文本没变时是否也把 ``base`` 对齐到当前原文。
+      模型 / 用户明确写入了这一条，就该算「已同步」；批量替换只改文本、不该借机
+      把整条轨的「原文已改」标记抹掉，所以那条路传 ``False``。
+
+    返回 ``(新 texts, 新 base, 文本真正变化的 0 基下标, 因空值被保留的条数)``。
+    """
+    total = len(source_texts)
+    aligned = texts is not None and len(texts) == total
+    if aligned:
+        out_texts = [str(item or "") for item in texts]
+        out_base = [str(item or "") for item in (base or [])]
+        if len(out_base) < total:
+            out_base.extend(source_texts[len(out_base) :])
+        out_base = out_base[:total]
+    else:
+        out_texts = [""] * total
+        out_base = list(source_texts)
+
+    changed: list[int] = []
+    kept = 0
+    for index, raw in sorted(updates.items()):
+        if not isinstance(index, int) or not 0 <= index < total:
+            continue
+        value = str(raw or "")
+        if skip_empty and not value.strip():
+            if out_texts[index].strip():
+                kept += 1
+            continue
+        previous = out_texts[index]
+        out_texts[index] = value
+        if value != previous:
+            changed.append(index)
+        if value and (sync_unchanged_base or value != previous):
+            out_base[index] = source_texts[index]
+    return out_texts, out_base, changed, kept
+
+
 def remap_track(
     old_cues: list[SubtitleCue],
     new_cues: list[SubtitleCue],

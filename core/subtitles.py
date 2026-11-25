@@ -109,15 +109,22 @@ def parse_srt_timestamp(value: str) -> float:
     return hours * 3600 + minutes * 60 + seconds + millis / 1000
 
 
-def srt_to_cues(srt_text: str) -> list[SubtitleCue]:
-    """健壮的 SRT 解析器：精准前瞻识别序号行，彻底杜绝序号渗入字幕正文。"""
+def parse_srt_entries(srt_text: str) -> list[tuple[int | None, SubtitleCue]]:
+    """解析 SRT，保留**每条前面的序号**（没有序号时为 ``None``）。
+
+    为什么需要序号：补译（gap fill）要按「全片条号」把回复落回原槽位，不能靠顺序
+    或时间轴猜——模型把两条合并成一条时，顺序对齐会错位。普通导入仍然只取文本，
+    走 :func:`srt_to_cues`（它的行为与本函数拆出来之前逐字节一致）。
+    """
     normalized = srt_text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     # 过滤纯空白行，仅保留有内容的文本行
     lines = [line.strip() for line in normalized.split("\n") if line.strip()]
-    
-    cues: list[SubtitleCue] = []
+
+    entries: list[tuple[int | None, SubtitleCue]] = []
     curr_start: float | None = None
     curr_end: float | None = None
+    curr_index: int | None = None
+    pending_index: int | None = None
     curr_text_lines: list[str] = []
 
     total_lines = len(lines)
@@ -128,14 +135,17 @@ def srt_to_cues(srt_text: str) -> list[SubtitleCue]:
             if curr_start is not None and curr_end is not None:
                 text_content = "\n".join(curr_text_lines).strip()
                 if text_content:
-                    cues.append(SubtitleCue(curr_start, curr_end, text_content))
+                    entries.append((curr_index, SubtitleCue(curr_start, curr_end, text_content)))
             curr_start = parse_srt_timestamp(match.group("start"))
             curr_end = parse_srt_timestamp(match.group("end"))
+            curr_index = pending_index
+            pending_index = None
             curr_text_lines = []
             continue
 
         # 核心修复：当前行是纯数字，且下一行紧接着是时间轴时，才判定为序号行跳过
         if line.isdigit() and i + 1 < total_lines and SRT_TIME_LINE_RE.match(lines[i + 1]):
+            pending_index = int(line)
             continue
 
         # 收集真正的字幕文本
@@ -146,9 +156,14 @@ def srt_to_cues(srt_text: str) -> list[SubtitleCue]:
     if curr_start is not None and curr_end is not None:
         text_content = "\n".join(curr_text_lines).strip()
         if text_content:
-            cues.append(SubtitleCue(curr_start, curr_end, text_content))
+            entries.append((curr_index, SubtitleCue(curr_start, curr_end, text_content)))
 
-    return cues
+    return entries
+
+
+def srt_to_cues(srt_text: str) -> list[SubtitleCue]:
+    """健壮的 SRT 解析器：精准前瞻识别序号行，彻底杜绝序号渗入字幕正文。"""
+    return [cue for _index, cue in parse_srt_entries(srt_text)]
 
 
 def strip_webvtt(text: str) -> str:

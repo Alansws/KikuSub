@@ -211,3 +211,71 @@ def test_remap_track_survives_short_or_missing_arrays():
     texts, base, _stats = remap_track(old, new, [], [])
     assert texts == [""]
     assert base == ["A"]
+
+
+def test_merge_translation_texts_only_writes_listed_slots():
+    from core.i18n import merge_translation_texts
+
+    source = ["おはよう", "今日は雨だ", "またね"]
+    texts = ["早上好", "今天下雨", "再见"]
+    base = list(source)
+    merged, merged_base, changed, kept = merge_translation_texts(
+        source, texts, base, {1: "今天下雨了"}
+    )
+    # 只有第 2 条被写；其余逐字节不动
+    assert merged == ["早上好", "今天下雨了", "再见"]
+    assert changed == [1]
+    assert kept == 0
+    assert merged_base == source
+
+
+def test_merge_translation_texts_empty_never_clears_existing_text():
+    from core.i18n import merge_translation_texts
+
+    source = ["A", "B", "C"]
+    texts = ["甲", "乙", "丙"]
+    merged, _base, changed, kept = merge_translation_texts(
+        source, texts, source, {1: "", 2: "   "}
+    )
+    # 空 / 纯空白只表示「本次没有这一条」，不表示删除
+    assert merged == ["甲", "乙", "丙"]
+    assert changed == []
+    assert kept == 2
+
+
+def test_merge_translation_texts_allow_empty_when_authoritative():
+    from core.i18n import merge_translation_texts
+
+    source = ["A", "B"]
+    merged, _base, changed, _kept = merge_translation_texts(
+        source, ["甲", "乙"], source, {1: ""}, skip_empty=False
+    )
+    assert merged == ["甲", ""]
+    assert changed == [1]
+
+
+def test_merge_translation_texts_keeps_stale_base_for_untouched_rows():
+    """批量替换只改文本：没改的条目不重设 base，「原文已改」标记不能因此消失。"""
+    from core.i18n import merge_translation_texts
+
+    source = ["新A", "B"]
+    texts = ["甲", "乙"]
+    base = ["旧A", "B"]  # 第 1 条本来是 stale
+    merged, merged_base, changed, _kept = merge_translation_texts(
+        source, texts, base, {1: "乙改"}, sync_unchanged_base=False
+    )
+    assert merged == ["甲", "乙改"]
+    assert merged_base == ["旧A", "B"]
+    assert changed == [1]
+
+
+def test_merge_translation_texts_rebuilds_when_track_misaligned():
+    from core.i18n import merge_translation_texts
+
+    source = ["A", "B", "C"]
+    merged, merged_base, changed, _kept = merge_translation_texts(
+        source, ["甲"], ["旧A"], {2: "丙"}
+    )
+    assert merged == ["", "", "丙"]
+    assert merged_base == source
+    assert changed == [2]

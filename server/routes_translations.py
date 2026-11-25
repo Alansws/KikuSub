@@ -17,8 +17,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from core import ai_gap
 from core import ai_proposal as proposals
-from core.i18n import pending_indices
+from core.i18n import merge_translation_texts, pending_indices
 from core.subtitles import align_translation_texts, cues_from_subtitle_file
 
 from .deps import get_session
@@ -34,6 +35,8 @@ class ApplyTranslationRequest(BaseModel):
     # 二选一：直接给译文数组（长度必须与核对台一致），或给一份 translate 提案
     texts: list[str] | None = None
     proposal: dict | None = None
+    # 逐条采纳的**全片 1 基序号**；缺省 = 全采纳。补译 / 取消勾选都靠它。
+    accept: list[int] | None = None
 
 
 class ImportTranslationRequest(BaseModel):
@@ -53,6 +56,32 @@ class ReplaceTextsRequest(BaseModel):
     """整轨替换文本：查找替换「全部替换」一次提交，避免逐条压历史。"""
 
     texts: list[str] = Field(default_factory=list)
+
+
+class GapItem(BaseModel):
+    """补译回填的一条：``i`` 全片 1 基序号，``before`` 是复制时的原文（防错位）。"""
+
+    i: int
+    before: str = ""
+    after: str = ""
+
+
+class GapApplyRequest(BaseModel):
+    lang: str = Field(min_length=1)
+    items: list[GapItem] = Field(default_factory=list)
+
+
+def _require_aligned(session: Session, lang: str, track: TranslationTrack) -> None:
+    """译文轨必须与原文逐条对齐；不对齐时宁可拒绝，也不写一份错位的轨。"""
+    total = len(session.review_cues)
+    if len(track.texts) != total:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{lang} 译文轨与原文条数不一致（{len(track.texts)} / {total}）；"
+                "请重新导入译文，或删除这条译文轨后再补译"
+            ),
+        )
 
 
 def track_payload(session: Session, lang: str) -> dict:
@@ -155,12 +184,75 @@ def import_translation(
     return {**track_payload(session, lang), "path": str(path)}
 
 
+def _commit_merged(
+    session: Session,
+    lang: str,
+    cues,
+    updates: dict[int, str],
+    *,
+    skip_empty: bool,
+    sync_unchanged_base: bool,
+    label: str,
+    entry: str = "",
+) -> tuple[dict, list[int], int]:
+    """把本次要写的条目合并进整片轨，只在真的有变化时压一步历史。
+
+    返回 ``(轨 payload, 文本真正变化的下标, 因空值被保留的条数)``。
+    服务端只写 ``updates`` 里的下标——范围外 / 未采纳 / 批外的槽位不会进入写循环，
+    这是「补译不覆盖已核对译文」的第一道（也是最硬的一道）锁。
+    """
+    track = session.translations.get(lang)
+    if track is not None and len(track.texts) != len(cues):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{lang} 译文轨与原文条数不一致（{len(track.texts)} / {len(cues)}）；"
+                "请重新导入译文，或删除这条译文轨后再应用"
+            ),
+        )
+    texts, base, changed, kept = merge_translation_texts(
+        [cue.text for cue in cues],
+        track.texts if track is not None else None,
+        track.base if track is not None else None,
+        updates,
+        skip_empty=skip_empty,
+        sync_unchanged_base=sync_unchanged_base,
+    )
+    before_base = list(track.base) if track is not None else []
+    base_dirty = any(
+        base[index] != (before_base[index] if index < len(before_base) else "")
+        for index in updates
+    )
+    dirty = (
+        (track is None and any(text.strip() for text in texts))
+        or (track is not None and (texts != list(track.texts) or base_dirty))
+    )
+    if dirty:
+        session.set_translation(
+            TranslationTrack(
+                lang=lang,
+                texts=texts,
+                base=base,
+                created_at=track.created_at if track is not None else time.time(),
+                entry=entry or (track.entry if track is not None else "in-app"),
+            ),
+            label=label,
+        )
+    return track_payload(session, lang), changed, kept
+
+
 @router.post("/api/translations", status_code=201)
 def apply_translation(
     payload: ApplyTranslationRequest,
     session: Session = Depends(get_session),
 ) -> dict:
-    """应用一版译文。整轨替换，压一次该语种的撤销栈。"""
+    """应用一版译文。
+
+    整轨替换会替换整条轨；片段应用只写这一段。**提案里的空槽位不清掉已有译文**：
+    模型把相邻两句合并成一条时，被合并槽位的 ``after`` 是空串，它只表示「本批没有
+    这一条」，不表示「删掉用户已核对的译文」。逐条取消采纳（``accept``）同理。
+    直接给 ``texts`` 数组时每一格都是最终值（允许清空），与「全部替换」同口径。
+    """
     lang = (payload.lang or "").strip()
     if not lang:
         raise HTTPException(status_code=422, detail="必须指定语种")
@@ -168,13 +260,16 @@ def apply_translation(
     if not cues:
         raise HTTPException(status_code=409, detail="当前没有字幕，无法应用译文")
 
+    total = len(cues)
+    accept = {int(i) for i in payload.accept} if payload.accept is not None else None
     entry = "in-app"
+    partial = False
+    first = last = 1
     if payload.proposal is not None:
         data = dict(payload.proposal)
         kind = data.get("kind")
         if kind != "translate":
             raise HTTPException(status_code=422, detail="这不是一份翻译提案")
-        total = len(cues)
         try:
             first, last = proposals.source_span(data, total)
         except ValueError as exc:
@@ -195,61 +290,46 @@ def apply_translation(
             for item in sorted(data["items"], key=lambda it: it["i"])
         ]
         entry = str(data.get("entry") or "in-app")
-        if scoped:
-            # 局部应用：按原始索引把这 N 条译文合并进整片平行轨，范围外原样保留。
-            # 旧轨没有 / 条数对不上时，创建一个整片长度、范围外为空位的轨。
-            previous = session.translations.get(lang)
-            if previous is not None and len(previous.texts) == total:
-                texts = list(previous.texts)
-                base = list(previous.base) + [""] * (total - len(previous.base))
-                created_at = previous.created_at
-            else:
-                texts = [""] * total
-                base = [c.text for c in cues]
-                created_at = time.time()
-            for offset, text in enumerate(scope_texts):
-                index = first - 1 + offset
-                texts[index] = text
-                base[index] = cues[index].text
-            session.set_translation(
-                TranslationTrack(
-                    lang=lang,
-                    texts=texts,
-                    base=base[:total],
-                    created_at=created_at,
-                    entry=entry,
-                ),
-                label=f"局部应用 {lang} 译文（第 {first}–{last} 条，{len(scope_texts)} 条）",
-            )
-            result = track_payload(session, lang)
-            result.update(
-                {
-                    "partial": True,
-                    "range": {"from": first, "to": last},
-                    "applied": len(scope_texts),
-                }
-            )
-            return result
-        texts = scope_texts
+        partial = scoped
+        updates = {
+            first - 1 + offset: text
+            for offset, text in enumerate(scope_texts)
+            if accept is None or (first + offset) in accept
+        }
+        label = (
+            f"局部应用 {lang} 译文（第 {first}–{last} 条，{len(updates)} 条）"
+            if scoped
+            else f"应用 {lang} 译文（{len(updates)} 条）"
+        )
     else:
         texts = [str(t or "") for t in (payload.texts or [])]
+        if len(texts) != total:
+            raise HTTPException(
+                status_code=422,
+                detail=f"译文条数不符：{len(texts)} 条译文 / {len(cues)} 条字幕",
+            )
+        updates = {
+            index: text
+            for index, text in enumerate(texts)
+            if accept is None or (index + 1) in accept
+        }
+        label = f"应用 {lang} 译文（{len(updates)} 条）"
 
-    if len(texts) != len(cues):
-        raise HTTPException(
-            status_code=422,
-            detail=f"译文条数不符：{len(texts)} 条译文 / {len(cues)} 条字幕",
-        )
-
-    session.set_translation(
-        TranslationTrack(
-            lang=lang,
-            texts=texts,
-            base=[c.text for c in cues],
-            entry=entry,
-        ),
-        label=f"应用 {lang} 译文（{len(texts)} 条）",
+    result, changed, kept = _commit_merged(
+        session,
+        lang,
+        cues,
+        updates,
+        # 提案里的空 after = 本批没有这一条；直接给 texts 数组时每一格都是最终值。
+        skip_empty=payload.proposal is not None,
+        sync_unchanged_base=True,
+        label=label,
+        entry=entry,
     )
-    return track_payload(session, lang)
+    result.update({"applied": len(updates), "changed": len(changed), "kept_empty": kept})
+    if partial:
+        result.update({"partial": True, "range": {"from": first, "to": last}})
+    return result
 
 
 # 注意：这条必须声明在 `/api/translations/{lang}/{index}` 之前。FastAPI 按声明顺序
@@ -268,6 +348,7 @@ def replace_translation_texts(
     track = session.translations.get(lang)
     if track is None:
         raise HTTPException(status_code=404, detail=f"没有 {lang} 译文轨")
+    _require_aligned(session, lang, track)
     texts = [str(t or "") for t in payload.texts]
     if len(texts) != len(track.texts):
         raise HTTPException(
@@ -276,19 +357,75 @@ def replace_translation_texts(
         )
     if texts == track.texts:
         return track_payload(session, lang)
-    replaced = sum(1 for a, b in zip(track.texts, texts) if a != b)
-    session.set_translation(
-        TranslationTrack(
-            lang=lang,
-            texts=texts,
-            # 批量替换是基于当前原文做的，直接视为已同步，避免整轨被标成过期。
-            base=[cue.text for cue in session.review_cues],
-            created_at=track.created_at,
-            entry=track.entry,
-        ),
+    replaced = sum(1 for before, after in zip(track.texts, texts) if before != after)
+    result, _changed, _kept = _commit_merged(
+        session,
+        lang,
+        session.review_cues,
+        {index: text for index, text in enumerate(texts)},
+        # 整轨替换的每一格都是用户给的最终值：允许清空。
+        skip_empty=False,
+        # 只改文本，不借机把整条轨的「原文已改」标记抹掉：只有真正变过的条目才重设 base。
+        sync_unchanged_base=False,
         label=f"替换 {lang} 译文（{replaced} 处）",
     )
-    return track_payload(session, lang)
+    return result
+
+
+@router.post("/api/translations/gap", status_code=201)
+def apply_gap(
+    payload: GapApplyRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """补译回填：**只写显式列出的下标**，其余条目一个字节不动。
+
+    与「应用一版译文」的区别：
+
+    - 不接收提案、不校验 digest，条号就是唯一的落位依据；
+    - 每条的 ``before`` 必须是当前原文（复制之后原文被改过就 409，什么都不写）；
+    - 一次 ``set_translation`` = 一步统一历史，⌘Z 一次退掉整批补译。
+
+    这是 2026-11-25「待译专列」的落点：用户逐句核对完一章后，只剩几条待译；
+    外部模型只翻这几条，回填时**不能**碰到其余已经核对过的译文。
+    """
+    lang = (payload.lang or "").strip()
+    if not lang:
+        raise HTTPException(status_code=422, detail="必须指定语种")
+    cues = session.review_cues
+    if not cues:
+        raise HTTPException(status_code=409, detail="当前没有字幕，无法补译")
+    track = session.translations.get(lang)
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"没有 {lang} 译文轨")
+    _require_aligned(session, lang, track)
+    total = len(cues)
+    try:
+        updates = ai_gap.validate_gap_items(payload.items, cues)
+    except ai_gap.GapError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    result, changed, kept_empty = _commit_merged(
+        session,
+        lang,
+        cues,
+        updates,
+        skip_empty=True,
+        sync_unchanged_base=True,
+        label=f"补译 {lang} 译文（{len(updates)} 条）",
+    )
+    result.update(
+        {
+            "gap": True,
+            "applied": len(updates),
+            "kept": total - len(updates),
+            "changed": len(changed),
+            "kept_empty": kept_empty,
+        }
+    )
+    log.info(
+        "补译回填 | lang=%s | 写入=%d | 保留=%d", lang, len(updates), total - len(updates)
+    )
+    return result
 
 
 @router.patch("/api/translations/{lang}/{index}")

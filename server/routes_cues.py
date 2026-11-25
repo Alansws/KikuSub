@@ -20,7 +20,7 @@ from core import export_naming
 from core import settings as settings_store
 from core.audit import load_audit_payload
 from core.clip_range import clip_tag, clip_window, safe_label, select_cues_in_range, shift_cues_to_clip
-from core.i18n import bilingual_entries, target_cues
+from core.i18n import bilingual_entries, merge_translation_texts, target_cues
 from core.subtitles import (
     SubtitleCue,
     cues_from_subtitle_file,
@@ -481,16 +481,37 @@ def replace_all(
                 detail=f"译文条数不符：{len(texts)} 条译文 / 轨道 {expected} 条",
             )
 
+    if texts is not None and track is not None:
+        source_len = len(new_cues) if new_cues is not None else len(session.review_cues)
+        if len(track.texts) != source_len:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{lang} 译文轨与原文条数不一致（{len(track.texts)} / {source_len}）；"
+                    "不能在同一步里改条数并写译文"
+                ),
+            )
+
     session.ensure_baseline()
     rebased: dict[str, list[int]] = {}
     if new_cues is not None:
         rebased = session.replace_review(new_cues, label=label, record=False)
     if texts is not None and track is not None:
+        # 整轨替换的每一格都是最终值（允许清空），但 base 只对**真正改过**的条目
+        # 重设：批量清标点 / 查找替换不该顺手把整条轨的「原文已改」标记抹掉。
+        merged_texts, merged_base, _changed, _kept = merge_translation_texts(
+            [cue.text for cue in session.review_cues],
+            track.texts,
+            track.base,
+            {index: text for index, text in enumerate(texts)},
+            skip_empty=False,
+            sync_unchanged_base=False,
+        )
         session.set_translation(
             TranslationTrack(
                 lang=lang,
-                texts=texts,
-                base=[cue.text for cue in session.review_cues],
+                texts=merged_texts,
+                base=merged_base,
                 created_at=track.created_at,
                 entry=track.entry,
             ),
