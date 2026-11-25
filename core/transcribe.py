@@ -1686,16 +1686,27 @@ class AnimeWhisperEngine:
         不匹配），但**不影响**别的调用方——它们本来就不会传 `prompt_text`。
         """
         stats = dict(getattr(self, "last_prompt_ids_stats", {}) or {})
+        # 兜底自愈：权重可能被外部卸载（空闲巡检 / 换引擎让路 / 对齐层让显存）。
+        # 2026-11-26 真机事故就是 `self._pipe is None` 时直接调用，报
+        # `TypeError: 'NoneType' object is not callable`，整片任务判死。服务端现在
+        # 用 `EngineIdleReleaser.hold()` 租约保证转写期间不会被卸；真走到这里就
+        # 重新加载一次，让任务继续，而不是把已完成的部分全丢掉。
+        if self._pipe is None:
+            log.warning("Anime Whisper 权重被意外卸载，重新加载后继续解码")
+            self.load()
+        pipe = self._pipe
+        if pipe is None:
+            raise RuntimeError("Anime Whisper 权重未能加载，无法继续转写")
         kwargs = generate_kwargs
         if prompt_text and not timestamps and stats.get("enabled"):
             try:
-                tokenizer = getattr(self._pipe, "tokenizer", None)
+                tokenizer = getattr(pipe, "tokenizer", None)
                 if tokenizer is None:
                     raise RuntimeError("pipeline 没有 tokenizer")
                 ids = tokenizer.get_prompt_ids(
                     prompt_text[-PROMPT_MAX_CHARS:], return_tensors="pt"
                 )
-                device = getattr(self._pipe, "device", None)
+                device = getattr(pipe, "device", None)
                 if device is not None:
                     ids = ids.to(device)
                 kwargs = {**generate_kwargs, "prompt_ids": ids}
@@ -1705,7 +1716,7 @@ class AnimeWhisperEngine:
                 stats["failed"] = int(stats.get("failed", 0)) + 1
                 self.last_prompt_ids_stats = stats
                 kwargs = generate_kwargs
-        res = self._pipe(
+        res = pipe(
             {"array": buf, "sampling_rate": SAMPLE_RATE},
             generate_kwargs=kwargs,
             return_timestamps=bool(timestamps),

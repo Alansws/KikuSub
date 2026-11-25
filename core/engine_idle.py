@@ -9,12 +9,21 @@
 - 整片任务开始时 `release_others(keep=本轮引擎)` 立即把**另一个**引擎让出去，
   但不碰本轮要用的那个。
 
+**租约（2026-11-26 真机事故）：** 只按「最后一次 `touch` 的时间」判空闲是不够的——
+一次整片转写可能跑几分钟到几十分钟，期间没有任何 `touch` 落地，空闲巡检就会把
+**正在解码的那个引擎**卸掉，解码线程下一次 `self._pipe(...)` 直接
+`TypeError: 'NoneType' object is not callable`（真机日志 00:36:08，
+`core/transcribe.py:1708`）。所以「用引擎跑片」必须以 `hold(engine_key)` 租约
+包起来：租约期间 `sweep()` / `release_others()` / `release_now()` 一律跳过该引擎。
+租约退出时自动 `touch`，把空闲窗口从「这轮结束」重新计时，而不是从「这轮开始」。
+
 与 TTS 的 `TTSManager` 是同一种策略（它的默认空闲是 5 分钟），区别是这里只管
 ASR 引擎、而且卸载动作委托给 `core.pipeline.release_engine`（唯一出口）。
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -57,6 +66,8 @@ class EngineIdleReleaser:
         self._clock = clock
         self._release = release or _default_release
         self._last_used: dict[str, float] = {}
+        # 正在跑片的引擎（租约计数）：>0 时任何路径都不许卸它。
+        self._in_use: dict[str, int] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -75,6 +86,49 @@ class EngineIdleReleaser:
         with self._lock:
             return sorted(self._last_used)
 
+    # -- 租约：跑片期间钉住引擎 --------------------------------------------
+
+    def busy(self, engine_key: str) -> bool:
+        """该引擎是否有未结束的租约（正在跑片）。"""
+        with self._lock:
+            return bool(self._in_use.get(engine_key))
+
+    def acquire(self, engine_key: str) -> None:
+        """进入一次「正在使用」租约；同时刷新空闲计时。"""
+        if not engine_key:
+            return
+        with self._lock:
+            self._in_use[engine_key] = self._in_use.get(engine_key, 0) + 1
+        self.touch(engine_key)
+
+    def relinquish(self, engine_key: str) -> None:
+        """结束一次租约；空闲窗口从这一刻重新计时。"""
+        if not engine_key:
+            return
+        with self._lock:
+            left = int(self._in_use.get(engine_key, 0)) - 1
+            if left > 0:
+                self._in_use[engine_key] = left
+            else:
+                self._in_use.pop(engine_key, None)
+        self.touch(engine_key)
+
+    @contextlib.contextmanager
+    def hold(self, engine_key: str, reason: str = ""):
+        """`with idle.hold(key):` —— 租约期内空闲巡检不会卸载该引擎。
+
+        `engine_key` 为空时是空操作（例如未绑定引擎的测试替身任务），保持调用点
+        不用写 `if`。
+        """
+        if not engine_key:
+            yield self
+            return
+        self.acquire(engine_key)
+        try:
+            yield self
+        finally:
+            self.relinquish(engine_key)
+
     # -- 卸载 --------------------------------------------------------------
 
     def sweep(self) -> list[str]:
@@ -84,7 +138,7 @@ class EngineIdleReleaser:
             expired = [
                 (key, used)
                 for key, used in self._last_used.items()
-                if now - used >= self.idle_seconds
+                if now - used >= self.idle_seconds and not self._in_use.get(key)
             ]
             for key, _used in expired:
                 self._last_used.pop(key, None)
@@ -100,8 +154,9 @@ class EngineIdleReleaser:
 
     def release_now(self, reason: str = "") -> list[str]:
         with self._lock:
-            keys = list(self._last_used)
-            self._last_used.clear()
+            keys = [key for key in self._last_used if not self._in_use.get(key)]
+            for key in keys:
+                self._last_used.pop(key, None)
         released = []
         for key in keys:
             try:
@@ -113,9 +168,17 @@ class EngineIdleReleaser:
         return released
 
     def release_others(self, keep: str, reason: str = "") -> list[str]:
-        """整片任务开始前，把「不是本轮引擎」的引擎让出去（不碰 keep）。"""
+        """整片任务开始前，把「不是本轮引擎」的引擎让出去（不碰 keep）。
+
+        正在跑片（有租约）的引擎同样不碰：单槽任务注册表下理论上不会出现，但真出现
+        就是同一个 `NoneType` 事故。
+        """
         with self._lock:
-            keys = [key for key in self._last_used if key != keep]
+            keys = [
+                key
+                for key in self._last_used
+                if key != keep and not self._in_use.get(key)
+            ]
             for key in keys:
                 self._last_used.pop(key, None)
         released = []
