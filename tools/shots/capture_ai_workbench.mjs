@@ -282,8 +282,16 @@ const sleep = (ms) => `await new Promise((r) => setTimeout(r, ${ms}));`;
 function evalFor(state, theme) {
   const common = `
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    document.documentElement.dataset.theme = ${JSON.stringify(theme)};
-    localStorage.setItem('kikusub.theme', ${JSON.stringify(theme)});
+    // mincho 是字幕字体偏好，不是第三套配色（2026-11-25 起）
+    if (${JSON.stringify(theme)} === 'mincho') {
+      document.documentElement.dataset.cueFont = 'mincho';
+      localStorage.setItem('kikusub.cueFont', 'mincho');
+      document.documentElement.dataset.theme = 'light';
+      localStorage.setItem('kikusub.appearance', 'light');
+    } else {
+      document.documentElement.dataset.theme = ${JSON.stringify(theme)};
+      localStorage.setItem('kikusub.appearance', ${JSON.stringify(theme)});
+    }
     ${sleep(2400)}
   `;
 
