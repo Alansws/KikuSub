@@ -62,6 +62,10 @@ updated: 2026-11-25 23:05
 | **Step 4.1 纯结构拆分** | ✅ 完成 | ReviewView 2583 → 1769；查找 / 浮层 / 纯计算分到 lib 与 components；0.000000% 像素差；见 §7.4 |
 | **Step 4.2 核对台精修** | ✅ 验收通过 | 44px cue 页边接通、检查器去重、走带/浮层精修；ReviewView 1769 持平；见 §7.5 |
 | **Step 4.2.1 译文轨状态条** | ✅ 完成 | 两行散件并成一条 24px 状态条 + `⋯` 菜单；CuePane 748→629；见 §7.5.1 |
+| **Step 4.3 组一 准备与复核** | ✅ 完成 | 导入页「继续当前工程」卡；双引擎复核收进台本纸；见 §7.6 |
+| **Step 4.3 组二 原文加工** | ✅ 完成 | 侧栏 ① ② 编号；AI 三页 note 槽与互相指路；见 §7.6 |
+| **Step 4.3 组三 交付** | ✅ 完成 | 「暂无译文轨」收敛成一次；成片预览按监看器；导出完成补回核对台；见 §7.6 |
+| **Step 4.3 组四 辅助/边界** | ✅ 完成 | 设置页去彩图标；内核未连接可手动重启；修 `.sb-item` 类名撞车；见 §7.6 |
 | 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（392）/ `pytest -m "not integration"`（1058 passed / 2 skipped） |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
@@ -731,6 +735,86 @@ Step 4.1 把查找栏抽进 `ReviewTable` 时，`bind:value={findState.query}` �
 菜单展开）、[step4-trackbar-dark.jpg](images/refactor-2026-11/step4-trackbar-dark.jpg)（暗色）、
 [step4-trackbar-empty.jpg](images/refactor-2026-11/step4-trackbar-empty.jpg)（暂无译文）。
 
+### 7.6 Step 4.3 落地记录：剩余页面按用户旅程收口（2026-11-25）
+
+顺序按用户真实动线：**准备与复核 → 原文加工 → 交付 → 辅助与边界**。每完成一组各自成
+commit（`desktop` 层），台账与契约随后同步。
+
+**组一 · 准备与复核（导入 + 双引擎复核）**
+
+- **导入页补上「继续当前工程」**（修断层）：已有工程时顶部先是一张 760px 卡——封面 /
+  文件名 / `时长 · 条数 · 报告状态` / 主按钮「继续核对 ⌘3」（没字幕时「去转写 ⌘2」）+
+  安静的「换片…」；拖入降为一条 40px 带（仍可直接把文件拖进窗口）。没有工程时才回到
+  原来的大拖放区。
+- **双引擎复核收进一张台本纸**：对照表用 `.cue-sheet`（纸白 + 1px `--rule` + 7px 圆角，
+  左右 16px 页边），表头回到 11px 标签字；页头 `.canvas` + 16px 页边，与核对台同骨架。
+  行内「试听 / 采用 B」命中区 20 → 22px、字 11 → 11.5px，仍然安静。
+
+**组二 · 原文加工（锁轴 ① / 重排 ②）**
+
+- 侧栏「03 原文」两页加**段内编号** `①` `②`（mono 11px、第三级墨色）。编号只做可见标记，
+  不进 `label` / `aria-label`，脚本按名字匹配不受影响。
+- `AiBatchToolbar` 新增 **note 槽**（标题下一行）：写清这一页动不动时间轴，并给同组下一页
+  的入口——锁轴「只改文字，条数与时间码 1:1 不动 → 去 ② 重排润色」、重排「会改条数与
+  时间码，整段替换前先过体检 → 去 ① 锁轴润色」、翻译「译文走平行轨，原文与时间轴都不动
+  → 回核对台」。三页共用同一个位置，切页不跳。
+
+**组三 · 交付（双语翻译 + 导出）**
+
+- 「暂无译文轨」从两段各一句收成**页头一条**（原文案还带着改名前的「AI 处理 → 翻译」），
+  右侧直接给「去双语翻译」；两段的译文 / 双语按钮照旧置灰。
+- 成片预览按**监看器**做：10px 视窗圆角、近黑底、内描边 + `--shadow-video`，与核对台
+  画面同一套处理。
+- 导出完成卡补「回到核对台」，交付闭环不用再回侧栏找路。
+
+**组四 · 辅助与边界（提示词库 / 设置 / Harden）**
+
+- 设置页左侧四个类别去掉高饱和彩块（蓝 / 紫 / 橙 / 青），改成与主侧栏同一套线图标：
+  未选中 `--ink-3`、选中转蓝铅笔。
+- 提示词库右上角三颗按钮改用现名（锁轴润色 / 重排润色 / 双语翻译）；导出页与设置页
+  AI 文案里残留的旧页名一并改掉。
+- **Harden**：①「内核未连接」遮罩多一颗「重启内核」（主进程 `sidecar:restart`，把崩溃
+  自动重连的 3 次计数清零再拉一次，退出中拒绝）；② 底栏读数 `.sb-item` → `.st-item`，
+  修掉与侧栏导航的类名撞车（设置页布局回归一直点到「Anime Whisper」的真正原因）；
+  ③ 长路径 / 截断沿用既有 `title` + ellipsis（导出位置、模型目录、导入工程名均核对过）。
+
+**顺手修好的脚本（Step 3B 改名后的存量红）**
+
+| 脚本 | 原因 | 处理 |
+| --- | --- | --- |
+| `verify_gap_fill` | `nav('翻译')` 匹配不到「双语翻译」 | 改现名，11 项全绿 |
+| `verify_clip_scope` | `sidebar('润色'/'翻译')`、章节按钮 `仅处理此片段` | 改现名 / 改「处理此片段」，20 项全绿 |
+| `verify_batch_and_align` | `sidebar('润色'/'翻译'/'断句重排')` | 改现名，全部通过 |
+| `verify_settings_layout` | 底栏 `.sb-item` 撞侧栏类名 | 底栏改名 `.st-item`（代码修复，非改断言） |
+| `verify_settings_ai_fold` | 导出页 hint 从两段收成一条 | 断言改成 `hintCount === 1` + 新文案 |
+
+**Step 4.3 生产截图（真实 Electron，无窗口，明暗各一套）**
+
+| 页面 | 日间校样 | 夜间配音 |
+| --- | --- | --- |
+| 导入（已有工程 → 继续核对） | [step5-import-light.jpg](images/refactor-2026-11/step5-import-light.jpg) | [step5-import-dark.jpg](images/refactor-2026-11/step5-import-dark.jpg) |
+| 转写 | [step5-transcribe-light.jpg](images/refactor-2026-11/step5-transcribe-light.jpg) | [step5-transcribe-dark.jpg](images/refactor-2026-11/step5-transcribe-dark.jpg) |
+| 核对台 | [step5-review-light.jpg](images/refactor-2026-11/step5-review-light.jpg) | [step5-review-dark.jpg](images/refactor-2026-11/step5-review-dark.jpg) |
+| 双引擎复核 | [step5-dual-light.jpg](images/refactor-2026-11/step5-dual-light.jpg) | [step5-dual-dark.jpg](images/refactor-2026-11/step5-dual-dark.jpg) |
+| ① 锁轴润色 | [step5-polish-light.jpg](images/refactor-2026-11/step5-polish-light.jpg) | [step5-polish-dark.jpg](images/refactor-2026-11/step5-polish-dark.jpg) |
+| ② 重排润色 | [step5-reshape-light.jpg](images/refactor-2026-11/step5-reshape-light.jpg) | [step5-reshape-dark.jpg](images/refactor-2026-11/step5-reshape-dark.jpg) |
+| 双语翻译 | [step5-translate-light.jpg](images/refactor-2026-11/step5-translate-light.jpg) | [step5-translate-dark.jpg](images/refactor-2026-11/step5-translate-dark.jpg) |
+| 导出 | [step5-export-light.jpg](images/refactor-2026-11/step5-export-light.jpg) | [step5-export-dark.jpg](images/refactor-2026-11/step5-export-dark.jpg) |
+| 提示词库 | [step5-prompts-light.jpg](images/refactor-2026-11/step5-prompts-light.jpg) | [step5-prompts-dark.jpg](images/refactor-2026-11/step5-prompts-dark.jpg) |
+| 设置 | [step5-settings-light.jpg](images/refactor-2026-11/step5-settings-light.jpg) | [step5-settings-dark.jpg](images/refactor-2026-11/step5-settings-dark.jpg) |
+
+命令：`bash tools/shots/capture_matrix.sh --out /tmp/final-light --size 1360x838 --seed
+tools/shots/readme-seed.json --states "import transcribe review translate export prompts settings"`
+（暗色加 `--theme dark`）；AI 三页用
+`node tools/shots/capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual"`。
+全部走独立 `--user-data-dir` / `KIKUSUB_DATA_DIR`，不写现役 App 的任何目录。
+
+**明确不做 / 待评估**
+
+- 检查器 348px → 388px 与「舞台行」改造：仍按 §7.5 的结论留在后续评估。
+- `verify_chapter_edge`：8/10。修好「旗标已不在 2.5s 视窗里」的前置现场后，只剩
+  「拖到右缘 rAF 推进 / 抓手钉在右缘」两项；本轮没有碰章节端点代码，列为已知遗留。
+
 ## 8. 验收矩阵
 
 ### 8.1 每步必跑
@@ -769,6 +853,31 @@ node tools/shots/verify_review_overlays.mjs --mode dialog
   2026-11-25 Step 4.2 的核对台精修一行没进这两个文件（页边纯逻辑在 `lib/reviewMargin.ts`）。
 - 单击 vs 4 px 框选、`duration/69` 缩放、50 步统一历史、`setExport*`、无窗口、无 200%。
 - 主题只走 `html[data-theme]` 令牌；组件不写主题色；分隔线不用 5% 灰。
+
+### 7.7 Step 5 终局验证（2026-11-25）
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run check` | ✅ 0 error |
+| `npm run check:svelte` | ✅ 4/4（基线 4，未上升） |
+| `npm run build` | ✅ |
+| `npm run test:main` | ✅ **392** |
+| `pytest -q -m "not integration"` | ✅ **1058 passed / 2 skipped**（31 deselected） |
+| `impeccable detect`（构建产物） | ✅ **0 anti-patterns**：删掉进度条的两条无限循环高光、导出进度条的渐变填充、存储条的斜纹底 |
+| 键盘 | ✅ `⌘1…⌘8` 依次切到 导入/转写/核对台/双引擎复核/① 锁轴/② 重排/双语翻译/导出；`⌘F` 打开查找（输入框就位）、`Esc` 关闭；`Esc` 不清当前行 |
+| 对比度 | ✅ `verify_phase2_shell`（明暗两套：正文 ≥7:1 / 11px ≥4.5:1 / 蓝铅笔 ≥4.5:1 / 底栏 ≥4.5:1） |
+| 动效 | ✅ 高频编辑零过渡；进度条只保留「确定填充」与「不确定呼吸」；`prefers-reduced-motion` 全停 |
+| `tools/shots/verify_*.mjs` | ✅ **25 / 26 全绿**（含 2 个浮层模式）；唯一红的是 `verify_chapter_edge` **8/10**（右缘 rAF 推进两项，已知遗留，见 §7.6） |
+| `capture_matrix.sh` | ✅ 10 个状态 × 明暗两套；基线已按新外观刷新（21 张） |
+
+**基线更新**：`docs/images/shots/baseline/` 全部 21 张换成新外观（10 个状态 + AI 三页的
+light/dark/mincho + 设置两页 1440×900），`capture_matrix.sh --compare` 从此以新外观为准。
+
+**README 展示图**：**本轮不动** `README.md` / `README_EN.md` 的成品图。理由：那些图是
+main 分支面向用户的承诺，而 `feat/ui-redesign` 还没合入；等验收通过、合并前用
+`KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh --seed
+tools/shots/readme-seed.json --delay 12000 --states "import transcribe review translate export settings"`
+重出一次即可（命令与种子都已在 tools/shots/README.md 里）。
 
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
@@ -815,15 +924,22 @@ node tools/shots/verify_review_overlays.mjs --mode dialog
 | 2026-11-25 | 危险动作只在菜单里，`删除译文` 与其它项隔一条发丝线 | DESIGN.md §Inspector：danger 隔离、不与主操作相邻；朱红不应常驻 |
 | 2026-11-25 | `⋯` 用几何图标（三颗实心点）而非文本字形 `⋯` | 文本字形被字体基线顶到行顶，2× 截图里像一撮浮尘 |
 | 2026-11-25 | 菜单内 `Esc` 只关菜单（`stopPropagation`），不清核对台选区 | 红线 6：`Esc` 只清选区；两个「Esc」叠在一起时必须先关浮层 |
+| 2026-11-25 | **导入页：已有工程时先给「继续当前工程」，拖入降为 40px 带** | 用户回来问的是「我上次干到哪了」，不是「再选一个文件」 |
+| 2026-11-25 | **锁轴 / 重排：①② 编号 + 页头一行「动不动时间轴」+ 互相指路** | §2.3 落地；比模式开关更符合「先锁轴、必要时才重排」的心智 |
+| 2026-11-25 | 编号只落在侧栏可见标记，不进 label / aria-label | 快捷键、菜单、脚本都按名字匹配，改名字等于改动三处契约 |
+| 2026-11-25 | **「暂无译文轨」全站一次**（导出页头 + 去双语翻译入口） | 同一件事说两遍、还用着改名前的导航名 |
+| 2026-11-25 | 成片预览 = 监看器（10px + 近黑底 + 内描边 + `--shadow-video`） | 预览要能判断成片亮度，不能是「一张图」 |
+| 2026-11-25 | 设置页类别不用彩色块，改用与侧栏同一套线图标 | Cue Script 里一屏唯一的饱和色是主操作；旧彩块是上一套皮肤的残留 |
+| 2026-11-25 | 崩落后允许手动重启内核（`sidecar:restart`） | 自动重连 3 次用完后，桌面端不该只剩「重启应用」 |
+| 2026-11-25 | 底栏读数 `.sb-item` → `.st-item` | 与侧栏导航同名，脚本按类名数导航项时会被底栏读数污染 |
 
 ## 11. 交接清单（新会话）
 
 1. `git status` 必须在 `feat/ui-redesign`、干净；备份分支/tag 已存在且未动（§0.1）。
 2. 读本文 §0.1、§1、§2、§7、§9；读 [DESIGN.md](../DESIGN.md) 的 Colors/Typography/Layout/Components。
-3. Step 3、**Step 4.1、Step 4.2 已验收；Step 4.2.1 已完成**（§7.3 / §7.3.1 / §7.4 /
-   §7.5 / §7.5.1）；**下一步是 Step 4.3**（按用户旅程重构剩余页面：
-   导入 + 双引擎复核 → 锁轴 / 重排 → 双语翻译 → 导出 → 提示词库 / 设置 / 边界态）。
-   不要再把逻辑塞回 ReviewView；4.2 与 4.2.1 的视觉改动各自单独成 commit。
+3. Step 3、Step 4.1、Step 4.2、**Step 4.2.1、Step 4.3 四组均已完成**（§7.3 / §7.3.1 /
+   §7.4 / §7.5 / §7.5.1 / §7.6）。不要再把逻辑塞回 ReviewView；每一步的视觉改动各自成 commit。
+   **已知遗留**：`verify_chapter_edge` 8/10（右缘 rAF 推进两项），详见 §7.6 末尾。
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。

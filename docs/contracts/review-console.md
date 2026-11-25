@@ -1214,3 +1214,16 @@
   共 20 条）、`verify_translation_flow`（读数选择器改 `.track-bar .tb-status`，
   24 条全绿）、`verify_gap_fill`（页签标签从 Step 3B 起就叫「双语翻译」，
   脚本里的旧名 `翻译` 一并修好，11 条全绿）。
+
+#### 3.4.23 底栏读数项不再复用侧栏的 `.sb-item`（2026-11-25，界面重构 Step 4.3）
+
+> 触发：`verify_settings_layout.mjs` 按「侧栏最后一项」找设置入口，忽然停在
+> 「设置页没有打开」。根因不在设置页：底栏 `StatusBar` 的每个读数 `<span>` 也叫
+> `.sb-item`，于是 `document.querySelectorAll('.sb-item')` 末尾拿到的是底栏的
+> 「Anime Whisper」引擎读数，点它当然没反应。
+
+- 底栏读数项改名 `.st-item`（分辨率 / 帧率那项是 `.st-item.st-spec`），
+  `.sb-item` 从此专属于侧栏导航。选择器的歧义消失，任何「按类名数导航项」的脚本
+  都不会再被底栏读数污染。
+- 同类检查仍然有效：`verify_phase2_shell`（侧栏 232/52、四段分组、激活态）、
+  `verify_settings_layout`（三种窗口下四页不越界 / 不重叠 / 不截断）。

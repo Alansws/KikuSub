@@ -266,9 +266,25 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 - **Danger:** delete sits alone at the bottom, after 16 px of air and a hairline.
 - **No repeated read-outs:** device, engine, cue count, character count and resolution live in the titlebar and status bar; transcription parameters and version live in the task report. The inspector never restates them.
 
+### Page note (AI pages)
+
+The three AI pages carry one line under the title bar: a small line icon, one sentence stating
+whether **this page can move the time axis**, and at most one link to the sibling page
+(`锁轴润色 ①` ⇄ `重排润色 ②`, `双语翻译` → review console). It sits between the title row and the
+command row, so it never moves when switching pages. This is a sentence, not an eyebrow: it names
+a fact the user is about to act on.
+
 ### Empty states
 
-One icon, one sentence naming the next action, one primary button, one quiet alternative. No illustration, no marketing copy.
+One icon, one sentence naming the next action, one primary button, one quiet alternative. No
+illustration, no marketing copy.
+
+### Progress
+
+Determinate progress is a solid cobalt fill on a neutral track — no shimmer, no gradient, no halo;
+the bar is already moving. Indeterminate progress is a fixed block that breathes in opacity; it
+never travels sideways, because lateral motion reads as "some progress is happening" and competes
+with the content. `prefers-reduced-motion` stops both.
 
 ## Do's and Don'ts
 
@@ -281,6 +297,7 @@ One icon, one sentence naming the next action, one primary button, one quiet alt
 - Test both appearances at 1360×838 and 1080×680.
 - Keep the 44 px margin, 30 px rows and 1 px hairlines consistent across pages.
 - Let a mark exist only where the fact is invisible elsewhere (that is why the pencil hides in bilingual mode).
+- Say once per screen when a fact can be acted on from one place (the missing translation track is stated once, at the page top).
 
 ### Don't
 
@@ -290,6 +307,8 @@ One icon, one sentence naming the next action, one primary button, one quiet alt
 - Don't use a display face, gradient text or decorative glass.
 - Don't make the interface the hero; the film and the cues are the hero.
 - Don't reorder ⌘1–⌘8 without updating the menu bar, the shortcut help and the tests.
+- Don't use looped decoration on anything that already moves (progress, playback). No shimmer, no stripes, no traveling highlight.
+- Don't give settings categories their own hues; categories are learned by name and position, and the only saturated colour on a working screen is the blue pencil.
 
 ## Notes on Implementation
 
@@ -298,6 +317,15 @@ The high-fidelity prototype lives in `.impeccable/prototype/` (workspace root, n
 - respect `ReviewView.svelte` and `store.svelte.ts` line budgets (only shrink; split logic first);
 - preserve the review interaction contracts (4 px click slop, `duration/69` zoom, 50-step history);
 - route every screenshot through `KIKUSUB_DEV_SEED` + `--screenshot` or `capture_matrix.sh`, never a visible window.
+
+**Step 4.3 additions (2026-11-25).** The import page is the documented exception to the
+1120 px measure: a 760 px "continue current project" card (cover, name, `duration · cues ·
+report`, one primary "continue review ⌘3", one quiet "switch film…") above a 40 px drop strip;
+the full drop target only appears when no project is open. The dual-engine review uses the same
+`.cue-sheet` primitive as the review table (sheet white, 1 px `--rule`, 7 px radius, 16 px edges).
+The sidebar marks the two 原文 pages with paragraph ordinals `①` `②` — a visible mark only; it
+never enters the label or the accessible name, because shortcuts, menus and tests match by name.
+The settings category list uses the same line icons as the main sidebar (no coloured tiles).
 
 **Parallel install and data isolation.** The user's current installed `KikuSub.app` is their daily
 driver and must keep working untouched. A redesign build is only ever a *separate* artefact
