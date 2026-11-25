@@ -233,6 +233,13 @@ const EVAL = String.raw`
     await sleep(500);
     const afterFlagClick = timeValue();
 
+    stage = 'rezoom';
+    // 全景复位只是为了让「单击旗标仍跳转」点得到旗标；全景下视窗已经铺满整片
+    // （clampStart 无处可移），边缘自动平移必然不动。这里把视窗重新放大回窄窗，
+    // 恢复 pan 阶段的前置现场——下面的断言本身没有放宽。
+    await clickAt(14.5);
+    await zoomAtPlayhead(2);
+
     stage = 'pan';
     // 5) 拖到右缘外并压住不动：端点要自己继续走（rAF 推进），视窗跟着平移
     const beforePan = timesOf(0);

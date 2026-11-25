@@ -82,11 +82,19 @@
     });
   });
 
-  /** 只渲染视窗附近（左右各留半屏），整片几百个标记时不至于塞满 DOM。 */
+  /**
+   * 只渲染视窗附近（左右各留半屏），整片几百个标记时不至于塞满 DOM。
+   *
+   * 拖动中的那一条**必须留在 DOM 里**：边缘自动平移时视窗一直往右走，而条目
+   * 的可见性读的是已落库的 `item.start/end`（拖动值只是 `liveStart/liveEnd`）。
+   * 不特判的话，压住右缘平移超过半屏，这一条就被筛掉、`chapter-track` 整体卸载，
+   * 抓手连同 `drag` 状态一起消失——松手什么都没提交（2026-11-26 排雷时实测）。
+   */
   const visible = $derived(
     items.filter(
       (item) =>
-        item.end >= viewStart - viewSpan * 0.5 && item.start <= viewStart + viewSpan * 1.5,
+        drag?.id === item.mark.id ||
+        (item.end >= viewStart - viewSpan * 0.5 && item.start <= viewStart + viewSpan * 1.5),
     ),
   );
 
