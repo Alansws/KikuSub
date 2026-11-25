@@ -1358,9 +1358,35 @@ bash tools/pack/build_trial.sh     # → build/pack-next/KikuSub-Next.app（1.4G
 - `desktop/test/theme-preview.test.mjs` 的 `card` 对账从 `--raise` 改读 `--surface`，
   因为缩略图里那张小卡是**台本纸**，不是浮层按钮。
 
+**顺手抓到的一处真缺陷**：`--bg-content` 改读 `--raise` 后，首启向导 / 引擎设置 /
+退出面板的**全窗遮罩与卡片同时读它**，于是暗色下卡片溶进遮罩、只剩一圈阴影。
+现在遮罩读 `--canvas`（页面地面）、卡片读 `--raise`（真浮层），
+实测三层各不相同：scrim `(22,22,24)` / card `(49,49,53)` / 卡片里的凹槽 `(60,60,64)`。
+取证走打包产物：`KIKUSUB_ISOLATION_ROOT=/tmp/… KikuSub-Next --no-sandbox --screenshot=…`。
+
 **基线**：`docs/images/shots/baseline/` 需要在下一轮整体刷新（本轮已重拍取证图）。
 
-#### 五、取证截图（无窗口，全部 `read_image` 自检过）
+#### 五、试用版重新打包（Step 8 收口）
+
+Python 一行未改（`git diff HEAD~4 -- core server tools/kikusub` 为空），所以 sidecar 不需要重打；
+只重装前端与装配：
+
+```bash
+bash tools/pack/build_trial.sh   # → build/pack-next/KikuSub-Next.app（1.4G）
+```
+
+- 身份未变：`com.kikusub.desktop.next` / 包内 `app-isolation.json` 仍是
+  `{appName: KikuSub-Next, dataDirName: KikuSub-Next}` / 数据根
+  `~/Library/Application Support/KikuSub-Next`。
+- **现役隔离核对**（装配前后各取一次）：
+  `build/pack/KikuSub.app/Contents/Info.plist` sha256 恒为 `f0afca4a…4269e`；
+  `~/Library/Application Support/KikuSub` 的目录 mtime 与根下四个 `.json` 的 sha256
+  前后逐字节一致；现役进程（PID 44777）在两次装配后仍在运行。
+- **无窗口冒烟**：`KIKUSUB_ISOLATION_ROOT=/tmp/trial-shot2/root` 把数据根挪到临时目录后跑
+  `…/MacOS/KikuSub-Next --no-sandbox --screenshot=…`，首启向导正常出现且指向临时根，
+  真实数据根未被这次验证写入。
+
+#### 六、取证截图（无窗口，全部 `read_image` 自检过）
 
 | 看什么 | 图 |
 | --- | --- |
