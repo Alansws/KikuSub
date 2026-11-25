@@ -671,6 +671,13 @@
       </span>
     {/snippet}
 
+    {#snippet note()}
+      <span class="note-ico warn"><Icon name="warn" size={11} /></span>
+      <span>会改条数与时间码：整段替换前先过一遍体检，越界的时间会单独高亮。</span>
+      <button class="aiw-link" onclick={() => setView('polish')}>
+        只是改字？去 ① 锁轴润色 →
+      </button>
+    {/snippet}
     {#snippet statusExtra()}
       {#if isOps && app.cues.length}
         <span class="aiw-chip" title="结构建议按全片原稿索引应用，不叠加处理范围 / 批次">

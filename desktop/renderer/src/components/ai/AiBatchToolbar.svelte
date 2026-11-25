@@ -62,6 +62,7 @@
     laneManual,
     statusExtra,
     railExtra,
+    note,
   }: {
     title: string;
     /** 当前通道；由调用方持有，切换时通过 `onChannel` 回写。 */
@@ -90,6 +91,11 @@
     statusExtra?: Snippet;
     /** 可选的分段轨（只在多段 / 需要时渲染）。 */
     railExtra?: Snippet;
+    /**
+     * 标题下一行的一句话（Step 4.3）：写清「这一页动不动时间轴」并给同组下一页的入口。
+     * 锁轴 / 重排 / 翻译三页共用，位置固定在标题与命令条之间，切页时不跳。
+     */
+    note?: Snippet;
   } = $props();
 </script>
 
@@ -111,6 +117,10 @@
     <div class="aiw-spacer"></div>
     {@render statusExtra?.()}
   </div>
+
+  {#if note}
+    <div class="aiw-note">{@render note()}</div>
+  {/if}
 
   <div class="aiw-cmd-row">
     <div class="aiw-lane" role="group" aria-label="执行通道">

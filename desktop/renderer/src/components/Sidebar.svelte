@@ -48,7 +48,10 @@
             aria-current={app.view === item.view ? 'page' : undefined}
           >
             <span class="ico"><Icon name={item.icon} /></span>
-            <span class="sb-text">{item.label}</span>
+            <span class="sb-text">
+              {#if item.ordinal}<span class="sb-ord" aria-hidden="true">{item.ordinal}</span>{/if}
+              {item.label}
+            </span>
             {#if countOf(item.view)}
               <span
                 class="sb-count"
@@ -200,6 +203,16 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* 段内编号（① 锁轴 / ② 重排）：11px 等宽、第三级文字色，跟在标签前当一个「页序」，
+     不是徽标——它只说顺序，不抢激活态的蓝。 */
+  .sb-ord {
+    display: inline-block;
+    margin-right: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--text-3);
   }
 
   .sb-count {

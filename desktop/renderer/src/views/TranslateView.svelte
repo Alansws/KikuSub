@@ -292,6 +292,11 @@
       </button>
     {/snippet}
 
+    {#snippet note()}
+      <Icon name="quote" size={11} />
+      <span>译文走平行轨：原文与时间轴都不动，采纳后回核对台逐句对照。</span>
+      <button class="aiw-link" onclick={() => setView('review')}>回核对台 →</button>
+    {/snippet}
     {#snippet statusExtra()}
       {#if ai.proposal}
         <span

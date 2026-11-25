@@ -246,6 +246,30 @@ button.aiw-count:hover {
 
 /* ---------- 第 2 行：执行通道一选一 + 该通道的动作 + 本次批次 ---------- */
 
+/* 标题下的一行「这页会/不会动时间轴」+ 同组下一页入口。
+   12px、第二级文字色，左缘与标题对齐（14px），不另占页边。 */
+.aiw-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: 0 14px 7px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--ink-3);
+}
+.aiw-note .aiw-link {
+  margin-left: 2px;
+}
+.aiw-note .note-ico {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+/* 「会改时间轴」用 warn：词已经说清了，颜色只是把风险再抬一档。 */
+.aiw-note .note-ico.warn {
+  color: var(--warn);
+}
+
 .aiw-cmd-row {
   display: flex;
   align-items: center;
