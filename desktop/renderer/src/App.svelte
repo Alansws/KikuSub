@@ -864,7 +864,7 @@
     z-index: 200;
   }
   .overlay-card {
-    background: var(--bg-content);
+    background: var(--raise);
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);
