@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * 转写页底部任务条（2026-11-25）。
+   * 转写页底部任务条（2026-11-25 Cue Script 版）。
    *
-   * 为什么固定在这里：旧页面的主按钮夹在「结果与输出」卡片中间，跑起来还要在
+   * 为什么固定在底部：旧页面的主按钮夹在「结果与输出」卡片中间，跑起来还要在
    * 页面里插一张进度卡，下面的参数 / 已有字幕被整体推下去。用户每改一次范围都要
    * 往下找按钮，也就看不出「改了范围 = 本次任务变了」。
    *
@@ -89,13 +89,13 @@
         </button>
       {:else}
         {#if state === 'done' && savedPath}
-          <button class="btn tiny ghost" type="button" onclick={onreveal}>在访达中显示</button>
+          <button class="btn ghost sm" type="button" onclick={onreveal}>在访达中显示</button>
         {/if}
         {#if state === 'done' && doneCta}
           <button class="btn ghost" type="button" onclick={doneCta.onclick}>{doneCta.label}</button>
         {/if}
         <button
-          class="btn primary run-btn"
+          class="btn primary lg run-btn"
           type="button"
           onclick={onrun}
           disabled={disabled || Boolean(blocked)}
@@ -111,28 +111,28 @@
   .dock {
     flex: 0 0 auto;
     position: relative;
-    padding: 10px 0 2px;
-    border-top: 1px solid var(--separator);
-    background: var(--paper);
+    padding: 10px 0 var(--sp-3);
+    border-top: 1px solid var(--line);
+    background: var(--bg-toolbar);
+    backdrop-filter: saturate(180%) blur(16px);
+    -webkit-backdrop-filter: saturate(180%) blur(16px);
     min-width: 0;
   }
 
-  /* 进度线贴任务条上缘：不占高度，跑起来页面不位移。 */
+  /* 进度线贴任务条上缘：不占高度，跑起来页面不位移 */
   .track {
     position: absolute;
     left: 0;
     right: 0;
     top: -1px;
-    height: 3px;
+    height: 2px;
     background: var(--fill-strong);
     overflow: hidden;
-    border-radius: 2px;
   }
   .track > i {
     display: block;
     height: 100%;
     background: var(--accent);
-    border-radius: 2px;
     transition: width 260ms var(--ease);
   }
 
@@ -169,7 +169,7 @@
   .status-note {
     min-width: 0;
     font-weight: 400;
-    font-size: 11.5px;
+    font-size: 11px;
     color: var(--text-3);
     white-space: nowrap;
     overflow: hidden;
@@ -179,12 +179,13 @@
     color: var(--warn);
   }
   .pct {
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11.5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: var(--text-2);
   }
 
+  /* 这一行是「谁 × 哪一段 → 写到哪」的复述，唯一一行必须完整可读 */
   .plan {
     margin-top: 2px;
     font-size: 12.5px;
@@ -197,7 +198,7 @@
   }
   .detail {
     margin-top: 1px;
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1.45;
     color: var(--text-3);
     white-space: nowrap;
@@ -215,11 +216,8 @@
     flex: 0 0 auto;
   }
   .run-btn {
-    min-width: 158px;
-    height: 34px;
+    min-width: 156px;
     justify-content: center;
-    font-size: var(--fs-body);
-    font-weight: 600;
   }
 
   .spin {
@@ -243,7 +241,6 @@
       white-space: normal;
     }
   }
-
   @media (max-width: 900px) {
     .dock-body {
       gap: var(--sp-2);

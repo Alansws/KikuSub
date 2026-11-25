@@ -1,11 +1,12 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
-  import EngineChoiceCards from '../components/transcribe/EngineChoiceCards.svelte';
+  import EngineChoiceList from '../components/transcribe/EngineChoiceList.svelte';
   import ExpertParamsDrawer from '../components/transcribe/ExpertParamsDrawer.svelte';
   import RunDock from '../components/transcribe/RunDock.svelte';
   import TranscriptState from '../components/transcribe/TranscriptState.svelte';
   import { app, cancelJob, setView, startTranscribe, toast } from '../lib/store.svelte';
+  import { shortcuts } from '../lib/shortcuts.svelte';
   import * as kernel from '../lib/applyMode';
   import {
     type ApplyMode,
@@ -200,7 +201,7 @@
     if (!app.media) return '还没有导入媒体——先去「导入」挑一个文件。';
     if (!cues.length) return '还没有字幕；这次转写会写进核对台。';
     const alt = dual.exists ? `第二版 ${dual.count} 条` : '第二版还没有';
-    return `${cues.length} 条主稿 · ${alt}。换一个引擎跑同一段，就能逐句对照两份原文。`;
+    return `${cues.length} 条主稿 · ${alt}。先定这一趟要产什么，再选引擎。`;
   });
 
   const alignNote = $derived(
@@ -381,199 +382,242 @@
 </script>
 
 <div class="pane">
-  <PageHeader title="开始转写" {subtitle} />
+  <PageHeader title="转写" {subtitle}>
+    <button
+      class="btn ghost sm"
+      type="button"
+      onclick={() => setView('report')}
+      disabled={!app.report}
+      title={app.report ? '查看本次转写的任务详报' : '跑完一次转写后才有报告'}
+    >
+      任务报告
+    </button>
+    <button class="btn ghost sm" type="button" onclick={() => (shortcuts.open = true)}>
+      快捷键
+    </button>
+  </PageHeader>
 
   <div class="main-scroll">
-    <div class="layout">
-      <div class="col-main">
-        <!-- ① 先定「这一趟做什么」：产出 → 写入方式 → 范围 → 选项。 -->
-        <section class="card">
-          <div class="card-head">
-            <div class="card-copy">
-              <div class="card-title">这次做什么</div>
-              <p class="card-sub">先定产出，再定范围；底栏会把「谁 × 哪一段 → 写到哪」复述一遍。</p>
-            </div>
-          </div>
+    <div class="page-wrap">
+      <div class="tr-layout">
+        <div class="tr-main">
+          <!-- 01 先定「这一趟做什么」：产出 → 写入方式 -->
+          <section class="step">
+            <div class="step-margin"><span class="step-idx">01</span></div>
+            <div class="step-body">
+              <h2 class="step-title">这次产出什么</h2>
+              <p class="step-hint">主稿写进核对台；第二版只做对照，不会改动主稿。</p>
 
-          <div class="row-line">
-            <span class="line-label">产出</span>
-            <div class="seg" role="group" aria-label="本次产出">
-              <button
-                type="button"
-                class:on={transcribeTask.target === 'primary'}
-                onclick={() => chooseTarget('primary')}
-                title="转写结果写进核对台（主稿）"
-              >
-                主稿
-              </button>
-              <button
-                type="button"
-                class:on={transcribeTask.target === 'alt'}
-                onclick={() => chooseTarget('alt')}
-                disabled={!cues.length}
-                title={cues.length
-                  ? '只写第二版（双引擎复核的 B），核对台不动'
-                  : '先有一版主稿，第二版才有东西可对照'}
-              >
-                第二版
-              </button>
-              <button
-                type="button"
-                class:on={transcribeTask.target === 'both'}
-                onclick={() => chooseTarget('both')}
-                disabled={!dualCandidates.length}
-                title={dualCandidates.length
-                  ? '顺序跑两个引擎：主稿进核对台，副稿进第二版'
-                  : '需要再启用一个日语引擎'}
-              >
-                两版一起
-              </button>
-            </div>
-          </div>
-
-          {#if plan.choices.length}
-            <div class="row-line">
-              <span class="line-label">写入方式</span>
-              <div class="seg" role="group" aria-label="结果写入方式">
-                {#each plan.choices as opt (opt.key)}
+              <div class="step-row">
+                <span class="row-label">产出</span>
+                <div class="seg" role="group" aria-label="本次产出">
                   <button
                     type="button"
-                    class:on={plan.apply === opt.key}
-                    class:danger-opt={opt.key === 'replace' && !fullCover}
-                    onclick={() => (applyMode = opt.key)}
-                    title={applyHint(opt.key, ctx)}
+                    class:on={transcribeTask.target === 'primary'}
+                    aria-pressed={transcribeTask.target === 'primary'}
+                    onclick={() => chooseTarget('primary')}
+                    title="转写结果写进核对台（主稿）"
                   >
-                    {opt.label}
+                    主稿
                   </button>
-                {/each}
+                  <button
+                    type="button"
+                    class:on={transcribeTask.target === 'alt'}
+                    aria-pressed={transcribeTask.target === 'alt'}
+                    onclick={() => chooseTarget('alt')}
+                    disabled={!cues.length}
+                    title={cues.length
+                      ? '只写第二版（双引擎复核的 B），核对台不动'
+                      : '先有一版主稿，第二版才有东西可对照'}
+                  >
+                    第二版
+                  </button>
+                  <button
+                    type="button"
+                    class:on={transcribeTask.target === 'both'}
+                    aria-pressed={transcribeTask.target === 'both'}
+                    onclick={() => chooseTarget('both')}
+                    disabled={!dualCandidates.length}
+                    title={dualCandidates.length
+                      ? '顺序跑两个引擎：主稿进核对台，副稿进第二版'
+                      : '需要再启用一个日语引擎'}
+                  >
+                    两版一起
+                  </button>
+                </div>
+              </div>
+
+              {#if plan.choices.length}
+                <div class="step-row">
+                  <span class="row-label">写入方式</span>
+                  <div class="seg" role="group" aria-label="结果写入方式">
+                    {#each plan.choices as opt (opt.key)}
+                      <button
+                        type="button"
+                        class:on={plan.apply === opt.key}
+                        aria-pressed={plan.apply === opt.key}
+                        class:danger-opt={opt.key === 'replace' && !fullCover}
+                        onclick={() => (applyMode = opt.key)}
+                        title={applyHint(opt.key, ctx)}
+                      >
+                        {opt.label}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if plan.warning}
+                <p class="row-warn">{plan.warning}</p>
+              {/if}
+            </div>
+          </section>
+
+          <!-- 02 处理哪一段：范围 → 选项 → 格式 -->
+          <section class="step">
+            <div class="step-margin"><span class="step-idx">02</span></div>
+            <div class="step-body">
+              <h2 class="step-title">处理哪一段</h2>
+              <p class="step-hint">
+                先整片跑一遍，再对不确定的段落单独重转；区间结果保留原片绝对时间轴。
+              </p>
+
+              <div class="step-row">
+                <span class="row-label">范围</span>
+                <div class="seg" role="group" aria-label="本次范围">
+                  <button
+                    type="button"
+                    class:on={!rangeEditing}
+                    aria-pressed={!rangeEditing}
+                    onclick={useWhole}
+                    title="处理整片"
+                  >
+                    整片
+                  </button>
+                  <button
+                    type="button"
+                    class:on={rangeEditing}
+                    aria-pressed={rangeEditing}
+                    onclick={() => void startRangeEditing()}
+                    title="只处理一段起止时间；留空任一端按片头 / 片尾算"
+                  >
+                    区间
+                  </button>
+                </div>
+                {#if rangeEditing}
+                  <input
+                    class="range-input mono"
+                    bind:this={startInput}
+                    value={transcribeTask.scope.startText}
+                    placeholder="片头"
+                    aria-label="起始时间"
+                    spellcheck="false"
+                    oninput={(e) => touchScope(e.currentTarget.value, transcribeTask.scope.endText)}
+                  />
+                  <span class="dash" aria-hidden="true">–</span>
+                  <input
+                    class="range-input mono"
+                    value={transcribeTask.scope.endText}
+                    placeholder="片尾"
+                    aria-label="结束时间"
+                    spellcheck="false"
+                    oninput={(e) =>
+                      touchScope(transcribeTask.scope.startText, e.currentTarget.value)}
+                  />
+                  <label
+                    class="check"
+                    title={absoluteLocked
+                      ? '「替换选区」必须用原片绝对时间轴：相对时间轴会让新区间的字幕从 0 秒开始编号'
+                      : '用原片时间轴编号，而不是从区间起点重新计时'}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={effectiveAbsolute}
+                      disabled={absoluteLocked}
+                      onchange={(e) => (absolute = e.currentTarget.checked)}
+                    />
+                    绝对时间轴
+                  </label>
+                {/if}
+              </div>
+              {#if rangeEditing}
+                <p class="hint">
+                  {sourceText}{sourceText ? ' · ' : ''}留空任一端 = 该端按片头 / 片尾；点「整片」清空范围。
+                </p>
+              {/if}
+
+              <div class="step-row">
+                <span class="row-label">选项</span>
+                <label
+                  class="check"
+                  title="对整片或已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用。"
+                >
+                  <input
+                    type="checkbox"
+                    bind:checked={vocalSeparation.enabled}
+                    disabled={!canSeparate}
+                  />
+                  强 BGM / 歌曲人声分离
+                </label>
+              </div>
+              {#if vocalSeparation.enabled}
+                <div class="step-row sub-row">
+                  <span class="row-label">分离用途</span>
+                  <div class="seg" role="group" aria-label="人声分离用途">
+                    <button
+                      type="button"
+                      class:on={vocalSeparation.mode === 'vad_only'}
+                      aria-pressed={vocalSeparation.mode === 'vad_only'}
+                      onclick={() => (vocalSeparation.mode = 'vad_only')}
+                      title="分离人声只用于 VAD 切分，识别仍听原声：不会被削掉日语清辅音"
+                    >
+                      仅 VAD 切分
+                    </button>
+                    <button
+                      type="button"
+                      class:on={vocalSeparation.mode === 'to_asr'}
+                      aria-pressed={vocalSeparation.mode === 'to_asr'}
+                      onclick={() => (vocalSeparation.mode = 'to_asr')}
+                      title="高级：分离人声直接送识别，只在人声被彻底盖死时用"
+                    >
+                      送识别
+                    </button>
+                  </div>
+                </div>
+                <p class="hint">
+                  {vocalSeparation.mode === 'vad_only'
+                    ? '切分看干净人声、识别听原声——保住日语清辅音细节，只从更准的边界获益。'
+                    : '分离人声直接送识别，适合人声被纯歌声 / 极重混响彻底盖死的段落；代价是清辅音可能被一起削掉。'}
+                </p>
+              {:else if !canSeparate}
+                <p class="hint">先导入媒体或填写起止时间，才能开启分离。</p>
+              {/if}
+
+              <div class="step-row">
+                <span class="row-label">格式</span>
+                <div class="seg" role="group" aria-label="输出格式">
+                  {#each ['SRT', 'VTT', 'TXT'] as f (f)}
+                    <button
+                      type="button"
+                      class:on={outputFormat === f}
+                      aria-pressed={outputFormat === f}
+                      onclick={() => (outputFormat = f)}
+                    >
+                      {f}
+                    </button>
+                  {/each}
+                </div>
+                <span class="row-note">写进导出文件夹的文件格式</span>
               </div>
             </div>
-          {/if}
+          </section>
 
-          <div class="row-line">
-            <span class="line-label">范围</span>
-            <div class="seg" role="group" aria-label="本次范围">
-              <button type="button" class:on={!rangeEditing} onclick={useWhole} title="处理整片">
-                整片
-              </button>
-              <button
-                type="button"
-                class:on={rangeEditing}
-                onclick={() => void startRangeEditing()}
-                title="只处理一段起止时间；留空任一端按片头 / 片尾算"
-              >
-                区间
-              </button>
-            </div>
-            {#if rangeEditing}
-              <input
-                class="range-input mono"
-                bind:this={startInput}
-                value={transcribeTask.scope.startText}
-                placeholder="片头"
-                aria-label="起始时间"
-                spellcheck="false"
-                oninput={(e) => touchScope(e.currentTarget.value, transcribeTask.scope.endText)}
-              />
-              <span class="dash">–</span>
-              <input
-                class="range-input mono"
-                value={transcribeTask.scope.endText}
-                placeholder="片尾"
-                aria-label="结束时间"
-                spellcheck="false"
-                oninput={(e) => touchScope(transcribeTask.scope.startText, e.currentTarget.value)}
-              />
-              <label
-                class="check"
-                title={absoluteLocked
-                  ? '「替换选区」必须用原片绝对时间轴：相对时间轴会让新区间的字幕从 0 秒开始编号'
-                  : '用原片时间轴编号，而不是从区间起点重新计时'}
-              >
-                <input
-                  type="checkbox"
-                  checked={effectiveAbsolute}
-                  disabled={absoluteLocked}
-                  onchange={(e) => (absolute = e.currentTarget.checked)}
-                />
-                绝对时间轴
-              </label>
-            {/if}
-          </div>
-          {#if rangeEditing}
-            <p class="hint">
-              {sourceText}{sourceText ? ' · ' : ''}留空任一端 = 该端按片头 / 片尾；点「整片」清空范围。
-            </p>
-          {/if}
-
-          {#if plan.warning}
-            <p class="hint warn">{plan.warning}</p>
-          {/if}
-
-          <div class="row-line">
-            <span class="line-label">选项</span>
-            <label
-              class="check"
-              title="对整片或已填写的起止区间做 Demucs 人声分离；首次会下载约 80MB 权重，结果会缓存，换引擎重转可复用。"
-            >
-              <input
-                type="checkbox"
-                bind:checked={vocalSeparation.enabled}
-                disabled={!canSeparate}
-              />
-              强 BGM / 歌曲人声分离
-            </label>
-          </div>
-          {#if vocalSeparation.enabled}
-            <div class="row-line sub-row">
-              <span class="line-label">分离用途</span>
-              <div class="seg" role="group" aria-label="人声分离用途">
-                <button
-                  type="button"
-                  class:on={vocalSeparation.mode === 'vad_only'}
-                  onclick={() => (vocalSeparation.mode = 'vad_only')}
-                  title="分离人声只用于 VAD 切分，识别仍听原声：不会被削掉日语清辅音"
-                >
-                  仅 VAD 切分
-                </button>
-                <button
-                  type="button"
-                  class:on={vocalSeparation.mode === 'to_asr'}
-                  onclick={() => (vocalSeparation.mode = 'to_asr')}
-                  title="高级：分离人声直接送识别，只在人声被彻底盖死时用"
-                >
-                  送识别
-                </button>
-              </div>
-            </div>
-            <p class="hint">
-              {vocalSeparation.mode === 'vad_only'
-                ? '切分看干净人声、识别听原声——保住日语清辅音细节，只从更准的边界获益。'
-                : '分离人声直接送识别，适合人声被纯歌声 / 极重混响彻底盖死的段落；代价是清辅音可能被一起削掉。'}
-            </p>
-          {:else if !canSeparate}
-            <p class="hint">先导入媒体或填写起止时间，才能开启分离。</p>
-          {/if}
-
-          <div class="row-line">
-            <span class="line-label">格式</span>
-            <div class="seg" role="group" aria-label="输出格式">
-              {#each ['SRT', 'VTT', 'TXT'] as f (f)}
-                <button type="button" class:on={outputFormat === f} onclick={() => (outputFormat = f)}>
-                  {f}
-                </button>
-              {/each}
-            </div>
-            <span class="row-note">写进导出文件夹的文件格式</span>
-          </div>
-        </section>
-
-        <!-- ② 用谁做：两个日语主力讲清差别；副引擎只在「两版一起」出现。 -->
-        <section class="card">
-          <div class="card-head">
-            <div class="card-copy">
-              <div class="card-title">用哪个引擎</div>
-              <p class="card-sub">
+          <!-- 03 用哪个引擎：主力讲清差别；副引擎只在「两版一起」出现 -->
+          <section class="step">
+            <div class="step-margin"><span class="step-idx">03</span></div>
+            <div class="step-body">
+              <h2 class="step-title">用哪个引擎</h2>
+              <p class="step-hint">
                 {#if transcribeTask.target === 'alt'}
                   {primaryEngineLabel
                     ? `主稿来自 ${primaryEngineLabel}；这里选的是第二版要用的引擎。`
@@ -581,216 +625,221 @@
                 {:else if transcribeTask.target === 'both'}
                   主稿用这个引擎，副引擎在下面单独选。
                 {:else}
-                  按这次的素材选口径；两个主力各自擅长什么，卡片上写着。
+                  两个日语主力各有所长；这次只能选一个。第二版可以之后再跑。
                 {/if}
               </p>
-            </div>
-            {#if currentEngine}
-              <span class="engine-state" class:ready={currentEngine.installed}>
-                <span class="state-dot" class:ready={currentEngine.installed}></span>
-                {currentEngine.installed ? '当前引擎已就绪' : `未下载 · ${currentEngine.approx_label}`}
-              </span>
-            {/if}
-          </div>
 
-          <EngineChoiceCards
-            bind:engine
-            engines={enabledEngines}
-            onmanage={() => setView('settings')}
+              <EngineChoiceList
+                bind:engine
+                engines={enabledEngines}
+                onmanage={() => setView('settings')}
+              />
+
+              {#if currentEngine && !currentEngine.installed}
+                <p class="hint warn">
+                  首次使用会先下载 {currentEngine.approx_label}；下载完成后自动开始，期间可以取消。
+                </p>
+              {/if}
+
+              {#if transcribeTask.target === 'both'}
+                <div class="duo">
+                  <div class="duo-row">
+                    <span class="duo-role">主引擎</span>
+                    <b class="duo-name">{currentEngine?.label ?? engine}</b>
+                    <span class="duo-arrow" aria-hidden="true">→</span>
+                    <span class="duo-dest">写进核对台（主稿）</span>
+                  </div>
+                  <div class="duo-row">
+                    <span class="duo-role">副引擎</span>
+                    <select class="duo-select" bind:value={secondaryEngine} aria-label="副引擎">
+                      {#each dualCandidates as item (item.key)}
+                        <option value={item.key}>{item.label}</option>
+                      {/each}
+                    </select>
+                    <span class="duo-arrow" aria-hidden="true">→</span>
+                    <span class="duo-dest">写进第二版（只读对照）</span>
+                  </div>
+                  <div class="duo-foot">
+                    <span class="duo-note">
+                      两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；副稿永远不改核对台。
+                    </span>
+                    <button
+                      class="btn ghost sm"
+                      type="button"
+                      onclick={swapRoles}
+                      disabled={!secondaryEngine}
+                      title="交换主 / 副引擎；主引擎同时同步到标题栏胶囊"
+                    >
+                      <Icon name="split" size={11} />交换主副
+                    </button>
+                  </div>
+                </div>
+              {/if}
+
+              <div class="params">
+                <ExpertParamsDrawer {engine} />
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="tr-rail">
+          <TranscriptState
+            {primaryEngineKey}
+            {primaryEngineLabel}
+            target={transcribeTask.target}
+            lastRun={lastRunView}
+            onSuggestAlt={suggestAlt}
+            onPickAlt={() => chooseTarget('alt')}
+            onReplayAlt={replayLastAsAlt}
           />
-
-          {#if currentEngine && !currentEngine.installed}
-            <p class="hint warn">
-              首次使用会先下载 {currentEngine.approx_label}；下载完成后自动开始，期间可以取消。
-            </p>
-          {/if}
-
-          {#if transcribeTask.target === 'both'}
-            <div class="duo">
-              <div class="duo-row">
-                <span class="duo-role">主引擎</span>
-                <b class="duo-name">{currentEngine?.label ?? engine}</b>
-                <span class="duo-arrow" aria-hidden="true">→</span>
-                <span class="duo-dest">写进核对台（主稿）</span>
-              </div>
-              <div class="duo-row">
-                <span class="duo-role">副引擎</span>
-                <select class="duo-select" bind:value={secondaryEngine} aria-label="副引擎">
-                  {#each dualCandidates as item (item.key)}
-                    <option value={item.key}>{item.label}</option>
-                  {/each}
-                </select>
-                <span class="duo-arrow" aria-hidden="true">→</span>
-                <span class="duo-dest">写进第二版（只读对照）</span>
-              </div>
-              <div class="duo-foot">
-                <span class="duo-note">
-                  两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；副稿永远不改核对台。
-                </span>
-                <button
-                  class="btn tiny ghost"
-                  type="button"
-                  onclick={swapRoles}
-                  disabled={!secondaryEngine}
-                  title="交换主 / 副引擎；主引擎同时同步到顶栏胶囊"
-                >
-                  <Icon name="split" size={11} />交换主副
-                </button>
-              </div>
-            </div>
-          {/if}
-
-          <div class="params">
-            <ExpertParamsDrawer {engine} />
-          </div>
-        </section>
+        </div>
       </div>
 
-      <div class="col-side">
-        <TranscriptState
-          {primaryEngineKey}
-          {primaryEngineLabel}
-          target={transcribeTask.target}
-          lastRun={lastRunView}
-          onSuggestAlt={suggestAlt}
-          onPickAlt={() => chooseTarget('alt')}
-          onReplayAlt={replayLastAsAlt}
+      <div class="dock-wrap">
+        <RunDock
+          summary={dockSummary}
+          detail={plan.hint}
+          blocked={plan.blocked}
+          buttonLabel={plan.button}
+          disabled={!app.media || !app.connected || !hasEnabledEngine}
+          state={dockState}
+          {pct}
+          stage={app.job?.stage ?? ''}
+          statusText={doneInfo.text}
+          statusNote={doneInfo.note}
+          error={app.job?.error ?? ''}
+          doneCta={doneCta}
+          savedPath={dockState === 'done' ? app.lastSavedPath : ''}
+          onrun={go}
+          oncancel={cancelJob}
+          onreveal={revealSaved}
         />
       </div>
-    </div>
-
-    <div class="dock-wrap">
-      <RunDock
-        summary={dockSummary}
-        detail={plan.hint}
-        blocked={plan.blocked}
-        buttonLabel={plan.button}
-        disabled={!app.media || !app.connected || !hasEnabledEngine}
-        state={dockState}
-        {pct}
-        stage={app.job?.stage ?? ''}
-        statusText={doneInfo.text}
-        statusNote={doneInfo.note}
-        error={app.job?.error ?? ''}
-        doneCta={doneCta}
-        savedPath={dockState === 'done' ? app.lastSavedPath : ''}
-        onrun={go}
-        oncancel={cancelJob}
-        onreveal={revealSaved}
-      />
     </div>
   </div>
 </div>
 
 <style>
   .pane {
-    padding: var(--sp-8) var(--sp-6) 0;
+    padding: var(--sp-6) var(--sp-8) 0;
     overflow: hidden;
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    background: var(--canvas);
   }
 
   .main-scroll {
     overflow-y: auto;
     flex: 1;
     min-height: 0;
-    padding-right: var(--sp-1);
   }
 
-  /* 左：设置（卡片）；右：现状（平面，像检查器而不是又一张表单）。 */
-  .layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 14px;
+  .page-wrap {
     width: 100%;
-    max-width: 1040px;
+    max-width: 1120px;
     margin: 0 auto;
-    min-height: 0;
-  }
-  .col-main {
+    min-height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    min-width: 0;
-  }
-  .col-side {
-    min-width: 0;
   }
 
-  /* 任务条跟在内容后面：内容短时自然收在卡片下方，内容长（展开参数）时
-     吸附在滚动区底部——两种情况下都“始终看得见”，又不会在短页面上留一大块空白。 */
-  .dock-wrap {
-    position: sticky;
-    bottom: 0;
-    z-index: 2;
-    width: 100%;
-    max-width: 1040px;
-    margin: 0 auto;
-    padding-top: 10px;
-    background: var(--paper);
+  /* 左：三个步骤（一条纸上的三段）；右：现状（像检查器，不是又一张表单） */
+  .tr-layout {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 28px;
+    padding-bottom: var(--sp-4);
   }
-
-  .card {
-    border: 1px solid var(--separator-soft);
-    border-radius: 10px;
-    background: var(--bg-content);
-    padding: 10px var(--sp-4);
+  .tr-main {
     min-width: 0;
   }
+  /* 分隔线挂在网格单元上（而不是右栏内容上）：内容短时线也不会断在半空 */
+  .tr-rail {
+    min-width: 0;
+    border-left: 1px solid var(--line);
+    padding-left: var(--sp-5);
+  }
 
-  .card-head {
+  /* 步骤 = 台本的一段：左侧 44px 页边写段号，右侧是内容。
+     这不是装饰性的「01 / 02 / 03」——三步有先后，必须按这个顺序做。 */
+  .step {
+    display: grid;
+    grid-template-columns: var(--cue-margin-w) minmax(0, 1fr);
+    border-top: 1px solid var(--line);
+  }
+  .step:first-child {
+    border-top: 0;
+  }
+  .step-margin {
+    border-right: 1px solid var(--line-2);
+    padding-top: 21px;
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--sp-3);
-    margin-bottom: var(--sp-2);
-    min-width: 0;
+    justify-content: center;
   }
-  .card-copy {
-    min-width: 0;
+  .step-idx {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.04em;
+    color: var(--text-3);
   }
-  .card-title {
-    font-size: 12.5px;
+  .step-body {
+    min-width: 0;
+    padding: 18px 0 20px var(--sp-4);
+  }
+  .step-title {
+    margin: 0 0 3px;
+    font-size: 13.5px;
+    line-height: 20px;
     font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text-2);
+    color: var(--text);
   }
-  .card-sub {
-    margin: 3px 0 0;
-    font-size: 11.5px;
+  .step-hint {
+    margin: 0 0 10px;
+    font-size: 12px;
     line-height: 1.5;
     color: var(--text-3);
     text-wrap: pretty;
   }
 
-  .row-line {
+  .step-row {
     display: flex;
     align-items: center;
-    gap: var(--sp-2);
+    gap: 10px;
     flex-wrap: wrap;
     min-width: 0;
-    margin-top: 9px;
   }
-  .card-head + .row-line {
-    margin-top: 0;
+  .step-row + .step-row {
+    margin-top: var(--sp-2);
   }
-  .row-line.sub-row {
-    margin-top: 7px;
+  .step-row.sub-row {
+    margin-top: 6px;
     padding-left: var(--sp-2);
   }
-  .line-label {
-    font-size: 12px;
-    color: var(--text-2);
-    min-width: 56px;
-    flex: 0 0 auto;
+  .row-label {
+    width: 62px;
+    flex: 0 0 62px;
+    font-size: 11.5px;
+    color: var(--text-3);
   }
   .row-note {
     font-size: 11px;
     color: var(--text-3);
   }
+  .row-warn {
+    margin: var(--sp-2) 0 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--warn);
+    text-wrap: pretty;
+  }
 
+  /* 页面内唯一的说明文字档：只有「读了才知道下一步」的句子用它 */
   .hint {
     margin: 6px 0 0;
     font-size: 11.5px;
@@ -805,13 +854,17 @@
 
   .range-input {
     width: 104px;
-    height: 27px;
-    border: 1px solid var(--separator);
-    border-radius: 5px;
-    background: var(--bg-content);
+    height: 26px;
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: var(--raise);
     color: var(--text);
     font-size: 12px;
     padding: 0 7px;
+  }
+  .range-input.mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
   .range-input:focus-visible {
     outline: 2px solid var(--accent-ring);
@@ -833,36 +886,14 @@
     accent-color: var(--control-on);
   }
 
-  .engine-state {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    flex: 0 0 auto;
-    font-size: 11.5px;
-    color: var(--text-3);
-    white-space: nowrap;
-  }
-  .state-dot {
-    width: 6px;
-    height: 6px;
-    flex: 0 0 6px;
-    border-radius: 50%;
-    background: var(--warn);
-    box-shadow: 0 0 0 2px var(--warn-soft);
-  }
-  .state-dot.ready {
-    background: var(--success);
-    box-shadow: 0 0 0 2px var(--success-soft);
-  }
-
   .params {
     margin-top: var(--sp-3);
   }
 
-  /* 两版一起的流向：主角是「谁写哪里」，不靠一段长提示解释。 */
+  /* 两版一起的流向：主角是「谁写哪里」，不靠一段长提示解释 */
   .duo {
-    border: 1px solid var(--separator-soft);
-    border-radius: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--rad-card);
     background: var(--fill);
     padding: var(--sp-2) 10px;
     display: flex;
@@ -883,7 +914,7 @@
     color: var(--text-3);
   }
   .duo-name {
-    color: var(--accent);
+    color: var(--accent-text);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -894,9 +925,9 @@
     font: inherit;
     font-size: 12px;
     color: var(--text);
-    background: var(--bg-content);
-    border: 1px solid var(--separator-soft);
-    border-radius: 5px;
+    background: var(--raise);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
     padding: 2px 6px;
     max-width: 190px;
     min-width: 120px;
@@ -915,13 +946,13 @@
     align-items: center;
     gap: var(--sp-2);
     padding-top: 6px;
-    border-top: 1px solid var(--separator-soft);
+    border-top: 1px solid var(--line-2);
     min-width: 0;
   }
   .duo-note {
     flex: 1;
     min-width: 0;
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1.45;
     color: var(--text-3);
     text-wrap: pretty;
@@ -935,27 +966,47 @@
     color: var(--warn);
   }
 
-  @media (max-width: 1120px) {
-    .layout {
+  /* 任务条跟在内容后面：内容短时自然收在内容下方，内容长时吸附在滚动区底部 */
+  .dock-wrap {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: auto;
+    padding-top: var(--sp-2);
+    background: var(--canvas);
+  }
+
+  /* 1080（最小窗口）下仍保留右栏：它是「我现在有什么 / 下一步去哪」的锚点，
+     掉到三步之后就要滚到底才看得见。窄到这个程度也够放三个控件行。 */
+  @media (max-width: 1180px) {
+    .tr-layout {
+      grid-template-columns: minmax(0, 1fr) 272px;
+      gap: var(--sp-5);
+    }
+  }
+  @media (max-width: 1000px) {
+    .tr-layout {
       grid-template-columns: minmax(0, 1fr);
     }
-    .col-side {
+    .tr-rail {
       order: 2;
+      border-left: 0;
+      padding-left: 0;
+      border-top: 1px solid var(--line);
+      padding-top: var(--sp-4);
     }
   }
 
   @media (max-width: 900px) {
     .pane {
-      padding: var(--sp-4) var(--sp-6) 0;
+      padding: var(--sp-4) var(--sp-4) 0;
     }
-    .card-head {
-      flex-wrap: wrap;
+    .step-body {
+      padding-left: var(--sp-3);
     }
-    .engine-state {
-      white-space: normal;
-    }
-    .line-label {
-      min-width: 52px;
+    .row-label {
+      width: 52px;
+      flex-basis: 52px;
     }
   }
 </style>
