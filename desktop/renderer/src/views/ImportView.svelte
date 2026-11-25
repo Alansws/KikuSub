@@ -415,7 +415,7 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     line-height: 1;
-    padding: 2px 4px;
+    padding: 2px var(--sp-1);
     border-radius: 3px;
     background: rgba(255, 255, 255, 0.18);
     color: inherit;
@@ -452,7 +452,7 @@
   .dropstrip .dz-sub {
     margin-left: auto;
     display: inline-flex;
-    gap: 4px;
+    gap: var(--sp-1);
   }
 
   .note {

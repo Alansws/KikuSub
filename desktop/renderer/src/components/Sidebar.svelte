@@ -208,7 +208,7 @@
      不是徽标——它只说顺序，不抢激活态的蓝。 */
   .sb-ord {
     display: inline-block;
-    margin-right: 4px;
+    margin-right: var(--sp-1);
     font-family: var(--font-mono);
     font-size: 11px;
     line-height: 16px;

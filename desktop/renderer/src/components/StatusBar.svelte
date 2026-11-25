@@ -33,16 +33,16 @@
 </script>
 
 <footer class="statusbar">
-  <span class="sb-item">
+  <span class="st-item">
     <i class="dot" class:off={!app.connected}></i>
     <b>{app.config?.device?.toUpperCase() ?? '—'}</b>
     {app.connected ? '就绪' : '未连接'}
   </span>
-  <span class="sb-item">{engineLabel}</span>
+  <span class="st-item">{engineLabel}</span>
   {#if app.media}
-    <span class="sb-item"><b>{app.cues.length}</b> 条 · <b>{chars}</b> 字</span>
+    <span class="st-item"><b>{app.cues.length}</b> 条 · <b>{chars}</b> 字</span>
     {#if spec}
-      <span class="sb-item sb-spec" title="源视频分辨率 · 帧率">{spec}</span>
+      <span class="st-item st-spec" title="源视频分辨率 · 帧率">{spec}</span>
     {/if}
   {/if}
 
@@ -53,7 +53,7 @@
     <span class="sb-sep" aria-hidden="true"></span>
   {/if}
   {#if app.job?.status === 'running'}
-    <span class="sb-item" title="后台任务进度">
+    <span class="st-item" title="后台任务进度">
       {app.job.kind === 'proxy' ? '压制代理' : app.job.kind === 'export' ? '导出成片' : '转写'}
       {app.job.percent}%
     </span>
@@ -84,7 +84,10 @@
     white-space: nowrap;
     overflow: hidden;
   }
-  .sb-item {
+  /* 底栏读数项。**不再叫 .sb-item**（2026-11-25 Step 4.3）：那个类名属于侧栏导航，
+     两处同名会让 `document.querySelectorAll('.sb-item')` 把底栏读数一起数进去
+     （设置页布局回归按「侧栏最后一项」找入口，于是一直点到「Anime Whisper」）。 */
+  .st-item {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -99,7 +102,7 @@
   .grow {
     flex: 1;
   }
-  .sb-spec {
+  .st-spec {
     color: var(--text-3);
     overflow: hidden;
     text-overflow: ellipsis;

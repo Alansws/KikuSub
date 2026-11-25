@@ -216,14 +216,14 @@
     subtitle={'单击选中、双击编辑；复制时自动填入当前字幕与目标语种。'}
   >
     <span class="cue-meta">{app.cues.length} 条字幕</span>
-    <button class="btn ghost" onclick={() => setView('polish')} title="回到润色页">
-      <Icon name="doc" size={11} />润色页
+    <button class="btn ghost" onclick={() => setView('polish')} title="回到 ① 锁轴润色">
+      <Icon name="doc" size={11} />锁轴润色
     </button>
-    <button class="btn ghost" onclick={() => setView('reshape')} title="回到断句重排页">
-      <Icon name="split" size={11} />断句重排页
+    <button class="btn ghost" onclick={() => setView('reshape')} title="回到 ② 重排润色">
+      <Icon name="split" size={11} />重排润色
     </button>
-    <button class="btn ghost" onclick={() => setView('translate')} title="回到翻译页">
-      <Icon name="quote" size={11} />翻译页
+    <button class="btn ghost" onclick={() => setView('translate')} title="回到双语翻译">
+      <Icon name="quote" size={11} />双语翻译
     </button>
     <button class="btn primary" onclick={() => beginEdit('__new__')} disabled={Boolean(editingId)}>
       <Icon name="plus" size={11} />新建模板

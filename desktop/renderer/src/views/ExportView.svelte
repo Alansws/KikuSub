@@ -223,7 +223,7 @@
   async function exportSubtitle() {
     if (!app.cues.length || subBusy) return;
     if (subTrack !== 'source' && !hasTranslations) {
-      toast('还没有译文轨；先在翻译页生成并应用译文', 'warn');
+      toast('还没有译文轨；先到「双语翻译」生成并应用一版', 'warn');
       return;
     }
     if (scoped && !scopeSpan.count) {
