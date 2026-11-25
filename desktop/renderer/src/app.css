@@ -78,7 +78,10 @@
   --sidebar-w: 232px;
   --sb-collapsed-w: 52px;
   --sb-rail-w: var(--sb-collapsed-w);
-  --inspector-w: 388px;
+  /* 检查器整列宽度。DESIGN.md 的 388 属于「舞台行」版布局（视频与检查器并排、
+     表格通栏）；当前外壳把检查器放成整列，40px 的差价要从字幕列里出，
+     1080 最小窗口会把它压到 124px，所以按实测的 348 冻结。 */
+  --inspector-w: 348px;
   --row-h: 30px;
   /* 签名动作：台本页边。状态、导航、校对记号都在这一列里 */
   --cue-margin-w: 44px;
@@ -158,7 +161,9 @@
 
   /* 平面优先：卡片没有阴影；只有画面与真浮层有 */
   --shadow-pop: 0 12px 32px rgba(21, 25, 28, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7);
-  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 18px 40px rgba(0, 0, 0, 0.42);
+  /* 画面投影按所在房间取值：日间是浅灰画布上的一块屏幕（轻），
+     夜间配音间才是「唯一的亮面」（重）。同一份深影搬到浅色上会读成一圈黑边。 */
+  --shadow-video: 0 10px 28px rgba(21, 25, 28, 0.14), 0 2px 6px rgba(21, 25, 28, 0.06);
   --shadow-btn: none;
   --shadow-seg: none;
 
@@ -913,8 +918,11 @@ body {
   color: var(--ink-3);
 }
 
-/* 页边记号：默认空、已核 ✓、提案（蓝铅笔）、待核（朱点） */
+/* 页边记号：默认空、已核 ✓、提案（蓝铅笔）、待核（朱点）。
+   45 个字的字幕表里这一列必须能一眼扫过，所以记号只有 12px 一种尺寸：
+   勾和铅笔是描边图形，待核是 5px 实心圆点——不靠颜色深浅区分三种状态。 */
 .cue-mark {
+  flex: 0 0 var(--cue-mark);
   width: var(--cue-mark);
   height: var(--cue-mark);
   display: grid;
@@ -924,16 +932,23 @@ body {
   line-height: 1;
   color: var(--ink-3);
 }
+.cue-mark i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .cue-mark.ok {
   color: var(--success);
 }
 .cue-mark.ai {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .cue-mark.warn {
   color: var(--danger);
 }
-/* 当前条：页边 2px 朱线 + 编号转朱 */
+/* 当前条：页边 2px 朱线 + 序号转朱（台本的「正在对这一句」） */
 .cue-margin.active {
   position: relative;
   color: var(--danger);

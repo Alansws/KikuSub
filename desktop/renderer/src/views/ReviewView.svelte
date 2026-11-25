@@ -47,7 +47,7 @@
     transcribeRange,
   } from '../lib/store.svelte';
   import { chapters, loadChapters, seekToMark } from '../lib/chapters.svelte';
-  import { dual } from '../lib/dualReview.svelte';
+  import { cueMarks } from '../lib/reviewMargin';
   import { jobBusy } from '../lib/jobState';
   import { tcShort } from '../lib/time';
   import { isTypingTarget } from '../lib/typing';
@@ -219,7 +219,6 @@
   // 最近一次自动滚到/选中过的字幕行，避免同一句反复滚动
   let lastRevealed = -1;
 
-
   // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
   const src = $derived(
     app.media ? mediaUrl(app.media.id, Boolean(app.media.proxy_ready), app.media.proxy_version) : '',
@@ -305,6 +304,8 @@
   // 双语是**固定双行高**：自动测量会和虚拟滚动的绝对定位打架（开发文档 §6.3.2）。
   // 窗口计算是纯函数，在 lib/reviewTable.ts（可单测，也不占这里的行数预算）。
   const rowHeight = $derived(rowHeightFor(app.track));
+  /** 页边记号：待核 / 已核来自质检队列；蓝铅笔只在「原文」模式下点——译文已经摊在表里时它什么也没多说。 */
+  const marks = $derived(cueMarks(app.cues, qa.payload, app.track === 'source' ? app.translations[app.trackLang]?.texts : null));
   const vwin = $derived(
     virtualWindow({ scrollTop, viewH, total: app.cues.length, rowH: rowHeight }),
   );
@@ -1240,7 +1241,6 @@
     }
   }
 
-
   function onWaveWheel(e: WheelEvent) {
     e.preventDefault();
     if (duration <= 0) return;
@@ -1289,10 +1289,6 @@
     const span = focusSpan();
     const center = (selection.start + selection.end) / 2;
     setView(center - span / 2, span);
-  }
-
-  function clearSelection() {
-    selection = null;
   }
 
   function toggleFollow() {
@@ -1586,7 +1582,7 @@
       onSendSelection={sendSelectionToTranscribe}
       onSeekSelection={() => selection && seekTo(selection.start, { stopAt: selection.end, play: true })}
       onClearLane={() => (laneSelection = [])}
-      onClearSelection={clearSelection}
+      onClearSelection={() => (selection = null)}
     />
   </div>
 
@@ -1652,6 +1648,7 @@
       selected: play.selected,
       multiKeys,
       activeKey,
+      marks,
       matchedSet: find.matchedCues,
       findCue: find.current?.cue ?? -1,
       busy,
@@ -1674,7 +1671,8 @@
       busy: find.busy,
       prevKey: find.prevKey,
       nextKey: find.nextKey,
-      onInput: find.resetSession,
+      onQuery: find.setQuery,
+      onReplacement: find.setReplacement,
       onGo: find.go,
       onReplace: () => void find.replaceCurrent(),
       onSkip: find.skip,
@@ -1720,8 +1718,10 @@
     flex-direction: column;
   }
 
+  /* 时间轴与走带、字幕表共用同一条 16px 页边（Step 4.2 的最大视口原则：
+     外框留白只留一次，竖向空间全部让给画面 / 波形 / 表格）。 */
   .timeline {
-    padding: 6px 26px 0;
+    padding: 2px var(--sp-4) 0;
     flex: 0 0 auto;
   }
 
@@ -1753,12 +1753,12 @@
       width: min(640px, 100%, calc((100vh - 170px) * 16 / 9));
     }
     .timeline {
-      padding: 6px var(--sp-4) 0;
+      padding: 2px var(--sp-4) 0;
     }
     .table-area {
       flex: 0 0 auto;
       height: clamp(200px, 52vh, 300px);
-      margin: 6px var(--sp-4) var(--sp-4);
+      margin: 4px var(--sp-4) var(--sp-4);
     }
     .transport,
     .tl-tools {
