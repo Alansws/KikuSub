@@ -90,7 +90,7 @@
     {#if gapFill.open}
       <div class="gap-body">
         <div class="gap-hint">
-          复制出去的是<b>全片条号</b>编号的这 {gapFill.indices.length || wanted} 条；回填时按条号落位，
+          复制出去的是按<b>全片条号</b>编号的这 {gapFill.indices.length || wanted} 条；回填时按条号落位，
           只写这些条目，其余 {counts.translated} 条已有译文原样保留。
         </div>
 
