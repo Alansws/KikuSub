@@ -3,27 +3,30 @@ name: KikuSub
 description: A cue-script interface for a local Japanese subtitle workstation.
 colors:
   canvas: "#FFFFFF"
-  panel: "#F0F2F4"
-  inspector: "#F7F8F9"
+  panel: "#F5F5F7"
+  inspector: "#FBFBFD"
   sheet: "#FFFFFF"
-  well: "#F2F3F4"
+  surface: "#FFFFFF"
+  well: "#F2F2F7"
   ink: "#15191C"
-  ink-2: "#4A545C"
-  ink-3: "#566168"
-  blue-pencil: "#0B63E5"
+  ink-2: "#4B4B52"
+  ink-3: "#55555C"
+  blue-pencil: "#295CE6"
+  blue-pencil-text: "#2453D4"
   vermilion: "#B8412F"
   approved: "#356B52"
   attention: "#7E5416"
-  hairline: "#DBE1E6"
-  dark-stage: "#0B0D0F"
-  dark-canvas: "#1A1C1F"
-  dark-panel: "#24272B"
-  dark-inspector: "#1F2226"
-  dark-sheet: "#2C3136"
-  dark-well: "#2A2D31"
-  dark-ink: "#E9E6DF"
-  dark-blue-pencil: "#84A9E6"
-  dark-vermilion: "#E07A66"
+  hairline: "#E2E2E7"
+  dark-stage: "#0C0C0E"
+  dark-canvas: "#161618"
+  dark-panel: "#1D1D1F"
+  dark-surface: "#242427"
+  dark-raise: "#313135"
+  dark-well: "#121214"
+  dark-ink: "#EDEDEF"
+  dark-blue-pencil: "#3467EB"
+  dark-blue-pencil-text: "#6B96FF"
+  dark-vermilion: "#E5776A"
 typography:
   display:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Hiragino Sans', 'PingFang SC', sans-serif"
@@ -104,7 +107,7 @@ components:
     padding: "0 12px"
     height: "28px"
   nav-item-active:
-    backgroundColor: "rgba(11, 99, 229, 0.09)"
+    backgroundColor: "rgba(41, 92, 230, 0.08)"
     textColor: "{colors.blue-pencil}"
     rounded: "{rounded.sm}"
     padding: "0 8px"
@@ -142,11 +145,26 @@ Light is the daylight proofing desk; dark is the dubbing booth at night. The sta
 
 ## Colors
 
-A cool paper ground, a sumi ink, and two pencils. The palette is Restrained: one accent does the action, one signal does the correction, one green does approval.
+A **neutral** paper ground, a sumi ink, and two pencils. The palette is Restrained: one accent does the action, one signal does the correction, one green does approval.
+
+**The Nobody's-Teal Rule (2026-11-26, third pass).** Every neutral in this system is a *pure*
+neutral: R = G, and B sits at most three levels above them. The previous carbon ladder
+(`#1A1C1F → #24272B → #2C3136`) and the previous chrome (`#F0F2F4`) both carried a blue-grey
+cast, and stacked six deep that cast read as a haze over the whole window. Greys are now mixed
+from `rgba(0,0,0,…)` in light and `rgba(255,255,255,…)` in dark, never from a tinted base.
 
 ### Primary
 
-- **Blue Pencil** (`#0B63E5`, 5.34:1 on sheet; 5.06:1 on panel; 4.71:1 on canvas): primary actions, current selection, AI proposal marks, links. The 2026-11-25 acceptance pass replaced the old low-chroma steel blue (`#2D5FA6`) with a cleaner cobalt because the old value read grey and muddy on the light surfaces. In dark, `#84A9E6` (7.19:1 on sheet) because a deep blue would disappear. A filled primary button uses `#0B63E5` with white text in light (5.34:1) and the deeper `#2D5FA6` (6.37:1) in dark, where a bright fill would glare.
+- **Blue Pencil — Studio royal cobalt.** Light: fill `#295CE6` (white text 5.57:1); text/icon
+  `#2453D4` (6.44:1 on sheet, 5.91:1 on chrome); selected wash `rgba(41,92,230,0.08)`.
+  Dark: fill `#3467EB` (white text 4.90:1, hover `#3B6DEE` at 4.56:1); text/icon `#6B96FF`
+  (5.96:1 on chrome); selected wash `rgba(52,103,235,0.16)`.
+  The 2026-11-25 value (`#0B63E5`) was a clean cobalt but read as **web link blue** next to a
+  neutral grey; the royal cobalt sits deeper and leans indigo, which is what the blue controls in
+  Final Cut's inspector do. The requested dark hover `#4274F2` measured 4.19:1 against white and
+  was darkened 4 levels to `#3B6DEE` — the visually indistinguishable value that keeps white text
+  legal. Text and fill are deliberately **two** tokens: a fill is read as a block, an 11 px icon
+  or link is read as a glyph.
 - **Vermilion** (`#B8412F`, 5.37:1; dark `#E07A66`, 5.84:1): correction, "needs review", the active cue mark, destructive text. Never used for a primary action.
 
 ### Neutral (light: the paper desk)
@@ -154,47 +172,63 @@ A cool paper ground, a sumi ink, and two pencils. The palette is Restrained: one
 - **Canvas** (`#FFFFFF`): the working stage. In daylight the page itself is **paper white** —
   the desk, not a grey felt under white cards. Every page ground, the cue sheet and the inspector
   live on this value or one step off it.
-- **Panel** (`#F0F2F4`): window chrome only — sidebar, titlebar, status bar, timeline dock.
-  One neutral step below the paper, so the chrome reads as the frame and the work as the sheet.
-- **Inspector** (`#F7F8F9`, `--bg-inspector`): the third plane, half a step between paper and
+- **Panel** (`#F5F5F7`): window chrome only — sidebar, titlebar, status bar, timeline dock.
+  Apple's pure neutral light grey. The previous `#F0F2F4` was a blue-leaning industrial grey that
+  contaminated the cobalt sitting next to it.
+- **Inspector** (`#FBFBFD`, `--bg-inspector`): the third plane, half a step between paper and
   chrome. Three adjacent planes (sidebar / work / inspector) are each separable by value alone.
-- **Sheet** (`#FFFFFF`): the cue table, fields, popovers. Separated from the paper ground by a
-  1 px `--rule`, never by a grey wash.
-- **Well** (`rgba(21,25,28,0.05)` → `#F2F3F4` on white, `--well`): the **recessed tonal fill** for
-  unselected option blocks, info strips, inputs and grouping rows. No border, no shadow: the block
-  is read from value alone. Hover is `--well-hover` (`0.09`), selection adds the blue pencil.
-- **Sumi** (`#15191C`; dark `#E9E6DF`): primary text, 15.8:1 / 12.0:1.
-- **Graphite** (`#4A545C`; dark `#B6BBB9`): secondary text, 7.7:1 / 8.6:1.
-- **Slate** (`#566168`; dark `#98A1A8`): 11 px labels, counts and units; 5.66:1 / 5.71:1 on the
-  panel. Step 3 darkened this one level so 11 px data no longer sits just above 4.5:1.
-- **Hairline** (`#DBE1E6` rule, `rgba(21,25,28,0.14)` line; dark `#34383D` / `rgba(236,232,223,0.15)`):
-  1 px rules. No 5% grey separators.
+- **Sheet / Surface** (`#FFFFFF`): the cue table, fields, popovers. Separated from the paper
+  ground by a 1 px `--rule`, never by a grey wash.
+- **Well** (`#F2F2F7`, `--well`): the **recessed** fill for unselected option blocks, info strips,
+  inputs, slider grooves and tag slots. In light it sits one step *below* the paper; in dark it
+  sits one step *below* the canvas (`#121214`, with a 7 % white hairline). Hover is `--well-hover`,
+  selection adds the blue pencil. **A well never lifts.** Lifting it was the 2026-11-25 mistake:
+  six raised wells per screen is exactly what "washed-out grey fog" looks like.
+- **Sumi** (`#15191C`; dark `#EDEDEF`): primary text, 16.2:1 / 14.4:1 on chrome.
+- **Graphite** (`#4B4B52`; dark `#B9B9BF`): secondary text, 7.1:1 / 8.6:1.
+- **Slate** (`#55555C`; dark `#A0A0A6`): 11 px labels, counts and units; 5.8:1 / 6.5:1 on the
+  panel, 4.7:1 on the raised layer. 11 px is the floor, so this value may not go lighter.
+- **Hairline** (`#E2E2E7` rule, `rgba(0,0,0,0.13)` line; dark `#303034` /
+  `rgba(255,255,255,0.13)`): 1 px rules. No 5 % grey separators, no tinted greys.
 
 ### Neutral (dark: the carbon console)
 
-Four steps of neutral carbon, borrowed from the grading bay rather than from "black mode". Values
-are deliberately **not** near-black: a charcoal room reads professional and lets the film be the
-only bright thing on screen.
+Five steps of **pure neutral** carbon, borrowed from the grading bay rather than from "black mode".
+Values are deliberately **not** near-black except the stage: a charcoal room reads professional and
+lets the film be the only bright thing on screen. Every step is neutral to within three levels of
+blue, so six stacked surfaces never add up to a haze.
 
-- **Stage** (`#0B0D0F`, `--stage-bg`): the room around the picture. The darkest value in the app,
+- **Stage** (`#0C0C0E`, `--stage-bg`): the room around the picture. The darkest value in the app,
   and the only one that is near-black.
-- **Canvas** (`#1A1C1F`): the working ground, one step up from the stage.
-- **Panel** (`#24272B`): chrome — sidebar, titlebar, status bar, timeline dock.
-- **Inspector** (`#1F2226`): the third plane, between canvas and panel.
-- **Sheet** (`#2C3136`): the cue table, popovers, fields — the lightest carbon, so a sheet still
-  reads as "paper laid on the desk".
-- **Well** (`rgba(232,230,224,0.065)` → about `#2A2D31` on canvas): in dark the recessed fill
-  **lifts** instead of darkening — same token, opposite direction, because on a dark ground a
-  clickable block is a lighter block (this is exactly how Final Cut's controls behave).
+- **Canvas** (`#161618`): the working ground, one step up from the stage.
+- **Panel** (`#1D1D1F`): chrome — sidebar, titlebar, status bar, **inspector**.
+- **Surface** (`#242427`): panels, the cue table, cards laid on a page.
+- **Raise** (`#313135`, hover `#3A3A3F`): buttons, popovers, dialogs — the only layer that is
+  "on top". It carries a `inset 0 1px 0 rgba(255,255,255,0.06)` top highlight and a `#0E0E10`
+  seam instead of a large shadow.
+- **Well** (`#121214` + `rgba(255,255,255,0.07)` hairline): input fields, slider grooves, tag
+  slots, and any recessed block. It sinks **below the canvas** — the same direction as in light.
+  This is Final Cut's control grammar: a groove is darker than what surrounds it, a key is lighter.
+
+**Why the direction is fixed.** The 2026-11-25 pass made the dark well *lift* by 6.5 % white
+"because FCP's controls look lighter". That is true of FCP's **buttons**, not of its **grooves**;
+applying it to every well put six light patches on every screen, and the result was reported as
+"a washed-out grey-teal fog floating above the surface". The two roles are now two tokens:
+`--raise` lifts, `--well` sinks, and `--surface` sits between them.
 
 ### Named Rules
 
 **The One Colour One Job Rule.** Blue means "you can act / this is selected / this is a proposal". Vermilion means "this is a correction or needs attention". Green means "approved / passed". A color never carries a status alone; a word, a mark or an icon travels with it.
 
 **The Dark Is a Room Rule.** Dark is not the light theme inverted. It is the dubbing booth: a
-four-step carbon ladder (stage → canvas → inspector → panel → sheet), paper-warm text, the film
-still as the brightest plane. Both appearances are audited at 4.5:1 for body text and 3:1 for
-large text.
+five-step carbon ladder (stage → canvas → panel → surface → raise), neutral near-white text (not
+paper-warm — the warmth was part of the haze), the film still as the brightest plane. Both
+appearances are audited at 4.5:1 for body text and 3:1 for large text.
+
+**The Raise Lifts, the Well Sinks Rule (2026-11-26).** In both appearances, `--raise` is lighter
+than what it sits on and `--well` is darker. The direction never flips between appearances:
+a groove is a groove. `verify_phase2_shell.mjs` asserts the luminance sign in both themes, so a
+future "dark wells should lift" experiment fails on the spot instead of shipping.
 
 **The No White Frame Rule (2026-11-26).** A white surface may only be a **sheet, a field or a
 popover**. Anything that is *a section of a page* — an option group, an info strip, a mode card,
@@ -265,9 +299,17 @@ of empty paper on the right that reads as an unfinished layout. Because the meas
 of these pages still start on the same left edge at a given window width; nobody invents 1120 /
 1000 / 960 again.
 
-The import page keeps its own narrower measure (`--measure-card`, **760 px** continue card plus a
-40 px drop strip), because the job there is to choose a file, not to read a form — but it is
-centred on the same axis.
+The import page keeps its own narrower measure (`--measure-card`, **760 px**), because the job
+there is to choose a file, not to read a form — but it is centred on the same axis.
+
+**The Import Page Has One Sheet Rule (2026-11-26).** With a project already open, the import page
+contains exactly **one sheet**: the "continue this project" card (`--surface` + 1 px `--rule`),
+because it carries both "where I left off" and the page's only primary button. Everything else on
+the page is a **title + a hairline + rows on the ground** — never a second grey slab. The page used
+to stack four full-width grey bars (continue card / "switch film" strip / export folder / recent
+list) and read as bricks on white. The redundant "switch film" strip and its five extension pills
+are gone: switching film has three paths already (the card's own "换片…" button, drag-and-drop
+anywhere in the window, `⌘O`), so one 12 px sentence under the card is all the page says about it.
 
 The transcribe page is the one two-column page: a 1120 px measure with a 320 px right rail for
 "what happens next", also centred. Full-bleed grids (review console, the three AI tables) are the
@@ -286,8 +328,8 @@ Flat by default. Depth is **tonal, not shadowed**, and it has two directions:
   chrome (`--paper`) sits one step below it, and anything *inside* the page is a **recess** (`--well`,
   darker than the paper). Nothing in a light page is "on top of" the page.
 - **Dark** reads as a panel in a grading bay: the film room (`--stage-bg`) is the floor, then
-  canvas → inspector → panel → sheet, each one step up. Anything inside a page **lifts** (`--well`,
-  lighter than the ground).
+  canvas → panel → surface → raise, each one step up. Anything **recessed** inside a page
+  (`--well`, inputs, grooves, slots) goes *down* below the canvas, exactly as in light.
 
 The only shadows are the video frame (a physical screen in a dark room), true popovers/menus, and
 the selected segment of a segmented control (a native control lift, not a card). Cards do not cast
@@ -314,10 +356,11 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 ### Buttons
 
 - **Shape:** 5 px radius, 28 px default height; 24 px inline, 32 px large, 36 px primary.
-- **Primary:** blue pencil fill, white text, no border, one per view.
-- **Secondary:** panel fill, 1 px hairline, ink text.
-- **Soft (tinted secondary, 2026-11-26):** `--well` fill, no border, graphite text, hover
-  `--well-hover`. This is the button for a **secondary action that lives on its own** — "去双语翻译"
+- **Primary:** blue pencil fill, white text, no border, no bevel, one per view.
+- **Secondary:** `--raise` fill (raised) with a `inset 0 1px 0` top highlight in dark, 1 px
+  hairline, ink text. Buttons lift; that is the one place the dark theme goes *up*.
+- **Soft (tinted secondary, 2026-11-26):** `--well` fill (sunk), no border, no bevel, graphite
+  text, hover `--well-hover`. This is the button for a **secondary action that lives on its own** — "去双语翻译"
   inside a notice strip, "管理引擎…" at the end of a list, page-header actions. A lone bare blue
   word floating at the end of a row is not an action, it is a rumour.
 - **Ghost:** transparent, graphite text; hover raises to the hover wash. Reserved for icon
@@ -341,8 +384,13 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 
 ### Option blocks (wells)
 
-- **Shape:** 5 px radius, `--well` fill, **no border**. Hover `--well-hover`. Selected add a
-  1 px `--accent-line` ring plus `--accent-soft`; hover never changes a border.
+- **Shape:** 5 px radius, `--well` fill (**sunk**, in both appearances), **no border**.
+  Hover `--well-hover`. Selected adds a 1 px `--accent-line` ring plus `--accent-soft`;
+  hover never changes a border.
+- **Exception — text fields and dropdowns** carry `1 px solid var(--well-line)` (transparent in
+  light, `rgba(255,255,255,0.07)` in dark). A *block* is read from value alone; a *field* also
+  needs an edge to say "there is a caret in here". Focus moves the fill to `--well-focus`, never
+  up to `--raise`: raising a field would put it on the same layer as the buttons beside it.
 - **Rule:** one interactive layer. An option group is not a card, and never sits inside another
   outlined box. Explain the option in 13/19 `--ink-2`, never in a second tonal block.
 - **Where:** export mode / subtitle style / bitrate presets, engine rows, appearance and cue-font
@@ -350,7 +398,7 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 
 ### Cue table
 
-- **Shape:** a cue sheet (`.cue-sheet`: sheet white, 1 px `--rule`, 7 px radius) inset 16 px from the dock; 30 px rows (60 px bilingual); columns `44 px margin | start | end | duration | cue text | row actions`.
+- **Shape:** a cue sheet (`.cue-sheet`: `--surface` + 1 px `--rule`, 7 px radius) inset 16 px from the dock; 30 px rows (60 px bilingual); columns `44 px margin | start | end | duration | cue text | row actions`.
 - **Cue margin:** 44 px, separated by a 1 px rule. Marks and the cue number both live in it: **approved** = 11 px check (green); **needs review** = 5 px vermilion dot; **machine-written line** = 10 px blue pencil. One mark per row, priority needs-review → approved → pencil.
   - The pencil means "this line already has a translation". It is drawn **only in 原文 mode**: in bilingual or target mode the translation is already on the sheet, so a pencil on every row is a stamp, not information.
   - The active row (selected row, or the block under the playhead) carries a 2 px vermilion line on the margin's left edge and a vermilion number. Hover wash, selected tint, find-hit wash and skipped-hit strike stay as they were.
@@ -437,8 +485,9 @@ The high-fidelity prototype lives in `.impeccable/prototype/` (workspace root, n
 
 **Step 4.3 additions (2026-11-25).** The import page is the documented exception to the
 1120 px measure: a 760 px "continue current project" card (cover, name, `duration · cues ·
-report`, one primary "continue review ⌘3", one quiet "switch film…") above a 40 px drop strip;
-the full drop target only appears when no project is open. The dual-engine review uses the same
+report`, one primary "continue review ⌘3", one quiet "switch film…"). The 40 px drop strip
+described here was **removed on 2026-11-26** (see The Import Page Has One Sheet Rule);
+the full drop target still only appears when no project is open. The dual-engine review uses the same
 `.cue-sheet` primitive as the review table (sheet white, 1 px `--rule`, 7 px radius, 16 px edges).
 The sidebar marks the two 原文 pages with paragraph ordinals `①` `②` — a visible mark only; it
 never enters the label or the accessible name, because shortcuts, menus and tests match by name.
@@ -472,12 +521,13 @@ The settings category list uses the same line icons as the main sidebar (no colo
 24 minutes, one pass) produced six visual rulings. What shipped:
 
 - The **light surface hierarchy is inverted**: the page is the paper (`--canvas #FFFFFF`), the chrome
-  is one step greyer (`--paper #F0F2F4`), the inspector is a third plane (`--bg-inspector #F7F8F9`),
-  and everything inside a page that used to be a white card is now a **borderless well**
-  (`--well`, 5 % ink). White is reserved for cue sheets, fields and popovers.
-- **Dark is a four-step carbon console** (`#0B0D0F` stage → `#1A1C1F` canvas → `#1F2226` inspector →
-  `#24272B` panel → `#2C3136` sheet). Adjacent steps differ by ~10 levels: enough to separate zones,
-  not enough to stripe the screen. Wells lift (6.5 % white) instead of sinking.
+  is one step greyer (`--paper`), the inspector is a third plane (`--bg-inspector`), and everything
+  inside a page that used to be a white card is now a **borderless well** (`--well`).
+  White is reserved for cue sheets, fields and popovers. *(The exact greys were replaced in Step 8;
+  the hierarchy ruling stands, the values did not.)*
+- **Dark becomes a stepped carbon console instead of one near-black plane.** *(Step 7 shipped four
+  steps and lifting wells; Step 8 replaced both — five neutral steps, sinking wells. The ruling that
+  survives is "separate zones by value, do not stripe the screen".)*
 - The **appearance button is a two-state switch**; `auto` lives in Settings only.
 - The **sidebar ordinals ①② are gone**; the sequencing hint lives in the pages.
 - The **朗读 disclosure is one header line** (engine chip + a single "收起") with two even grids
@@ -487,6 +537,19 @@ The settings category list uses the same line icons as the main sidebar (no colo
 - One honest bug found while editing: the compact-mode rules for `.player` / `.table-area` /
   `.transport` had been written in `ReviewView` but **never applied** — Svelte's scoped styles do not
   reach child components. They now live in `ReviewStage` / `ReviewTable` / `ReviewTransport`.
+
+**Step 8 additions (2026-11-26, third real-source pass).** A third run of `KikuSub-Next.app`
+produced three defects and three rulings:
+
+- **Dark is now pure neutral carbon with sinking wells** (`#0C0C0E` stage → `#161618` canvas →
+  `#1D1D1F` panel → `#242427` surface → `#313135` raise; `#121214` well). The old ladder was
+  blue-grey by ~6 levels per step and its wells lifted by 6.5 % white; together that read as a
+  grey-teal haze. See *The Nobody's-Teal Rule* and *The Raise Lifts, the Well Sinks Rule*.
+- **The blue is Studio royal cobalt** (`#295CE6` / `#2453D4` light, `#3467EB` / `#6B96FF` dark),
+  with fill and text as two separate tokens. Text/icon values are one step deeper than fills so an
+  11 px glyph clears 4.5:1 on every surface it can land on.
+- **The import page holds one sheet** and two hairline-separated sections; the duplicated
+  "switch film" bar and its extension pills are gone. See *The Import Page Has One Sheet Rule*.
 
 **Parallel install and data isolation.** The user's current installed `KikuSub.app` is their daily
 driver and must keep working untouched. A redesign build is only ever a *separate* artefact
