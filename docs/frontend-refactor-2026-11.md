@@ -1008,7 +1008,7 @@ TypeError: 'NoneType' object is not callable
 
 **回归**（两条，都先证明「没有修复会红」）：
 
-- `tests/test_engine_idle_lease.py`（7 例，轻量）：无租约时巡检会卸、有租约时 600s
+- `tests/test_engine_idle_lease.py`（6 例，轻量）：无租约时巡检会卸、有租约时 600s
   也不卸、退出即重新计时、空 key 是空操作、`release_others` 只卸载空闲的、真线程下
   200 轮不漏；
 - `tests/test_server_alt_review_idle.py`（服务端整条路径）：主稿存在 → 用 whisper 跑
