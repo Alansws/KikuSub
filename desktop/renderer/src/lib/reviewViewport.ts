@@ -22,6 +22,8 @@
  * 这里只给纯函数：`planViewportRestore()` 负责合法 clamp，越界/损坏一律安全降级。
  */
 
+import type { Cue } from './api';
+
 export interface ReviewViewport {
   /** 当前选中的字幕下标（恢复时若越界，用 cueTime 找最近的一条）。 */
   cueIndex: number;
@@ -155,6 +157,32 @@ export function readViewportForRestore(path: string): ReviewViewport | null {
     span: 0,
     selection: null,
     updatedAt: 0,
+  };
+}
+
+/**
+ * 把核对台当前状态收成一份可落盘的现场快照（不含 `updatedAt`）。
+ *
+ * 纯函数：cue 起点从 cues 里取，其余值由调用方给。放在这里是为了让
+ * `ReviewView.svelte` 只保留接线，也让「cueIndex 越界时 cueTime 退 0」
+ * 的口径与恢复端共用一份。
+ */
+export function snapshotOf(
+  cues: readonly Cue[],
+  selected: number,
+  playhead: number,
+  viewStart: number,
+  span: number,
+  selection: { start: number; end: number } | null,
+): Omit<ReviewViewport, 'updatedAt'> {
+  const cue = cues[selected];
+  return {
+    cueIndex: selected,
+    cueTime: cue?.start ?? 0,
+    playhead,
+    viewStart,
+    span,
+    selection: selection ? { start: selection.start, end: selection.end } : null,
   };
 }
 

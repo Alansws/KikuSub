@@ -44,6 +44,15 @@ export interface WaveformPaintInput {
   resizeH: number;
 }
 
+/**
+ * 波形包络的采样点数：按像素的 3 倍取，放大到 1 秒视窗时仍有足够包络，
+ * 不会退化成一排可数的柱子。服务端只读这一小段样本，成本可忽略。
+ * 缓存键必须带上这个数（`peakCacheKey` 的第四个参数）。
+ */
+export function binsForWidth(width: number): number {
+  return Math.max(512, Math.min(12000, Math.round(width * 3)));
+}
+
 export function paintReviewCanvas(input: WaveformPaintInput): void {
   const { canvas, waveWrap } = input;
   const w = waveWrap.clientWidth;

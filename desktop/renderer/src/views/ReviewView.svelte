@@ -96,6 +96,11 @@
     stepSelection,
   } from '../lib/selection';
   import { canSplitAt } from '../lib/cueEdit';
+  import {
+    captionLinesAt,
+    cueDisplayText,
+    cueIndexAtTimeExclusive,
+  } from '../lib/reviewCues';
   import { collectSnapTargets, snapCueTimes, snapThreshold } from '../lib/cueSnap';
   import { createScrubber, createScrubPan } from '../lib/scrub';
   import { snapPrefs } from '../lib/snapPrefs.svelte';
@@ -110,7 +115,7 @@
     zoomTimelineView,
   } from '../lib/timelineView';
   import { roundRect } from '../lib/waveformDraw';
-  import { paintReviewCanvas } from '../lib/waveformCanvas';
+  import { binsForWidth, paintReviewCanvas } from '../lib/waveformCanvas';
   import {
     cachedPeaks,
     peakCacheKey,
@@ -118,6 +123,7 @@
     readViewportForRestore,
     rememberViewport,
     resolveCueIndex,
+    snapshotOf,
     storePeaks,
     takeExplicitJump,
   } from '../lib/reviewViewport';
@@ -205,8 +211,6 @@
   const EDGE = 6; // 字幕块左右端的抓取宽度（px）
   const PLAYHEAD_GRAB = 8; // 播放头两侧的抓取宽度（px）
   const CLICK_SLOP = 4; // 按下后移动超过它才算框选，否则算单击跳转
-
-  const laneTopOf = (h: number) => h - RESIZE_H - LANE_H;
 
   // 光标与高亮（悬停/拖动的字幕块用 key 标识，双语同区间的两行算同一块）
   let waveCursor = $state('crosshair');
@@ -305,71 +309,15 @@
   });
 
   // 当前播放到的字幕。双语 SRT 的两行区间完全相同，必须一起显示。
+  // 纯计算在 lib/reviewCues（二分查找 + 分块 + 轨道拼行），这里只保留依赖。
   const captionLines = $derived.by(() => {
     // 显式依赖：切换显示模式或译文更新时，画面字幕要立刻跟着变
     void app.track;
     void app.translations[app.trackLang]?.texts.length;
-    const cues = app.cues;
-    if (!cues.length) return [] as string[];
-    const t = play.time;
-    let lo = 0;
-    let hi = cues.length - 1;
-    let hit = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const c = cues[mid];
-      if (t < c.start) hi = mid - 1;
-      else if (t >= c.end) lo = mid + 1;
-      else {
-        hit = mid;
-        break;
-      }
-    }
-    if (hit < 0) return [];
-    const key = `${cues[hit].start}:${cues[hit].end}`;
-    const lines: string[] = [];
-    let i = hit;
-    while (i >= 0 && `${cues[i].start}:${cues[i].end}` === key) i -= 1;
-    const idxs: number[] = [];
-    for (let k = i + 1; k < cues.length; k += 1) {
-      if (`${cues[k].start}:${cues[k].end}` !== key) break;
-      if (cues[k].text.trim()) idxs.push(k);
-    }
-
-    // 画面字幕跟着「原文 / 译文 / 双语」切换：双语是原文在上、译文在下。
-    // 译文缺失时退回原文，绝不在画面上留空行。
-    //
-    // 一条 cue 里可能带 `\n`（外部 SRT 的硬换行、旧版双语文件）：必须拆成多行
-    // 交给叠加层，否则 `white-space` 会把它压成「日文 中文」一行（用户报过）。
-    for (const k of idxs) {
-      const sourceLines = captionTextLines(cues[k].text);
-      const targetLines = captionTextLines(translationAt(k));
-      if (app.track === 'target') {
-        lines.push(...(targetLines.length ? targetLines : sourceLines));
-      } else if (app.track === 'both') {
-        lines.push(...sourceLines);
-        if (targetLines.length) lines.push(...targetLines);
-      } else {
-        lines.push(...sourceLines);
-      }
-    }
-    return lines;
+    return captionLinesAt(app.cues, play.time, app.track, translationAt);
   });
 
-  const cueIndex = $derived.by(() => {
-    const t = play.time;
-    const cues = app.cues;
-    let lo = 0;
-    let hi = cues.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const c = cues[mid];
-      if (t < c.start) hi = mid - 1;
-      else if (t >= c.end) lo = mid + 1;
-      else return mid;
-    }
-    return -1;
-  });
+  const cueIndex = $derived(cueIndexAtTimeExclusive(app.cues, play.time));
 
   /**
    * 当前画面对应的「字幕块」区间。双语 SRT 的日/中两行完全同区间，
@@ -435,19 +383,6 @@
     return viewStart + ratio * viewSpan;
   }
 
-  /** 当前核对台状态 → 可持久化的现场快照。 */
-  function currentSnapshot() {
-    const cue = app.cues[play.selected];
-    return {
-      cueIndex: play.selected,
-      cueTime: cue?.start ?? 0,
-      playhead: play.time,
-      viewStart,
-      span: viewSpan,
-      selection: selection ? { start: selection.start, end: selection.end } : null,
-    };
-  }
-
   /** 把某部影片的现场落盘（默认当前片）。切换影片前必须先调一次。 */
   function persistViewport(path = app.media?.path ?? '') {
     if (!path) return;
@@ -455,7 +390,10 @@
     // 那一刻视窗还是「全片 1.0×」的复位值，写下去会变成现场快照，
     // 下一次打开反而把它当用户位置恢复回来了。
     if (restoreDoneFor !== path) return;
-    rememberViewport(path, currentSnapshot());
+    rememberViewport(
+      path,
+      snapshotOf(app.cues, play.selected, play.time, viewStart, viewSpan, selection),
+    );
   }
 
   // 章节标记按媒体加载；检查器里的「将选区设为章节」需要当前时间选区。
@@ -499,16 +437,8 @@
   let peakSeq = 0;
   let peakTimer = 0;
 
-  /**
-   * 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，不会退化成一排
-   * 可数的柱子。服务端只读这一小段样本，成本可忽略。缓存键必须带上它。
-   */
-  function binsFor(width: number) {
-    return Math.max(512, Math.min(12000, Math.round(width * 3)));
-  }
-
   async function fetchPeaks(id: string, from: number, span: number, width: number) {
-    const bins = binsFor(width);
+    const bins = binsForWidth(width);
     const key = peakCacheKey(id, from, span, bins);
     const hit = cachedPeaks(key);
     if (hit) {
@@ -541,7 +471,7 @@
     const from = viewStart;
     const span = viewSpan;
     if (!id || width <= 0 || span <= 0) return;
-    const hit = cachedPeaks(peakCacheKey(id, from, span, binsFor(width)));
+    const hit = cachedPeaks(peakCacheKey(id, from, span, binsForWidth(width)));
     if (hit) {
       // 同步命中：不等 70ms 防抖，也不重新请求——切页回来时波形立刻就在
       peaks = hit;
@@ -1252,19 +1182,11 @@
     };
   }
 
-  /** 光标下是否有字幕；返回下标，没有就 -1。 */
-  function cueUnder(t: number): number {
-    for (let i = 0; i < app.cues.length; i += 1) {
-      if (app.cues[i].start <= t && t <= app.cues[i].end) return i;
-    }
-    return -1;
-  }
-
   /** 右键：菜单出现在光标处；越靠近窗口边缘越往回收，避免被裁掉。 */
   function onWaveContextMenu(e: MouseEvent) {
     e.preventDefault();
     const t = Math.max(0, Math.min(duration || Number.POSITIVE_INFINITY, timeAt(e.clientX)));
-    const hit = cueUnder(t);
+    const hit = cueIndexAtTime(app.cues, t);
     if (hit >= 0) play.selected = hit;
     // 合并目标：优先用刚框选的区间，其次用底部轨道的 ⌘ 多选。
     let merge: number[] = [];
@@ -1803,23 +1725,6 @@
     } finally {
       findBusy = false;
     }
-  }
-
-  /** 画面叠加层：一条 cue 里的硬换行拆成多行，空行丢掉。 */
-  function captionTextLines(text: string): string[] {
-    return String(text || '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-  }
-
-  /**
-   * 表格里一行只能放一行文字（虚拟列表固定行高），多行 cue 用「 / 」分隔显示，
-   * 不再让 newline 被 nowrap 压成一个空格——两种语言粘在一起看起来像识别错误。
-   * 完整原文仍在检查器文本框里按原样编辑。
-   */
-  function cueDisplayText(text: string): string {
-    return captionTextLines(text).join(' / ');
   }
 
   /** 切片逻辑在 lib/findMatches（纯函数），这里只把当前的查找上下文接进来。 */
