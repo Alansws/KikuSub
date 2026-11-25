@@ -397,14 +397,30 @@ function clearMainLogs() {
 }
 
 /**
- * 原生外观跟随应用主题。
+ * 原生外观跟随外观偏好。
  *
  * 侧栏用 `vibrancy: 'sidebar'`，它的颜色由 macOS 的明暗外观决定，不受
- * `<html data-theme>` 影响。如果只切 CSS，深色主题下最左侧（红绿灯那一列）
- * 会透出系统浅色的毛玻璃，看起来像没切过去。设置 nativeTheme 后原生材质一起变。
+ * `<html data-theme>` 影响。如果只切 CSS，深色下侧栏会透出浅色毛玻璃，
+ * 看起来像没切过去。设置 nativeTheme 后原生材质一起变。
+ *
+ * 2026-11-25 起传进来的是**偏好**：`auto` 要落成 `themeSource = 'system'`，
+ * 让原生材质真正跟随系统，而不是被渲染层的解析值钉死。
  */
-function applyTheme(theme) {
-  nativeTheme.themeSource = theme === 'dark' ? 'dark' : 'light';
+function applyAppearance(appearance) {
+  const id = appearance === 'light' || appearance === 'dark' ? appearance : 'auto';
+  nativeTheme.themeSource = id === 'auto' ? 'system' : id;
+}
+
+/**
+ * 旧版把外观存成 `preferences.theme`（'light' / 'dark' / 'mincho'）。
+ * 读一次做迁移：深色保住深色，其余回落到 auto；写回新字段后旧字段就不再被读。
+ */
+function loadAppearance() {
+  const prefs = loadPreferences();
+  if (prefs.appearance === 'auto' || prefs.appearance === 'light' || prefs.appearance === 'dark') {
+    return prefs.appearance;
+  }
+  return prefs.theme === 'dark' ? 'dark' : 'auto';
 }
 
 function ensureDataDirs() {
@@ -854,10 +870,11 @@ function createWindow() {
     titleBarStyle: 'hiddenInset',
     // 红绿灯位置。**渲染层有两个数值与它绑死**（见 app.css 的 `--tl-safe-x`
     // 与 `--topbar-h`）：三颗 12px 灯 + 2×8 间距 = 52 宽，右缘落在 x=71；
-    // 收起态顶栏从侧栏右缘 52px 起，首个控件必须让到 87（71 + 16 呼吸），
-    // 且顶栏 40px 要比灯的中线 y=24 留出余量。改这里的 x/y 必须同步改
-    // `--tl-safe-x`，回归脚本 tools/shots/verify_phase2_shell.mjs 会拦。
-    trafficLightPosition: { x: 19, y: 18 },
+    // 标题栏横跨整窗（44px），所以恒定让到 87（71 + 16 呼吸），不再有
+    // 「收起态从侧栏右缘起」的分支。y=16 让灯的中线落在 44/2=22，
+    // 与标题栏内控件同一条中线。改这里的 x/y 必须同步改 `--tl-safe-x`
+    // 与 `--topbar-h`，回归脚本 tools/shots/verify_phase2_shell.mjs 会拦。
+    trafficLightPosition: { x: 19, y: 16 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -1098,7 +1115,28 @@ function buildMenu() {
       submenu: [
         { label: '打开…', accelerator: 'CmdOrCtrl+O', click: () => pickMedia(true) },
         { type: 'separator' },
+        // 底栏改成只读状态后，暂存/恢复必须在这里有命令（HIG：每个工具栏/底栏
+        // 能力都要能在菜单栏找到）。只写工作草稿，不覆盖交付文件。
+        { label: '暂存工作草稿', accelerator: 'CmdOrCtrl+S', click: send('menu:save-draft') },
+        { label: '恢复工作草稿…', click: send('menu:restore-draft') },
+        { type: 'separator' },
         { label: '导出…', accelerator: 'CmdOrCtrl+E', click: send('menu:export') },
+        { type: 'separator' },
+        // 标题栏「⋯」里的动作也要能在菜单栏找到（HIG：每个工具栏项都要有菜单命令）。
+        // 危险项自己会弹确认框，这里不重复问。
+        {
+          label: '字幕与代理',
+          submenu: [
+            { label: '导入原文字幕…', click: send('menu:import-subtitle') },
+            { label: '导入译文字幕…', click: send('menu:import-translation') },
+            { type: 'separator' },
+            { label: '压制监看代理', click: send('menu:proxy') },
+            { label: '导入已有代理…', click: send('menu:import-proxy') },
+            { type: 'separator' },
+            { label: '删除原文字幕…', click: send('menu:clear-original') },
+            { label: '删除译文字幕…', click: send('menu:clear-translation') },
+          ],
+        },
         { type: 'separator' },
         { role: 'close', label: '关闭窗口' },
       ],
@@ -1125,21 +1163,24 @@ function buildMenu() {
     {
       label: '显示',
       submenu: [
-        // ⌘1–⌘8 由渲染层处理（导入 / 转写 / 核对台 / 双引擎复核 / 润色 / 断句重排 / 翻译 / 导出）。
+        // ⌘1–⌘8 由渲染层处理（导入 / 转写 / 核对台 / 双引擎复核 / 锁轴润色 / 重排润色 / 双语翻译 / 导出）。
         // 菜单不绑 accelerator：用户改键后旧键不能仍然生效。
+        // 命名与侧栏、页面标题必须同源（台账 §2.4）：改一处就要改三处。
         { label: '导入', click: send('menu:view', 'import') },
         { label: '转写', click: send('menu:view', 'transcribe') },
         { label: '核对台', click: send('menu:view', 'review') },
         { label: '双引擎复核', click: send('menu:view', 'dual') },
-        { label: '润色', click: send('menu:view', 'polish') },
-        { label: '断句重排', click: send('menu:view', 'reshape') },
-        { label: '翻译', click: send('menu:view', 'translate') },
+        { label: '锁轴润色（不动时间轴）', click: send('menu:view', 'polish') },
+        { label: '重排润色（可改条数与时间码）', click: send('menu:view', 'reshape') },
+        { label: '双语翻译', click: send('menu:view', 'translate') },
         { label: '导出', click: send('menu:view', 'export') },
         { label: '任务详报', click: send('menu:view', 'report') },
+        { label: '撤销历史…', click: send('menu:history') },
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
         { label: '切换侧边栏', accelerator: 'Ctrl+CmdOrCtrl+S', click: send('menu:sidebar') },
-        { label: '切换外观', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:theme') },
+        // 外观默认跟随系统（HIG）；⇧⌘A 只在三个偏好之间循环，真正的三选一在设置页。
+        { label: '切换外观（跟随系统 / 日间校样 / 夜间配音）', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:appearance') },
         { type: 'separator' },
         { role: 'togglefullscreen', label: '进入全屏幕' },
         { role: 'toggleDevTools', label: '开发者工具' },
@@ -1539,16 +1580,16 @@ ipcMain.on('window:set-dirty', (_e, dirty) => {
   if (win) win.setDocumentEdited(Boolean(dirty));
 });
 
-ipcMain.on('window:set-theme', (_e, theme) => {
-  // 外观 id 原样存（'light' / 'dark' / 'mincho'）：主进程只关心原生明暗，
-  // 但冷启动的窗口要在首帧就用对 vibrancy，所以把 id 也记下来。
-  const raw = theme === 'cool' ? 'mincho' : theme; // 'cool' 是旧版「明朝墨」的 id
-  const id = raw === 'dark' || raw === 'mincho' ? raw : 'light';
-  applyTheme(id === 'dark' ? 'dark' : 'light');
+ipcMain.on('window:set-appearance', (_e, appearance) => {
+  // 存的是**偏好**（auto / light / dark）：冷启动首帧要按同一个值设 vibrancy。
+  // 'mincho' / 'cool' 不再出现在这里 —— 明朝已降为字幕字体，与明暗正交。
+  const id = appearance === 'light' || appearance === 'dark' ? appearance : 'auto';
+  applyAppearance(id);
   try {
-    if (loadPreferences().theme !== id) savePreferences({ theme: id });
+    const prefs = loadPreferences();
+    if (prefs.appearance !== id) savePreferences({ appearance: id });
   } catch {
-    /* 主题写盘失败不影响本次切换 */
+    /* 外观写盘失败不影响本次切换 */
   }
 });
 
@@ -1595,7 +1636,7 @@ if (!app.requestSingleInstanceLock()) {
       /* 日志清理失败不能挡启动 */
     }
     firstRunPending = shouldFirstRun();
-    applyTheme(loadPreferences().theme === 'dark' ? 'dark' : 'light');
+    applyAppearance(loadAppearance());
     mainLog(
       `[main] KikuSub start version=${app.getVersion()} electron=${process.versions.electron} ` +
         `platform=${process.platform}/${process.arch} packaged=${app.isPackaged} ` +

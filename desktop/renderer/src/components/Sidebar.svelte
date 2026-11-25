@@ -1,66 +1,28 @@
 <script lang="ts">
+  /**
+   * 侧栏：四段导航（01 准备 / 02 核对 / 03 原文 / 04 交付）+ 底部工具页。
+   *
+   * 名字与分组来自 `lib/viewMeta.ts`——那里是唯一来源，标题栏面包屑、
+   * 主进程菜单、快捷键面板都读同一份，避免「侧栏叫锁轴润色、菜单还叫润色」。
+   *
+   * 段内顺序与 ⌘1–⌘8 绑死，不按拼音重排。
+   */
   import Icon from './Icon.svelte';
-  import SidebarToggle from './SidebarToggle.svelte';
-  import { app, setView, type View } from '../lib/store.svelte';
+  import { app, setView } from '../lib/store.svelte';
   import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
   import { dual } from '../lib/dualReview.svelte';
+  import { NAV_GROUPS, UTILITY_ITEMS } from '../lib/viewMeta';
   import appIcon from '../assets/app-icon.png';
 
-  interface NavItem {
-    view: View;
-    icon: string;
-    label: string;
-    key: string;
+  /** 右侧计数：只给「有东西可数」的两页，其余留空。 */
+  function countOf(view: string): string {
+    if (view === 'review' && app.cues.length) return String(app.cues.length);
+    if (view === 'dual' && dual.exists) return String(dual.stats?.badge ?? 0);
+    return '';
   }
-
-  /**
-   * 按「工作心智」分四段，而不是八条平级步骤（2026-11-21 去噪）：
-   * 准备（导入 / 转写）→ 核对（核对台 / 双引擎复核）→ AI 处理（润色 / 断句重排 / 翻译）
-   * → 交付（导出）。分组只加视觉分隔，不改路由。
-   *
-   * **段内顺序必须保持不变**：`⌘1..⌘8` 与这张表一一对应（见 lib/shortcuts.svelte.ts），
-   * 主进程「视图」菜单也是这个顺序；调顺序等于把快捷键和菜单一起打乱。
-   * 所以 AI 处理段里仍是 润色(⌘5) / 断句重排(⌘6) / 翻译(⌘7)，不是按拼音重排。
-   */
-  const nav: { group: string; items: NavItem[] }[] = [
-    {
-      group: '准备',
-      items: [
-        { view: 'import', icon: 'tray', label: '导入', key: '⌘1' },
-        { view: 'transcribe', icon: 'wave', label: '转写', key: '⌘2' },
-      ],
-    },
-    {
-      group: '核对',
-      items: [
-        { view: 'review', icon: 'listcheck', label: '核对台', key: '⌘3' },
-        { view: 'dual', icon: 'rows', label: '双引擎复核', key: '⌘4' },
-      ],
-    },
-    {
-      group: 'AI 处理',
-      items: [
-        { view: 'polish', icon: 'sparkle', label: '润色', key: '⌘5' },
-        { view: 'reshape', icon: 'split', label: '断句重排', key: '⌘6' },
-        { view: 'translate', icon: 'quote', label: '翻译', key: '⌘7' },
-      ],
-    },
-    {
-      group: '交付',
-      items: [{ view: 'export', icon: 'export', label: '导出', key: '⌘8' }],
-    },
-  ];
 </script>
 
 <aside class="sidebar" class:collapsed={sidebarPrefs.collapsed}>
-  <!-- 展开态的折叠开关贴在红绿灯留白区右侧；收起态它移到顶栏。
-       紧凑模式（≤900px，含 200% 缩放）同理：图标轨只有 56px，
-       `right: 10px` 会把开关放到 x≈24，正好压在红绿灯（x19–71）上，
-       所以**两种「窄轨」情况都挂到顶栏**，这里只留全宽展开态。 -->
-  {#if !sidebarPrefs.collapsed && !app.compact}
-    <SidebarToggle floating />
-  {/if}
-
   <div class="sb-brand" aria-label="KikuSub 字幕工作台">
     <img class="brand-mark" src={appIcon} width="20" height="20" alt="" aria-hidden="true" />
     <span class="brand-text">
@@ -69,72 +31,68 @@
     </span>
   </div>
 
-  {#each nav as section, index (section.group)}
-    <div class="sb-label" class:lead={index === 0}>{section.group}</div>
-    {#each section.items as item (item.view)}
+  <nav class="sb-nav" aria-label="工作阶段">
+    {#each NAV_GROUPS as group (group.stage)}
+      <div class="sb-group">
+        <div class="sb-label">
+          <span class="sb-num">{group.stage}</span>
+          {group.label}
+        </div>
+        {#each group.items as item (item.view)}
+          <button
+            class="sb-item"
+            class:active={app.view === item.view}
+            onclick={() => setView(item.view)}
+            title={item.key ? `${item.label}（${item.key}）` : item.label}
+            aria-label={item.key ? `${item.label}（${item.key}）` : item.label}
+            aria-current={app.view === item.view ? 'page' : undefined}
+          >
+            <span class="ico"><Icon name={item.icon} /></span>
+            <span class="sb-text">{item.label}</span>
+            {#if countOf(item.view)}
+              <span
+                class="sb-count"
+                class:alt={item.view === 'dual'}
+                title={item.view === 'dual' ? '文本差异行数（+ / − 漏句在页内单独显示）' : ''}
+              >
+                {countOf(item.view)}
+              </span>
+            {:else}
+              <kbd class="sb-key" aria-hidden="true">{item.key}</kbd>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/each}
+  </nav>
+
+  <div class="sb-spacer"></div>
+
+  <nav class="sb-foot" aria-label="工具">
+    {#each UTILITY_ITEMS as item (item.view)}
       <button
         class="sb-item"
         class:active={app.view === item.view}
         onclick={() => setView(item.view)}
-        title={`${item.label}（${item.key}）`}
-        aria-label={`${item.label}（${item.key}）`}
+        title={item.key ? `${item.label}（${item.key}）` : item.label}
+        aria-label={item.key ? `${item.label}（${item.key}）` : item.label}
+        aria-current={app.view === item.view ? 'page' : undefined}
       >
         <span class="ico"><Icon name={item.icon} /></span>
-        <span>{item.label}</span>
-        {#if item.view === 'review' && app.cues.length}
-          <span class="sb-count">{app.cues.length}</span>
-        {:else if item.view === 'dual' && dual.exists}
-          <span class="sb-count alt" title="文本差异行数（+ / − 漏句在页内单独显示）">
-            {dual.stats?.badge ?? 0}
-          </span>
-        {/if}
+        <span class="sb-text">{item.label}</span>
+        <kbd class="sb-key" aria-hidden="true">{item.key}</kbd>
       </button>
     {/each}
-  {/each}
-
-  <div class="sb-spacer"></div>
-
-  <button
-    class="sb-item"
-    class:active={app.view === 'prompts'}
-    onclick={() => setView('prompts')}
-    title="提示词库：选中、编辑并复制翻译提示词"
-    aria-label="提示词库"
-  >
-    <span class="ico"><Icon name="quote" /></span>
-    <span>提示词库</span>
-  </button>
-
-  <button
-    class="sb-item"
-    class:active={app.view === 'settings'}
-    onclick={() => setView('settings')}
-    title="设置：引擎与模型、文件夹路径、日志与诊断（⌘,）"
-    aria-label="设置（⌘,）"
-  >
-    <span class="ico"><Icon name="gear" /></span>
-    <span>设置</span>
-    <kbd class="sb-key" aria-hidden="true">⌘,</kbd>
-  </button>
-
+  </nav>
 </aside>
 
 <style>
   .sb-brand {
     display: flex;
     align-items: center;
-    gap: var(--sp-2);
-    padding: var(--sp-1) var(--sp-2) 14px;
+    gap: 9px;
+    padding: var(--sp-1) var(--sp-2) var(--sp-4);
     color: var(--text);
-  }
-  /* 收起态：只剩 27px 图标，下边距要更大一点，否则第一个导航项贴着它。
-     组件样式排在 app.css 之后，同一条规则放这里才压得住（与下方紧凑模式同理）。
-     上内边距 6px：app.css 把收起态的 `padding-top` 设成 40（= 顶栏底边，
-     顶带整块连续），这里再给 6 让图标从 y=46 起，与发丝线留出呼吸。 */
-  .sidebar.collapsed .sb-brand {
-    justify-content: center;
-    gap: 0;
-    padding: 6px 0 var(--sp-4);
   }
   .brand-mark {
     display: block;
@@ -148,124 +106,167 @@
   }
   .brand-name {
     display: block;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
+    font-size: 13.5px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
   }
   .brand-sub {
     display: block;
-    font-size: 12px;
-    color: var(--text-3);
-    margin-top: 1px;
-  }
-  /* 分组标签是「分隔」而不是「标题」：比导航正文更小更淡，读起来不抢行。
-     第一段贴着品牌标，上边距要比后续分段小。 */
-  .sb-label {
     font-size: 11px;
-    font-weight: 600;
     color: var(--text-3);
-    letter-spacing: 0.06em;
-    padding: 16px var(--sp-2) 5px;
+    margin-top: 2px;
+    letter-spacing: 0.02em;
   }
-  .sb-label.lead {
-    padding-top: 6px;
+
+  .sb-nav {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .sb-group + .sb-group {
+    margin-top: var(--sp-3);
+  }
+  /* 段标是「分隔」不是「标题」：等宽小字 + 段号，读起来是一张任务表 */
+  .sb-label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 var(--sp-2) 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.07em;
+    color: var(--text-3);
+    text-transform: uppercase;
+  }
+  .sb-num {
+    color: var(--text-2);
+    font-weight: 500;
   }
 
   .sb-item {
     appearance: none;
     border: 0;
     background: transparent;
-    height: 30px;
+    height: var(--row-h);
+    width: 100%;
     display: flex;
     align-items: center;
-    gap: var(--sp-2);
+    gap: 9px;
     padding: 0 var(--sp-2);
     border-radius: var(--rad-control);
-    color: var(--text);
+    color: var(--text-2);
     font: inherit;
-    font-size: 13px;
+    font-size: 12.5px;
     text-align: left;
-    transition: background var(--dur) var(--ease);
-    width: 100%;
+    transition:
+      background var(--dur) var(--ease),
+      color var(--dur) var(--ease);
   }
   .sb-item:hover {
     background: var(--fill);
+    color: var(--text);
   }
-  /* 选中态只有一层柔和强调色底（2026-11-21 去噪）：去掉外圈 2px 朱红左线，
-     全站与设置页 / 核对台保持一致，侧栏不再像「八条带边框的步骤」。 */
+  /* 选中：蓝铅笔 tint + 1px 边；不用单侧竖条，也不加阴影 */
   .sb-item.active {
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
     font-weight: 500;
   }
-  /* 键盘焦点用内侧细环：全局 2px 外描边套在浅底选中项外面会读成「报错框」，
-     内侧环（accent-ring）既去掉外圈朱红框，又保住键盘用户看得见焦点。 */
   .sb-item:focus-visible {
     outline: 2px solid var(--accent-ring);
     outline-offset: -2px;
-  }
-  .sb-item.active .ico {
-    color: var(--accent);
   }
   .ico {
     width: 16px;
     height: 16px;
     flex: 0 0 16px;
-    color: var(--text-2);
+    color: var(--text-3);
     display: grid;
     place-items: center;
   }
+  .sb-item:hover .ico {
+    color: var(--text-2);
+  }
+  .sb-item.active .ico {
+    color: var(--accent);
+  }
+  .sb-text {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   .sb-count {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--text-3);
+    min-width: 16px;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
+    color: var(--text-3);
   }
   .sb-item.active .sb-count {
     color: var(--accent);
   }
   .sb-count.alt {
-    min-width: 17px;
+    min-width: 18px;
     padding: 0 5px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 999px;
     background: var(--accent-soft);
     color: var(--accent);
-    text-align: center;
   }
 
-  .sb-spacer {
-    flex: 1;
-  }
-
-  /* 设置项的固定快捷键提示：⌘, 是 macOS 惯例，不属于可自定义表。 */
+  /* 快捷键只在悬停/聚焦时出现，常驻会变成一片杂音 */
   .sb-key {
-    margin-left: auto;
-    flex: 0 0 auto;
-    font-family: var(--font-sans);
-    font-size: 11.5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
     line-height: 16px;
     color: var(--text-3);
-    letter-spacing: 0.02em;
-    font-variant-numeric: tabular-nums;
+    opacity: 0;
+    flex: 0 0 auto;
+  }
+  .sb-item:hover .sb-key,
+  .sb-item:focus-visible .sb-key {
+    opacity: 1;
+  }
+  .sb-foot .sb-key {
+    opacity: 1;
   }
   .sb-item.active .sb-key {
     color: var(--accent);
   }
 
-  /* 紧凑模式（≤900px）：56px 图标轨。标签的显隐在 app.css（全局骨架）里，
-     品牌文字在这里收起——组件样式排在 app.css 之后，同一份规则放这里才生效。 */
+  .sb-spacer {
+    flex: 1;
+    min-height: var(--sp-3);
+  }
+  .sb-foot {
+    border-top: 1px solid var(--line);
+    padding-top: var(--sp-2);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* 紧凑模式（≤900px）：标签与快捷键的显隐在 app.css 统一处理，
+     品牌文字这里收起——组件样式排在 app.css 之后，同一份规则放这里才生效。 */
   @media (max-width: 900px) {
     .sb-brand {
       justify-content: center;
       gap: 0;
-      /* 6px：顶栏发丝线在 y=40，图标从 y=46 起，与收起态一致 */
-      padding: 6px 0 var(--sp-3);
+      padding: var(--sp-2) 0 var(--sp-3);
     }
     .brand-name,
-    .brand-sub {
-      display: none;
-    }
+    .brand-sub,
     .sb-key {
       display: none;
     }

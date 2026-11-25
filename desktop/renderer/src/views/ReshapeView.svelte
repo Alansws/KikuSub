@@ -598,7 +598,7 @@
     </div>
   {/if}
   <AiBatchToolbar
-    title="断句重排"
+    title="重排润色"
     channel="manual"
     channels={['api', 'manual']}
     apiAvailable={false}

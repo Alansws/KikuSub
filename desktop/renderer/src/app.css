@@ -1,47 +1,57 @@
 /* ============================================================
-   设计令牌 —— D「青空」(Clear Sky)
-   注意：真实应用里没有「假窗口」。窗口边框、红绿灯、阴影都由 macOS 提供，
+   KikuSub —— 设计令牌「Cue Script（录音台本）」
+
+   世界只借四件事：字体、色板、密度、一个签名动作（cue margin）。
+   导航与控件仍是 macOS 标准件；见根目录 DESIGN.md。
+
+   **两套外观，两个字面值**：
+   `html[data-theme]` 只承载**解析后**的 light / dark（偏好 auto / light / dark
+   在 store 里解析，见 lib/themes.ts）。明朝不是第三套配色，只换 `--font-cue`，
+   挂在 `html[data-cue-font='mincho']` 上。
+
+   真实应用里没有「假窗口」：窗口边框、红绿灯、阴影都由 macOS 提供，
    所以 body 是透明的，侧栏的 vibrancy 才能透出桌面。
 
-   语义只有五档：surface（canvas/paper/raise）、hairline（line/line2）、
-   text（ink/ink2/ink3）、focus（accent 系）、danger/warn/success 状态。
+   语义只有五档：surface（canvas/panel/sheet）、hairline（line/line2）、
+   text（ink/ink-2/ink-3/muted）、focus（accent 系）、status（danger/warn/success）。
    旧变量名保留为别名，组件不用一次性全改。
    ============================================================ */
 
 :root {
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --dur: 200ms;
+  --dur: 160ms;
   --dur-fast: 120ms;
-  --dur-panel: 220ms;
-  --dur-page: 220ms;
+  --dur-panel: 200ms;
+  --dur-page: 160ms;
 
+  /* ---------- 字体 ---------- */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
-    'Hiragino Sans GB', 'Noto Sans SC', sans-serif;
+    'Hiragino Sans GB', 'Hiragino Sans', 'Noto Sans SC', sans-serif;
   --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* 字幕正文的字体角色：只有主题会换它（「明朝墨」用明朝），UI 永远跟 --font-sans */
+  /* 字幕正文的字体角色：只有「字幕字体」偏好会换它 */
   --font-cue: var(--font-sans);
-  /* 明朝字幕的字体栈单独提一个与主题无关的别名：设置页的缩略图要在「当前不是明朝墨」时
-     也能渲染出明朝那一张，不能读当前主题的 --font-cue */
+  /* 明朝字体栈单独一个与当前偏好无关的别名：设置页缩略图要在「当前是黑体」时
+     也能渲染出明朝那一张，不能读当前的 --font-cue */
   --font-cue-mincho: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
 
-  /* 字阶：UI 角色 ≤6 种，字幕正文单独一条（见设计规划 §5.2） */
+  /* ---------- 字阶（DESIGN.md §Typography） ---------- */
   --fs-display: 22px;
   --lh-display: 30px;
   --fs-heading: 15px;
   --lh-heading: 22px;
-  --fs-body: 14px;
-  --lh-body: 22px;
+  --fs-body: 13px;
+  --lh-body: 19px;
   --fs-ui: 13px;
   --lh-ui: 18px;
-  --fs-label: 12px;
+  --fs-label: 11px;
   --lh-label: 16px;
-  --fs-mono: 12.5px;
-  --lh-mono: 18px;
-  /* 设置页总览看板的大数字 */
-  --fs-hero: 27px;
-  --lh-hero: 33px;
+  --fs-mono: 11px;
+  --lh-mono: 16px;
+  --fs-control: 13px;
+  --fs-hero: 24px;
+  --lh-hero: 32px;
 
-  /* 间距：4 的倍数 */
+  /* ---------- 间距：4 的倍数 ---------- */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -53,90 +63,82 @@
   --sp-12: 48px;
   --sp-16: 64px;
 
-  /* 圆角：控件 / 卡片 / 面板 */
-  --rad-control: 4px;
-  --rad-card: 8px;
-  --rad-panel: 12px;
-  /* 设置页：分段导航 / Inset 分组 / 总览看板 / 主题缩略图 */
-  --rad-tab: 9px;
-  --rad-inset: 10px;
-  --rad-hero: 14px;
-  --rad-shot: 6px;
+  /* ---------- 圆角：3 记号 / 5 控件 / 7 面板表 / 10 窗口画面 ---------- */
+  --rad-control: 5px;
+  --rad-card: 7px;
+  --rad-panel: 10px;
+  --rad-tab: 6px;
+  --rad-inset: 8px;
+  --rad-hero: 10px;
+  --rad-shot: 4px;
 
-  /* 控件高度 */
-  --ctl-h: 28px;
-  /* 侧栏收起态宽度：52px 正好是 16px 图标 + 两侧各 18px 的呼吸，
-     和「一条图标轨」的视觉重量一致，再窄就捏不住点击目标了。 */
+  /* ---------- 骨架几何 ---------- */
+  --topbar-h: 44px;
+  --statusbar-h: 24px;
+  --sidebar-w: 232px;
   --sb-collapsed-w: 52px;
-
-  /* 系统红绿灯的安全区（2026-11-24）：
-     19（右缘起点）+ 52（三颗 12px 灯 + 2×8 间距）+ 16（呼吸）= 87px。
-     **必须与 `desktop/main/main.cjs` 的 `trafficLightPosition.x` 同步**：
-     红绿灯是原生绘制的，DOM 读不到，改一处不同步另一处就会重新叠上
-     （收起态第一版就是这样把开关压在绿灯上：顶栏从 52px 起 + 16px 内边距 = 68px）。
-     收起态的顶栏用它让位，展开态顶栏从 236px 起、天然在安全区右侧。 */
-  --tl-safe-x: 87px;
-  /* 收起态图标轨的实际宽度。默认就是 `--sb-collapsed-w`，但 ≤900px 的紧凑模式
-     把轨加宽到 56px（点按目标要更大），顶栏的让位是按「轨宽」反算的，
-     所以这里单独提一个 token，紧凑模式覆盖它一处即可，不用在 Toolbar 里
-     再写一个 56 的魔法数。 */
   --sb-rail-w: var(--sb-collapsed-w);
-  /* 顶栏高度：收起态侧栏顶部要把同样的 40px 铺成一整块连续底色（红绿灯背后
-     不能出现「两种底色 + 一条竖线」），所以顶栏与侧栏顶部共用这一个数值，
-     见 `.sidebar.collapsed` 一段。 */
-  --topbar-h: 40px;
+  --inspector-w: 388px;
+  --row-h: 30px;
+  /* 签名动作：台本页边。状态、导航、校对记号都在这一列里 */
+  --cue-margin-w: 44px;
+  --cue-mark: 12px;
+  --wave-h: 84px;
+  /* 系统红绿灯的安全区：19（右缘起点）+ 52（三颗 12px 灯 + 2×8 间距）+ 16（呼吸）= 87px。
+     **必须与 `desktop/main/main.cjs` 的 `trafficLightPosition.x` 同步**：
+     红绿灯是原生绘制的，DOM 读不到。标题栏横跨整窗，所以恒定让出这一段。 */
+  --tl-safe-x: 87px;
+
+  --ctl-h: 28px;
   --ctl-h-lg: 32px;
   --ctl-h-xl: 36px;
-  /* 设置页分段导航的段高（比普通控件高一档） */
-  --seg-h: 30px;
+  --seg-h: 28px;
 
-  /* —— D「青空」浅色（来自上传图的浅天蓝 / 薰衣草 / 樱粉 / 深靛） —— */
-  --canvas: #edf3fb;
-  --paper: #f9fbfe;
-  --raise: #ffffff;
-  --ink: #1b2740;
-  --ink-2: #5a6780;
-  /* 2026-11-23：4.18 → 4.7（on --canvas）。只做「标签/计数/单位/快捷键」，
-     解释性正文一律用 --ink-2 —— 两者必须成对使用，否则正文与标签同重，灰阶会变紧。 */
-  --ink-3: #5f6d84;
-  /* G14：禁用 / 不可用专用。与 --ink-3（标签）语义分开：
-     标签是「次要但有效」，muted 是「此刻不生效」。对比度刻意低（2.6:1），
-     因为它本来就该弱到不像可读内容，但仍高于纯装饰。 */
-  --ink-muted: #99a3b3;
-  --line: rgba(27, 39, 64, 0.12);
-  --line-2: rgba(27, 39, 64, 0.06);
+  /* ---------- 表面：冷纸 / 纸面 / 台本 ---------- */
+  --canvas: #e7ecef;
+  --paper: #f4f6f6;
+  --raise: #fcfdfc;
+  --ink: #15191c;
+  --ink-2: #4a545c;
+  /* 6.23:1 on sheet —— 标签 / 计数 / 单位 / 快捷键。11px 也要读得清，
+     所以比 DESIGN.md 里的 #5E6A72 再深一档（5.45 → 6.23）。 */
+  --ink-3: #566168;
+  /* 禁用 / 不可用专用：弱到不像可读内容，但仍高于纯装饰（2.9:1） */
+  --ink-muted: #8e979c;
 
-  --accent: #4f6bff;
-  --accent-hover: #3d57e6;
-  /* 文字/图标形式的强调。--accent 在小字上只有 4.15（on --paper），
-     所以「填充底」与「文字色」用两个令牌分开算：这里 5.47/5.08。 */
-  --accent-text: #3d57e6;
-  --accent-soft: rgba(79, 107, 255, 0.08);
-  --accent-ring: rgba(79, 107, 255, 0.35);
-  --accent-line: rgba(79, 107, 255, 0.35);
-  /* 主操作（实心按钮）的底色。两套主题都跟强调色一致；留成独立令牌，
-     是为了以后真要做「墨色主按钮」的主题时不必再改组件。
-     不要为了“现在没用到”把它删掉：它同时被 .btn.primary 与组件内的主按钮引用。 */
+  /* 发丝线保留 rgba：多个组件把 --line-2 当 hover 底色用，实色会变成灰块。
+     .14 是分隔线的最低可读档，不再回退到 5% 灰。 */
+  --line: rgba(21, 25, 28, 0.14);
+  --line-2: rgba(21, 25, 28, 0.1);
+  /* 明确的 1px 发丝线（cue 表、台本页边） */
+  --rule: #c8d1d6;
+
+  /* ---------- 蓝铅笔 / 朱笔 ---------- */
+  --accent: #2d5fa6;
+  --accent-hover: #234b85;
+  /* 文字/图标形式的强调：蓝铅笔本身在纸面 5.87、台本 6.24，小字也达标 */
+  --accent-text: #2d5fa6;
+  --accent-soft: rgba(45, 95, 166, 0.1);
+  --accent-ring: rgba(45, 95, 166, 0.45);
+  --accent-line: rgba(45, 95, 166, 0.36);
   --btn-primary-bg: var(--accent);
   --btn-primary-hover: var(--accent-hover);
-  /* 开关 / 勾选 / 滑杆的「开」色，同样默认跟强调色一致；主题要统一染色就改这一处 */
   --control-on: var(--accent);
-  /* 实心强调色上的文字。浅强调色主题必须把它改成深墨，否则白字压不住底 */
-  --on-accent: #fff;
-  --danger: #b3261e;
-  --danger-soft: rgba(179, 38, 30, 0.1);
-  --warn: #9a6400;
-  --warn-soft: rgba(154, 100, 0, 0.1);
-  --success: #2e7d5b;
-  --success-soft: rgba(46, 125, 91, 0.1);
+  --on-accent: #ffffff;
 
-  /* 内容区本身是 paper；--bg-content 留给卡片/输入/浮层（raise） */
+  --danger: #b8412f;
+  --danger-soft: rgba(184, 65, 47, 0.1);
+  --warn: #7e5416;
+  --warn-soft: rgba(126, 84, 22, 0.1);
+  --success: #356b52;
+  --success-soft: rgba(53, 107, 82, 0.1);
+
   --bg-content: var(--raise);
   --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(249, 251, 254, 0.86);
-  --bg-status: rgba(249, 251, 254, 0.92);
-  /* 侧栏叠在 macOS vibrancy 上：留一点透，但颜色仍由青空画布决定 */
-  --bg-sidebar: rgba(237, 243, 251, 0.72);
+  --bg-toolbar: rgba(244, 246, 246, 0.9);
+  --bg-status: rgba(244, 246, 246, 0.94);
+  /* 侧栏叠在 macOS vibrancy 上：留一点透，颜色仍由冷纸画布决定 */
+  --bg-sidebar: rgba(231, 236, 239, 0.72);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -144,114 +146,102 @@
   --separator: var(--line);
   --separator-soft: var(--line-2);
 
-  --fill: rgba(27, 39, 64, 0.045);
-  --fill-strong: rgba(27, 39, 64, 0.08);
-  --row-hover: rgba(27, 39, 64, 0.03);
+  --fill: rgba(21, 25, 28, 0.05);
+  --fill-strong: rgba(21, 25, 28, 0.09);
+  --row-hover: rgba(21, 25, 28, 0.035);
 
-  --shadow-pop: 0 10px 30px rgba(27, 39, 64, 0.14), 0 1px 3px rgba(27, 39, 64, 0.1);
-  --shadow-video: 0 22px 50px rgba(30, 42, 69, 0.16);
-  /* 控件级的两个小阴影：主按钮、分段选中。换墨色的主题要一起换 */
-  --shadow-btn: 0 1px 2px rgba(27, 39, 64, 0.18);
-  --shadow-seg: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
-  --scroll-thumb: rgba(27, 39, 64, 0.18);
-  --scroll-thumb-hover: rgba(27, 39, 64, 0.3);
-  /* 查找命中：荧光笔黄，不属于强调色体系，各主题共用 */
+  /* 平面优先：卡片没有阴影；只有画面与真浮层有 */
+  --shadow-pop: 0 12px 32px rgba(21, 25, 28, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 18px 40px rgba(0, 0, 0, 0.42);
+  --shadow-btn: none;
+  --shadow-seg: none;
+
+  --scroll-thumb: rgba(21, 25, 28, 0.18);
+  --scroll-thumb-hover: rgba(21, 25, 28, 0.3);
   --hit: rgba(255, 214, 10, 0.4);
   --hit-row: rgba(255, 214, 10, 0.16);
-  --caption-bg: rgba(13, 20, 36, 0.62);
-  /* 监看舞台（2026-11-24 Phase 2；同日二改）：
-     浅色主题下舞台不再是深黑——640×360 的 16:9 画面放在宽舞台上，
-     左右/底部会露出两条生硬的黑边，在浅色界面里读起来像「画面没铺满」。
-     改成柔和浅灰画布（比 --canvas 深一档、比 --paper 深两档），黑边变成
-     「画面浮在画布上」的一圈留白。暗色主题仍保持接近纯黑的舞台不变。
-     1px 分割线走 --stage-line，浅色下用 0.52 墨（对画布 3.15:1，可见但不抢眼），
-     原来是 0.34 白 —— 那是给深色舞台算的，放到浅灰上等于消失。 */
-  --stage-bg: #eef1f5;
-  --stage-line: rgba(27, 39, 64, 0.52);
-  /* 画面本体（16:9 的那一块）的 1px 细边：舞台是浅灰时靠它把画面与留白分开，
-     不能再用「0.06 白」那种只对深色成立的值。 */
-  --stage-frame: rgba(27, 39, 64, 0.16);
-  --wave: #a3adbe;
+  --caption-bg: rgba(13, 18, 24, 0.62);
 
-  /* 波形底部字幕轨道。灰条时代和底色的对比只有 4%，几乎看不见；
-     这里改用品牌蓝的分层透明度：底槽 → 有字幕 → 悬停 → 当前句。 */
-  /* 轨道块只在「当前块」用 accent；其余是中性墨，避免一条蓝块带抢戏 */
-  --cue-lane: rgba(27, 39, 64, 0.05);
-  --cue-wash: rgba(27, 39, 64, 0.03);
-  --cue-block: rgba(27, 39, 64, 0.14);
-  --cue-block-hover: rgba(27, 39, 64, 0.24);
-  --cue-block-active: rgba(79, 107, 255, 0.82);
-  --cue-edge: rgba(79, 107, 255, 0.9);
+  /* 监看舞台：浅色下是「画面浮在柔和浅灰画布上」，不是两条黑边；
+     暗色下保持近黑，让画面成为唯一亮面。 */
+  --stage-bg: #dde4e7;
+  --stage-line: rgba(21, 25, 28, 0.52);
+  --stage-frame: rgba(21, 25, 28, 0.16);
+  --wave: #8b959b;
 
-  /* —— 设置页（2026-11）：分段导航 / Bento / 占用条 / Inset 分组 —— */
-  --seg-track: rgba(27, 39, 64, 0.055);
-  --seg-thumb: #ffffff;
-  --seg-thumb-ring: rgba(27, 39, 64, 0.1);
-  --seg-thumb-shadow: var(--shadow-seg);
+  --cue-lane: rgba(21, 25, 28, 0.05);
+  --cue-wash: rgba(21, 25, 28, 0.03);
+  --cue-block: rgba(21, 25, 28, 0.14);
+  --cue-block-hover: rgba(21, 25, 28, 0.24);
+  --cue-block-active: rgba(45, 95, 166, 0.84);
+  --cue-edge: rgba(45, 95, 166, 0.9);
+
+  /* ---------- 设置页令牌（分段 / Bento / 占用条 / Inset） ---------- */
+  --seg-track: rgba(21, 25, 28, 0.06);
+  --seg-thumb: var(--raise);
+  --seg-thumb-ring: rgba(21, 25, 28, 0.12);
+  --seg-thumb-shadow: none;
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
-  --bento-bg: #ffffff;
-  --bento-border: rgba(27, 39, 64, 0.075);
-  --bento-border-on: rgba(79, 107, 255, 0.34);
-  --bento-glow: rgba(79, 107, 255, 0.1);
-  --bento-bg-on: rgba(79, 107, 255, 0.035);
-  --bento-shadow: 0 1px 2px rgba(27, 39, 64, 0.045);
-  --bento-shadow-on: 0 2px 12px rgba(79, 107, 255, 0.1), 0 1px 2px rgba(27, 39, 64, 0.05);
+  --bento-bg: var(--raise);
+  --bento-border: rgba(21, 25, 28, 0.12);
+  --bento-border-on: rgba(45, 95, 166, 0.34);
+  --bento-glow: rgba(45, 95, 166, 0.08);
+  --bento-bg-on: rgba(45, 95, 166, 0.04);
+  --bento-shadow: none;
+  --bento-shadow-on: none;
 
-  --hero-bg: linear-gradient(180deg, rgba(79, 107, 255, 0.075), rgba(79, 107, 255, 0) 68%),
-    var(--raise);
-  --hero-border: rgba(79, 107, 255, 0.16);
+  --hero-bg: var(--raise);
+  --hero-border: rgba(45, 95, 166, 0.16);
 
-  --meter-track: rgba(27, 39, 64, 0.065);
-  --meter-a: #4f6bff;
-  --meter-b: #2f9e8f;
-  --meter-c: #b06bd0;
-  --meter-muted: rgba(27, 39, 64, 0.28);
+  --meter-track: rgba(21, 25, 28, 0.07);
+  --meter-a: #2d5fa6;
+  --meter-b: #356b52;
+  --meter-c: #7e5416;
+  --meter-muted: rgba(21, 25, 28, 0.28);
   --meter-gap: var(--raise);
 
-  --inset-bg: #ffffff;
-  --inset-line: var(--separator-soft);
-  /* 开关的滑块：三套主题都是白片，单独留一个令牌方便以后换 */
+  --inset-bg: var(--raise);
+  --inset-line: rgba(21, 25, 28, 0.1);
+  --bg-inset: var(--inset-bg);
   --switch-knob: #ffffff;
 }
 
 html[data-theme='dark'] {
   color-scheme: dark;
-  --canvas: #0a0c10;
-  --paper: #111419;
-  --raise: #181c23;
-  --ink: #ecf1fa;
-  --ink-2: #a9b4c6;
-  /* 深色下已是 5.79（on --paper），本来就达标，不动。
-     浅色的 #5F6D84 是冷蓝灰，拿到深色会变暗、失去层次。 */
-  --ink-3: #8591a5;
-  --ink-muted: #5c6675;
-  --line: rgba(236, 241, 250, 0.13);
-  --line-2: rgba(236, 241, 250, 0.07);
 
-  --accent: #7d93ff;
-  --accent-hover: #94a6ff;
-  /* 文字/图标形式的强调：深色保持高亮蓝（6.58），不用浅色的 #3D57E6。 */
-  --accent-text: #7d93ff;
-  --accent-soft: rgba(125, 147, 255, 0.16);
-  --accent-ring: rgba(125, 147, 255, 0.42);
-  --accent-line: rgba(125, 147, 255, 0.42);
-  --danger: #e6675a;
-  --danger-soft: rgba(230, 103, 90, 0.14);
-  --warn: #d9a441;
-  --warn-soft: rgba(217, 164, 65, 0.14);
-  --success: #6fbf8b;
-  --success-soft: rgba(111, 191, 139, 0.14);
+  --canvas: #0b0e11;
+  --paper: #12161a;
+  --raise: #171c21;
+  --ink: #ece8df;
+  --ink-2: #b3b8b8;
+  --ink-3: #959fa8;
+  --ink-muted: #5e686f;
 
-  /* 内容区本身是 paper；--bg-content 留给卡片/输入/浮层（raise） */
+  --line: rgba(236, 232, 223, 0.16);
+  --line-2: rgba(236, 232, 223, 0.09);
+  --rule: #2a3238;
+
+  --accent: #84a9e6;
+  --accent-hover: #a8c4ef;
+  --accent-text: #84a9e6;
+  --accent-soft: rgba(132, 169, 230, 0.14);
+  --accent-ring: rgba(132, 169, 230, 0.5);
+  --accent-line: rgba(132, 169, 230, 0.4);
+  --danger: #e07a66;
+  --danger-soft: rgba(224, 122, 102, 0.12);
+  --warn: #d2a15e;
+  --warn-soft: rgba(210, 161, 94, 0.13);
+  --success: #7fb89b;
+  --success-soft: rgba(127, 184, 155, 0.12);
+
   --bg-content: var(--raise);
   --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(17, 20, 25, 0.86);
-  --bg-status: rgba(17, 20, 25, 0.94);
-  /* 侧栏叠在 macOS 原生 vibrancy 上。原生材质的明暗由系统外观决定，
-     应用内切到深色时它可能仍是浅色；0.92 既压住浅色底，又保留一点毛玻璃。 */
-  --bg-sidebar: rgba(10, 12, 16, 0.92);
+  --bg-toolbar: rgba(12, 16, 20, 0.9);
+  --bg-status: rgba(18, 22, 26, 0.96);
+  /* 侧栏叠在 macOS 原生 vibrancy 上；0.92 既压住浅色底，又保留一点毛玻璃 */
+  --bg-sidebar: rgba(10, 13, 17, 0.92);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -259,172 +249,71 @@ html[data-theme='dark'] {
   --separator: var(--line);
   --separator-soft: var(--line-2);
 
-  --fill: rgba(236, 241, 250, 0.06);
-  --fill-strong: rgba(236, 241, 250, 0.11);
-  --row-hover: rgba(236, 241, 250, 0.04);
+  --fill: rgba(236, 232, 223, 0.06);
+  --fill-strong: rgba(236, 232, 223, 0.11);
+  --row-hover: rgba(236, 232, 223, 0.045);
 
-  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.45);
-  --shadow-video: 0 24px 60px rgba(0, 0, 0, 0.55);
-  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.45);
-  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --scroll-thumb: rgba(236, 241, 250, 0.2);
-  --scroll-thumb-hover: rgba(236, 241, 250, 0.32);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 18px 40px rgba(0, 0, 0, 0.45);
+  --shadow-btn: none;
+  --shadow-seg: none;
+
+  --scroll-thumb: rgba(236, 232, 223, 0.2);
+  --scroll-thumb-hover: rgba(236, 232, 223, 0.32);
   --hit: rgba(255, 214, 10, 0.3);
   --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
-  /* 深色主题里舞台要比页面更暗，才能读成「监看区」；1px 分割线用 0.34 白
-     （0.14 实测只有 1.48:1，等于看不见）。 */
-  --stage-bg: #08090b;
+
+  --stage-bg: #07090b;
   --stage-line: rgba(255, 255, 255, 0.34);
-  /* 深色下画面本来就与舞台同色系，细边只需要「刚好不糊成一片」 */
-  --stage-frame: rgba(236, 241, 250, 0.09);
-  --wave: #8f9db5;
+  --stage-frame: rgba(236, 232, 223, 0.1);
+  --wave: #8f9da4;
 
-  --cue-lane: rgba(236, 241, 250, 0.06);
-  --cue-wash: rgba(236, 241, 250, 0.035);
-  --cue-block: rgba(236, 241, 250, 0.12);
-  --cue-block-hover: rgba(236, 241, 250, 0.2);
-  --cue-block-active: rgba(125, 147, 255, 0.88);
-  --cue-edge: rgba(160, 178, 255, 0.95);
+  --cue-lane: rgba(236, 232, 223, 0.06);
+  --cue-wash: rgba(236, 232, 223, 0.035);
+  --cue-block: rgba(236, 232, 223, 0.12);
+  --cue-block-hover: rgba(236, 232, 223, 0.2);
+  --cue-block-active: rgba(132, 169, 230, 0.88);
+  --cue-edge: rgba(160, 186, 240, 0.95);
 
-  /* —— 设置页令牌（深色） —— */
-  --seg-track: rgba(236, 241, 250, 0.075);
-  --seg-thumb: #262c36;
-  --seg-thumb-ring: rgba(236, 241, 250, 0.11);
-  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --seg-track: rgba(236, 232, 223, 0.075);
+  --seg-thumb: #262c32;
+  --seg-thumb-ring: rgba(236, 232, 223, 0.12);
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
-  --bento-bg: #171b22;
-  --bento-border: rgba(236, 241, 250, 0.085);
-  --bento-border-on: rgba(125, 147, 255, 0.46);
-  --bento-glow: rgba(125, 147, 255, 0.13);
-  --bento-bg-on: rgba(125, 147, 255, 0.055);
-  --bento-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --bento-shadow-on: 0 2px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(125, 147, 255, 0.08);
+  --bento-bg: var(--raise);
+  --bento-border: rgba(236, 232, 223, 0.13);
+  --bento-border-on: rgba(132, 169, 230, 0.46);
+  --bento-glow: rgba(132, 169, 230, 0.1);
+  --bento-bg-on: rgba(132, 169, 230, 0.05);
+  --bento-shadow: none;
+  --bento-shadow-on: none;
 
-  --hero-bg: linear-gradient(180deg, rgba(125, 147, 255, 0.1), rgba(125, 147, 255, 0) 70%),
-    var(--raise);
-  --hero-border: rgba(125, 147, 255, 0.22);
+  --hero-bg: var(--raise);
+  --hero-border: rgba(132, 169, 230, 0.22);
 
-  --meter-track: rgba(236, 241, 250, 0.085);
-  --meter-a: #7d93ff;
-  --meter-b: #45c0ad;
-  --meter-c: #c07fe0;
-  --meter-muted: rgba(236, 241, 250, 0.3);
-  --meter-gap: #111419;
+  --meter-track: rgba(236, 232, 223, 0.085);
+  --meter-a: #84a9e6;
+  --meter-b: #7fb89b;
+  --meter-c: #d2a15e;
+  --meter-muted: rgba(236, 232, 223, 0.3);
+  --meter-gap: var(--paper);
 
-  --inset-bg: #1a1f27;
-  --inset-line: rgba(236, 241, 250, 0.07);
+  --inset-bg: #1a1f24;
+  --inset-line: rgba(236, 232, 223, 0.1);
+  --bg-inset: var(--inset-bg);
 
-  /* 深色强调色 #7d93ff 上的白字只有 2.8:1：实心主按钮单独加深，白字回到 5.0:1 */
-  --btn-primary-bg: #4c62c9;
-  --btn-primary-hover: #5b71d8;
+  /* 深色强调色上的白字只有 2.9:1：实心主按钮固定用浅色的深蓝，白字回到 6.4:1 */
+  --btn-primary-bg: #2d5fa6;
+  --btn-primary-hover: #356bb8;
 }
 
 /* ============================================================
-   C「明朝墨」：纸白 + 墨黑结构 + 一点朱红；只有字幕换明朝。
-
-   这是单色主题：没有 dark 变体（用户明确不要第二套暗色）。
-   主进程 nativeTheme 按 scheme='light' 处理，侧栏毛玻璃保持浅色。
-   切到它时 `--font-cue` 是唯一的排版变化，字号/行高/密度全不动，
-   所以核对台的虚拟列表行高、命中判定都不受影响。
+   字幕字体：与明暗正交的偏好，不是第三套配色。
+   只换 `--font-cue`，字号 / 行高 / 密度 / 命中判定全不动。
    ============================================================ */
-html[data-theme='mincho'] {
-  color-scheme: light;
-  --canvas: #f1f3f0;
-  --paper: #fafaf8;
-  --raise: #ffffff;
-  --ink: #15181b;
-  --ink-2: #5e6468;
-  /* 明抄是暖色主题：#666c70 已是 5.1（on --paper），本来就达标；
-     浅色的冷蓝灰 #5F6D84 会毁掉这套暖调，所以这里不动。 */
-  --ink-3: #666c70;
-  --ink-muted: #a3a8ab;
-  --line: rgba(21, 24, 27, 0.12);
-  --line-2: rgba(21, 24, 27, 0.06);
-
-  --accent: #c8412d;
-  --accent-hover: #b03524;
-  /* 文字/图标形式的强调：朱红本身 4.73（on --paper）已达标，用同一色不另调。 */
-  --accent-text: #c8412d;
-  --accent-soft: rgba(200, 65, 45, 0.07);
-  --accent-ring: rgba(200, 65, 45, 0.32);
-  --accent-line: rgba(200, 65, 45, 0.35);
-  --on-accent: #fff;
-  --danger: #9e2318;
-  --danger-soft: rgba(158, 35, 24, 0.09);
-  --warn: #8a5a00;
-  --warn-soft: rgba(138, 90, 0, 0.1);
-  --success: #2e6b45;
-  --success-soft: rgba(46, 107, 69, 0.09);
-
-  --bg-content: var(--raise);
-  --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(250, 250, 248, 0.86);
-  --bg-status: rgba(250, 250, 248, 0.92);
-  --bg-sidebar: rgba(241, 243, 240, 0.72);
-
-  --text: var(--ink);
-  --text-2: var(--ink-2);
-  --text-3: var(--ink-3);
-  --separator: var(--line);
-  --separator-soft: var(--line-2);
-
-  --fill: rgba(21, 24, 27, 0.045);
-  --fill-strong: rgba(21, 24, 27, 0.08);
-  --row-hover: rgba(21, 24, 27, 0.03);
-
-  --shadow-pop: 0 10px 30px rgba(21, 24, 27, 0.14), 0 1px 3px rgba(21, 24, 27, 0.1);
-  --shadow-video: 0 22px 50px rgba(21, 24, 27, 0.18);
-  --shadow-btn: 0 1px 2px rgba(21, 24, 27, 0.18);
-  --shadow-seg: 0 1px 2px rgba(21, 24, 27, 0.1), 0 0 0 0.5px rgba(21, 24, 27, 0.04);
-  --scroll-thumb: rgba(21, 24, 27, 0.18);
-  --scroll-thumb-hover: rgba(21, 24, 27, 0.3);
-  --caption-bg: rgba(18, 20, 22, 0.66);
-  --stage-bg: #101112;
-  --stage-line: rgba(255, 255, 255, 0.33);
-  --stage-frame: rgba(236, 241, 250, 0.09);
-  --wave: #9aa0a0;
-
-  --cue-lane: rgba(21, 24, 27, 0.05);
-  --cue-wash: rgba(21, 24, 27, 0.03);
-  --cue-block: rgba(21, 24, 27, 0.14);
-  --cue-block-hover: rgba(21, 24, 27, 0.24);
-  --cue-block-active: rgba(200, 65, 45, 0.82);
-  --cue-edge: rgba(200, 65, 45, 0.9);
-
-  /* —— 设置页令牌（明朝墨） —— */
-  --seg-track: rgba(21, 24, 27, 0.055);
-  --seg-thumb: #ffffff;
-  --seg-thumb-ring: rgba(21, 24, 27, 0.13);
-  --seg-thumb-shadow: var(--shadow-seg);
-  --seg-ink: var(--text-2);
-  --seg-ink-on: var(--text);
-
-  --bento-bg: #ffffff;
-  --bento-border: rgba(21, 24, 27, 0.09);
-  --bento-border-on: rgba(200, 65, 45, 0.3);
-  --bento-glow: rgba(200, 65, 45, 0.07);
-  --bento-bg-on: rgba(200, 65, 45, 0.028);
-  --bento-shadow: 0 1px 2px rgba(21, 24, 27, 0.05);
-  --bento-shadow-on: 0 2px 10px rgba(200, 65, 45, 0.08), 0 1px 2px rgba(21, 24, 27, 0.05);
-
-  --hero-bg: linear-gradient(180deg, rgba(200, 65, 45, 0.055), rgba(200, 65, 45, 0) 66%),
-    var(--raise);
-  --hero-border: rgba(200, 65, 45, 0.16);
-
-  --meter-track: rgba(21, 24, 27, 0.06);
-  --meter-a: #c8412d;
-  --meter-b: #4a6b64;
-  --meter-c: #a08a6a;
-  --meter-muted: rgba(21, 24, 27, 0.26);
-  --meter-gap: var(--paper);
-
-  --inset-bg: #ffffff;
-  --inset-line: var(--separator-soft);
-
-  /* 唯一的排版差异：字幕用明朝。UI 文案仍是苹方，别把整个界面变成书 */
+html[data-cue-font='mincho'] {
   --font-cue: var(--font-cue-mincho);
 }
 
@@ -443,7 +332,7 @@ body {
 body {
   font-family: var(--font-sans);
   font-size: 13px;
-  line-height: 1.38;
+  line-height: 1.4;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   user-select: none;
@@ -454,90 +343,52 @@ body {
   height: 100%;
 }
 
-/* ---------- 应用骨架 ---------- */
+/* ---------- 应用骨架 ----------
+   标题栏横跨整窗（含红绿灯安全区），下面才是「侧栏 + 主区」。
+   这样红绿灯永远落在标题栏里，侧栏不需要为它让位，也不再有
+   「顶带连续 / 竖线穿过黄绿灯」那类几何问题。 */
 
 .shell {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-body {
+  flex: 1;
+  min-height: 0;
   display: flex;
 }
 
 .sidebar {
   position: relative;
-  width: 236px;
-  flex: 0 0 236px;
-  /* 收起态：52px 纯图标条（2026-11-24 Phase 1）。用 --sidebar-w 过渡，
-     折叠开关在 Sidebar 顶部红绿灯留白区，状态存在 localStorage。 */
-  transition: width var(--dur-panel) var(--ease), flex-basis var(--dur-panel) var(--ease);
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  transition:
+    width var(--dur-panel) var(--ease),
+    flex-basis var(--dur-panel) var(--ease);
   background: var(--bg-sidebar);
   backdrop-filter: saturate(180%) blur(24px);
   -webkit-backdrop-filter: saturate(180%) blur(24px);
-  /* 竖分割线：展开态侧栏 236px，整组红绿灯（x19–71）都在栏内，线在右缘不会
-     碰到任何一颗灯，所以照常从顶到底。收起态会横穿红绿灯，例外见下面的
-     `.sidebar.collapsed` 一段。 */
-  border-right: 1px solid var(--separator);
-  padding: 46px 12px 12px;
+  border-right: 1px solid var(--line);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2);
   display: flex;
   flex-direction: column;
   gap: 2px;
-  -webkit-app-region: drag; /* 侧栏顶部空白可拖动窗口 */
-}
-.sidebar > * {
-  -webkit-app-region: no-drag;
-}
-.sidebar::before {
-  /* 顶部 46px 是红绿灯区，只用来拖动 */
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 46px;
-  -webkit-app-region: drag;
+  min-height: 0;
 }
 
-/* ---------- 侧栏收起态（52px 图标条） ----------
-   红绿灯已经占掉窗口左上角，收起后剩下的空间只够放图标；
-   标签与计数不参与布局，title / 无障碍名仍在（与 ≤900px 紧凑模式同一套规则）。 */
+/* 收起态：52px 纯图标条。标签与计数不参与布局，title / 无障碍名仍在。 */
 .sidebar.collapsed {
   width: var(--sb-collapsed-w);
   flex: 0 0 var(--sb-collapsed-w);
-
-  /* 顶栏那 40px 与顶栏连成一整块（2026-11-24）：
-     收起后顶栏从 52px 起、而红绿灯右缘在 71px，三颗灯横跨在「侧栏 + 顶栏」
-     两侧；若左栏照常带自己的底色和右边框，那条 1px 竖线正好从黄灯与绿灯之间
-     穿过去，视觉上把红黄绿劈成两半。
-     处理：顶部 40px 刷成与顶栏**完全相同的颜色**（`--paper`：顶栏是
-     `--bg-toolbar` 0.86 的同色叠在 `.main` 的 `--paper` 上，合成结果就是
-     `--paper` 本身，三套主题都成立），底部同一条发丝线；竖分割线（::after）
-     改从 y=40 起画，与顶栏底边在 (52,40) 接成直角。
-     主因记在 `docs/contracts/review-console.md` §3.4.13。 */
-  border-right-color: transparent;
-  /* 内容从顶栏底边起（40px），与上面那条「整块顶带」严丝合缝：
-     留 46px 会在 40–46 之间露出一条 6px 的侧栏色，正是要消掉的那种割裂。 */
-  padding-top: var(--topbar-h);
-}
-.sidebar.collapsed::before {
-  height: var(--topbar-h);
-  background: var(--paper);
-  box-shadow: inset 0 -1px 0 var(--separator);
-}
-.sidebar.collapsed::after {
-  content: '';
-  position: absolute;
-  top: var(--topbar-h);
-  right: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--separator);
-  pointer-events: none;
-  -webkit-app-region: no-drag;
+  padding: 10px var(--sp-2) var(--sp-2);
+  align-items: stretch;
 }
 .sidebar.collapsed .sb-brand {
   justify-content: center;
   gap: 0;
-  /* 收起态只剩 27px 图标：下边距给到 14px，第一个导航项才不会贴着它
-     （实测差 2px 时读起来像两个控件粘在一起）。
-     上边距 6px：收起态的 padding-top 已经是 40（= 顶栏底边），
-     再给 6 就是图标从 y=46 起，与红绿灯区（y<30）留足 16px。 */
-  padding: 6px 0 14px;
+  padding: var(--sp-2) 0 var(--sp-4);
 }
 .sidebar.collapsed .brand-text,
 .sidebar.collapsed .sb-label,
@@ -557,9 +408,10 @@ body {
 .main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--paper);
+  background: var(--canvas);
 }
 
 .workspace {
@@ -583,18 +435,20 @@ body {
   appearance: none;
   border: 1px solid var(--line);
   height: var(--ctl-h);
-  padding: 0 11px;
+  padding: 0 10px;
   border-radius: var(--rad-control);
   font: inherit;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-control);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   cursor: default;
   background: var(--raise);
   color: var(--text);
-  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
-    transform var(--dur-fast) var(--ease);
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
@@ -602,19 +456,16 @@ body {
   border-color: var(--accent-line);
 }
 .btn:active:not(:disabled) {
-  transform: scale(0.985);
+  transform: translateY(0.5px);
 }
 .btn:disabled {
   opacity: 0.45;
 }
-/* G14：禁用态用 --ink-muted（"此刻不生效"），与 --ink-3（"次要但有效"）分开。
-   原来两者都走 --text-3，导致「置灰的按钮」和「次要标签」看起来是同一档语义。 */
-/* 禁用态不要留一层淡 accent：主操作要么是实心蓝，要么明确退成灰 */
+/* 禁用态明确退成灰，不留一层淡 accent */
 .btn.primary:disabled {
   background: var(--fill);
   border-color: transparent;
   color: var(--ink-muted);
-  box-shadow: none;
   opacity: 1;
 }
 .btn.ghost:disabled {
@@ -625,7 +476,6 @@ body {
   border-color: var(--btn-primary-bg);
   color: var(--on-accent);
   font-weight: 500;
-  box-shadow: var(--shadow-btn);
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--btn-primary-hover);
@@ -646,24 +496,30 @@ body {
   padding: 0;
   justify-content: center;
 }
-/* 设置页大量使用的小号按钮（Inline 行内动作） */
-/* 操作文字按规则不低于 13px；小号按钮只缩高度与内边距，不缩字号。 */
-.btn.sm {
+/* 行内小号动作：只缩高度与内边距，不缩字号（操作文字不低于 13px） */
+.btn.sm,
+.btn.tiny {
   height: 24px;
-  font-size: var(--fs-ui);
   padding: 0 var(--sp-2);
 }
 .btn.danger {
   color: var(--danger);
 }
+/* 主操作：一屏一个，36px */
+.btn.lg {
+  height: var(--ctl-h-xl);
+  padding: 0 var(--sp-3);
+  font-weight: 600;
+}
 
+/* 分段：选中用蓝铅笔 tint + 1px 边，不用阴影 */
 .seg {
   display: inline-flex;
   padding: 2px;
   background: var(--fill);
-  border-radius: 4px;
+  border-radius: var(--rad-control);
   gap: 2px;
-  height: var(--ctl-h);
+  height: var(--seg-h);
 }
 .seg button {
   appearance: none;
@@ -674,27 +530,27 @@ body {
   font-size: 12.5px;
   padding: 0 10px;
   height: 22px;
-  border-radius: var(--rad-control);
+  border-radius: 3px;
   cursor: default;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease);
   white-space: nowrap;
 }
-.seg button:hover {
+.seg button:hover:not(:disabled) {
   color: var(--text);
 }
 .seg button.on {
-  background: var(--raise);
-  color: var(--text);
-  box-shadow: var(--shadow-seg);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
   font-weight: 500;
 }
-html[data-theme='dark'] .seg button.on {
-  background: rgba(236, 241, 250, 0.14);
+.seg button:disabled {
+  opacity: 0.42;
 }
 
-/* 紧凑版：分区标题右侧的小切换（导入页「最近打开」的列表 / 图标）。
-   轨道用 fill-strong、选中片补 1px inset 描边：浅色主题下「fill」与页面几乎同色，
-   只靠投影会读成两枚散落图标（独立评审实测对比度约 1.06:1）。 */
+/* 紧凑版：分区标题右侧的小切换 */
 .seg.compact {
   height: 24px;
   padding: 1px;
@@ -711,7 +567,7 @@ html[data-theme='dark'] .seg button.on {
 }
 .seg.compact button.on {
   color: var(--text);
-  box-shadow: var(--shadow-seg), inset 0 0 0 1px var(--separator);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .seg button:focus-visible {
@@ -722,15 +578,17 @@ html[data-theme='dark'] .seg button.on {
 .field {
   height: var(--ctl-h-lg);
   border-radius: var(--rad-control);
-  border: 1px solid var(--separator);
+  border: 1px solid var(--line);
   background: var(--raise);
   display: flex;
   align-items: center;
   padding: 0 9px;
-  font-size: var(--fs-ui);
+  font-size: var(--fs-control);
   color: var(--text);
   gap: 6px;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
 }
 .field:focus-within {
   border-color: var(--accent);
@@ -747,13 +605,12 @@ html[data-theme='dark'] .seg button.on {
 }
 .field.mono,
 .field input.mono {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-/* G16 检查器的「键 / 值」两层：
-   键是标签，退后（12/400/--ink-3）；值是可读内容，抬上来（12.5/500/--text）。
-   原来键 12.5、值 12 —— 标签比值还重，扫读时先看到标签而不是数据。 */
+/* 检查器的「键 / 值」两层：键是标签，退后；值是可读内容，抬上来 */
 .kv {
   display: flex;
   justify-content: space-between;
@@ -761,7 +618,7 @@ html[data-theme='dark'] .seg button.on {
   gap: 10px;
   padding: 3px 0;
   font-size: 12.5px;
-  line-height: 18px; /* 12.5/18：整行 24px，和 4px 的间距网格对齐 */
+  line-height: 18px;
 }
 .kv .k {
   color: var(--ink-3);
@@ -778,31 +635,26 @@ html[data-theme='dark'] .seg button.on {
   white-space: nowrap;
 }
 .kv .v.mono {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
-/* G10：浅色下 --paper(#F9FBFE) 与 --raise(#FFF) 只差 1.04，卡片边界几乎全靠这一条线。
-   原来用 --separator-soft（.06），比 bento 卡片用的 --bento-border（.075）还淡一档，
-   于是同一屏里两种卡片边界深浅不一。统一到 .075 这一档，边界看得清又不过重。
-   （深色与明抄不动：深色 paper→raise 是 1.08，本来就分得开；明抄另有自己的暖色边框值。） */
+/* 面板：一张台本纸 + 一条发丝线，不是浮起来的盒子 */
 .card {
   background: var(--raise);
-  border: 1px solid var(--bento-border);
+  border: 1px solid var(--line);
   border-radius: var(--rad-card);
-  padding: 14px 16px;
-}
-html[data-theme='dark'] .card {
-  background: var(--raise);
+  padding: 14px var(--sp-4);
 }
 
 .ins-h {
   font-size: var(--fs-label);
   font-weight: 600;
   color: var(--text-2);
-  letter-spacing: 0.02em;
-  margin-bottom: 8px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: var(--sp-2);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -821,7 +673,7 @@ html[data-theme='dark'] .card {
   padding: 0 9px;
   border-radius: var(--rad-control);
   background: var(--fill);
-  font-size: var(--fs-label);
+  font-size: 12px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
@@ -844,6 +696,9 @@ html[data-theme='dark'] .card {
   color: var(--success);
 }
 
+/* 状态点：一颗实心圆，不加光晕。
+   零偏移的彩色光晕是装饰而不是深度（craft floor 的 Do-not），
+   在台本世界里状态靠「颜色 + 旁边的字」表达，不靠发光。 */
 .dot {
   width: 6px;
   height: 6px;
@@ -852,16 +707,12 @@ html[data-theme='dark'] .card {
   display: inline-block;
   margin-right: 5px;
   vertical-align: 1px;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 18%, transparent);
 }
 .dot.off {
   background: var(--warn);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 18%, transparent);
 }
 
-/* ---------- 设置页：说明 / 警示条 ---------- */
-/* 说明 / 警示条：内容多为「Key 会不会上传」「失败原因」这类读了才能正确操作的话，
-   按 G3 规则用 13/19；颜色沿用各态（warn 态继续走 --warn，不迁 --ink-2）。 */
+/* ---------- 说明 / 警示条 ---------- */
 .note-box {
   display: flex;
   gap: var(--sp-2);
@@ -887,7 +738,7 @@ html[data-theme='dark'] .card {
 }
 
 /* ---------- 设置页：Inset 分组列表 ---------- */
-/* 四个页签共用；组件里不要再各写一份（和 .sec/.sec-head 同一个道理）。 */
+/* 四个页签共用；组件里不要再各写一份。 */
 .set-group {
   border: 1px solid var(--inset-line);
   border-radius: var(--rad-inset);
@@ -898,16 +749,11 @@ html[data-theme='dark'] .card {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  /* 折行后控件那一行离上面说明只留 6px：这里不是两个设置项之间的距离，
-     是同一个设置项内部的两段，用 --sp-4 会读成「另一条设置」。 */
   row-gap: 6px;
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--inset-line);
   min-height: 46px;
-  /* 右侧控件放不下时**整行折行**，而不是把左边说明挤成一条 40px 宽的缝。
-     一条「路径 + 状态 + 三个按钮」就占 380–477px；若控件列永不收缩，
-     说明列会被压到 46–160px，正文变成 9–11 行的一根竖条
-     （2026-11-24 用户报障「每个设置子页显示都异常」）。 */
+  /* 右侧控件放不下时整行折行，而不是把说明挤成一根竖条 */
   flex-wrap: wrap;
 }
 .set-row:last-child {
@@ -915,7 +761,6 @@ html[data-theme='dark'] .card {
 }
 .set-row-main {
   min-width: 0;
-  /* 240px 是「说明还能读成句子」的下限；低于它就让控件换行，别再压这句话。 */
   flex: 1 1 240px;
   display: flex;
   flex-direction: column;
@@ -925,37 +770,22 @@ html[data-theme='dark'] .card {
   font-size: var(--fs-ui);
   font-weight: 500;
 }
-/* 设置页每行的说明是「不看会选错」的文字（例：系统语音 vs 克隆音色的差别），
-   按 G3 规则提到 13/19 并迁到 --ink-2；--ink-3 只留给计数、单位、快捷键。 */
 .set-row-desc {
   font-size: var(--fs-ui);
   color: var(--ink-2);
   line-height: 19px;
 }
 .set-row-ctl {
-  /* 控件列优先保持自己的一行整宽（放不下时由 .set-row 的 wrap 把它整体换下去），
-     但允许它先收缩到 min-content 再换行，所以必须带 `min-width: 0`。 */
   flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   justify-content: flex-end;
   min-width: 0;
-  /* 控件列自己也折行：按钮串（「更改… + 恢复默认 + 打开」）在窄栏或放大字号下
-     比整行还宽时，往下排而不是戳出卡片右边缘。 */
   flex-wrap: wrap;
-  /* 折行后贴着行右边缘，与上一行说明的右边界对齐。
-     `flex-grow: 1` 让它在独占一行时铺满整行，路径左对齐到行首——
-     否则「路径 + 徽标 + 按钮」会缩成一团飘在行中间。 */
   margin-left: auto;
 }
 .set-row-ctl.grow {
-  /* 「路径 / 徽标 + 动作」那一列：可以占满折行后的整宽（路径左对齐到行首、
-     按钮右对齐到行尾），但**仍然可以收缩**。原来写 `flex: 0 0 auto`（不可收缩）
-     时，路径长了这条列就要求 max-content，超过行宽后直接戳出卡片右边缘
-     （200% 缩放实测溢出 22–81px）。现在允许收缩，路径本身有
-     `overflow: hidden; text-overflow: ellipsis`，拿不到宽度就省略，
-     按钮永远留在卡内。 */
   flex: 1 1 46%;
   min-width: 0;
 }
@@ -967,12 +797,9 @@ html[data-theme='dark'] .card {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  /* 路径是这一列里唯一「可以拿不到整宽」的东西：先让它按剩余空间伸缩并省略，
-     动作按钮保持原尺寸留在卡内。 */
   flex: 1 1 auto;
 }
-/* AI 通道的输入与状态：AiPanel（核心配置）与 AiAdvancedFold（进阶折叠区）共用。 */
-/* 2026-11-21 分级折叠时从 AiPanel 提上来，两处不再各写一份。 */
+/* AI 通道的输入与状态：AiPanel 与 AiAdvancedFold 共用。 */
 .ai-input {
   font: inherit;
   font-size: 12px;
@@ -980,7 +807,7 @@ html[data-theme='dark'] .card {
   flex: 1;
   min-width: 0;
   padding: 0 var(--sp-2);
-  border: 1px solid var(--separator);
+  border: 1px solid var(--line);
   border-radius: var(--rad-control);
   background: var(--raise);
   color: var(--text);
@@ -1014,7 +841,6 @@ html[data-theme='dark'] .card {
 }
 
 /* ---------- 开关 ---------- */
-/* 设置页的引擎卡与 AI 分组共用。ParamPanel 里另有一份历史实现，不在本次范围。 */
 .switch {
   appearance: none;
   width: 30px;
@@ -1035,7 +861,7 @@ html[data-theme='dark'] .card {
   height: 14px;
   border-radius: 50%;
   background: var(--switch-knob);
-  box-shadow: var(--shadow-btn);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
   transition: transform var(--dur) var(--ease);
 }
 .switch.on {
@@ -1046,6 +872,66 @@ html[data-theme='dark'] .card {
 }
 .switch:disabled {
   opacity: 0.45;
+}
+
+/* ============================================================
+   签名动作：cue margin（台本页边）
+
+   左缘 44px 是一列**页边**，不是卡片：已核打勾、AI 蓝铅笔、待核朱点；
+   当前句在页边落一道 2px 朱线，编号转朱。核对台的表格在 Step 4 接线，
+   这里先落几何与语义，避免到时候每个页面各发明一套 44px。
+   ============================================================ */
+
+.cue-sheet {
+  background: var(--raise);
+  border: 1px solid var(--rule);
+  border-radius: var(--rad-card);
+  overflow: hidden;
+}
+
+.cue-margin {
+  width: var(--cue-margin-w);
+  flex: 0 0 var(--cue-margin-w);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+}
+
+/* 页边记号：默认空、已核 ✓、提案（蓝铅笔）、待核（朱点） */
+.cue-mark {
+  width: var(--cue-mark);
+  height: var(--cue-mark);
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-3);
+}
+.cue-mark.ok {
+  color: var(--success);
+}
+.cue-mark.ai {
+  color: var(--accent);
+}
+.cue-mark.warn {
+  color: var(--danger);
+}
+/* 当前条：页边 2px 朱线 + 编号转朱 */
+.cue-margin.active {
+  position: relative;
+  color: var(--danger);
+}
+.cue-margin.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--danger);
 }
 
 /* ---------- 滚动条（overlay 风格） ---------- */
@@ -1068,7 +954,7 @@ html[data-theme='dark'] .card {
   background-clip: content-box;
 }
 
-/* 原生 range / checkbox / radio 也走品牌 accent，别让系统蓝混进来 */
+/* 原生 range / checkbox / radio 也走强调色，别让系统蓝混进来 */
 input[type='range'],
 input[type='checkbox'],
 input[type='radio'],
@@ -1076,9 +962,16 @@ progress {
   accent-color: var(--control-on);
 }
 
+/* 文字光标也用强调色：浏览器默认的蓝黑不属于这套色板 */
+input,
+textarea,
+[contenteditable='true'] {
+  caret-color: var(--accent);
+}
+
 /* 键盘焦点必须看得见（鼠标点击不显示） */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-ring);
   outline-offset: 2px;
 }
 ::selection {
@@ -1089,45 +982,20 @@ progress {
 /* ============================================================
    紧凑模式 —— 只加媒体查询，不改 ≥900px 的桌面结构。
 
-   触发条件不是「窗口多小」，而是「CSS 视口多小」：应用没有缩放菜单，
-   200% 页面缩放（无障碍 / 极端缩放验收）会让 1360 窗口变成 680×419。
-   侧栏收成 56px 图标轨、检查器改成右侧抽屉（见 Inspector.svelte 与 App.svelte），
-   内容区因此重新拿回整个宽度。
+   触发条件不是「窗口多小」，而是「CSS 视口多小」。本轮起没有
+   「图标轨加宽到 56px」的特例：标题栏横跨整窗，红绿灯已经不回
+   落到左栏顶部，52px 图标条在任何宽度下都成立。
    ============================================================ */
 @media (max-width: 900px) {
-  :root {
-    /* 紧凑模式图标轨 56px：顶栏收起态的让位按这个宽度反算（见 Toolbar 注释） */
-    --sb-rail-w: 56px;
-  }
   .sidebar {
     width: var(--sb-rail-w);
     flex: 0 0 var(--sb-rail-w);
-    /* 与收起态同一套「顶带连续」处理（见 `.sidebar.collapsed` 的注释）：
-       56px 的轨也窄于红绿灯右缘 71px，竖线照样会从黄灯与绿灯之间穿过去。 */
-    border-right-color: transparent;
-    padding: var(--topbar-h) 8px 10px;
-  }
-  .sidebar::before {
-    height: var(--topbar-h);
-    background: var(--paper);
-    box-shadow: inset 0 -1px 0 var(--separator);
-  }
-  .sidebar::after {
-    content: '';
-    position: absolute;
-    top: var(--topbar-h);
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--separator);
-    pointer-events: none;
-    -webkit-app-region: no-drag;
+    padding: 10px var(--sp-2) var(--sp-2);
   }
   .sidebar .sb-brand {
     justify-content: center;
     gap: 0;
-    /* 6px：图标从 y=46 起，与顶栏发丝线（y=40）留出呼吸 */
-    padding: 6px 0 12px;
+    padding: var(--sp-2) 0 var(--sp-3);
   }
   .sidebar .brand-name,
   .sidebar .brand-sub,
@@ -1147,18 +1015,13 @@ progress {
 }
 
 /* ============================================================
-   G8：减少动态效果
+   减少动态效果
 
-   原来的写法是 `* { animation-duration: .01ms }`，把 spinner 也一起停掉 ——
-   开了这个偏好的用户会看到一个「不转的转圈图标」，比转圈更困惑：
-   看不出是「正在加载」还是「已经卡死」。
-
-   新写法不再全局压动画，而是**只关引起前庭不适的那几类**（位移 / 缩放 / 淡入）：
-   过渡时长统一压到 0.01ms，入场类 keyframes 直接 `animation: none`；
-   其余动画（spinner、进度条微光）保持原速 —— 它们表达的是「还在处理」。
+   只关引起前庭不适的那几类（位移 / 缩放 / 淡入）：过渡时长压到 0.01ms，
+   入场类 keyframes 直接 `animation: none`；spinner / 进度条保持原速 ——
+   它们表达的是「还在处理」。
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
-  /* 过渡（hover / 展开 / 抽屉 / 主题切换）全部即时完成 */
   *,
   *::before,
   *::after {
@@ -1166,7 +1029,6 @@ progress {
     scroll-behavior: auto !important;
   }
 
-  /* 入场类动画：位移与淡入一律关掉，元素直接停在终态 */
   .view-enter.animated,
   .toast,
   .ins-scrim,
@@ -1180,10 +1042,4 @@ progress {
     opacity: 1 !important;
     transform: none !important;
   }
-
-  /*
-     有意保留：spinner 与进度条、以及它们的关键帧时长。
-     本规则**不再声明任何全局 animation-duration**，所以这些组件的动画
-     保持各自 <style> 里写的原速 —— 这是与旧写法的关键区别。
-  */
 }

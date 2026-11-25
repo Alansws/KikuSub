@@ -64,8 +64,12 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 # 2026-11-25（译文轨三态 / 单句补译）：stale 判定搬进 `lib/translationStatus.ts`、
 #              「只动句读」的本地对齐搬进 `lib/translationBase.ts`，store 只留两行接线；
 #              3255 → 3252（下调，不是放宽）。
+# 2026-11-25（Cue Script 外观模型）：外观偏好的读取 / 迁移搬进 `lib/appearance.ts`
+#              （纯函数、可被 node --test 直接加载），响应式状态与落地搬进
+#              `lib/appearanceState.svelte.ts`；store 只留解析后的 `app.theme`
+#              （核对台波形只认它）。3252 → 3217，预算随实测值下调。
 BUDGET = {
-    "lib/store.svelte.ts": 3252,
+    "lib/store.svelte.ts": 3217,
     "views/ReviewView.svelte": 2583,
 }
 

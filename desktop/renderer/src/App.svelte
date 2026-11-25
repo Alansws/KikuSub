@@ -25,25 +25,34 @@
     app,
     boot,
     cancelJob,
+    clearOriginalTrack,
     closeFind,
     findState,
+    importProxyFromFile,
+    importSubtitleFromExport,
+    importTranslationFromExport,
     insertCueAt,
     markQuitting,
     markSidecarDown,
     openFind,
     openMedia,
     play,
+    removeTranslationTrack,
+    restoreDraft,
     restoreLastSession,
     qa,
     redo,
+    saveDraft,
     setView,
+    startProxyJob,
     toast,
+    toggleCueHistory,
     toggleQaPanel,
-    toggleTheme,
     undo,
     type View,
   } from './lib/store.svelte';
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
+  import { toggleAppearance } from './lib/appearanceState.svelte';
   import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
   import { cancelChapterDraft, loadChapters, setChapterDraftEdge } from './lib/chapters.svelte';
@@ -317,8 +326,37 @@
         case 'sidebar':
           toggleSidebar();
           break;
-        case 'theme':
-          toggleTheme();
+        case 'appearance':
+          // ⇧⌘A：跟随系统 → 日间校样 → 夜间配音 → 跟随系统
+          toggleAppearance();
+          break;
+        case 'history':
+          toggleCueHistory();
+          break;
+        case 'save-draft':
+          void saveDraft();
+          break;
+        case 'restore-draft':
+          void restoreDraft();
+          break;
+        // 「字幕与代理」菜单：与标题栏「⋯」里的同名动作走同一条路
+        case 'import-subtitle':
+          void importSubtitleFromExport();
+          break;
+        case 'import-translation':
+          void importTranslationFromExport();
+          break;
+        case 'proxy':
+          void startProxyJob();
+          break;
+        case 'import-proxy':
+          void importProxyFromFile();
+          break;
+        case 'clear-original':
+          void clearOriginalTrack();
+          break;
+        case 'clear-translation':
+          void removeTranslationTrack();
           break;
         case 'settings':
           setView('settings');
@@ -673,64 +711,67 @@
 />
 
 <div class="shell">
-  <Sidebar />
+  <!-- 标题栏横跨整窗：红绿灯永远落在它里面，侧栏不必再为原生控件让位 -->
+  <Toolbar bind:engine />
 
-  <div class="main">
-    <Toolbar bind:engine />
+  <div class="shell-body">
+    <Sidebar />
 
-    <div class="workspace">
-      <section class="content">
-        {#key app.view}
-        <div class="view-enter" class:animated={viewsAnimate}>
-        {#if app.view === 'import'}
-          <ImportView />
-        {:else if app.view === 'transcribe'}
-          <TranscribeView bind:engine />
-        {:else if app.view === 'review'}
-          <ReviewView bind:this={review} {engine} />
-        {:else if app.view === 'dual'}
-          <DualView />
-        {:else if app.view === 'polish'}
-          <PolishView />
-        {:else if app.view === 'reshape'}
-          <ReshapeView />
-        {:else if app.view === 'translate'}
-          <TranslateView />
-        {:else if app.view === 'prompts'}
-          <PromptView />
-        {:else if app.view === 'export'}
-          <ExportView />
-        {:else if app.view === 'report'}
-          <ReportView />
-        {:else if app.view === 'settings'}
-          <SettingsView />
+    <div class="main">
+      <div class="workspace">
+        <section class="content">
+          {#key app.view}
+          <div class="view-enter" class:animated={viewsAnimate}>
+          {#if app.view === 'import'}
+            <ImportView />
+          {:else if app.view === 'transcribe'}
+            <TranscribeView bind:engine />
+          {:else if app.view === 'review'}
+            <ReviewView bind:this={review} {engine} />
+          {:else if app.view === 'dual'}
+            <DualView />
+          {:else if app.view === 'polish'}
+            <PolishView />
+          {:else if app.view === 'reshape'}
+            <ReshapeView />
+          {:else if app.view === 'translate'}
+            <TranslateView />
+          {:else if app.view === 'prompts'}
+            <PromptView />
+          {:else if app.view === 'export'}
+            <ExportView />
+          {:else if app.view === 'report'}
+            <ReportView />
+          {:else if app.view === 'settings'}
+            <SettingsView />
+          {/if}
+          </div>
+          {/key}
+        </section>
+
+        {#if app.view === 'review'}
+          {#if compact && app.inspectorOpen}
+            <!-- 紧凑模式下检查器是抽屉：点空白处收起，Esc 同样关闭 -->
+            <button
+              class="ins-scrim"
+              aria-label="关闭检查器"
+              onclick={() => (app.inspectorOpen = false)}
+            ></button>
+          {/if}
+          <Inspector />
         {/if}
-        </div>
-        {/key}
-      </section>
 
-      {#if app.view === 'review'}
-        {#if compact && app.inspectorOpen}
-          <!-- 紧凑模式下检查器是抽屉：点空白处收起，Esc 同样关闭 -->
-          <button
-            class="ins-scrim"
-            aria-label="关闭检查器"
-            onclick={() => (app.inspectorOpen = false)}
-          ></button>
+        {#if qa.floating}
+          <QaPanel mode="floating" />
         {/if}
-        <Inspector />
-      {/if}
 
-      {#if qa.floating}
-        <QaPanel mode="floating" />
-      {/if}
+        {#if app.view === 'review' && arbitration.dialogOpen}
+          <ArbitrationDialog />
+        {/if}
+      </div>
 
-      {#if app.view === 'review' && arbitration.dialogOpen}
-        <ArbitrationDialog />
-      {/if}
+      <StatusBar {engine} />
     </div>
-
-    <StatusBar {engine} />
   </div>
 </div>
 

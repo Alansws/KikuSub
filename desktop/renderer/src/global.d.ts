@@ -32,7 +32,16 @@ export interface MenuEvent {
     | 'export'
     | 'inspector'
     | 'sidebar'
-    | 'theme'
+    | 'appearance'
+    | 'history'
+    | 'save-draft'
+    | 'restore-draft'
+    | 'import-subtitle'
+    | 'import-translation'
+    | 'proxy'
+    | 'import-proxy'
+    | 'clear-original'
+    | 'clear-translation'
     | 'play'
     | 'prev-cue'
     | 'next-cue'
@@ -140,7 +149,7 @@ declare global {
       openPath(target: string): Promise<string>;
       setTitle(title: string): void;
       setDocumentEdited(dirty: boolean): void;
-      setTheme(theme: 'light' | 'dark' | 'mincho'): void;
+      setAppearance(appearance: 'auto' | 'light' | 'dark'): void;
       getSetupState(): Promise<SetupState>;
       completeSetup(modelsDir: string): Promise<{ ok: boolean; modelsDir: string }>;
       pickModelsDir(): Promise<string | null>;

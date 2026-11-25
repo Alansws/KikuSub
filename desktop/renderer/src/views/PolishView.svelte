@@ -297,7 +297,7 @@
 
 <div class="polish aiw-page">
   <AiBatchToolbar
-    title="润色"
+    title="锁轴润色"
     channel={ai.channel}
     channels={['api', 'manual']}
     apiNote="设置 → AI 优化里启用并填写 API Key；也可以直接用「外部手动」"

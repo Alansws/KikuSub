@@ -1,84 +1,99 @@
 /**
- * 主题注册表。
+ * 外观注册表（Cue Script）。
  *
- * 一个外观 id 对应 `app.css` 里的一块 `html[data-theme='<id>']` 令牌覆盖。
- * 组件不再写主题分支：新主题 = 这里加一条 + app.css 写一块覆盖，其他地方不动。
+ * 两件事被拆开了（2026-11-25 用户拍板）：
  *
- * `scheme` 只影响两件事：主进程的 `nativeTheme`（侧栏毛玻璃 / 红绿灯）
- * 和 `color-scheme`（原生滚动条、表单控件）。它跟外观 id 不是一回事——
- * 「明朝墨」是浅色 scheme 的一次性主题，没有深色变体。
+ * 1. **外观偏好** `auto | light | dark` —— `auto` 跟随系统，是默认。
+ *    解析后的结果才是 `data-theme` 的取值，只有 `light` / `dark` 两个。
+ * 2. **字幕字体** `sans | mincho` —— 与明暗正交的阅读偏好，只换 `--font-cue`。
+ *
+ * 「明朝墨」不再是第三套配色：它曾经是 `data-theme='mincho'`，既有自己的
+ * 色板又有自己的字体，结果「想用明朝字幕」被迫连整套配色一起换。现在分开，
+ * 一个偏好只回答一个问题。
+ *
+ * 组件一律不写主题分支：`data-theme` 由 store 解析后写到 `<html>`，
+ * 色板在 app.css，这里只放「有哪些值、叫什么、缩略图长什么样」。
  */
 
-export type ThemeId = 'light' | 'dark' | 'mincho';
-export type SkinId = 'clear' | 'mincho';
-export type Scheme = 'light' | 'dark';
+/** 解析后的外观：只可能是这两个值，写进 `html[data-theme]`。 */
+export type ThemeId = 'light' | 'dark';
+/** 用户的偏好；`auto` 跟随系统。 */
+export type AppearanceId = 'auto' | ThemeId;
+/** 字幕字体偏好，写进 `html[data-cue-font]`。 */
+export type CueFontId = 'sans' | 'mincho';
 
-export interface Skin {
-  id: SkinId;
-  /** 设置页里的名字。 */
+/** 系统外观（`prefers-color-scheme`）的取值。 */
+export type SystemScheme = ThemeId;
+
+export interface AppearanceOption {
+  id: AppearanceId;
   name: string;
-  /** 一句话调性；鼠标悬停和读屏都能看到。 */
   note: string;
-  /** 预览色块：底 / 强调 / 墨。 */
-  swatch: [string, string, string];
-  /** 这套主题自带的明暗基调。单元素就是「固定浅色」。 */
-  schemes: Scheme[];
 }
 
-export const SKINS: Skin[] = [
+export const APPEARANCES: AppearanceOption[] = [
   {
-    id: 'clear',
-    name: '青空',
-    note: '浅天蓝 + 靛蓝，默认主题，浅色与深色两套',
-    swatch: ['#edf3fb', '#4f6bff', '#1b2740'],
-    schemes: ['light', 'dark'],
+    id: 'auto',
+    name: '跟随系统',
+    note: '白天日间校样，入夜自动切夜间配音间；一般不用动它',
   },
-  {
-    id: 'mincho',
-    name: '明朝墨',
-    note: '纸白 + 墨黑 + 一点朱红；只有字幕用明朝，固定浅色',
-    swatch: ['#f1f3f0', '#c8412d', '#15181b'],
-    schemes: ['light'],
-  },
+  { id: 'light', name: '日间校样', note: '冷纸桌面 · 墨 · 蓝铅笔，适合白天与交付前通读' },
+  { id: 'dark', name: '夜间配音', note: '近黑画布 · 暖纸白字，画面是唯一亮面' },
 ];
 
-interface ThemeMeta {
-  skin: SkinId;
-  scheme: Scheme;
+export interface CueFontOption {
+  id: CueFontId;
   name: string;
+  note: string;
 }
 
-const META: Record<ThemeId, ThemeMeta> = {
-  light: { skin: 'clear', scheme: 'light', name: '浅色' },
-  dark: { skin: 'clear', scheme: 'dark', name: '深色' },
-  mincho: { skin: 'mincho', scheme: 'light', name: '明朝墨' },
-};
+export const CUE_FONTS: CueFontOption[] = [
+  { id: 'sans', name: '黑体', note: '系统黑体（Hiragino Sans）；长时间扫读更稳，是默认' },
+  { id: 'mincho', name: '明朝', note: 'Hiragino Mincho；字幕的「书」感更强，适合通读' },
+];
 
 export function isThemeId(value: unknown): value is ThemeId {
-  return value === 'light' || value === 'dark' || value === 'mincho';
+  return value === 'light' || value === 'dark';
 }
 
-export const schemeOf = (theme: ThemeId): Scheme => META[theme].scheme;
-export const skinOf = (theme: ThemeId): SkinId => META[theme].skin;
-export const themeName = (theme: ThemeId): string => META[theme].name;
+export function isAppearanceId(value: unknown): value is AppearanceId {
+  return value === 'auto' || isThemeId(value);
+}
 
-/** 青空的两档明暗；单色主题在设置页里禁用这一行。 */
-export const SCHEMES: { id: Scheme; name: string }[] = [
-  { id: 'light', name: '浅色' },
-  { id: 'dark', name: '深色' },
-];
+export function isCueFontId(value: unknown): value is CueFontId {
+  return value === 'sans' || value === 'mincho';
+}
+
+/** 偏好 × 系统外观 → `data-theme`。 */
+export function resolveTheme(appearance: AppearanceId, system: SystemScheme): ThemeId {
+  return appearance === 'auto' ? system : appearance;
+}
+
+export const appearanceName = (id: AppearanceId): string =>
+  APPEARANCES.find((item) => item.id === id)?.name ?? id;
+
+export const cueFontName = (id: CueFontId): string =>
+  CUE_FONTS.find((item) => item.id === id)?.name ?? id;
+
+/** `auto` 之后循环：跟随系统 → 日间 → 夜间 → 跟随系统。⇧⌘A 与工具栏月亮走这一条。 */
+export function nextAppearance(id: AppearanceId): AppearanceId {
+  if (id === 'auto') return 'light';
+  if (id === 'light') return 'dark';
+  return 'auto';
+}
 
 /**
- * 设置页「外观与朗读」的三张缩略图。
+ * 设置页三张外观缩略图的配色。
  *
- * 为什么颜色放在注册表而不是 app.css：三张缩略图要**同时**显示三套主题，
- * 组件读当前主题的令牌只能拿到一套颜色。这里是“主题元信息”的唯一位置，
+ * 为什么颜色放在注册表而不是 app.css：三张缩略图要**同时**显示三套配色，
+ * 组件读当前主题的令牌只能拿到一套。这里是「外观元信息」的唯一位置，
  * 组件只消费 `--shot-*` 变量，不写死色值。
  *
- * `desktop/test/theme-preview.test.mjs` 会把这些值与 app.css 对应主题块的
+ * `desktop/test/theme-preview.test.mjs` 会把这些值与 app.css 对应块的
  * `--canvas / --paper / --raise / --ink / --accent / --line` 逐项对账，漂移就红。
+ * `line` 与 app.css 一样保留 rgba：测试按字符串对账，换成等效实色会两边都读不出同一个值。
  */
-export interface ThemePreview {
+export interface AppearanceShot {
   id: ThemeId;
   name: string;
   note: string;
@@ -89,46 +104,30 @@ export interface ThemePreview {
   ink: string;
   accent: string;
   line: string;
-  /** 字幕字体角色：明朝墨用明朝，其余跟 UI 一致（缩略图里要看得出来）。 */
-  cueFont: 'sans' | 'mincho';
 }
 
-export const THEME_PREVIEWS: ThemePreview[] = [
+export const APPEARANCE_SHOTS: AppearanceShot[] = [
   {
     id: 'light',
-    name: '青空浅',
-    note: '浅天蓝 + 靛蓝，默认主题',
-    canvas: '#edf3fb',
-    paper: '#f9fbfe',
-    card: '#ffffff',
-    ink: '#1b2740',
-    accent: '#4f6bff',
-    line: 'rgba(27, 39, 64, 0.12)',
-    cueFont: 'sans',
+    name: '日间校样',
+    note: '冷纸 · 墨 · 蓝铅笔',
+    canvas: '#e7ecef',
+    paper: '#f4f6f6',
+    card: '#fcfdfc',
+    ink: '#15191c',
+    accent: '#2d5fa6',
+    line: 'rgba(21, 25, 28, 0.14)',
   },
   {
     id: 'dark',
-    name: '青空深',
-    note: '深空底 + 亮靛蓝，夜间校对',
-    canvas: '#0a0c10',
-    paper: '#111419',
-    card: '#181c23',
-    ink: '#ecf1fa',
-    accent: '#7d93ff',
-    line: 'rgba(236, 241, 250, 0.13)',
-    cueFont: 'sans',
-  },
-  {
-    id: 'mincho',
-    name: '明朝墨',
-    note: '纸白 + 墨黑 + 朱红，字幕用明朝',
-    canvas: '#f1f3f0',
-    paper: '#fafaf8',
-    card: '#ffffff',
-    ink: '#15181b',
-    accent: '#c8412d',
-    line: 'rgba(21, 24, 27, 0.12)',
-    cueFont: 'mincho',
+    name: '夜间配音',
+    note: '近黑画布 · 暖纸白字',
+    canvas: '#0b0e11',
+    paper: '#12161a',
+    card: '#171c21',
+    ink: '#ece8df',
+    accent: '#84a9e6',
+    line: 'rgba(236, 232, 223, 0.16)',
   },
 ];
 

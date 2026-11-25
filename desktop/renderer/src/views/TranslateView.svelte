@@ -200,7 +200,7 @@
 <div class="ai aiw-page">
   <GapFillCard />
   <AiBatchToolbar
-    title="翻译"
+    title="双语翻译"
     channel={ai.channel}
     channels={['api', 'manual']}
     apiNote="设置 → AI 优化里启用并填写 API Key；也可以直接用「外部手动」"
