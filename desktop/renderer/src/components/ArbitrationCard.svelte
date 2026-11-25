@@ -620,7 +620,7 @@
     padding: 0 10px;
     border: 1px solid var(--line);
     border-radius: var(--rad-control);
-    background: var(--raise);
+    background: var(--surface);
     color: var(--ink);
     font: inherit;
     font-size: 12px;

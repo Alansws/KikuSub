@@ -189,6 +189,19 @@ const EVAL = String.raw`
       accentOnCanvas: ratio(token('--accent-text'), token('--canvas')),
       onAccent: ratio(token('--on-accent'), token('--accent')),
       hairline: ratio(over(token('--line'), token('--paper')), token('--paper')),
+      /* ---- 2026-11-26 第三次修正：凹陷暗槽必须是「下沉」的 ----
+         --well 是输入框 / 滑块底槽 / 标签槽。上一版暗色把它做成「提亮 6.5%」，
+         于是整个界面泛白青灰、分层全丢；这里用亮度关系把它冻住：
+         浅色 well 比台面暗、暗色 well 比画布暗。
+         注意：本段是 String.raw 模板，注释里不许出现反引号。 */
+      wellVsCanvas: Math.round((lum(token('--well')) - lum(token('--canvas'))) * 1000) / 1000,
+      wellVsPaper: Math.round((lum(token('--well')) - lum(token('--paper'))) * 1000) / 1000,
+      primary: token('--btn-primary-bg'),
+      primaryHover: token('--btn-primary-hover'),
+      onPrimaryHover: ratio(token('--on-accent'), token('--btn-primary-hover')),
+      /* 抬升层（按钮 / 浮层）必须比它所在的地面**更亮**（暗色）/ 更亮或等亮（浅色）。 */
+      raiseVsCanvas: Math.round((lum(token('--raise')) - lum(token('--canvas'))) * 1000) / 1000,
+      panelVsCanvas: Math.round((lum(token('--surface')) - lum(token('--canvas'))) * 1000) / 1000,
     };
     const bar = document.querySelector('.statusbar');
     const barBg = bar ? getComputedStyle(bar).backgroundColor : '';
@@ -340,6 +353,14 @@ check('亮色：蓝铅笔文字对画布 ≥4.5:1', light.themes.accentOnCanvas 
 check('亮色：主按钮白字对强调底 ≥4.5:1', light.themes.onAccent >= 4.5, light.themes);
 console.log('    亮色实算：', JSON.stringify(light.themes));
 check('亮色：发丝线可见（≥1.25:1，不回退到看不见的 5% 灰）', light.themes.hairline >= 1.25, light.themes);
+// 2026-11-26：凹陷必下沉、抬升必凸起 —— 两条方向断言把「凹槽提亮」这类回归钉死。
+check('亮色：凹陷暗槽比台面更暗（well 沉在纸下）', light.themes.wellVsCanvas < -0.005, light.themes);
+check('亮色：凹陷暗槽比铬件更暗', light.themes.wellVsPaper < 0, light.themes);
+check(
+  '亮色：按钮 / 浮层不比台面暗（抬升层凸起）',
+  light.themes.raiseVsCanvas >= 0,
+  light.themes,
+);
 
 // ---- 4) 暗色：同一套结构，另一套令牌 ----
 const dark = run(seed, 'profile-dark', path.join(BASE, 'dark.png'), 'dark');
@@ -357,6 +378,17 @@ check('暗色：底栏文字对底栏底色 ≥4.5:1', dark.relocated.statusInk 
 check('暗色：正文墨对纸面 ≥7:1', dark.themes.bodyInk >= 7, dark.themes);
 check('暗色：11px 标签墨对纸面 ≥4.5:1', dark.themes.labelInk >= 4.5, dark.themes);
 check('暗色：蓝铅笔文字对纸面 ≥4.5:1', dark.themes.accentInk >= 4.5, dark.themes);
+// 暗色必须是「炭黑阶梯 + 下沉暗槽」：灯下最亮的只能是画面与抬升层。
+check('暗色：凹陷暗槽沉在画布以下（不再泛白提亮）', dark.themes.wellVsCanvas < -0.001, dark.themes);
+check('暗色：凹陷暗槽沉在铬件以下', dark.themes.wellVsPaper < 0, dark.themes);
+check('暗色：按钮 / 浮层比画布亮一档（抬升层凸起）', dark.themes.raiseVsCanvas > 0.01, dark.themes);
+check('暗色：面板层比画布亮一档', dark.themes.panelVsCanvas > 0.004, dark.themes);
+// 用户给的暗色悬停值 #4274F2 配白字只有 4.19:1；实现里压到 #3B6DEE（4.56:1）。
+check(
+  '暗色：主按钮悬停底仍能配白字（≥4.5:1）',
+  dark.themes.onPrimaryHover >= 4.5,
+  { primary: dark.themes.primary, hover: dark.themes.primaryHover, ratio: dark.themes.onPrimaryHover },
+);
 
 // ---- 5) 紧凑模式（窗口 ≤900px）：同一套结构 ----
 // 触发条件是 CSS 视口宽度，不是缩放：本应用没有缩放菜单（AGENTS.md 红线 14），

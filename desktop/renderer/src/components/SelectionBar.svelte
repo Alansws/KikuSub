@@ -116,7 +116,7 @@
     position: absolute;
     inset: 2px;
     z-index: 2;
-    background: var(--raise);
+    background: var(--surface);
     border: 1px solid var(--line);
     box-shadow: var(--shadow-pop);
     border-radius: var(--rad-control);

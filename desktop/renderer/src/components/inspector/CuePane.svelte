@@ -434,7 +434,7 @@
     display: block;
     width: 100%;
     margin-top: var(--sp-2);
-    border: 1px solid transparent;
+    border: 1px solid var(--well-line);
     border-radius: var(--rad-control);
     background: var(--well);
     /* rows=2（20/29 × 2 = 58）加上上下内边距与 1px 边框，高度才是整数像素；
@@ -471,7 +471,7 @@
      而不是 `:focus-visible` —— 点进输入框也要亮（那是「现在可以改这一句」），
      而且焦点落在框内任何位置都成立。 */
   .cue-card:focus-within .cue-text {
-    background: var(--raise);
+    background: var(--well-focus);
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }

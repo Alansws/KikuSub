@@ -533,7 +533,7 @@
     display: flex;
     flex-direction: column;
     margin: var(--sp-3) var(--sp-4) var(--sp-4);
-    background: var(--raise);
+    background: var(--surface);
     border: 1px solid var(--rule);
     border-radius: var(--rad-card);
     overflow: hidden;

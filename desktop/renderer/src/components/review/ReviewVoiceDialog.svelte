@@ -131,7 +131,7 @@
     width: min(360px, calc(100vw - 48px));
     padding: var(--sp-4) var(--sp-4) var(--sp-3);
     border-radius: var(--rad-panel);
-    background: var(--raise);
+    background: var(--surface);
     border: 1px solid var(--line);
     box-shadow: var(--shadow-pop);
     display: flex;

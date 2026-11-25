@@ -719,7 +719,7 @@
 
 <style>
   .qa-panel {
-    background: var(--raise);
+    background: var(--surface);
     display: flex;
     flex-direction: column;
     overflow: hidden;

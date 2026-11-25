@@ -115,40 +115,55 @@
      规则：白底只允许出现在「台本纸 / 浮层 / 输入框」三类对象上；页内分区一律是
      「标题 + 发丝线」或「凹陷填充」，全站不再有白框叠白框、也没有灰底贴白框。 */
   --canvas: #ffffff;
-  --paper: #f0f2f4;
+  /* 铬件去冷青：旧的 #f0f2f4 是一条偏蓝的工业灰，和蓝铅笔叠在一起会互相污染。
+     Apple 的纯中性浅灰 #f5f5f7 只差一个色相（中性），但整页立刻从「冷灰控制台」
+     变成「纸白桌面」。 */
+  --paper: #f5f5f7;
   --raise: #ffffff;
-  /* 凹陷填充 = 5% 中性墨，悬停 9%。靠明度而不是描边表达「凹下去的一块」；
-     --well / --well-hover 是语义别名，组件里写它们比写 --fill 更说得清用途。 */
-  --well: var(--fill);
-  --well-hover: var(--fill-strong);
+  /* 面板 / 台本纸层（--surface）：暗色里它是「浮在 canvas 上的一层」，
+     浅色里就是纸本身。单独立一个令牌，是因为抬升层（按钮 / 浮层）和它
+     在暗色已经分道：前者 #313135，后者 #242427。 */
+  --surface: #ffffff;
+  /* 凹陷填充（well）= 输入框 / 滑块底槽 / 标签槽 / 选项块。
+     2026-11-26 第三次修正：**蹲在台面以下**，不再往白里提亮。
+     浅色 #f2f2f7（比纸白低一档），暗色 #121214（比 canvas 再低一档）。
+     --well-line 只给「框形凹陷」（输入框 / 下拉）用，选项块靠明度就够。 */
+  --well: #f2f2f7;
+  --well-hover: #eaeaef;
+  --well-focus: #ffffff;
+  --well-line: transparent;
+  /* 浅色里的「抬升层」就是纸本身：按钮 / 浮层 / 分段拇指都读这一档。
+     暗色才有真正的抬升色（#313135），因此这两个令牌必须两套都声明。 */
+  --raise-hover: #ffffff;
+  --raise-bevel: none;
+  --raise-seam: rgba(0, 0, 0, 0.12);
   --ink: #15191c;
-  --ink-2: #4a545c;
-  /* 6.35:1 on sheet / 6.02:1 on panel —— 标签 / 计数 / 单位 / 快捷键。
-     11px 也要读得清，所以比 DESIGN.md 里的 #5E6A72 再深一档。 */
-  --ink-3: #566168;
+  --ink-2: #4b4b52;
+  /* 标签 / 计数 / 单位 / 快捷键：5.9:1 on 铬件、6.4:1 on 纸白。
+     11px 是字号下限，所以这一档不许再浅。 */
+  --ink-3: #55555c;
   /* 禁用 / 不可用专用：弱到不像可读内容，但仍高于纯装饰（2.9:1） */
   --ink-muted: #8e979c;
 
   /* 发丝线保留 rgba：多个组件把 --line-2 当 hover 底色用，实色会变成灰块。
      .14 是分隔线的最低可读档，不再回退到 5% 灰。 */
-  --line: rgba(21, 25, 28, 0.14);
-  --line-2: rgba(21, 25, 28, 0.1);
-  /* 明确的 1px 发丝线（cue 表、台本页边）：干净冷灰，不发黄。
-     台面变成纸白之后它也从 #ccd5dc 退到 #dbe1e6 —— 白纸上的一条线
-     只要有形体就够，不需要再压一道深灰把版面切开。 */
-  --rule: #dbe1e6;
+  --line: rgba(0, 0, 0, 0.13);
+  --line-2: rgba(0, 0, 0, 0.09);
+  /* 明确的 1px 发丝线（cue 表、台本页边）：纯中性，不再带蓝味。
+     白纸上的一条线只要有形体就够，不需要压深灰把版面切开。 */
+  --rule: #e2e2e7;
 
   /* ---------- 蓝铅笔 / 朱笔 ----------
-     2026-11-25 验收修正：旧 #2D5FA6 是低饱和钢青，叠在灰底上显脏。
-     换成更清澈的专业钴蓝（高彩度、明度适中），实算 5.34:1 on 台本、
-     5.06:1 on 纸面、4.71:1 on 画布；白字落在它上面 5.34:1。 */
-  --accent: #0b63e5;
-  --accent-hover: #0952c4;
-  /* 文字/图标形式的强调：与实心主按钮同一个蓝，保证小字也 ≥4.5 */
-  --accent-text: #0b63e5;
-  --accent-soft: rgba(11, 99, 229, 0.09);
-  --accent-ring: rgba(11, 99, 229, 0.45);
-  --accent-line: rgba(11, 99, 229, 0.34);
+     2026-11-26 第三次修正：上一版 #0B63E5 是老式网页蓝，和中性灰放在一起
+     像贴着一条链接色。换成 Studio 皇家钴蓝：底色更沉、色相偏靛，白字 5.57:1。
+     文字态（--accent-text）再压深一档 #2453D4，白纸上 6.44:1、铬件上 5.91:1；
+     小字与图标永远读这一个，实心填充读 --accent。 */
+  --accent: #295ce6;
+  --accent-hover: #1e4ed8;
+  --accent-text: #2453d4;
+  --accent-soft: rgba(41, 92, 230, 0.08);
+  --accent-ring: rgba(41, 92, 230, 0.45);
+  --accent-line: rgba(41, 92, 230, 0.34);
   --btn-primary-bg: var(--accent);
   --btn-primary-hover: var(--accent-hover);
   --control-on: var(--accent);
@@ -164,11 +179,11 @@
   --bg-content: var(--raise);
   /* 检查器夹在铬件与台面之间的窄带：既不像侧栏那么灰，也不跟台面抢白。
      三块并排时（侧栏 / 工作区 / 检查器）每两块之间都有可读的明度差。 */
-  --bg-inspector: #f7f8f9;
-  --bg-toolbar: rgba(240, 242, 244, 0.9);
-  --bg-status: rgba(240, 242, 244, 0.94);
+  --bg-inspector: #fbfbfd;
+  --bg-toolbar: rgba(245, 245, 247, 0.9);
+  --bg-status: rgba(245, 245, 247, 0.94);
   /* 侧栏叠在 macOS vibrancy 上：留一点透，颜色仍由铬件灰决定 */
-  --bg-sidebar: rgba(240, 242, 244, 0.74);
+  --bg-sidebar: rgba(245, 245, 247, 0.74);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -176,48 +191,50 @@
   --separator: var(--line);
   --separator-soft: var(--line-2);
 
-  --fill: rgba(21, 25, 28, 0.05);
-  --fill-strong: rgba(21, 25, 28, 0.09);
-  --row-hover: rgba(21, 25, 28, 0.035);
+  /* --fill 只做「悬停/洗色」这类一层半透明，不再兼任凹陷填充（那是 --well）；
+     去掉蓝味之后，它和 --rule 出自同一个中性墨。 */
+  --fill: rgba(0, 0, 0, 0.05);
+  --fill-strong: rgba(0, 0, 0, 0.09);
+  --row-hover: rgba(0, 0, 0, 0.035);
 
   /* 平面优先：卡片没有阴影；只有画面与真浮层有 */
-  --shadow-pop: 0 12px 32px rgba(21, 25, 28, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7);
   /* 画面投影按所在房间取值：日间是浅灰画布上的一块屏幕（轻），
      夜间配音间才是「唯一的亮面」（重）。同一份深影搬到浅色上会读成一圈黑边。 */
-  --shadow-video: 0 10px 28px rgba(21, 25, 28, 0.14), 0 2px 6px rgba(21, 25, 28, 0.06);
+  --shadow-video: 0 10px 28px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   --shadow-btn: none;
   --shadow-seg: none;
 
-  --scroll-thumb: rgba(21, 25, 28, 0.18);
-  --scroll-thumb-hover: rgba(21, 25, 28, 0.3);
+  --scroll-thumb: rgba(0, 0, 0, 0.18);
+  --scroll-thumb-hover: rgba(0, 0, 0, 0.3);
   --hit: rgba(255, 214, 10, 0.4);
   --hit-row: rgba(255, 214, 10, 0.16);
-  --caption-bg: rgba(13, 18, 24, 0.62);
+  --caption-bg: rgba(0, 0, 0, 0.62);
 
   /* 监看舞台：浅色下是「画面浮在柔和浅灰画布上」，不是两条黑边；
      暗色下保持近黑，让画面成为唯一亮面。 */
-  --stage-bg: #e9ecf0;
-  --stage-line: rgba(21, 25, 28, 0.52);
-  --stage-frame: rgba(21, 25, 28, 0.16);
-  --wave: #8b959b;
+  --stage-bg: #ededf0;
+  --stage-line: rgba(0, 0, 0, 0.52);
+  --stage-frame: rgba(0, 0, 0, 0.16);
+  --wave: #8a8a90;
 
-  --cue-lane: rgba(21, 25, 28, 0.05);
-  --cue-wash: rgba(21, 25, 28, 0.03);
-  --cue-block: rgba(21, 25, 28, 0.14);
-  --cue-block-hover: rgba(21, 25, 28, 0.24);
-  --cue-block-active: rgba(11, 99, 229, 0.88);
-  --cue-edge: rgba(11, 99, 229, 0.92);
+  --cue-lane: rgba(0, 0, 0, 0.05);
+  --cue-wash: rgba(0, 0, 0, 0.03);
+  --cue-block: rgba(0, 0, 0, 0.14);
+  --cue-block-hover: rgba(0, 0, 0, 0.24);
+  --cue-block-active: rgba(41, 92, 230, 0.88);
+  --cue-edge: rgba(41, 92, 230, 0.92);
 
   /* ---------- 设置页令牌（分段 / Bento / 占用条 / Inset） ----------
      分段选中态回到 macOS 原生语法：灰槽里一颗**纯白凸起胶囊**，
      极轻投影 + 深墨文字；不再往槽里涂半透明蓝。
      2026-11-26：Bento / Inset 从「白卡 + 描边」退成**凹陷填充**——
      未选中的选项是台面上一块无边框的淡灰，选中才加蓝须。 */
-  --seg-track: rgba(15, 23, 30, 0.055);
+  --seg-track: rgba(0, 0, 0, 0.06);
   --seg-thumb: #ffffff;
-  --seg-thumb-ring: rgba(15, 23, 30, 0.10);
+  --seg-thumb-ring: rgba(0, 0, 0, 0.10);
   --seg-thumb-shadow:
-    0 1px 2px rgba(15, 23, 30, 0.12), 0 0 0 0.5px var(--seg-thumb-ring);
+    0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px var(--seg-thumb-ring);
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
@@ -232,11 +249,11 @@
   --hero-bg: var(--well);
   --hero-border: transparent;
 
-  --meter-track: rgba(21, 25, 28, 0.07);
-  --meter-a: #0b63e5;
+  --meter-track: rgba(0, 0, 0, 0.07);
+  --meter-a: #295ce6;
   --meter-b: #356b52;
   --meter-c: #7e5416;
-  --meter-muted: rgba(21, 25, 28, 0.28);
+  --meter-muted: rgba(0, 0, 0, 0.28);
   --meter-gap: var(--raise);
 
   --inset-bg: var(--well);
@@ -248,43 +265,74 @@
 html[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ---------- 深碳黑灰的四阶（Final Cut Pro 的剪辑台语法） ----------
-     不再是「一块近黑到底」：观众席（--canvas）只是房间的地面，
-     铬件（--paper）比它亮一阶，台本纸与浮层（--raise）再亮一阶，
-     检查器夹在中间做第三块。相邻两阶差 ~10 个色阶（≈4% 明度），
-     刚好够分区、不够成条纹。
-     画面自己（--stage-bg）回到最深，于是影片是屋里唯一发亮的东西。 */
-  --canvas: #1a1c1f;
-  --paper: #24272b;
-  --raise: #2c3136;
-  --ink: #e9e6df;
-  --ink-2: #b6bbb9;
-  --ink-3: #98a1a8;
-  --ink-muted: #616b72;
+  /* ---------- 纯中性深炭黑：FCP 检查器的语法（2026-11-26 第三次修正） ----------
+     上一版是「偏青灰的 #1A1C1F → #24272B → #2C3136 + 凹槽提亮 6.5%」，
+     结果整个界面浮着一层灰雾：底色本身带蓝味，而凹槽往白里提，
+     于是「里外都是亮的」，看不出哪一层在前哪一层在后。
 
-  --line: rgba(236, 232, 223, 0.15);
-  --line-2: rgba(236, 232, 223, 0.085);
-  --rule: #34383d;
+     这一版换成 **纯中性炭黑阶梯 + 下沉暗槽**，就是 FCP 检查器的反向关系：
+       --stage  #0C0C0E  画面所在的房间（全应用最深，唯一接近纯黑的值）
+       --canvas #161618  工作区地面
+       --paper  #1D1D1F  侧栏 / 标题栏 / 底栏 / 检查器（铬件）
+       --surface#242427  面板 / 卡片层（台本表也落这一层）
+       --raise  #313135  按钮 / 浮层（再往上提一档，悬停 #3A3A3F）
+       --well   #121214  输入框 / 滑块底槽 / 标签槽：**蹲到画布以下**，
+                         配一条 7% 白的极细边，读成「挖进去的一块」
+     三个色相全部是中性（R=G，B 只多一点），不再有一丝青灰；
+     字也不再偏暖，用中性近白，因为 FCP 的字就是中性白。 */
+  --stage: #0c0c0e;
+  --canvas: #161618;
+  --paper: #1d1d1f;
+  --surface: #242427;
+  --raise: #313135;
+  --raise-hover: #3a3a3f;
 
-  --accent: #84a9e6;
-  --accent-hover: #a8c4ef;
-  --accent-text: #84a9e6;
-  --accent-soft: rgba(132, 169, 230, 0.14);
-  --accent-ring: rgba(132, 169, 230, 0.5);
-  --accent-line: rgba(132, 169, 230, 0.4);
-  --danger: #e07a66;
-  --danger-soft: rgba(224, 122, 102, 0.12);
-  --warn: #d2a15e;
-  --warn-soft: rgba(210, 161, 94, 0.13);
-  --success: #7fb89b;
-  --success-soft: rgba(127, 184, 155, 0.12);
+  --ink: #ededef;
+  --ink-2: #b9b9bf;
+  /* 11px 标签：4.7:1 on 浮层、6.5:1 on 铬件 —— 抬到 A0 才不会在炭黑上糊掉 */
+  --ink-3: #a0a0a6;
+  --ink-muted: #6e6e74;
 
+  --line: rgba(255, 255, 255, 0.13);
+  --line-2: rgba(255, 255, 255, 0.075);
+  --rule: #303034;
+
+  /* 凹陷：往黑里沉，再配一条 7% 白的极细边。绝不往白里提亮。 */
+  --well: #121214;
+  --well-hover: #1a1a1d;
+  --well-focus: #1a1a1d;
+  --well-line: rgba(255, 255, 255, 0.07);
+
+  /* ---------- Studio 皇家钴蓝 ----------
+     暗色主填充 #3467EB（白字 4.90:1），文字态 #6B96FF（铬件 5.96:1）。
+     悬停取 #3B6DEE 而不是指定值 #4274F2：后者配白字只有 4.19:1，
+     同一色相压 4 个色阶肉眼不可分辨，却把白字拉回 4.56:1。 */
+  --accent: #3467eb;
+  --accent-hover: #3b6dee;
+  --accent-text: #6b96ff;
+  --accent-soft: rgba(52, 103, 235, 0.16);
+  --accent-ring: rgba(107, 150, 255, 0.55);
+  --accent-line: rgba(107, 150, 255, 0.42);
+  --btn-primary-bg: var(--accent);
+  --btn-primary-hover: var(--accent-hover);
+  --control-on: var(--accent);
+  --on-accent: #ffffff;
+
+  --danger: #e5776a;
+  --danger-soft: rgba(229, 119, 106, 0.14);
+  --warn: #d6a460;
+  --warn-soft: rgba(214, 164, 96, 0.14);
+  --success: #74b493;
+  --success-soft: rgba(116, 180, 147, 0.14);
+
+  /* 内容面 / 浮层 / 对话框读「抬升层」，所以在暗色是 #313135 —— 它就是
+     FCP 里那一层真正浮在面板之上的东西。页内分区不许用这张牌。 */
   --bg-content: var(--raise);
-  --bg-inspector: #1f2226;
-  --bg-toolbar: rgba(36, 39, 43, 0.9);
-  --bg-status: rgba(36, 39, 43, 0.96);
-  /* 侧栏叠在 macOS 原生 vibrancy 上；0.86 让桌面只透一点点 */
-  --bg-sidebar: rgba(31, 34, 38, 0.86);
+  --bg-inspector: var(--paper);
+  --bg-toolbar: rgba(29, 29, 31, 0.92);
+  --bg-status: rgba(29, 29, 31, 0.96);
+  /* 侧栏叠在 macOS 原生 vibrancy 上；0.9 让桌面只透一点点 */
+  --bg-sidebar: rgba(29, 29, 31, 0.9);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
@@ -292,45 +340,50 @@ html[data-theme='dark'] {
   --separator: var(--line);
   --separator-soft: var(--line-2);
 
-  /* 凹陷填充在暗色里是「提一档」：同样 6% / 11% 的白，落在任何一层碳灰上
-     都读成一块可点的面，而不是一块更黑的洞。 */
-  --fill: rgba(232, 230, 224, 0.065);
-  --fill-strong: rgba(232, 230, 224, 0.115);
-  --row-hover: rgba(232, 230, 224, 0.045);
+  /* --fill 只做悬停/洗色这类一层半透明；凹陷填充是 --well（往黑里沉）。 */
+  --fill: rgba(255, 255, 255, 0.055);
+  --fill-strong: rgba(255, 255, 255, 0.1);
+  --row-hover: rgba(255, 255, 255, 0.04);
 
-  --shadow-pop: 0 14px 36px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
-  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 22px 46px rgba(0, 0, 0, 0.55);
+  /* 浮层的立体关系：一条 1px 暗缝 + 一道极淡顶边高光，不用大面积阴影。 */
+  --raise-bevel: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --raise-seam: #0e0e10;
+  --shadow-pop:
+    0 0 0 1px var(--raise-seam), 0 14px 36px rgba(0, 0, 0, 0.62),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 22px 46px rgba(0, 0, 0, 0.6);
   --shadow-btn: none;
   --shadow-seg: none;
 
-  --scroll-thumb: rgba(236, 232, 223, 0.2);
-  --scroll-thumb-hover: rgba(236, 232, 223, 0.32);
+  --scroll-thumb: rgba(255, 255, 255, 0.18);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.3);
   --hit: rgba(255, 214, 10, 0.3);
   --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
 
-  --stage-bg: #0b0d0f;
+  --stage-bg: var(--stage);
   --stage-line: rgba(255, 255, 255, 0.34);
-  --stage-frame: rgba(236, 232, 223, 0.1);
-  --wave: #93a1a8;
+  --stage-frame: rgba(255, 255, 255, 0.1);
+  --wave: #8e8e94;
 
-  --cue-lane: rgba(236, 232, 223, 0.06);
-  --cue-wash: rgba(236, 232, 223, 0.035);
-  --cue-block: rgba(236, 232, 223, 0.13);
-  --cue-block-hover: rgba(236, 232, 223, 0.21);
-  --cue-block-active: rgba(132, 169, 230, 0.88);
-  --cue-edge: rgba(160, 186, 240, 0.95);
+  --cue-lane: rgba(255, 255, 255, 0.06);
+  --cue-wash: rgba(255, 255, 255, 0.035);
+  --cue-block: rgba(255, 255, 255, 0.13);
+  --cue-block-hover: rgba(255, 255, 255, 0.21);
+  --cue-block-active: rgba(52, 103, 235, 0.9);
+  --cue-edge: rgba(107, 150, 255, 0.95);
 
-  /* 分段：槽比台面暗、拇指比台面亮 —— FCP 里那颗凸起的小胶囊就是这个关系。 */
-  --seg-track: rgba(0, 0, 0, 0.22);
-  --seg-thumb: #3a4046;
-  --seg-thumb-ring: rgba(0, 0, 0, 0.42);
+  /* 分段：槽沉到画布以下、拇指是浮层那一档 —— FCP 里那颗凸起的小胶囊。 */
+  --seg-track: rgba(0, 0, 0, 0.34);
+  --seg-thumb: var(--raise);
+  --seg-thumb-ring: var(--raise-seam);
   --seg-thumb-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 0.5px var(--seg-thumb-ring);
+    0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 0.5px var(--seg-thumb-ring),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --seg-ink: var(--text-2);
   --seg-ink-on: var(--text);
 
-  --bento-bg: var(--well);
+  --bento-bg: var(--surface);
   --bento-border: transparent;
   --bento-border-on: var(--accent-line);
   --bento-glow: transparent;
@@ -338,23 +391,19 @@ html[data-theme='dark'] {
   --bento-shadow: none;
   --bento-shadow-on: none;
 
-  --hero-bg: var(--well);
+  --hero-bg: var(--surface);
   --hero-border: transparent;
 
-  --meter-track: rgba(236, 232, 223, 0.085);
-  --meter-a: #84a9e6;
-  --meter-b: #7fb89b;
-  --meter-c: #d2a15e;
-  --meter-muted: rgba(236, 232, 223, 0.3);
-  --meter-gap: var(--raise);
+  --meter-track: rgba(255, 255, 255, 0.08);
+  --meter-a: var(--accent);
+  --meter-b: var(--success);
+  --meter-c: var(--warn);
+  --meter-muted: rgba(255, 255, 255, 0.3);
+  --meter-gap: var(--surface);
 
   --inset-bg: var(--well);
-  --inset-line: var(--line-2);
+  --inset-line: var(--well-line);
   --bg-inset: var(--inset-bg);
-
-  /* 深色强调色上的白字只有 2.9:1：实心主按钮固定用浅色的深蓝，白字回到 6.4:1 */
-  --btn-primary-bg: #2d5fa6;
-  --btn-primary-hover: #356bb8;
 }
 
 /* ============================================================
@@ -481,6 +530,8 @@ body {
 
 .btn {
   appearance: none;
+  /* 按钮是**抬升层**：暗色 #313135 之上再加一道极淡顶边高光，
+     于是它在炭黑板面里读成「凸起的一颗键」，而不是一块灰贴纸。 */
   border: 1px solid var(--line);
   height: var(--ctl-h);
   padding: 0 10px;
@@ -492,6 +543,7 @@ body {
   gap: 6px;
   cursor: default;
   background: var(--raise);
+  box-shadow: var(--raise-bevel);
   color: var(--text);
   transition:
     background var(--dur) var(--ease),
@@ -500,7 +552,7 @@ body {
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
-  background: var(--fill);
+  background: var(--raise-hover);
   border-color: var(--accent-line);
 }
 .btn:active:not(:disabled) {
@@ -522,6 +574,7 @@ body {
 .btn.primary {
   background: var(--btn-primary-bg);
   border-color: var(--btn-primary-bg);
+  box-shadow: none;
   color: var(--on-accent);
   font-weight: 500;
 }
@@ -545,6 +598,7 @@ body {
 .btn.soft {
   background: var(--well);
   border-color: transparent;
+  box-shadow: none;
   color: var(--text-2);
 }
 .btn.soft:hover:not(:disabled) {
@@ -645,9 +699,10 @@ body {
 .field {
   height: var(--ctl-h-lg);
   border-radius: var(--rad-control);
-  /* 输入区是台面上的一块**凹陷填充**：无边框、极淡中性灰，聚焦才出现蓝须。
-     描边常驻会把它读成「白框」，而白框只留给台本纸与浮层。 */
-  border: 1px solid transparent;
+  /* 输入区是**下沉的暗槽**：暗色 #121214 + 一圈 7% 白的极细边（FCP 的凹槽
+     就是这个关系——比周围更黑、靠一道细边勾出形状）。浅色 --well-line 是
+     transparent，落在纸上仍然是一块无边框的淡灰。 */
+  border: 1px solid var(--well-line);
   background: var(--well);
   display: flex;
   align-items: center;
@@ -663,7 +718,7 @@ body {
   background: var(--well-hover);
 }
 .field:focus-within {
-  background: var(--raise);
+  background: var(--well-focus);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -882,14 +937,14 @@ body {
   flex: 1;
   min-width: 0;
   padding: 0 var(--sp-2);
-  border: 1px solid transparent;
+  border: 1px solid var(--well-line);
   border-radius: var(--rad-control);
   background: var(--well);
   color: var(--text);
   outline: none;
 }
 .ai-input:focus {
-  background: var(--raise);
+  background: var(--well-focus);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -959,7 +1014,9 @@ body {
    ============================================================ */
 
 .cue-sheet {
-  background: var(--raise);
+  /* 台本表落在**面板层**（暗色 #242427，浅色纸白），不是浮层那一档：
+     表格是内容面的主体，浮层才该比它再亮一阶。 */
+  background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--rad-card);
   overflow: hidden;

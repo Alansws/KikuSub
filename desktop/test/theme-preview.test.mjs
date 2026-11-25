@@ -46,10 +46,17 @@ function tokensOf(block) {
   return out;
 }
 
+/**
+ * 缩略图要对账的令牌。
+ *
+ * `card` 读 **`--surface`**（面板 / 台本层）而不是 `--raise`：2026-11-26 第三次
+ * 修正把暗色的「台本纸」与「按钮/浮层」拆成了两档（#242427 / #313135），
+ * 缩略图里那张小卡片是台本纸，不是浮层按钮。
+ */
 const KEYS = [
   ['canvas', '--canvas'],
   ['paper', '--paper'],
-  ['card', '--raise'],
+  ['card', '--surface'],
   ['ink', '--ink'],
   ['accent', '--accent'],
   ['line', '--line'],

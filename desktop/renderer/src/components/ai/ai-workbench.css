@@ -234,8 +234,8 @@ button.aiw-count:hover {
   max-width: 210px;
   padding: 0 7px;
   border-radius: var(--rad-control);
-  border: 1px solid var(--separator);
-  background: var(--raise);
+  border: 1px solid var(--well-line);
+  background: var(--well);
   color: var(--text);
 }
 .aiw-select:hover {
@@ -421,9 +421,9 @@ html[data-theme='dark'] .aiw-lane button.on {
   gap: 7px;
   min-width: 0;
   padding: 6px 9px;
-  border: 1px solid var(--separator);
+  border: 1px solid var(--well-line);
   border-radius: var(--rad-card);
-  background: var(--raise);
+  background: var(--well);
   color: var(--text-2);
   font: inherit;
   text-align: left;

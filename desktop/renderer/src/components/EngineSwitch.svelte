@@ -249,7 +249,7 @@
     flex-direction: column;
     overflow: hidden;
     padding: var(--sp-1);
-    background: var(--raise);
+    background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 10px;
     box-shadow: var(--shadow-pop);

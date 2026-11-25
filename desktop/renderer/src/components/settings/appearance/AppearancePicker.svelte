@@ -41,14 +41,14 @@
     {
       id: 'light' as AppearanceId,
       name: '日间校样',
-      note: '冷纸桌面 · 墨 · 蓝铅笔；白天与交付前通读',
+      note: '中性浅灰铬件 · 纸白台面 · 皇家钴蓝；白天与交付前通读',
       split: false,
       shot: light,
     },
     {
       id: 'dark' as AppearanceId,
       name: '夜间配音',
-      note: '近黑画布 · 暖纸白字；画面是唯一亮面',
+      note: '纯中性深炭黑 · 下沉暗槽 · 中性近白字；画面是唯一亮面',
       split: false,
       shot: dark,
     },

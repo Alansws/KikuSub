@@ -364,10 +364,12 @@
     outline: none;
     margin: 2px 0 0;
   }
+  /* 滑块底槽是**下沉暗槽**（--well），不是一层 9% 白的提亮：
+     暗色里往白里提会读成「浮起来的一条杠」，与 FCP 的凹槽正好相反。 */
   input[type='range']::-webkit-slider-runnable-track {
     height: 3px;
     border-radius: 2px;
-    background: var(--fill-strong);
+    background: var(--well);
   }
   input[type='range']::-webkit-slider-thumb {
     appearance: none;
@@ -380,7 +382,7 @@
     cursor: default;
   }
   input[type='range']:hover::-webkit-slider-runnable-track {
-    background: var(--separator);
+    background: var(--well-hover);
   }
   input[type='range']:active::-webkit-slider-thumb {
     background: var(--accent);

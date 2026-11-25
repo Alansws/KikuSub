@@ -671,8 +671,8 @@
     min-width: 96px;
     flex: 0 1 160px;
     border-radius: var(--rad-control);
-    border: 1px solid var(--line);
-    background: var(--raise);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     font: inherit;
     font-size: 12px;

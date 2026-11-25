@@ -38,7 +38,7 @@ export const APPEARANCES: AppearanceOption[] = [
     note: '白天日间校样，入夜自动切夜间配音间；一般不用动它',
   },
   { id: 'light', name: '日间校样', note: '纸白台面 · 墨 · 蓝铅笔，适合白天与交付前通读' },
-  { id: 'dark', name: '夜间配音', note: '碳黑剪辑台 · 暖纸白字，画面是唯一亮面' },
+  { id: 'dark', name: '夜间配音', note: '纯中性深炭黑 · 下沉暗槽 · 画面是唯一亮面' },
 ];
 
 export interface CueFontOption {
@@ -118,24 +118,24 @@ export const APPEARANCE_SHOTS: AppearanceShot[] = [
   {
     id: 'light',
     name: '日间校样',
-    note: '纸白台面 · 铬件浅灰 · 蓝铅笔',
+    note: '纸白台面 · 中性浅灰铬件 · 皇家钴蓝',
     canvas: '#ffffff',
-    paper: '#f0f2f4',
+    paper: '#f5f5f7',
     card: '#ffffff',
     ink: '#15191c',
-    accent: '#0b63e5',
-    line: 'rgba(21, 25, 28, 0.14)',
+    accent: '#295ce6',
+    line: 'rgba(0, 0, 0, 0.13)',
   },
   {
     id: 'dark',
     name: '夜间配音',
-    note: '碳灰四阶 · 暖纸白字',
-    canvas: '#1a1c1f',
-    paper: '#24272b',
-    card: '#2c3136',
-    ink: '#e9e6df',
-    accent: '#84a9e6',
-    line: 'rgba(236, 232, 223, 0.15)',
+    note: '纯中性深炭黑 · 下沉暗槽 · 中性近白字',
+    canvas: '#161618',
+    paper: '#1d1d1f',
+    card: '#242427',
+    ink: '#ededef',
+    accent: '#3467eb',
+    line: 'rgba(255, 255, 255, 0.13)',
   },
 ];
 
