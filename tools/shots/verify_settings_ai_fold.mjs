@@ -11,8 +11,8 @@
  * 2. **已配置时默认展开**：预置判定地址 / 判定模型 + 自动判定，折叠区一进来就是展开的，
  *    既有高级配置不会因为折叠而「消失」；用户手动收起后以用户为准。
  * 3. **导出页底部去宣传文案**：没有「为什么在 KikuSub 里导出」段落，底部只剩操作按钮。
- * 4. **无译文轨时就地引导**：置灰的「译文 / 双语」旁有一句「暂无译文轨，可在 AI 处理 →
- *    翻译生成后导出双语」。
+ * 4. **无译文轨时一次提示**：页头一句「还没有译文轨：先到「双语翻译」生成并应用一版」，
+ *    两段的译文 / 双语按钮同处置灰（Step 4.3 把原来重复的两句收敛成一条）。
  *
  * 走主进程 `--screenshot` 静默路径（透明窗口 + capturePage + app.exit），桌面上不出现。
  *
@@ -31,7 +31,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BASE = path.join(os.tmpdir(), 'kikusub-settings-ai-fold');
 const MEDIA = path.join(BASE, 'clip.mp4');
 
-const HINT = '暂无译文轨，可在 AI 处理 → 翻译生成后导出双语';
+const HINT = '还没有译文轨：先到「双语翻译」生成并应用一版，这里才能选译文 / 双语。';
 const OLD_WHY = '为什么在 KikuSub 里导出';
 
 /** 顶部公共小工具：切页、等元素、可读文本、是否真的可见（关掉的 details 里没有盒子）。 */
@@ -136,7 +136,7 @@ const EVAL_EXPORT = (toBottom) => String.raw`
     await waitFor(() => document.querySelector('.sub-row .seg'));
     await sleep(1000);
 
-    const hint = document.querySelector('.trk-hint');
+    const hint = document.querySelector('.track-note span'); // 句子本身；右侧「去双语翻译」是动作
     const subButtons = [...document.querySelectorAll('.sub-row .seg button')].map((button) => ({
       label: text(button),
       disabled: Boolean(button.disabled),
@@ -150,7 +150,7 @@ const EVAL_EXPORT = (toBottom) => String.raw`
     const scroller = document.querySelector('.export-view');
     const result = {
       hint: text(hint),
-      hintCount: document.querySelectorAll('.trk-hint').length,
+      hintCount: document.querySelectorAll('.track-note').length,
       subButtons,
       videoButtons,
       whyTextInPage: document.body.innerText.includes(${JSON.stringify(OLD_WHY)}),
@@ -365,8 +365,8 @@ const exportTrack = run('export-track', {
 check('无译文轨时「译文 / 双语」是置灰的', exportTrack.subButtons.every((b) => b.label === '原文' || b.disabled), exportTrack.subButtons);
 check('置灰按钮旁有一句引导文案', exportTrack.hint === HINT, exportTrack.hint);
 check(
-  '字幕文件 / 成片字幕轨两处置灰按钮旁各有一句引导',
-  exportTrack.hintCount === 2,
+  '「暂无译文轨」只在页头出现一次（不再在两段里各写一遍）',
+  exportTrack.hintCount === 1,
   exportTrack.hintCount,
 );
 check('成片「字幕轨」也给出同一句引导', exportTrack.videoButtons.some((row) => row.length >= 3), exportTrack.videoButtons);

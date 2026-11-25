@@ -53,8 +53,12 @@
 
   const translationLangs = $derived(Object.keys(app.translations).sort());
   const hasTranslations = $derived(translationLangs.length > 0);
-  /** 没有译文轨时「译文 / 双语」只能置灰：就地写一句去哪生成，而不是让按钮空着。 */
-  const NO_TRANSLATION_HINT = '暂无译文轨，可在 AI 处理 → 翻译生成后导出双语';
+  /**
+   * 没有译文轨时「译文 / 双语」只能置灰。提示**只在页头出现一次**（Step 4.3）：
+   * 原来字幕段与成片段各写一句，同一件事在一屏里说两遍，还带着旧导航名
+   * 「AI 处理 → 翻译」（现在叫 04 交付 → 双语翻译）。
+   */
+  const NO_TRANSLATION_HINT = '还没有译文轨：先到「双语翻译」生成并应用一版，这里才能选译文 / 双语。';
   const selectedTranslation = $derived(
     exporter.track === 'source' ? null : (app.translations[exporter.lang] ?? null),
   );
@@ -270,6 +274,14 @@
     </button>
   </PageHeader>
 
+  {#if !hasTranslations}
+    <p class="track-note" role="status">
+      <Icon name="warn" size={11} />
+      <span>{NO_TRANSLATION_HINT}</span>
+      <button class="link" onclick={() => setView('translate')}>去双语翻译</button>
+    </p>
+  {/if}
+
   <div class="range-row">
     <ClipScopePicker label="导出范围" disabled={exporter.running} />
     <span class="range-hint">
@@ -310,9 +322,6 @@
           双语
         </button>
       </div>
-      {#if !hasTranslations}
-        <span class="trk-hint">{NO_TRANSLATION_HINT}</span>
-      {/if}
       <select class="select" bind:value={subFormat} title="字幕格式">
         <option value="SRT">SRT</option>
         <option value="VTT">VTT</option>
@@ -417,9 +426,6 @@
               双语
             </button>
           </div>
-          {#if !hasTranslations}
-            <span class="trk-hint">{NO_TRANSLATION_HINT}</span>
-          {/if}
           {#if exporter.track !== 'source'}
             <select
               class="select"
@@ -756,6 +762,7 @@
             <div class="done-actions">
               <button class="btn" onclick={revealResult}><Icon name="folder" size={11} />在访达中显示</button>
               <button class="btn ghost" onclick={openResultDir}>打开所在文件夹</button>
+              <button class="btn ghost" onclick={() => setView('review')}>回到核对台</button>
               <button class="btn ghost" onclick={again}>再导一份</button>
             </div>
           </div>
@@ -1366,6 +1373,39 @@
   .chk.inline {
     font-size: 12px;
   }
+  /* 页面级提示：一条，放在页头与导出范围之间；不是横幅，也不抢主操作的蓝。 */
+  .track-note {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0 0 var(--sp-3);
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: var(--raise);
+    font-size: 12.5px;
+    line-height: 18px;
+    color: var(--ink-2);
+  }
+  .track-note :global(svg) {
+    color: var(--warn);
+  }
+  .track-note .link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent-text);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 0;
+    margin-left: auto;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .track-note .link:hover {
+    text-decoration: underline;
+  }
+
   .preview-panel {
     min-width: 0;
     display: flex;
@@ -1381,13 +1421,17 @@
     font-size: 12px;
     color: var(--text-3);
   }
+  /* 预览 = 一块监看器，不是一张图：10px 视窗圆角、近黑底、一圈内描边 + 轻投影。
+     与核对台的画面同一套处理（DESIGN「Viewer」），用户在这里看到的就是成片的亮度关系。 */
   .preview-frame {
     position: relative;
     aspect-ratio: 16 / 9;
-    border-radius: 4px;
+    border-radius: var(--rad-panel);
     overflow: hidden;
-    border: 1px solid var(--separator);
-    background: #14161c;
+    background: #0b0e11;
+    box-shadow:
+      var(--shadow-video),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   }
   .preview-frame img {
     display: block;
