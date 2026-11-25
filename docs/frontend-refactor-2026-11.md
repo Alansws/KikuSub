@@ -1,10 +1,14 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-26 03:20
+updated: 2026-11-26 04:20
 ---
 # KikuSub 前端重塑（2026-11）
 
-> **状态：Step 8 三修完成（2026-11-26）。** 第三次真机试用又报回三条**配色/布局**缺陷，
+> **状态：第一阶段封板（2026-11-26）。** 用户已确认把本分支作为「前端优化第一阶段完结版」
+> 封板，推送 GitHub 新分支存档、暂不合入 `main`、现役旧版继续使用。
+> **封板记录（能力边界 / 双开工具 / 第二阶段接续建议）见 §8.9。**
+>
+> **Step 8 三修完成（2026-11-26）。** 第三次真机试用又报回三条**配色/布局**缺陷，
 > 本轮全部落地：暗色改**纯中性深炭黑阶梯 + 下沉暗槽**（§7.11 一）、
 > 蓝色换 **Studio 皇家钴蓝**（二）、导入页删掉冗余灰条并按「一块台本纸 + 两条发丝线」重排（三）。
 > 全量验证 25 个 `verify_*.mjs` 绿，Phase2 外壳 54 项（含 5 条新增的**明度方向**断言）绿。
@@ -1397,6 +1401,107 @@ bash tools/pack/build_trial.sh   # → build/pack-next/KikuSub-Next.app（1.4G�
 | 暗色导出：分区是标题 + 发丝线，选项块是下沉 well | [step8-export-dark.jpg](images/refactor-2026-11/step8-export-dark.jpg) |
 | 暗色转写（三修后同一套令牌） | [step8-transcribe-dark.jpg](images/refactor-2026-11/step8-transcribe-dark.jpg) |
 | 暗色设置：引擎 Bento / 占用条 / 分段 | [step8-settings-dark.jpg](images/refactor-2026-11/step8-settings-dark.jpg) |
+
+## 8.9 第一阶段完结封板记录（2026-11-26）
+
+> **用户决定：把当前 `feat/ui-redesign` 作为「前端优化第一阶段」的完结版封板**，
+> 推到 GitHub 新分支做云端备份与存档，**暂不合入 `main`**，现役旧版 `KikuSub.app` 继续正常使用。
+
+### 一、封板范围：做了什么、没做什么
+
+**做了（Step 3 → Step 8，全部验收过）**
+
+| 层 | 内容 |
+| --- | --- |
+| 令牌 | `app.css` 重写为 Cue Script：两套外观（light / dark）× 五个表面令牌（`--canvas / --paper / --surface / --raise / --well`）+ 两个中性遮罩（`--scrim / --scrim-soft`），明朝只换 `--font-cue` |
+| 外壳 | 整幅 44px 标题栏（红绿灯 87px 安全区）、232/52 侧栏四段导航、24px 只读底栏、菜单补齐 |
+| 页面 | 11 个视图全部按新语法落地：导入 / 转写 / 核对台 / 双引擎复核 / 锁轴润色 / 重排润色 / 双语翻译 / 导出 / 提示词库 / 设置 / 任务详报 |
+| 核对台 | 44px cue 页边、检查器去重、走带与浮层精修、译文轨状态条、紧凑模式四条死样式修活 |
+| 布局 | 单栏页面统一 1040px 居中（导入例外 760px）；转写页唯一双栏 1120px |
+| 弹窗 | 全部浮层统一 `--raise` 卡片 + `--scrim` 遮罩；组件里已无 `--bg-content` 残留 |
+| 基线 | 21 张像素基线刷新并自洽（`capture_matrix --compare` / `capture_ai_workbench --compare`） |
+
+**刻意没做（第一阶段的能力边界）**
+
+1. **没有合入 `main`，没有打任何 tag。** `main` 停在 `5e4070f`（0.7.0 收尾），
+   `backup/pre-ui-redesign-2026-11` 与 `archive/pre-ui-redesign-2026-11-25` 是只读锚点。
+2. **没有改 `core/` / `server/` 一行。** 第一阶段是纯渲染层 + 文档；Python 侧只有既有的
+   ASR 空闲卸载租约那一处（Step 6）属于缺陷修复。
+3. **没有做**：动效体系（只有三处基本过渡）、VoiceOver 全路径审计、reduced-motion 全量覆盖、
+   长片（2 小时 / 500+ 条）滚动性能实测、200% 缩放（红线 14 明确不做）。
+4. **`README.md` 未更新。** 成品图仍是旧外观，留待正式合入 `main` 时一起换（本阶段明确不做）。
+5. **第二阶段未开工的事项**见本节「五、接续建议」。
+
+### 二、双开工具说明（这个封板版怎么用）
+
+| 项目 | 现役旧版 | 第一阶段封板版 |
+| --- | --- | --- |
+| 产物 | `build/pack/KikuSub.app` | `build/pack-next/KikuSub-Next.app` |
+| bundle id | 旧版原值 | `com.kikusub.desktop.next` |
+| 数据根 | `~/Library/Application Support/KikuSub` | `~/Library/Application Support/KikuSub-Next` |
+| 构建命令 | `tools/pack/rebuild.sh`（**发版用，勿乱跑**） | `bash tools/pack/build_trial.sh` |
+| 隔离标记 | — | 包内 `app-isolation.json` = `{appName: KikuSub-Next, dataDirName: KikuSub-Next}` |
+
+**两版可以同时双击打开**：bundle id、数据根、`.app` 路径三者都不同，没有任何共享写入点。
+渲染层新增偏好（外观、字幕字体、最近打开、最近打开的视图样式）只进 `localStorage`，
+每个 `--user-data-dir` 天然隔离，不进共享的 `settings.json`。
+
+**验证用的无窗口路径**（智能体只用这条）：
+
+```bash
+bash tools/pack/build_trial.sh                                   # 重打试用版（不开窗）
+KIKUSUB_ISOLATION_ROOT=/tmp/x/root KIKUSUB_NO_WINDOW=1 \
+  build/pack-next/KikuSub-Next.app/Contents/MacOS/KikuSub-Next \
+  --no-sandbox --user-data-dir=/tmp/x/profile --screenshot=/tmp/x/a.png
+```
+
+**隔离核对基线**（每次装配前后各取一次，两次必须逐字节一致）：
+`build/pack/KikuSub.app/Contents/Info.plist` sha256 = `f0afca4a…4269e`；
+`~/Library/Application Support/KikuSub` 根下 4 个 `.json` 的 sha256
+（`preferences` `6b72cdc8…`、`presets` `071b1151…`、`prompts` `1a7b0ab8…`、`settings` `70200051…`）。
+
+> 装配脚本会先 TERM（等不到再 KILL）一个仍在运行的旧 `KikuSub-Next` 实例。
+> 工作草稿是逐次自动落盘的（`*.autosave_draft.srt`），重新打开即可接着干；
+> **现役 `KikuSub.app` 不受影响**，装配全程不碰它的进程。
+
+### 三、GitHub 分支存档
+
+```bash
+git push -u origin feat/ui-redesign      # 只推分支，不推任何 tag
+```
+
+- **为什么不推 tag**：`.github/workflows/ci.yml` 的 `release-tag` job 触发条件是
+  `startsWith(github.ref, 'refs/tags/v')`，它检查「tag 名 == `desktop/package.json` 的 version」
+  且「tag 提交在 `main` 上」。封板版不在 `main` 上，任何 `v*` tag 都会让那条闸门直接红。
+  分支推送只触发 `pull_request` / `workflow_dispatch` 以外的默认分支过滤——`on.push.branches`
+  只列了 `main` 与 `app/macos`，所以**推 `feat/ui-redesign` 不会触发 CI**，是纯备份。
+- **不覆盖远端 `main`**：`git push` 的目标分支显式写成 `feat/ui-redesign`，不带 `--force`。
+
+### 四、认知负担提醒（接手的人先看这三条）
+
+1. **本分支是沙盒，不是主线。** 任何要进用户日常的改动都必须走
+   `feat/ui-redesign` → 验收 → 合 `app/macos`/`main` 的既定路线（见 `docs/release.md`）。
+2. **令牌只有五个表面档位。** 新写组件时先问「这是画布 / 铬件 / 面板 / 抬升层 / 凹槽」，
+   不要新造一个 rgba；`verify_phase2_shell.mjs` 会用**明度方向**断言抓住「凹槽被提亮」。
+3. **基线是本分支的自洽基线。** 合入 `main` 前若主线外观不同，需要在那条线上重拍一次，
+   不要直接把这 21 张带过去。
+
+### 五、未来开启第二阶段时的接续建议
+
+按投入产出排序，前两条是真正的短板：
+
+1. **合入主线的准备工作**（必须做）：在 `app/macos` 上重放令牌，核对 `docs/contracts/`
+   三份契约的差异；把 `README.md` 成品图换成新外观；跑一次
+   `bash tools/release/preflight.sh --with-tests`。这一步没有新设计，只有对账与验证。
+2. **动效体系**：现在只有三处基本过渡（页面进入、浮层淡入、卡片 stagger）。
+   第二阶段可以补「核对台播放 / 跳句时的轴跟随」「提案到达时的行内提示」这一类
+   **有语义的动效**，并同步做 `prefers-reduced-motion` 的全量覆盖与审计。
+3. **长片与窄窗实测**：24 分钟跑通过了，但 2 小时 / 500+ 条的滚动、拖拽、长列表手感
+   没有量化数据；1080×680 之外的窄窗（分屏 900px 以下）只做了结构收缩，没做走查。
+4. **可达性补全**：VoiceOver 全路径、键盘焦点全链路、对比度在自定义主题下的兜底。
+   `apple-design` 审查里第 10 条（键盘/焦点/VoiceOver 必须可用）目前只做了前半。
+5. **可选项**：把 `DESIGN.md` 的五个表面令牌抽成一份 JSON，让原型与实现共用一份源
+   （现在是 `theme-preview.test.mjs` 对账兜底，够用但仍是两个来源）。
 
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
