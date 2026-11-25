@@ -190,14 +190,12 @@
       </div>
     </section>
 
-    <!-- 第二动作：紧凑的一条拖放区，不再用整块画布抢主动作的位置 -->
-    <button class="dropstrip" onclick={pick}>
-      <Icon name="tray" size={14} />
-      <span>换一个片子：拖进来，或按 ⌘O 选择</span>
-      <span class="dz-sub">
-        <code>.mkv</code> <code>.mp4</code> <code>.mov</code> <code>.srt</code> <code>.vtt</code>
-      </span>
-    </button>
+    <!-- 2026-11-26 用户第三次报障：这里曾经还有一条与卡内「换片…」完全重复的
+         全宽灰条（+ 5 个大药丸）。功能重复、又把整页压成「四条灰砖」，已整条删除。
+         换片仍有三条路径：卡内「换片…」、整窗口拖放、⌘O；下面只留一句纯文本提示。 -->
+    <p class="drop-hint">
+      可随时拖入 .mkv / .mp4 / .mov / .srt / .vtt 替换片源，或按 ⌘O 选择。
+    </p>
   {:else}
     <button class="dropzone" onclick={pick}>
       <span class="dz-ico"><Icon name="tray" size={20} /></span>
@@ -208,31 +206,8 @@
     </button>
   {/if}
 
-  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
-    MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
-  </p>
-
-  {#if exportDir}
-    <div class="ins-h" style="margin-top:22px">导出文件夹</div>
-    <div class="export-card">
-      <span class="ec-ico"><Icon name="folder" size={15} /></span>
-      <span class="ec-main">
-        <b>上次转写的字幕在这里</b>
-        <span class="ec-path mono" title={exportDir}>{exportDir}</span>
-      </span>
-      <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
-        打开文件夹
-      </button>
-      <!-- 次级入口：导入原文是「接着上次的活干」，不是本页主流程（拖入素材才是），
-           所以用描边按钮，别和拖入区抢主操作的视觉重心。 -->
-      <button class="btn tiny" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台（可选，接着上次的活干）">
-        <Icon name="export" size={10} />导入原文…
-      </button>
-    </div>
-  {/if}
-
   {#if recents.length}
-    <div class="ins-h" style="margin-top:22px">
+    <div class="ins-h section-h">
       <span>最近打开</span>
       <div class="seg compact" role="group" aria-label="最近打开的显示方式">
         <button
@@ -333,6 +308,32 @@
       </div>
     {/if}
   {/if}
+
+  {#if exportDir}
+    <div class="ins-h section-h">导出文件夹</div>
+    <div class="export-card">
+      <span class="ec-ico"><Icon name="folder" size={15} /></span>
+      <span class="ec-main">
+        <b>上次转写的字幕在这里</b>
+        <span class="ec-path mono" title={exportDir}>{exportDir}</span>
+      </span>
+      <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
+        打开文件夹
+      </button>
+      <!-- 次级入口：导入原文是「接着上次的活干」，不是本页主流程（拖入素材才是），
+           所以用描边按钮，别和拖入区抢主操作的视觉重心。 -->
+      <button class="btn tiny" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台（可选，接着上次的活干）">
+        <Icon name="export" size={10} />导入原文…
+      </button>
+    </div>
+  {/if}
+
+  <!-- 播放能力的说明放在页脚：它回答的是「万一画面出不来怎么办」，
+       不该占住上半屏 —— 上半屏留给当前工程与最近打开。 -->
+  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
+    MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
+  </p>
+
 </div>
 
 <style>
@@ -350,16 +351,19 @@
     background: var(--canvas);
   }
 
-  /* ---------- 继续当前工程（有片时本页唯一的主动作） ---------- */
-  /* 继续当前工程：台面上的一块凹陷填充（无描边）。
-     2026-11-26：原来它是「灰底上一张白卡」，正是这次要消灭的那一层。 */
+  /* ---------- 继续当前工程（有片时本页唯一的主动作） ----------
+     2026-11-26 第三次修正：上一版把它也降成了 well，结果整页是
+     「继续卡 / 导出文件夹 / 最近打开」三块同色的灰砖 —— 没有焦点。
+     现在它是本页**唯一的台本纸**（--surface + 1px 发丝线），因为它承载的是
+     「你上次干到哪」+ 唯一的主按钮；下面两块退成**标题 + 发丝线**的分区，
+     不再是同色的横条。视觉焦点因此只剩两处：这张卡，和最近打开列表。 */
   .resume {
     display: flex;
     align-items: center;
     gap: var(--sp-3);
     padding: var(--sp-3);
-    background: var(--well);
-    border: 0;
+    background: var(--surface);
+    border: 1px solid var(--rule);
     border-radius: var(--rad-card);
     margin-top: var(--sp-1);
   }
@@ -426,37 +430,22 @@
     letter-spacing: 0;
   }
 
-  /* 换片：一条 40px 的拖放带，比整块画布轻，但不埋进菜单里。 */
-  .dropstrip {
-    appearance: none;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    width: 100%;
-    height: 40px;
-    margin-top: var(--sp-2);
-    padding: 0 var(--sp-3);
-    border: 1px solid transparent;
-    border-radius: var(--rad-control);
-    background: var(--well);
+  /* 换片提示：一句 12px 的纯文本，落在继续卡下方 10px。
+     它不是一个控件——控件是卡内的「换片…」，整窗口拖放与 ⌘O 是另外两条路径。
+     写成一条全宽的灰色横条会让导入页变成「白底上硬堆四条灰砖」。 */
+  /* 分区标题：本页的两块辅助信息（最近打开 / 导出文件夹）共用同一条节奏：
+     标题 11px 标签 + 下方一条发丝线（在块自己的 border-top 上）。 */
+  .section-h {
+    margin-top: var(--sp-6);
+    padding-bottom: var(--sp-2);
+    border-bottom: 0;
+  }
+
+  .drop-hint {
+    margin: var(--sp-2) 0 0;
+    font-size: 12px;
+    line-height: 18px;
     color: var(--ink-3);
-    font: inherit;
-    font-size: 12.5px;
-    text-align: left;
-    transition:
-      border-color var(--dur) var(--ease),
-      color var(--dur) var(--ease),
-      background var(--dur) var(--ease);
-  }
-  .dropstrip:hover {
-    border-color: transparent;
-    color: var(--ink-2);
-    background: var(--well-hover);
-  }
-  .dropstrip .dz-sub {
-    margin-left: auto;
-    display: inline-flex;
-    gap: var(--sp-1);
   }
 
   .note {
@@ -516,24 +505,28 @@
     border-radius: 4px;
   }
 
+  /* 导出文件夹：**一行**读数 + 两个动作，不再是一条灰色长条砖。
+     它是「上次转写的字幕在哪」，属于辅助信息；用标题 + 发丝线分区，
+     下面这一行直接就落在台面上（透明底），只有图标占一个凹槽。 */
   .export-card {
     display: flex;
     align-items: center;
     gap: 10px;
     border: 0;
-    border-radius: 8px;
-    padding: 10px var(--sp-3);
-    background: var(--well);
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    padding: var(--sp-3) 0 0;
+    background: transparent;
   }
   .ec-ico {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    background: var(--fill);
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: var(--well);
     display: grid;
     place-items: center;
     color: var(--text-2);
-    flex: 0 0 30px;
+    flex: 0 0 28px;
   }
   .ec-main {
     display: flex;
@@ -554,16 +547,19 @@
     white-space: nowrap;
   }
 
+  /* 最近打开：**行 + 发丝线**，不再是整块灰色容器。
+     缩略图占一个 well（那里真的该有底色：它是张封面），行本身落在台面上。 */
   .recent {
     border: 0;
-    border-radius: 8px;
-    background: var(--well);
+    border-radius: 0;
+    background: transparent;
     overflow: hidden;
+    border-top: 1px solid var(--rule);
   }
   .recent-row {
     display: flex;
     align-items: stretch;
-    border-bottom: 1px solid var(--line-2);
+    border-bottom: 1px solid var(--rule);
   }
   .recent-row:last-child {
     border-bottom: 0;
