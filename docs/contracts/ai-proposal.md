@@ -182,6 +182,44 @@
   本来就覆盖 A 的全部条目，段轨状态直接视为「已有建议」；只有手动粘贴通道要逐段攒。
 - **不变**：翻译仍只吃定稿后的 A 一列；第二版不进 50 步历史；随包技能不需要重写。
 
+#### 3.7.3.1 双引擎复核的「对照范围」（2026-11-26 真机报障）
+
+第 1、2 章字幕已在核对台，第 3 章用「两版一起 + 替换选区」跑完时，A 是**累积**的
+（1–3 章 636 条、00:13–55:36），B 只有这一趟的区间（220 条、35:58–55:36）。旧口径
+按整片对齐，于是前两章 430 条全变成红色「仅 A」、差异计数与侧栏徽标失真，
+而右上角唯一的「整列覆盖」一按就把前两章丢光。
+
+- **纯函数在 `core/dual_scope.py`**（无 IO / 无模型）：`cue_span` / `cues_in_window` /
+  `is_partial_b` / `interval_chapters` / `match_chapter` / `default_focus` /
+  `scope_options` / `resolve_focus` / `hidden_counts` / `replace_window` / `would_trim`。
+  三个范围：`all`（整片）、`b`（B 自己的跨度）、`ch:<id>`（工程里的**区间章节**；
+  时刻点没有跨度，不能当范围）。
+- **智能默认**：`is_partial_b` 为真（B 的跨度没盖住 A，差 > 1s）时默认聚焦 B 所在区间；
+  能匹配到覆盖率 ≥85%、两端不出章 +2s 的章节时**用章节名**（用户看到的是「章节三」，
+  不是「35:58–55:31」）。B 盖住整片时默认仍是全片。
+- **统计与徽标只算当前范围**：`GET /api/alt-review?scope=auto|all|b|ch:<id>` 先切片
+  再对齐，`stats.a_count / b_count / badge` 都是范围口径；响应新增 `scope`
+  （含 `options` / `hidden_a` / `hidden_b` / `would_trim` / `replace_mode` /
+  `replace_count`）、`total_a`、`total_b`。**范围只影响对齐与统计**，`cues` 永远是整份 B
+  （切范围不必重拉）。
+- **下标必须指回全片**：`build_review(a_cues, b_cues, a_map=…, b_map=…)` 让
+  `a_indices` / `b_indices` 仍是整份字幕的下标——「采用 B」与「回核对台定位」作用在
+  全片第 N 条，错一位就会采纳到邻句上（`tests/test_dual_scope.py` 有断言）。
+- **写回默认只替换当前范围**：`POST /api/alt-review/replace-primary` 的
+  `mode="auto"` 给了 `start`/`end` 就按 `range`，否则 `all`。`range` 走
+  `dual_scope.replace_window`：只换窗口内的 A，窗口外一条不动，`keep_translations=True`
+  按位置搬移译文，仍然只压一步历史（⌘Z 一次整批退回）。`all` 在 B 只覆盖局部
+  （`would_trim > 0`）时返回 **409**，必须 `confirm_trim=true` 才放行——这是
+  「绝不允许误操作清空第 1、2 章」的最后防线，老客户端只发 `{}` 同样被拦。
+- **界面**：`views/DualView.svelte` 顶部是「范围胶囊（B 所在区间 / 各章节 / 全片）+
+  横幅」；文案由 `lib/dualScope.ts` 的纯函数生成（`scopeBanner` / `replaceLabel` /
+  `replaceConfirmText`，12 条单测）。按钮文案分两档：范围对照是**「用 B 替换当前范围」**
+  （纸白键 + 蓝铅笔图标，安全动作），只有 B 盖住整片才是「用 B 覆盖核对台」（朱红边）。
+  二次确认必须写出「窗口外的 N 条（其它章节）一条不动」或「范围外还有 N 条会被丢掉」。
+- **回归**：`tests/test_dual_scope.py`（17 条：636/220 现场、默认聚焦章节三、
+  徽标不被前两章污染、下标回指、范围替换后前两章原样、整列覆盖被 409 拦下）+
+  `tools/shots/verify_dual_scope.mjs`（真实界面 16 项，含 ⌘Z 退回）。
+
 #### 3.7.4 Agent 技能（2026-11 M4）
 
 - 技能包在 `desktop/resources/skill/kikusub-subtitle/`，装到 `~/.agents/skills/`（DSH 会扫描的
