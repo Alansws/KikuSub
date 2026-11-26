@@ -646,6 +646,52 @@ export interface DualStats {
   badge: number;
 }
 
+export interface DualScopeOption {
+  kind: 'all' | 'range' | 'chapter';
+  key: string;
+  start: number;
+  end: number;
+  label: string;
+  range_label: string;
+  chapter_id: string;
+  chapter_title: string;
+  a_count: number;
+  b_count: number;
+}
+
+/**
+ * 当前对照范围（2026-11-26，多章节双引擎）。
+ *
+ * 用户现场：A 累积 1–3 章 636 条、B 只有第 3 章 220 条。旧口径下复核页按整片
+ * 对齐，前两章全成红色「仅 A」、统计与徽标失真，整列覆盖还会把前两章丢掉。
+ * 服务端现在返回**当前聚焦范围**（默认自动聚焦 B 所在章节），界面据此显示
+ * 「已隐去 N 条」并把写回限制在这一段里。
+ */
+export interface DualScope {
+  kind: 'all' | 'range' | 'chapter';
+  /** `all` / `b` / `ch:<id>`：直接作为 `?scope=` 传回去。 */
+  key: string;
+  start: number;
+  end: number;
+  label: string;
+  range_label: string;
+  chapter_id: string;
+  chapter_title: string;
+  /** 这次没指定范围、由服务端智能默认选出。 */
+  auto: boolean;
+  /** B 只覆盖了部分时间区间（局部 / 逐章转录的产物）。 */
+  partial_b: boolean;
+  options: DualScopeOption[];
+  /** 范围外被隐去的 A / B 条数（页头「已隐去 N 条」）。 */
+  hidden_a: number;
+  hidden_b: number;
+  /** 整列覆盖会丢掉多少条 A（0 = 安全）。 */
+  would_trim: number;
+  /** 默认写回方式：`range` = 只替换这一窗口。 */
+  replace_mode: 'range' | 'all';
+  replace_count: number;
+}
+
 export interface AltReviewPayload {
   exists: boolean;
   engine: string;
@@ -659,6 +705,11 @@ export interface AltReviewPayload {
   stats: DualStats | null;
   /** 服务端这次实际用的口径（``false`` = 标点也算差异）。 */
   ignore_punct?: boolean;
+  /** 当前对照范围；`exists` 为假时缺失。 */
+  scope?: DualScope | null;
+  /** 整份 A / B 的条数（与范围口径分开显示，避免「636 vs 220」被当成对齐错误）。 */
+  total_a?: number;
+  total_b?: number;
 }
 
 export interface AiProposalPayload {
@@ -1594,11 +1645,15 @@ export const api = {
    *
    * `ignorePunct` 默认开：只有标点 / 空白不同的行由服务端判为一致，
    * 不计入 `~ 文本不同` 与侧栏徽标（`core.dual_review.build_review`）。
+   *
+   * `scope`（2026-11-26）：`auto`（默认）= 服务端智能聚焦 B 所在章节 / 区间，
+   * `all` = 全片，`ch:<id>` = 某段区间章节。对齐、统计与徽标都只算这个范围。
    */
-  getAltReview: (diff = false, ignorePunct = true) => {
+  getAltReview: (diff = false, ignorePunct = true, scope = 'auto') => {
     const q = new URLSearchParams();
     if (diff) q.set('diff', '1');
     q.set('ignore_punct', ignorePunct ? '1' : '0');
+    if (scope) q.set('scope', scope);
     return req<AltReviewPayload>(`/api/alt-review?${q}`);
   },
 
@@ -1618,11 +1673,35 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
 
-  replacePrimaryWithAlt: (clearAlt = true) =>
-    req<CueSnapshot & { replaced: number; alt_cleared: boolean }>(
-      '/api/alt-review/replace-primary',
-      { method: 'POST', body: JSON.stringify({ clear_alt: clearAlt }) },
-    ),
+  /**
+   * 用第二版写回核对台。
+   *
+   * - `mode: 'range'`（界面默认）+ `start` / `end`：只换这一窗口内的 A，
+   *   窗口外一条不动（「绝不允许误操作清空第 1、2 章」）；
+   * - `mode: 'all'`：整列覆盖。B 只覆盖了局部时服务端会 409，
+   *   需要 `confirmTrim` 才放行。
+   */
+  replacePrimaryWithAlt: (
+    clearAlt = true,
+    opts: { mode?: 'range' | 'all'; start?: number; end?: number; confirmTrim?: boolean } = {},
+  ) =>
+    req<
+      CueSnapshot & {
+        replaced: number;
+        removed?: number;
+        mode?: 'range' | 'all';
+        alt_cleared: boolean;
+      }
+    >('/api/alt-review/replace-primary', {
+      method: 'POST',
+      body: JSON.stringify({
+        clear_alt: clearAlt,
+        mode: opts.mode ?? 'all',
+        ...(opts.start === undefined ? {} : { start: opts.start }),
+        ...(opts.end === undefined ? {} : { end: opts.end }),
+        ...(opts.confirmTrim ? { confirm_trim: true } : {}),
+      }),
+    }),
 
   /** 删除磁盘上的提案文件（「丢弃」用；只清界面不算丢弃） */
   deleteAiProposal: (kind: 'polish' | 'translate' = 'polish', lang = '') => {

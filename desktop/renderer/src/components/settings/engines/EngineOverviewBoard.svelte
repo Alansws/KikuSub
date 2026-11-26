@@ -105,7 +105,7 @@
 
   <div class="hero-foot">
     <button class="btn primary" onclick={onSetup}>
-      <Icon name="export" size={12} />运行首次配置…
+      <Icon name="export" size={12} />运行首次配置
     </button>
     <button class="btn" onclick={onRefresh} disabled={busy}>
       <Icon name="refresh" size={12} />{busy ? '检测中…' : '重新检测'}

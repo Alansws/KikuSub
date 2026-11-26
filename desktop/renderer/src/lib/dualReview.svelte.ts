@@ -8,7 +8,7 @@
  * 核对台改一句后切回来，重新拉一次就是最新的。
  */
 
-import { api, type Cue, type DualRow, type DualStats } from './api';
+import { api, type Cue, type DualRow, type DualScope, type DualStats } from './api';
 import { app, applyCueSnapshot, scheduleDraftSave, toast, updateCue } from './store.svelte';
 
 export const dual = $state({
@@ -47,6 +47,18 @@ export const dual = $state({
   anchor: '',
   /** 进入页面时接管的媒体 id：换片后自动重拉。 */
   mediaId: '',
+  /**
+   * 对照范围（2026-11-26）：`auto` = 智能默认（B 只覆盖一段就聚焦那一段），
+   * `all` = 全片，`ch:<id>` = 某段区间章节。**用户亲手切过就不再自动重置**，
+   * 直到换片 / 换第二版（`scopeTouched` 记这件事）。
+   */
+  scopeKey: 'auto' as string,
+  scopeTouched: false,
+  /** 服务端解析出来的当前范围（含选项、隐去条数、写回口径）。 */
+  scope: null as DualScope | null,
+  /** 整份 A / B 条数：页头与二次确认要「636 条里只换 220 条」这种说法。 */
+  totalA: 0,
+  totalB: 0,
 });
 
 /** 第二版是不是导入稿（没有转写参数、没有 job_id）。 */
@@ -99,6 +111,25 @@ export function resetAltReview() {
   dual.error = '';
   dual.anchor = '';
   dual.mediaId = app.media?.id ?? '';
+  dual.scope = null;
+  // 换了第二版 / 换了片：范围回到智能默认，别把上一份 B 的章节选择带过来。
+  dual.scopeKey = 'auto';
+  dual.scopeTouched = false;
+  dual.totalA = 0;
+  dual.totalB = 0;
+}
+
+/**
+ * 把服务端返回的范围收进状态。
+ *
+ * `scopeKey` 保持用户的选择（或 `auto`），服务端解析出来的实际章节放在
+ * `dual.scope` 里显示——两者不能混：把解析结果写回 `scopeKey` 会让「智能默认」
+ * 退化成「手选章节」，B 一更新就不再自动聚焦。
+ */
+function applyScope(data: { scope?: DualScope | null; total_a?: number; total_b?: number }) {
+  dual.scope = data.scope ?? null;
+  dual.totalA = Number(data.total_a ?? app.cues.length ?? 0);
+  dual.totalB = Number(data.total_b ?? dual.count ?? 0);
 }
 
 /** 拉摘要 + 统计（徽标只需要这个）。 */
@@ -107,7 +138,7 @@ export async function refreshAltReview() {
   dual.loading = true;
   dual.error = '';
   try {
-    const data = await api.getAltReview(false, dual.ignorePunct);
+    const data = await api.getAltReview(false, dual.ignorePunct, dual.scopeKey);
     dual.exists = data.exists;
     dual.engine = data.engine;
     dual.count = data.count;
@@ -116,6 +147,7 @@ export async function refreshAltReview() {
     dual.params = data.params ?? {};
     dual.stats = data.stats ?? null;
     adoptAltIdentity(data.created_at ?? 0);
+    applyScope(data);
     if (!data.exists) dual.rows = [];
   } catch (err) {
     dual.error = (err as Error).message;
@@ -135,7 +167,7 @@ export async function loadAltDiff() {
   dual.loading = true;
   dual.error = '';
   try {
-    const data = await api.getAltReview(true, dual.ignorePunct);
+    const data = await api.getAltReview(true, dual.ignorePunct, dual.scopeKey);
     dual.exists = data.exists;
     dual.engine = data.engine;
     dual.count = data.count;
@@ -145,6 +177,7 @@ export async function loadAltDiff() {
     dual.rows = data.rows ?? [];
     dual.stats = data.stats ?? null;
     adoptAltIdentity(data.created_at ?? 0);
+    applyScope(data);
   } catch (err) {
     dual.error = (err as Error).message;
   } finally {
@@ -203,20 +236,49 @@ export async function deleteAltReview() {
   }
 }
 
-export async function replacePrimaryWithAlt(clearAlt = true) {
+/**
+ * 用第二版写回核对台。
+ *
+ * **默认只替换当前范围**（2026-11-26）：A 累积了第 1–3 章、B 只有第 3 章时，
+ * 整列覆盖会把前两章一起丢掉。范围替换只换窗口内的 A，窗口外一条不动，
+ * 仍然只压一步历史、⌘Z 一次整批退回。
+ *
+ * `mode: 'all'` 是唯一的整列动作，B 只覆盖局部时服务端会 409（需要显式确认）。
+ */
+export async function replacePrimaryWithAlt(
+  clearAlt = true,
+  opts: { mode?: 'range' | 'all'; confirmTrim?: boolean } = {},
+) {
   if (dual.replacing) return false;
   if (!dual.exists) {
     toast('还没有第二版字幕', 'warn');
     return false;
   }
+  const scope = dual.scope;
+  const mode = opts.mode ?? scope?.replace_mode ?? 'all';
+  if (mode === 'range' && !scope) {
+    toast('还没拿到对照范围：刷新一次再试', 'warn');
+    return false;
+  }
   dual.replacing = true;
   try {
-    const res = await api.replacePrimaryWithAlt(clearAlt);
+    const res = await api.replacePrimaryWithAlt(clearAlt && mode === 'all', {
+      mode,
+      start: mode === 'range' ? scope?.start : undefined,
+      end: mode === 'range' ? scope?.end : undefined,
+      confirmTrim: opts.confirmTrim,
+    });
     applyCueSnapshot(res);
     scheduleDraftSave();
-    if (clearAlt) resetAltReview();
+    if (mode === 'all' && clearAlt) resetAltReview();
     else await refreshAltReview();
-    toast(`已用第二版覆盖核对台（${res.replaced} 条，⌘Z 可一次撤回）`);
+    if (mode === 'range') {
+      toast(
+        `已用第二版替换「${scope?.label || '当前范围'}」的 ${res.replaced} 条字幕，其余章节未改动（⌘Z 可一次撤回）`,
+      );
+    } else {
+      toast(`已用第二版覆盖核对台（${res.replaced} 条，⌘Z 可一次撤回）`);
+    }
     return true;
   } catch (err) {
     toast((err as Error).message, 'error');
@@ -224,6 +286,21 @@ export async function replacePrimaryWithAlt(clearAlt = true) {
   } finally {
     dual.replacing = false;
   }
+}
+
+/**
+ * 切换对照范围（章节 / B 所在区间 / 全片）并重拉对齐。
+ *
+ * 过滤在服务端做：切范围会改「哪些行存在」与「统计怎么算」，
+ * 本地过滤只能隐掉行，改不了徽标口径。
+ */
+export async function setDualScope(key: string) {
+  const next = String(key || 'auto');
+  if (dual.scopeKey === next && !dual.scope?.auto) return;
+  dual.scopeKey = next;
+  // 用户亲手切过就锁住：B 更新后别再自动跳回「B 所在区间」。
+  dual.scopeTouched = next !== 'auto';
+  await loadAltDiff();
 }
 
 /**

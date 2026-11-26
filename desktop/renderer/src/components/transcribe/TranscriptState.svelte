@@ -195,7 +195,7 @@
         onclick={importSubtitleFromExport}
         disabled={!app.connected || running}
       >
-        <Icon name="doc" size={10} />导入原文…
+        <Icon name="doc" size={10} />导入原文
       </button>
       <button
         class="btn sm ghost"
@@ -204,7 +204,7 @@
         disabled={!app.connected || running || !cues.length}
         title={cues.length ? '选择与当前原文逐条对齐的译文' : '先导入原文字幕，再导入译文'}
       >
-        <Icon name="quote" size={10} />导入译文…
+        <Icon name="quote" size={10} />导入译文
       </button>
     </div>
   </section>

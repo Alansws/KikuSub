@@ -7,7 +7,7 @@
  * 并共用 `lib/portal.ts`。这个脚本守住三件事：
  *
  *   1. 右键字幕行能打开菜单，菜单项齐全（切割 / 新建音色 / 试听 / 添加）；
- *   2. 「以此句音频新建音色…」能打开浮层，名字与参考文本预填、焦点在输入框；
+ *   2. 「以此句音频新建音色」能打开浮层，名字与参考文本预填、焦点在输入框；
  *   3. Esc / 点遮罩能关掉浮层，不把状态留在页面上。
  *
  * 走主进程 `--screenshot` 静默路径（透明窗口 + capturePage + app.exit），
@@ -85,7 +85,8 @@ const EVAL = String.raw`
       n.textContent.trim(),
     );
     out.hasSplit = out.items.includes('切割字幕');
-    out.hasVoice = out.items.includes('以此句音频新建音色…');
+    // 2026-11-26 起动作标签不带尾部省略号（口径见 tests/test_ui_label_hygiene.py）���
+    out.hasVoice = out.items.includes('以此句音频新建音色');
     out.hasAudition = out.items.includes('试听这句原声');
     out.hasAdd = out.items.includes('添加字幕');
 
@@ -210,7 +211,7 @@ const r = run(seed);
 
 check('右键字幕行打开菜单', r.menuOpen === true, r);
 check('菜单含「切割字幕」', r.hasSplit === true, r.items);
-check('菜单含「以此句音频新建音色…」', r.hasVoice === true, r.items);
+check('菜单含「以此句音频新建音色」（不带尾省略号）', r.hasVoice === true, r.items);
 check('菜单含「试听这句原声」', r.hasAudition === true, r.items);
 check('菜单含「添加字幕」', r.hasAdd === true, r.items);
 check('「新建音色」打开浮层', r.dialogOpen === true, r);

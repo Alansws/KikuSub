@@ -122,7 +122,7 @@
         <div class="field preset-name">
           <input
             bind:value={presetName}
-            placeholder="存为新预设…"
+            placeholder="存为新预设"
             aria-label="新预设名称"
             onkeydown={(e) => {
               if (e.key === 'Enter') onSave();

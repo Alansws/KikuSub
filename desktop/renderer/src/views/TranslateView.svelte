@@ -260,7 +260,7 @@
         <button class="aiw-link" onclick={cancelAiPolish}>取消</button>
         <span class="aiw-hint">{ai.stage || '准备中'}</span>
       {:else if !aiSetup.loaded}
-        <span class="aiw-hint">读取配置…</span>
+        <span class="aiw-hint">读取配置中…</span>
       {:else if !apiReady}
         <span class="aiw-hint">未启用 / 未配置 Key</span>
         <button class="aiw-chip warn" onclick={() => setView('settings')} title="设置 → AI 优化里打开">

@@ -164,11 +164,18 @@ def build_review(
     *,
     gap: float = GAP_TOLERANCE,
     ignore_punct: bool = True,
+    a_map: list[int] | None = None,
+    b_map: list[int] | None = None,
 ) -> dict:
     """逐条对齐两份字幕，返回 ``{"rows": [...], "stats": {...}}``。
 
     ``rows`` 里的 ``a_indices`` / ``b_indices`` 是 0 基、指向传入列表的下标；
     每条 row 最多一个 A 下标和一个 B 下标。
+
+    ``a_map`` / ``b_map``（2026-11-26，双引擎对照范围）让调用方先按范围切片、
+    再对齐，而 ``a_indices`` / ``b_indices`` 仍然指回**整份**字幕：
+    「采用 B」与「回核对台定位」必须作用在全片的第 N 条，不能是切片里的第 n 条。
+    统计（``a_count`` / ``b_count`` / ``badge``）按切片算——这就是范围口径。
 
     ``ignore_punct=True``（默认）时，**只有标点 / 空白不同**的一对判为 ``same``，
     并在该行打 ``punct_only: True``：它们不计入 ``stats.diff``，也不计入徽标
@@ -177,6 +184,8 @@ def build_review(
     """
     a = list(a_cues or [])
     b = list(b_cues or [])
+    a_map = list(a_map) if a_map is not None else None
+    b_map = list(b_map) if b_map is not None else None
     rows: list[dict] = []
 
     i = j = 0
@@ -223,6 +232,15 @@ def build_review(
 
     # 正常走法已经按时间顺序；按开始时间稳排一次，避免 only 行交错时乱序。
     rows.sort(key=lambda row: (row["start"], row["kind"]))
+
+    # 范围对照：下标映射回整份字幕的坐标系（切片第 n 条 → 全片 _map[n] 条）。
+    # 必须在算统计之前做完：``a_indices`` 是写回目标，错一位就会采纳到邻句上。
+    if a_map is not None:
+        for row in rows:
+            row["a_indices"] = [a_map[index] for index in row["a_indices"]]
+    if b_map is not None:
+        for row in rows:
+            row["b_indices"] = [b_map[index] for index in row["b_indices"]]
 
     paired = sum(1 for row in rows if row["kind"] in ("same", "diff"))
     only_a = sum(1 for row in rows if row["kind"] == "only_a")

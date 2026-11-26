@@ -700,7 +700,7 @@
         <div class="row">
           <span class="row-label">位置</span>
           <b class="out-path mono" title={exporter.outDir}>{exporter.outDir || '—'}</b>
-          <button class="btn tiny" onclick={chooseOutDir} disabled={exporter.running}>更改…</button>
+          <button class="btn tiny" onclick={chooseOutDir} disabled={exporter.running}>更改</button>
           <button class="btn tiny ghost" onclick={() => exporter.outDir && window.kikusub.openPath(exporter.outDir)}>
             打开
           </button>

@@ -113,7 +113,7 @@
             disabled={busy || !gapFill.indices.length}
             title={gapFill.indices.length ? '粘贴外部模型返回的 SRT' : '先点「复制待译」'}
           >
-            {gapFill.pasteOpen ? '收起粘贴' : '粘贴补译…'}
+            {gapFill.pasteOpen ? '收起粘贴' : '粘贴补译'}
           </button>
         </div>
 
@@ -196,7 +196,7 @@
           </div>
         {:else if !gapFill.pasteOpen}
           <div class="gap-empty">
-            点「复制待译」把这几条拿去外部模型；回来点「粘贴补译…」把回复贴回来。
+            点「复制待译」把这几条拿去外部模型；回来点「粘贴补译」把回复贴回来。
           </div>
         {/if}
       </div>

@@ -128,9 +128,11 @@
   }
 
   function placeholder(): string {
-    if (view.track === 'target') return '查找译文…';
-    if (view.track === 'both') return '查找原文 / 译文…';
-    return '查找原文…';
+    // 输入框的占位文字也不带尾部省略号（2026-11-26 全站口径：`…` 只留给
+    // 「正在进行」与「内容被截断」，不再当「点开对话框」的暗示）。
+    if (view.track === 'target') return '查找译文';
+    if (view.track === 'both') return '查找原文 / 译文';
+    return '查找原文';
   }
 </script>
 
