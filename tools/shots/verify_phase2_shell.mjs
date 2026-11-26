@@ -143,66 +143,157 @@ const EVAL = String.raw`
     };
 
     // ---- 主题令牌（实算对比度，不靠肉眼）----
-    const css = getComputedStyle(document.documentElement);
-    const token = (name) => css.getPropertyValue(name).trim();
-    const lum = (hex) => {
-      const h = String(hex).replace('#', '');
-      const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-      const n = parseInt(full, 16);
-      const parts = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    //
+    // 2026-11-26 Batch 3：派生令牌改成 color-mix()，色板由 data-palette 接管。
+    // 读取令牌后先用一个隐藏探测元素让浏览器把 color-mix / var() 解析成具体的
+    // rgb()/rgba()，否则这里拿到的是 CSS 表达式，算不出亮度。
+    const rootEl = document.documentElement;
+    const originalTheme = rootEl.dataset.theme || '';
+    const originalPalette = rootEl.dataset.palette || '';
+    const css = getComputedStyle(rootEl);
+    const colorProbe = document.createElement('span');
+    colorProbe.style.display = 'none';
+    colorProbe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(colorProbe);
+    const resolveColor = (raw) => {
+      if (!raw) return '';
+      colorProbe.style.color = '';
+      colorProbe.style.color = raw;
+      let value = getComputedStyle(colorProbe).color || '';
+      const srgb = value.match(
+        /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/i,
+      );
+      if (srgb) {
+        const [r, g, b] = [srgb[1], srgb[2], srgb[3]].map((n) => Math.round(Number(n) * 255));
+        value = 'rgba(' + r + ', ' + g + ', ' + b + ', ' + (srgb[4] ?? 1) + ')';
+      }
+      return value;
+    };
+    const token = (name) => resolveColor(css.getPropertyValue(name).trim());
+    const parseColor = (color) => {
+      const text = String(color).trim();
+      const rgb = text.match(/^rgba?\(([^)]+)\)$/i);
+      if (rgb) {
+        const parts = rgb[1].split(',').map((s) => parseFloat(s.trim()));
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+      }
+      let h = text.replace('#', '');
+      if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+      const n = parseInt(h, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 1 };
+    };
+    const composite = (fg, bg) => {
+      const f = parseColor(fg);
+      const b = parseColor(bg);
+      const a = f.a;
+      const mix = (x, y) => Math.round(x * a + y * (1 - a));
+      return 'rgb(' + mix(f.r, b.r) + ', ' + mix(f.g, b.g) + ', ' + mix(f.b, b.b) + ')';
+    };
+    const lumOf = (color) => {
+      const { r, g, b } = parseColor(color);
+      const parts = [r, g, b].map((v) => {
         const s = v / 255;
         return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
       });
       return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2];
     };
-    const ratio = (a, b) => {
-      const la = lum(a), lb = lum(b);
+    const ratio = (fg, bg) => {
+      const la = lumOf(composite(fg, bg));
+      const lb = lumOf(bg);
       const hi = Math.max(la, lb), lo = Math.min(la, lb);
       return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
     };
-    // rgba 叠到不透明底上
-    const over = (rgba, base) => {
-      const m = String(rgba).match(/rgba?\(([^)]+)\)/);
-      if (!m) return rgba;
-      const parts = m[1].split(',').map((s) => parseFloat(s.trim()));
-      const a = parts.length > 3 ? parts[3] : 1;
-      const b = base.replace('#', '');
-      const full = b.length === 3 ? b.split('').map((c) => c + c).join('') : b;
-      const n = parseInt(full, 16);
-      const bg = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-      const toHex = (c) => Math.round(c).toString(16).padStart(2, '0');
-      return '#' + [0, 1, 2].map((i) => toHex(parts[i] * a + bg[i] * (1 - a))).join('');
+    const round3 = (value) => Math.round(value * 1000) / 1000;
+
+    /**
+     * 量一套色板 × 一个明暗。
+     * 断言分三类：正文/标签/强调文字对比度、明度方向（raise 抬 / well 沉）、
+     * 输入控件边线可见性（框形凹陷在任意纸面上都要看得出形状）。
+     */
+    const measure = (palette, theme) => {
+      const stageBg = token('--stage-bg');
+      const paper = token('--paper');
+      const canvas = token('--canvas');
+      const surface = token('--surface');
+      const raise = token('--raise');
+      const well = token('--well');
+      const ink = token('--ink');
+      const ink3 = token('--ink-3');
+      const accentText = token('--accent-text');
+      const btnBg = token('--btn-bg');
+      const wellLine = token('--well-line');
+      return {
+        palette,
+        theme,
+        canvas,
+        paper,
+        surface,
+        raise,
+        well,
+        ink,
+        accent: token('--accent'),
+        accentText,
+        stageBg,
+        stageLum: round3(lumOf(stageBg)),
+        lineContrast: ratio(token('--stage-line'), stageBg),
+        frameEdgeContrast: ratio(token('--stage-frame'), stageBg),
+        bodyInk: ratio(ink, paper),
+        labelInk: ratio(ink3, paper),
+        labelOnWell: ratio(ink3, well),
+        labelOnSurface: ratio(ink3, surface),
+        accentInkPaper: ratio(accentText, paper),
+        accentInkCanvas: ratio(accentText, canvas),
+        accentInkSurface: ratio(accentText, surface),
+        // 兼容第一阶段的断言字段名（同一组比值，只是别名）
+        accentInk: ratio(accentText, paper),
+        accentOnSheet: ratio(accentText, surface),
+        accentOnCanvas: ratio(accentText, canvas),
+        onAccent: ratio(token('--on-accent'), token('--accent')),
+        onAccentHover: ratio(token('--on-accent'), token('--btn-primary-hover')),
+        onPrimaryHover: ratio(token('--on-accent'), token('--btn-primary-hover')),
+        dangerPaper: ratio(token('--danger'), paper),
+        dangerSurface: ratio(token('--danger'), surface),
+        warnPaper: ratio(token('--warn'), paper),
+        successPaper: ratio(token('--success'), paper),
+        hairline: ratio(token('--line'), paper),
+        rule: ratio(token('--rule'), canvas),
+        wellLinePaper: ratio(wellLine, paper),
+        wellLineWell: ratio(wellLine, well),
+        btnLineBtn: ratio(token('--btn-line'), btnBg),
+        wellAlpha: parseColor(wellLine).a,
+        wellVsCanvas: round3(lumOf(well) - lumOf(canvas)),
+        wellVsPaper: round3(lumOf(well) - lumOf(paper)),
+        raiseVsCanvas: round3(lumOf(raise) - lumOf(canvas)),
+        raiseVsSurface: round3(lumOf(raise) - lumOf(surface)),
+        surfaceVsCanvas: round3(lumOf(surface) - lumOf(canvas)),
+        panelVsCanvas: round3(lumOf(surface) - lumOf(canvas)),
+        primary: token('--btn-primary-bg'),
+        primaryHover: token('--btn-primary-hover'),
+      };
     };
-    const stageBg = token('--stage-bg');
-    const line = over(token('--stage-line'), stageBg);
-    const frameEdge = over(token('--stage-frame'), stageBg);
-    const themes = {
-      stageBg,
-      stageLum: Math.round(lum(stageBg) * 1000) / 1000,
-      lineContrast: ratio(line, stageBg),
-      frameEdgeContrast: ratio(frameEdge, stageBg),
-      // 正文与 11px 标签在「纸面」上的对比度：Cue Script 的硬指标
-      bodyInk: ratio(token('--ink'), token('--paper')),
-      labelInk: ratio(token('--ink-3'), token('--paper')),
-      accentInk: ratio(token('--accent-text'), token('--paper')),
-      accentOnSheet: ratio(token('--accent-text'), token('--raise')),
-      accentOnCanvas: ratio(token('--accent-text'), token('--canvas')),
-      onAccent: ratio(token('--on-accent'), token('--accent')),
-      hairline: ratio(over(token('--line'), token('--paper')), token('--paper')),
-      /* ---- 2026-11-26 第三次修正：凹陷暗槽必须是「下沉」的 ----
-         --well 是输入框 / 滑块底槽 / 标签槽。上一版暗色把它做成「提亮 6.5%」，
-         于是整个界面泛白青灰、分层全丢；这里用亮度关系把它冻住：
-         浅色 well 比台面暗、暗色 well 比画布暗。
-         注意：本段是 String.raw 模板，注释里不许出现反引号。 */
-      wellVsCanvas: Math.round((lum(token('--well')) - lum(token('--canvas'))) * 1000) / 1000,
-      wellVsPaper: Math.round((lum(token('--well')) - lum(token('--paper'))) * 1000) / 1000,
-      primary: token('--btn-primary-bg'),
-      primaryHover: token('--btn-primary-hover'),
-      onPrimaryHover: ratio(token('--on-accent'), token('--btn-primary-hover')),
-      /* 抬升层（按钮 / 浮层）必须比它所在的地面**更亮**（暗色）/ 更亮或等亮（浅色）。 */
-      raiseVsCanvas: Math.round((lum(token('--raise')) - lum(token('--canvas'))) * 1000) / 1000,
-      panelVsCanvas: Math.round((lum(token('--surface')) - lum(token('--canvas'))) * 1000) / 1000,
-    };
+
+    // 先量当前注入的明暗 + 默认 cobalt（兼容下面原有的亮/暗断言）
+    rootEl.dataset.palette = 'cobalt';
+    const themes = measure('cobalt', THEME === 'dark' ? 'dark' : 'light');
+
+    // 一次性遍历 6 套色板 × 2 个明暗（同一渲染进程内改 data 属性即可，
+    // 不必为 12 种组合各开一次 Electron）。这量的是真实计算样式，不是 CSS 文本。
+    const PALETTES = [
+      'cobalt', 'nord', 'rose-pine', 'everforest', 'catppuccin', 'cinema-amber',
+    ];
+    const paletteMatrix = [];
+    for (const palette of PALETTES) {
+      for (const theme of ['light', 'dark']) {
+        rootEl.dataset.palette = palette;
+        rootEl.dataset.theme = theme;
+        // 强制一次样式重算，确保 token() 读到的是新色板
+        void css.getPropertyValue('--canvas');
+        paletteMatrix.push(measure(palette, theme));
+      }
+    }
+    rootEl.dataset.palette = originalPalette;
+    rootEl.dataset.theme = originalTheme;
+
     const bar = document.querySelector('.statusbar');
     const barBg = bar ? getComputedStyle(bar).backgroundColor : '';
     const specNode = document.querySelector('.statusbar .st-spec');
@@ -210,18 +301,20 @@ const EVAL = String.raw`
     const relocated = {
       statusSpec: (specNode?.textContent || '').trim(),
       toolbarProxy: (document.querySelector('.titlebar .proxy-state')?.textContent || '').trim(),
-      statusInk: barBg && specInk ? ratio(over(specInk, token('--paper')), token('--paper')) : 0,
+      statusInk: barBg && specInk ? ratio(specInk, token('--paper')) : 0,
     };
 
     return JSON.stringify({
       theme: THEME || 'auto',
-      activeTheme: document.documentElement.dataset.theme || '',
+      activeTheme: originalTheme,
       expanded,
       collapsed,
       stage,
       themes,
+      paletteMatrix,
       relocated,
     });
+
   })()
 `;
 
@@ -389,6 +482,99 @@ check(
   dark.themes.onPrimaryHover >= 4.5,
   { primary: dark.themes.primary, hover: dark.themes.primaryHover, ratio: dark.themes.onPrimaryHover },
 );
+
+// ---- 4b) 色板矩阵：6 套 × 2 明暗 = 12 种真实计算样式 ----
+//
+// 2026-11-26 Batch 3：配色从"写死的一套蓝灰"升级为"基色 × 明暗 × 色板"三层正交。
+// 这一组断言不看截图，直接在渲染进程里改 data-palette / data-theme 后读计算样式，
+// 把每一套色板的正文、11px 标签、强调文字、主按钮、输入控件边线与明度方向全部量一遍。
+const matrix = light.paletteMatrix || [];
+check('色板矩阵：6 套 × 2 明暗 = 12 种组合', matrix.length === 12, matrix.length);
+const combos = new Set(matrix.map((m) => `${m.palette}/${m.theme}`));
+check('色板矩阵：12 种组合互不重复', combos.size === 12, [...combos]);
+
+const failures = {
+  body: [],
+  labels: [],
+  accent: [],
+  buttons: [],
+  status: [],
+  borders: [],
+  direction: [],
+  stage: [],
+};
+for (const m of matrix) {
+  const label = `${m.palette}/${m.theme}`;
+  // 用户给的六套基色以 4.5:1 为校准下限；cobalt 的 7:1 仍然由上面两条单独守着。
+  if (m.bodyInk < 4.5) failures.body.push(`${label} ${m.bodyInk}`);
+  if (m.labelInk < 4.5 || m.labelOnWell < 4.5 || m.labelOnSurface < 4.5) {
+    failures.labels.push(`${label} paper ${m.labelInk} / well ${m.labelOnWell} / surface ${m.labelOnSurface}`);
+  }
+  if (m.accentInkPaper < 4.5 || m.accentInkCanvas < 4.5 || m.accentInkSurface < 4.5) {
+    failures.accent.push(`${label} paper ${m.accentInkPaper} / canvas ${m.accentInkCanvas} / surface ${m.accentInkSurface}`);
+  }
+  if (m.onAccent < 4.5 || m.onAccentHover < 4.5) {
+    failures.buttons.push(`${label} ${m.onAccent} / hover ${m.onAccentHover}`);
+  }
+  if (m.dangerPaper < 4.5 || m.dangerSurface < 4.5 || m.warnPaper < 4.5 || m.successPaper < 4.5) {
+    failures.status.push(
+      `${label} danger ${m.dangerPaper}/${m.dangerSurface} warn ${m.warnPaper} success ${m.successPaper}`,
+    );
+  }
+  if (m.wellAlpha < 0.1 || m.wellLinePaper < 1.15 || m.btnLineBtn < 1.15) {
+    failures.borders.push(
+      `${label} alpha ${m.wellAlpha} paper ${m.wellLinePaper} btn ${m.btnLineBtn}`,
+    );
+  }
+  const sinkLimit = m.theme === 'dark' ? -0.001 : -0.005;
+  if (m.wellVsCanvas >= sinkLimit || m.wellVsPaper >= 0) {
+    failures.direction.push(`${label} well-canvas ${m.wellVsCanvas} well-paper ${m.wellVsPaper}`);
+  } else if (m.theme === 'dark') {
+    if (m.raiseVsSurface <= 0.004 || m.surfaceVsCanvas <= 0.004) {
+      failures.direction.push(
+        `${label} raise-surface ${m.raiseVsSurface} surface-canvas ${m.surfaceVsCanvas}`,
+      );
+    }
+  } else if (m.raiseVsCanvas < -0.001 || m.surfaceVsCanvas < -0.001) {
+    failures.direction.push(
+      `${label} raise-canvas ${m.raiseVsCanvas} surface-canvas ${m.surfaceVsCanvas}`,
+    );
+  }
+  if (m.theme === 'dark' ? m.stageLum >= 0.1 : m.stageLum < 0.7) {
+    failures.stage.push(`${label} stageLum ${m.stageLum}`);
+  }
+  if (m.lineContrast < 3 || m.hairline < 1.25 || m.rule < 1.1) {
+    failures.stage.push(`${label} line ${m.lineContrast} hairline ${m.hairline} rule ${m.rule}`);
+  }
+}
+
+check('12 组合：正文墨对纸面 ≥4.5:1（cobalt 另守 7:1）', failures.body.length === 0, failures.body);
+check('12 组合：11px 标签墨对纸 / 凹陷 / 台本 ≥4.5:1', failures.labels.length === 0, failures.labels);
+check('12 组合：强调文字对纸 / 画布 / 台本 ≥4.5:1', failures.accent.length === 0, failures.accent);
+check('12 组合：主按钮白字（常态 + 悬停）≥4.5:1', failures.buttons.length === 0, failures.buttons);
+check('12 组合：朱 / 警示 / 通过文字 ≥4.5:1', failures.status.length === 0, failures.status);
+check(
+  '12 组合：输入框 / 下拉边线可见（alpha ≥0.10、对纸 ≥1.15、按钮边线 ≥1.15）',
+  failures.borders.length === 0,
+  failures.borders,
+);
+check(
+  '12 组合：明度方向正确（well 沉在 canvas 下；暗色 raise > surface > canvas）',
+  failures.direction.length === 0,
+  failures.direction,
+);
+check('12 组合：舞台明度方向 + 发丝线 / 规则线可见', failures.stage.length === 0, failures.stage);
+
+console.log('    色板矩阵实算（正文 / 标签 / 强调 / 主按钮常态+悬停 / well+按钮边线 / 方向）：');
+for (const m of matrix) {
+  console.log(
+    `      ${m.palette.padEnd(13)} ${m.theme.padEnd(5)} ` +
+      `body ${String(m.bodyInk).padEnd(5)} label ${String(m.labelInk).padEnd(5)} ` +
+      `accent ${String(m.accentInkPaper).padEnd(5)} on ${m.onAccent}/${m.onAccentHover} ` +
+      `well-line ${m.wellLinePaper}/${m.btnLineBtn} ` +
+      `well-canvas ${m.wellVsCanvas} raise-surface ${m.raiseVsSurface}`,
+  );
+}
 
 // ---- 5) 紧凑模式（窗口 ≤900px）：同一套结构 ----
 // 触发条件是 CSS 视口宽度，不是缩放：本应用没有缩放菜单（AGENTS.md 红线 14），

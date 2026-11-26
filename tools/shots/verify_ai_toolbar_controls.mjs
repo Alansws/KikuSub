@@ -68,11 +68,38 @@ const EVAL = String.raw`
     try { localStorage.setItem('kikusub.appearance', THEME); } catch {}
     await sleep(400);
 
+    // 2026-11-26 Batch 3：令牌可能以 color-mix() / color(srgb …) 序列化。
+    // Canvas / 计算样式都只认具体颜色，这里统一解析成 {r,g,b,a}。
     const parse = (value) => {
-      const m = String(value || '').match(/rgba?\(([^)]+)\)/i);
-      if (!m) return { r: 0, g: 0, b: 0, a: 0 };
-      const parts = m[1].split(',').map((v) => Number.parseFloat(v.trim()));
-      return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+      const text = String(value || '').trim();
+      const m = text.match(/rgba?\(([^)]+)\)/i);
+      if (m) {
+        const parts = m[1].split(',').map((v) => Number.parseFloat(v.trim()));
+        return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+      }
+      const srgb = text.match(
+        /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/i,
+      );
+      if (srgb) {
+        return {
+          r: Number.parseFloat(srgb[1]) * 255,
+          g: Number.parseFloat(srgb[2]) * 255,
+          b: Number.parseFloat(srgb[3]) * 255,
+          a: srgb[4] === undefined ? 1 : Number.parseFloat(srgb[4]),
+        };
+      }
+      return { r: 0, g: 0, b: 0, a: 0 };
+    };
+    const probe = document.createElement('span');
+    probe.style.display = 'none';
+    probe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(probe);
+    const resolveToken = (name) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      if (!raw) return '';
+      probe.style.color = '';
+      probe.style.color = raw;
+      return getComputedStyle(probe).color;
     };
     const lum = ({ r, g, b }) => {
       const f = [r, g, b].map((v) => {
@@ -137,8 +164,8 @@ const EVAL = String.raw`
 
     const css = getComputedStyle(document.documentElement);
     const token = (name) => css.getPropertyValue(name).trim();
-    const wellLine = parse(css.getPropertyValue('--well-line'));
-    const canvas = hexToRgb(css.getPropertyValue('--canvas'));
+    const wellLine = parse(resolveToken('--well-line'));
+    const canvas = parse(resolveToken('--canvas'));
 
     const head = document.querySelector('.aiw-head');
     const page = document.querySelector('.aiw-page');
@@ -163,7 +190,7 @@ const EVAL = String.raw`
       tokens: {
         wellLine: { a: wellLine.a, raw: token('--well-line') },
         canvas,
-        paper: hexToRgb(token('--paper')),
+        paper: parse(resolveToken('--paper')),
         cueFont: token('--font-cue').replace(/\s+/g, ' '),
       },
       pageBg: parse(getComputedStyle(page).backgroundColor),
