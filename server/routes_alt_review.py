@@ -106,7 +106,6 @@ def _focus_payload(request: Request, session: Session, alt: AltReview | None, sc
     marks = list(getattr(session, "chapters", []) or [])
     options = dual_scope.scope_options(a_cues, b_cues, marks, duration)
     focus = dual_scope.resolve_focus(scope, a_cues, b_cues, marks, duration)
-    default = dual_scope.default_focus(a_cues, b_cues, marks, duration)
     auto = str(scope or "").strip() in {"", "auto"}
     hidden_a, hidden_b = dual_scope.hidden_counts(a_cues, b_cues, focus)
     trim = dual_scope.would_trim(a_cues, b_cues)
