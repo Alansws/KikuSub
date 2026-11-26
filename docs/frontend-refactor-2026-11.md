@@ -1,9 +1,13 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-26 13:20
+updated: 2026-11-26 14:10
 ---
 # KikuSub 前端重塑（2026-11）
 
+> **第二阶段 Batch 3 完成（2026-11-26）。** 配色升级为「明暗 × 六套色板」的正交体系，
+> 设置页新增「界面配色」，18 个派生令牌改 `color-mix` 动态计算；6 × 2 = 12 种组合全量实测
+> ≥4.5:1，`KikuSub-Next.app` 已重打，第二阶段未推送提交已推 GitHub。详见 §8.12。
+>
 > **状态：第一阶段封板（2026-11-26）。** 用户已确认把本分支作为「前端优化第一阶段完结版」
 > 封板，推送 GitHub 新分支存档、暂不合入 `main`、现役旧版继续使用。
 > **封板记录（能力边界 / 双开工具 / 第二阶段接续建议）见 §8.9。**
@@ -56,9 +60,10 @@ updated: 2026-11-26 13:20
    验证与并行体验一律走**独立数据根**：`KIKUSUB_DATA_DIR` / `KIKUSUB_PREFERENCES_PATH` /
    `--user-data-dir`（见 `tools/shots/` 下各脚本），默认指向系统临时目录。
    渲染层新增的偏好只进 `localStorage`（每个 `--user-data-dir` 天然隔离），不进共享配置文件。
-3. **Git 保护。** 只在 `feat/ui-redesign` 上工作；`backup/pre-ui-redesign-2026-11` 与
+3. **Git 保护。** 第一阶段在 `feat/ui-redesign`；第二阶段从 `feat/ui-redesign-p2` 继续，
+   后者可以推远端备份。`backup/pre-ui-redesign-2026-11` 与
    `archive/pre-ui-redesign-2026-11-25` 是两个只读锚点，**不删除、不移动、不 rebase**；
-   不推远端、不碰 `main`。
+   不推 tag、不碰 `main`。
 4. **不卸载、不重装、不改名旧版。** 不执行 `defaults write`、不改旧版的 Launch Services 注册、
    不动它的签名与图标。新旧共存靠新产物的独立标识实现，不靠改旧版。
 
@@ -93,7 +98,7 @@ updated: 2026-11-26 13:20
 | **Step 4.3 组二 原文加工** | ✅ 完成 | 侧栏 ① ② 编号；AI 三页 note 槽与互相指路；见 §7.6 |
 | **Step 4.3 组三 交付** | ✅ 完成 | 「暂无译文轨」收敛成一次；成片预览按监看器；导出完成补回核对台；见 §7.6 |
 | **Step 4.3 组四 辅助/边界** | ✅ 完成 | 设置页去彩图标；内核未连接可手动重启；修 `.sb-item` 类名撞车；见 §7.6 |
-| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（401）/ `pytest -q`（**1096** passed / 2 skipped）/ `verify_*.mjs`（27/27） |
+| 生产验证 | ✅ 全绿 | `check` / `check:svelte`（4/4 基线）/ `build` / `test:main`（**405**）/ `pytest -q`（**1096** passed / 2 skipped）/ `verify_phase2_shell`（**64** 项）/ 全量 `verify_*.mjs` 见 §8.12 |
 | **章节端点排雷** | ✅ 完成 | `verify_chapter_edge` 10/10；测试前置 + `ChapterTrack.visible` 两处修复，见 §7.8 |
 | **双开试用版** | ✅ 已打包 | `build/pack-next/KikuSub-Next.app` / `com.kikusub.desktop.next` / 独立数据根；见 §7.8 |
 | **真机崩溃 Bug（Anime Whisper 第二版）** | ✅ 已根治 | 空闲卸载与跑片竞态；`EngineIdleReleaser.hold()` 租约 + 解码自愈兜底；见 §7.9 一 |
@@ -104,8 +109,9 @@ updated: 2026-11-26 13:20
 | **Step 7 朗读面板重排** | ✅ 完成 | 去重复标题与 `×`、`管理` 换铅笔、两行等分网格、面板退成 well；见 §7.10 四 |
 | **Step 7 导出页细节 + 居中** | ✅ 完成 | 发丝线呼吸、裸蓝字改 `.btn.soft`、单栏页面 `--measure-page` 居中；见 §7.10 五/六 |
 | **Step 7 死样式修复** | ✅ 完成 | 紧凑模式 `.player/.table-area/.transport` 从父组件搬回各自组件；ReviewView 1764；见 §7.10 七 |
-| **第二阶段 Batch 1 导入页融合** | ✅ 完成，待用户确认截图 | 删「继续核对 / 换片…」卡，恢复大拖放区主视觉；顺序回到 拖放区 → 代理说明 → 导出文件夹 → 最近打开；按钮去 `…`；见 §8.10 |
-| **第二阶段 Batch 2 令牌治本 + AI 三页** | ✅ 完成，待用户确认截图 | `--well-line` 亮 0.14 / 暗 0.13；页内工具栏回 `--canvas` + 发丝线；`--font-cue` 日语优先；锁轴 / 重排 / 双语三页去灰带、粘贴区与表格精修；新增 22 条控件可见性断言；见 §8.11 |
+| **第二阶段 Batch 1 导入页融合** | ✅ 完成 | 删「继续核对 / 换片…」卡，恢复大拖放区主视觉；顺序回到 拖放区 → 代理说明 → 导出文件夹 → 最近打开；按钮去 `…`；见 §8.10 |
+| **第二阶段 Batch 2 令牌治本 + AI 三页** | ✅ 完成 | `--well-line` 亮 0.14 / 暗 0.13；页内工具栏回 `--canvas` + 发丝线；`--font-cue` 日语优先；锁轴 / 重排 / 双语三页去灰带、粘贴区与表格精修；新增 22 条控件可见性断言；见 §8.11 |
+| **第二阶段 Batch 3 六套双模色板 + 打包推送** | ✅ 完成 | `data-palette` 与 `data-theme` 正交；6 套 × 2 明暗；18 组派生令牌改 `color-mix`；设置页「界面配色」6 张卡；Canvas 2d `color-mix` 解析；12 组合全量对比度；见 §8.12 |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
@@ -1664,6 +1670,196 @@ Named Rules 与 Option blocks 的例外段；控制项边线、按钮边线与�
 | 双语翻译 · 已有译文 | [p2-ai-translate-proposal-light.png](images/refactor-2026-11/p2-ai-translate-proposal-light.png) | [p2-ai-translate-proposal-dark.png](images/refactor-2026-11/p2-ai-translate-proposal-dark.png) |
 | 双语翻译 · 展开粘贴框 | [p2-ai-translate-paste-light.png](images/refactor-2026-11/p2-ai-translate-paste-light.png) | [p2-ai-translate-paste-dark.png](images/refactor-2026-11/p2-ai-translate-paste-dark.png) |
 
+## 8.12 第二阶段 Batch 3：六套双模色板 + 可扩展配色架构（2026-11-26）
+
+> 分支 **`feat/ui-redesign-p2`**。`feat/ui-redesign` 冻结不动、`main` 不动、现役
+> `build/pack/KikuSub.app` 与 `~/Library/Application Support/KikuSub` 零触碰。
+> 本批次把配色从「一套蓝灰」升级为**可扩展的多色板正交体系**，一次性内置 6 套双模主题，
+> 重打试用版，并把第二阶段全部未推送提交推到 GitHub。
+
+### 一、架构：色板只换基色，派生令牌全部动态计算
+
+配色现在是 **两个正交轴**：
+
+| 轴 | 属性 | 取值 | 回答 |
+| --- | --- | --- | --- |
+| 明暗 | `html[data-theme]` | `light` / `dark`（由 `auto` / `light` / `dark` 解析） | 现在是日间还是夜间 |
+| 色板 | `html[data-palette]` | `cobalt`（默认）/ `nord` / `rose-pine` / `everforest` / `catppuccin` / `cinema-amber` | 这一面用哪套基色 |
+
+`cobalt` 不在 CSS 里另开覆写块：它就是 `:root`（浅色）与 `html[data-theme='dark']`（深色），
+数值与第一阶段封板逐字一致；其余 5 套各写两个
+`html[data-palette='<id>'][data-theme='light'|'dark']` 基色块。**加一套色板 = 两块 CSS +
+`themes.ts` 注册表一条**，组件不写任何主题分支。
+
+派生令牌统一改成 `color-mix(in srgb, var(…))`，不再有第二份写死的蓝灰：
+
+| 令牌组 | 来源 |
+| --- | --- |
+| `--bg-toolbar / --bg-status / --bg-sidebar` | 当前 `--paper` × 明暗 alpha（90/94/74% 亮、92/96/90% 暗） |
+| `--line / --line-2 / --fill / --fill-strong / --row-hover / --well-line / --scroll-thumb / --cue-lane / --cue-wash / --cue-block / --cue-block-hover` | 明暗方向的中性墨（亮黑 / 暗白）按 alpha 派生 |
+| `--accent-soft / --accent-ring / --accent-line / --cue-block-active / --cue-edge / --meter-a` | 当前 `--accent` 或 `--accent-text` 按 alpha 派生 |
+| `--btn-bg / --btn-bg-hover / --well-focus / --raise-hover` | 当前 `--raise` / `--well`；暗色抬升层再上一阶 |
+| `--stage-bg / --stage-line / --stage-frame` | 亮色 = `canvas × ink` 的房间色；暗色 = 色板的 `--stage` |
+| `--danger-soft / --warn-soft / --success-soft` | 当前状态色按 10%/14% 派生 |
+
+顺带修掉两个真实缺陷：
+
+1. **Canvas 2d 不认 `color-mix()`**：波形画布原来直接把令牌字符串塞给 `fillStyle`，
+   派生令牌一换就会静默保留上一笔颜色。新增 `resolveCssColor()`：隐藏探测元素把
+   `color-mix` / `var()` 解析成 `rgb()/rgba()`，`color(srgb …)` 再归一化，画布才拿到真颜色。
+2. **QaPanel 两处写死色**：暗色分段胶囊的 `rgba(236,241,250,.14)` 改成从当前
+   `--raise` 抬 7% 墨；危险悬停的 `rgba(179,38,30,.08)` 改走 `--danger-soft`。
+
+### 二、六套色板
+
+| id | 名称 | 浅色气质 | 深色气质 | 强调色（亮 / 暗） |
+| --- | --- | --- | --- | --- |
+| `cobalt` | 皇家钴蓝 | 纸白 + 中性浅灰铬件 | 纯中性炭黑 + 下沉暗槽 | `#295CE6` / `#3467EB` |
+| `nord` | 北欧极夜 | Snow Storm 冷调纸面 | Polar Night 极夜蓝灰 | `#456E9E` / `#4772A6` |
+| `rose-pine` | 玫瑰松木 | Dawn 暖手稿纸 | Main 黑胶紫墨 | `#286983` / `#31748F` |
+| `everforest` | 暮森护眼 | 暖纸米色 | 深林绿灰 | `#277355` / `#2B7E5E` |
+| `catppuccin` | 拿铁与摩卡 | Latte 清凉拿铁 | Mocha 紫调摩卡 | `#1E66F5` / `#3B6CE2` |
+| `cinema-amber` | 暗房琥珀 | 暖白暗房纸 | 放映间近黑 | `#B45309` / `#B8590C` |
+
+全量基色（canvas / paper / surface / raise / well / ink / rule / accent / accent-text /
+danger / stage）在 `app.css`；`themes.ts` 的 `PALETTES` 只保留缩略图要用的子集，
+`desktop/test/theme-preview.test.mjs` 逐项对账，任何一边漂移都会红。
+
+**校准偏差（实测后 1–3 个色阶，全部为对比度，不改变色相气质）：**
+
+| 位置 | 指定值 | 落地值 | 原因 |
+| --- | --- | --- | --- |
+| catppuccin 浅色 `--accent-text` | `#1E66F5` | `#1B61E8` | paper 上 4.34:1 → 4.74:1（11px 标签必须过线） |
+| catppuccin 深色 `--accent-hover` | `#4273EB` | `#3D6DE4` | 白字 4.30:1 → 4.66:1 |
+| rose-pine 深色 `--accent-hover` | `#3982A0` | `#357C99` | 白字 4.31:1 → 4.67:1 |
+| everforest 深色 `--accent-hover` | `#318A68` | `#2F8163` | 白字 4.23:1 → 4.73:1 |
+| cinema-amber 深色 `--accent-hover` | `#C66310` | `#B95D0E` | 白字 4.04:1 → 4.53:1 |
+| nord / everforest 深色 `--danger` | 默认 `#E5776A` | `#ED8F84` | surface 上 4.27 / 4.15:1 → 4.66 / 4.76:1 |
+
+rose-pine 浅色正文 6.66:1：高于 4.5:1 要求、低于 cobalt 的 7:1 AAA 档。这里保留用户给的
+`--ink #575279`，没有为凑 7:1 去压深主文字；cobalt 的 7:1 断言仍然单独保留。浅色色板
+**不强行要求 `raise > surface`**（用户给的值大多相等，rose-pine 甚至 surface 高一档）：
+日间是纸台面，真正必须守住的是 **well 沉在 canvas 以下**；暗色才守
+**raise > surface > canvas**。
+
+### 三、设置页「界面配色」
+
+「设置 → 外观与朗读」新增「界面配色」区：6 张统一缩略卡，**实时跟随当前明暗**显示该色板的
+浅色或深色版本（`paletteShot(id, resolvedTheme)`），点一下立即生效。卡片本身仍是台面上一块
+`--well` 凹陷填充，选中才加 `--accent-line` 细须；缩略图只画 canvas / paper / surface / ink +
+一个强调色，没有第二组彩色提示。偏好写 `localStorage['kikusub.palette']`，每个
+`--user-data-dir` 天然隔离，不进共享 `settings.json`。
+
+### 四、验证
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run check`（tsc） | ✅ 0 错 |
+| `npm run check:svelte` | ✅ 4/4 与基线持平（4.7.8） |
+| `npm run build` | ✅ 通过 |
+| `npm run test:main` | ✅ **405/405**（新增 3 条：色板默认 / 落盘 / 三 data 属性 + 色板对账 4 条） |
+| `python -m core.smoke` | ✅ 通过 |
+| `pytest -q` | ✅ **1096 passed / 2 skipped**（1 个 OmniVoice 权重 skip、1 个既有 skip） |
+| `node tools/shots/verify_phase2_shell.mjs` | ✅ **64/64**（新增 12 组合矩阵 8 组断言 + 逐套实算表） |
+| 全量 `tools/shots/verify_*.mjs` | ✅ 见 §8.12 五（汇总） |
+| `node tools/shots/capture_palettes.mjs` | ✅ 8/8 张（设置页 2 + 代表色板核对台 6） |
+
+`verify_phase2_shell` 现在在**同一个渲染进程里**依次改 `data-palette` / `data-theme`，
+遍历 6 × 2 = 12 种组合，读真实计算样式而不是 CSS 文本：
+
+- 正文墨对纸面 ≥4.5:1（cobalt 的亮 / 暗两条另按 ≥7:1 守）；
+- 11px 标签对纸 / well / surface ≥4.5:1；
+- 强调文字对纸 / canvas / surface ≥4.5:1；
+- 主按钮白字 **常态 + 悬停** ≥4.5:1；
+- 朱 / 警示 / 通过文字 ≥4.5:1；
+- 输入框 / 下拉框边线可见：`--well-line` alpha ≥0.10、对纸 ≥1.15、按钮边线 ≥1.15；
+- 明度方向：well < canvas（两种模式都成立）；暗色 raise > surface > canvas；
+- 舞台明度方向 + 1px 发丝线 / `--rule` 可见。
+
+实算表（正文 / 11px 标签 / 强调 / 主按钮常态+悬停 / 输入边线 / well−canvas）：
+
+| 色板 | 明暗 | 正文 | 标签 | 强调 | 主按钮 | 输入边线 | well−canvas |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| cobalt | 日 / 夜 | 16.24 / 14.39 | 6.79 / 6.47 | 5.91 / 5.96 | 5.57/6.70 · 4.90/4.56 | 1.37 / 1.48 | −0.109 / −0.002 |
+| nord | 日 / 夜 | 10.84 / 10.84 | 6.40 / 6.79 | 5.45 / 6.24 | 5.28/6.67 · 4.97/5.83 | 1.37 / 1.50 | −0.133 / −0.006 |
+| rose-pine | 日 / 夜 | 6.66 / 12.50 | 5.64 / 6.43 | 5.59 / 9.68 | 6.11/8.05 · 5.22/4.67 | 1.38 / 1.49 | −0.135 / −0.003 |
+| everforest | 日 / 夜 | 7.15 / 8.15 | 5.18 / 5.84 | 5.33 / 6.51 | 5.72/7.45 · 4.94/4.73 | 1.38 / 1.51 | −0.191 / −0.006 |
+| catppuccin | 日 / 夜 | 7.06 / 11.34 | 4.98 / 7.37 | 4.74 / 7.79 | 4.91/6.39 · 4.74/4.66 | 1.38 / 1.49 | −0.126 / −0.003 |
+| cinema-amber | 日 / 夜 | 14.91 / 14.45 | 6.35 / 6.21 | 5.77 / 8.03 | 5.02/6.48 · 4.70/4.53 | 1.38 / 1.49 | −0.162 / −0.002 |
+
+### 五、全量 `verify_*.mjs`
+
+`tools/shots/` 下 **29 个**回归脚本全部跑过（`KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`
+以适配本机沙箱），最终 **29/29 绿**：
+
+| 组 | 脚本 |
+| --- | --- |
+| 外壳 / 导入 / AI 工具栏 | `verify_phase2_shell`（64 项）、`verify_import_page`（15）、`verify_ai_toolbar_controls`（22） |
+| 核对台 | `verify_review_defaults`、`verify_review_transport`、`verify_review_overlays`、`verify_review_viewport`、`verify_scrub_pan`、`verify_cue_selection`、`verify_cue_clipboard`、`verify_gap_fill`、`verify_clip_scope`、`verify_punct_clean`、`verify_tts_panel_fit` |
+| 双引擎 / 提案 / 翻译 / 重排 | `verify_arbitration`、`verify_arbitration_dialog`、`verify_batch_and_align`、`verify_dual_lowdiff`、`verify_external_proposals`、`verify_reshape_flow`、`verify_translation_flow` |
+| 章节 / 设置 / 转写 / 其他 | `verify_chapters`、`verify_chapter_panel`、`verify_chapter_edge`、`verify_chapter_draft`、`verify_settings_ai_fold`、`verify_settings_layout`、`verify_cli_settings`、`verify_transcribe_flow` |
+
+> `verify_ai_toolbar_controls` 第一轮在「读 `--well-line` 原始串」这一步红了两条：
+> 它把 `getComputedStyle` 里的 `color-mix(...)` 当成空颜色（alpha 0）。这不是界面回归，
+> 而是验证脚本也需要 Batch 3 的解析器。补上 `color(srgb …)` / 探测元素解析后 22/22 通过。
+>
+> `capture_matrix.sh --compare docs/images/shots/baseline` 也跑过（10 张）。基线仍是
+> Batch 1/2 之前的旧图，导入 / AI 三页 / 设置页的差异是前两批**刻意改版**，本轮没有回退；
+> 核对台与钴蓝外观的当前截图与基线逐项目视一致，PSNR 偏低主要来自字体抗锯齿与
+> 前两批已存在的差异，不把这一项当作本批次的门禁。
+
+### 六、取证截图（无窗口 `--screenshot`，全部 `read_image` 自检）
+
+| 看什么 | 图 |
+| --- | --- |
+| 设置 → 外观与朗读：6 张浅色色板卡（皇家钴蓝选中） | [p2-palette-settings-light.png](images/refactor-2026-11/p2-palette-settings-light.png) |
+| 同上，夜间：6 张卡一起翻到深色版本 | [p2-palette-settings-dark.png](images/refactor-2026-11/p2-palette-settings-dark.png) |
+| 玫瑰松木 · 日间核对台：暖手稿纸 + 松木青 | [p2-palette-rose-pine-light.png](images/refactor-2026-11/p2-palette-rose-pine-light.png) |
+| 玫瑰松木 · 夜间核对台：黑胶紫墨 + `#9CCFD8` 文字 | [p2-palette-rose-pine-dark.png](images/refactor-2026-11/p2-palette-rose-pine-dark.png) |
+| 北欧极夜 · 日间核对台：Snow Storm 冷纸 | [p2-palette-nord-light.png](images/refactor-2026-11/p2-palette-nord-light.png) |
+| 北欧极夜 · 夜间核对台：Polar Night 蓝灰阶梯 | [p2-palette-nord-dark.png](images/refactor-2026-11/p2-palette-nord-dark.png) |
+| 暗房琥珀 · 日间核对台：暖白纸 + 琥珀强调 | [p2-palette-cinema-amber-light.png](images/refactor-2026-11/p2-palette-cinema-amber-light.png) |
+| 暗房琥珀 · 夜间核对台：放映间近黑 + 琥珀 | [p2-palette-cinema-amber-dark.png](images/refactor-2026-11/p2-palette-cinema-amber-dark.png) |
+
+> 截图脚本：`node tools/shots/capture_palettes.mjs`（8 张一次生成；换主题 / 色板走真实点击
+> 设置页卡片，不是只改 DOM 属性，所以缩略图的 `resolved` 预览与页面配色一致）。
+> 视口 1440×900 @2x，落在 `docs/images/refactor-2026-11/`。
+
+### 七、打包与 GitHub 推送
+
+**试用版重打（2026-11-26 14:03）：**
+
+```bash
+bash tools/pack/build_trial.sh
+# 完成（未打开窗口）：build/pack-next/KikuSub-Next.app
+# 身份：bundle id com.kikusub.desktop.next；数据根 ~/Library/Application Support/KikuSub-Next
+# 1.4G
+```
+
+| 项 | 值 |
+| --- | --- |
+| 产物 | `build/pack-next/KikuSub-Next.app` |
+| 大小 | **1.4 GB**（内置 sidecar 1.0G + ffmpeg 147M + CLI） |
+| bundle id | `com.kikusub.desktop.next` |
+| 隔离标记 | `Contents/Resources/app-isolation.json` = `{appName: KikuSub-Next, dataDirName: KikuSub-Next}` |
+| Python 侧 | 本轮**未改** `core/` / `server/` / `tools/kikusub/`；`build_trial.sh` 自动判定 sidecar / CLI 仍是最新，跳过重打 |
+| 无窗口冒烟 | `KIKUSUB_ISOLATION_ROOT=/tmp/… KIKUSUB_NO_WINDOW=1 … --screenshot=/tmp/…/shot.png` 退出码 0，首启向导正常 |
+| 现役旧版 | `build/pack/KikuSub.app/Contents/Info.plist` sha256 仍为 `f0afca4a…4269e`（`git`/装配全程未写入）；`~/Library/Application Support/KikuSub/settings.json` / `presets.json` / `prompts.json` 三个哈希与 §8.9 记录一致。`preferences.json` 的 mtime 为 **12:58:50**（本轮开始前由用户自己的 `KikuSub.app` 正常写入），不是本次工具链改动 |
+
+**GitHub 推送：**
+
+```bash
+git push -u origin feat/ui-redesign-p2   # 只推分支，不推 tag，不碰 main
+```
+
+- 远端：`https://github.com/Alansws/KikuSub.git`；目标分支 `feat/ui-redesign-p2`（此前远端只有
+  `feat/ui-redesign` @ `91f9bbb`，所以这是 6 个提交的**新分支**，不是 force push）。
+- 推送内容：第二阶段 Batch 1（导入页）、Batch 2（AI 三页 / 令牌治本）、Batch 3（本批色板）全部提交。
+- 不推 tag：`ci.yml` 的 `release-tag` 要求 tag == `desktop/package.json` version 且在 `main` 上；
+  本分支不满足，任何 `v*` tag 都会让闸门红。
+- CI 触发面：`on.push.branches: [main, app/macos]`，推 `feat/ui-redesign-p2` 不触发任何 job；
+  `--force` 未使用。最终 Commit SHA 以 `git log -1 --format=%H feat/ui-redesign-p2` 为准。
+
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
 > 本节此前是三个待问项；现已冻结为决定，后续会话不再重复询问。
@@ -1758,6 +1954,6 @@ Named Rules 与 Option blocks 的例外段；控制项边线、按钮边线与�
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。第二阶段按页面分批推进
-   （**Batch 1 导入页 §8.10、Batch 2 AI 三页 §8.11 已完成，均待用户确认截图**）；
-   **用户明确要求几批调完再统一重打 `.app`**。
+   （**Batch 1 导入页 §8.10、Batch 2 AI 三页 §8.11、Batch 3 六套色板 §8.12 已完成**）；
+   Batch 3 已按用户要求统一重打 `build/pack-next/KikuSub-Next.app`。
 6. 任何打包/试用动作先读 §0.1：现役 `.app`、配置文件、`userData` 一律不能覆盖。

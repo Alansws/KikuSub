@@ -132,8 +132,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    禁止按域拆历史、禁止双栈。
 6. **用户报障过的交互不许改回**：单击跳转 vs 框选阈值、进度条复用 click-to-seek、
    缩放步进 `duration/69`——改回去等于复活旧 bug。
-7. **主题只走令牌**：加主题 = `app.css` 一块 `html[data-theme='<id>']` 覆盖 + 注册表一条；
-   组件内不写主题专属色，分隔线不许退回 5% 灰。
+7. **主题只走令牌**：色板 = `app.css` 两块 `html[data-palette][data-theme]` + 注册表一条；
+   组件不写主题分支，分隔线不许退回 5% 灰。
 8. **导出设置必须进历史**：一律走 `setExportMode / setExportTrack / setExportResolution /
    setExportQuality / setExportSrt / setExportOutDir / updateExportStyle / applyExportStylePreset /
    resetExportStyle`，禁止直接写 `exporter.*`。

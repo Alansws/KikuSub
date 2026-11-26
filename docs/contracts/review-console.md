@@ -68,14 +68,17 @@
   跟随就被取消」。暂停时跳转依靠 `revealPlayhead()` 平移视窗让播放头保持可见，
   不应依赖“先敲空格开始播放”。
 - 字幕轨道配色走 `app.css` 的 `--cue-lane / --cue-wash / --cue-block / --cue-block-hover /
-  --cue-block-active / --cue-edge`，亮暗两套；禁止退回 `--separator` 那种 5% 灰。
-- **主题是「令牌 + 注册表」，不是组件分支**（2026-11-25 起）：**偏好** 有三个值
-  `auto` / `light` / `dark`，**解析后**只有 `light` / `dark` 两个色板，落在
-  `<html data-theme>` 上；名字、解析与映射在 `renderer/src/lib/themes.ts`，
-  `auto` 跟随系统的逻辑在 `lib/appearanceState.svelte.ts`。持久化走
-  `localStorage['kikusub.appearance']`（旧 key `kikusub.theme` / `kikusub.mode` 只在读取时
-  迁移一次，读完即删）。**加色板 = `app.css` 写一块 `html[data-theme='<id>']` 覆盖 +
-  注册表加一条**，组件里不要再写 `data-theme` 判断。
+  --cue-block-active / --cue-edge`，六套色板 × 亮暗两套；禁止退回 `--separator` 那种 5% 灰。
+- **主题是「令牌 + 注册表」，不是组件分支**（2026-11-26 第二轮起是**两个正交轴**）：
+  - **明暗**：偏好 `auto` / `light` / `dark`，解析后只有 `light` / `dark` 两个值，落在
+    `<html data-theme>` 上；持久化 `localStorage['kikusub.appearance']`（旧 key
+    `kikusub.theme` / `kikusub.mode` 只在读取时迁移一次，读完即删）。
+  - **皮肤色板**：`cobalt`（默认）/ `nord` / `rose-pine` / `everforest` / `catppuccin` /
+    `cinema-amber`，落在 `<html data-palette>` 上；持久化 `localStorage['kikusub.palette']`。
+  名字、解析、注册表在 `renderer/src/lib/themes.ts`，`auto` 跟随系统的逻辑在
+  `lib/appearanceState.svelte.ts`。**加色板 = `app.css` 写两个
+  `html[data-palette='<id>'][data-theme='light'|'dark']` 基色块 + `PALETTES` 注册表加一条**；
+  组件里不要写 `data-theme` / `data-palette` 判断，派生令牌只许 `color-mix(var(…))`。
   - **标题栏外观按钮与 ⇧⌘A 是两态直切**（`flipAppearance()`：取解析后的明暗翻面），
     `auto` 只留在「设置 → 外观」。旧的 `auto → light → dark → auto` 循环已删除——
     跟随系统且系统浅色时要按两下才变暗，是用户明确要求在 2026-11-26 修掉的。
@@ -88,8 +91,8 @@
   原生毛玻璃的明暗由系统外观决定，不受 `<html data-theme>` 控制。渲染层切主题时要
   通过 preload 的 `setAppearance()` 通知主进程 `nativeTheme.themeSource`；主进程只认 scheme
   （`dark` → dark，其余 → light），同时把外观 id 写进 `preferences.json` 供冷启动首帧使用。
-  侧栏 `--bg-sidebar` 必须足够不透明（深色当前 `rgba(31,34,38,.86)`、浅色
-  `rgba(240,242,244,.74)`），否则浅色系统下会透成灰白。
+  侧栏 `--bg-sidebar` 必须足够不透明（亮色 74% `--paper`、暗色 90% `--paper`，由
+  `color-mix(in srgb, var(--paper) …, transparent)` 派生），否则浅色系统下会透成灰白。
   `main.ts` 在挂载前先应用 localStorage 里的主题，避免冷启动闪一下浅色。
 - 修改后必须 `cd desktop && npm run build`，并至少实际验证：单击跳转、抖动单击不建选区、
   刻度/播放头/进度条拖动、字幕块整体与两端拖动、⌘Z 一次回退整块、播放头同步表格与检查器。

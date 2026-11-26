@@ -257,11 +257,87 @@ press it"* in one press. The appearance button flips light ⇄ dark directly; `a
 system) is a Settings choice, never a third stop in a toolbar cycle. A two-state control that needs
 two presses to reach the other state is a three-state control in disguise.
 
+### Palettes: one base, six skins (2026-11-26, Batch 3)
+
+Colour now has **two orthogonal axes**, and neither is a component branch:
+
+| Axis | Attribute | Values | Answers |
+| --- | --- | --- | --- |
+| Light / dark | `html[data-theme]` | `light` \| `dark` (resolved from `auto` / `light` / `dark`) | Which room am I in? |
+| Palette | `html[data-palette]` | `cobalt` \| `nord` \| `rose-pine` \| `everforest` \| `catppuccin` \| `cinema-amber` | Which base colours is this room painted in? |
+
+`cobalt` is the default and is **exactly** the Stage 1 palette; it costs no extra CSS
+block because it lives in `:root` (light) and `html[data-theme='dark']`. The other five
+palettes add **two blocks each** — `html[data-palette='<id>'][data-theme='light']` and
+`…[data-theme='dark']` — and only override **base colours** (canvas / paper / surface /
+raise / well / ink / rule / accent). Everything derived is computed once with
+`color-mix(in srgb, var(…))`, including:
+
+- window chrome: `--bg-toolbar / --bg-status / --bg-sidebar` mix `--paper` with transparency;
+- hairlines and washes: `--line / --line-2 / --fill / --row-hover / --well-line /
+  --cue-lane / --cue-wash / --cue-block` mix a neutral ink with alpha;
+- accent-derived washes: `--accent-soft / --accent-ring / --accent-line /
+  --cue-block-active / --cue-edge / --meter-a` read the **current** `--accent` or
+  `--accent-text`;
+- recess focus: `--well-focus` is the paper layer in light and a 4 % lift of `--well` in dark;
+- stage: `--stage-bg` is the palette's dark stage in dark, and a `canvas → ink`
+  mix in light (a room, not a second black band).
+
+There is **no hardcoded `rgba(245,245,247,…)` / `rgba(29,29,31,…)`** left in the token
+layer. A new palette is a CSS block pair plus one registry entry in
+`desktop/renderer/src/lib/themes.ts`; components never read `data-theme` or `data-palette`.
+
+#### The six palettes
+
+| id | Name | Light signature | Dark signature |
+| --- | --- | --- | --- |
+| `cobalt` | 皇家钴蓝 | paper white `#FFF` / chrome `#F5F5F7` / cobalt `#295CE6` | carbon `#161618 → #1D1D1F → #242427 → #313135` / `#3467EB` |
+| `nord` | 北欧极夜 | Snow Storm `#F7F9FC` / `#ECEFF4` / `#E5E9F0` / steel blue `#456E9E` | Polar Night `#242933 → #2E3440 → #353C4A → #434C5E` / `#4772A6` |
+| `rose-pine` | 玫瑰松木 | Dawn `#FFFAF3` / `#FAF4ED` / `#F2E9E1` / pine `#286983` | Main `#191724 → #1F1D2E → #26233A → #312D48` / `#31748F`, text `#9CCFD8` |
+| `everforest` | 暮森护眼 | warm paper `#FCF8EC` / `#F3EAD3` / `#EAE0C5` / forest `#277355` | `#1E2428 → #272E33 → #2E373C → #374248` / `#2B7E5E`, text `#83C092` |
+| `catppuccin` | 拿铁与摩卡 | Latte `#F7F8FC` / `#EFF1F5` / `#E6E9EF` / `#1E66F5` | Mocha `#181825 → #1E1E2E → #26273A → #313244` / `#3B6CE2`, text `#89B4FA` |
+| `cinema-amber` | 暗房琥珀 | `#FCFBF7` / `#F4F1EA` / `#ECE7DD` / amber `#B45309` | `#141413 → #1B1B19 → #232320 → #2E2E2A` / `#B8590C`, text `#F59E0B` |
+
+Full primitives (including well / ink-2 / ink-3 / rule / danger / inspector) live in
+`app.css`; the registry in `themes.ts` carries the subset the six cards draw. The two are
+reconciled by `desktop/test/theme-preview.test.mjs`.
+
+#### The Controls Must Survive Any Paper Rule
+
+A palette is not allowed to make a control disappear. `--well-line` is
+`color-mix(in srgb, neutral-wash 14%, transparent)` in light and `13%` in dark, so a
+dropdown / number field / textarea always has a visible 1 px edge on every one of the
+twelve combinations. **`transparent` is still forbidden.** The same rule covers the
+secondary button (`--btn-line`), the 1 px `--rule` hairlines, and the focus ring
+(`--accent-ring`).
+
+#### Calibration notes (deviations from the supplied values)
+
+All six palettes were measured in the real renderer across 6 × 2 = 12 combinations.
+Two kinds of 1–3 level adjustments were needed; everything else is the supplied value:
+
+| Where | Supplied | Shipped | Why |
+| --- | --- | --- | --- |
+| `catppuccin` light `--accent-text` | `#1E66F5` | `#1B61E8` | 4.34:1 on `--paper` (11 px labels need 4.5); new value 4.74:1 |
+| `catppuccin` dark `--accent-hover` | `#4273EB` | `#3D6DE4` | white button text 4.30:1 → 4.66:1 |
+| `rose-pine` dark `--accent-hover` | `#3982A0` | `#357C99` | white button text 4.31:1 → 4.67:1 |
+| `everforest` dark `--accent-hover` | `#318A68` | `#2F8163` | white button text 4.23:1 → 4.73:1 |
+| `cinema-amber` dark `--accent-hover` | `#C66310` | `#B95D0E` | white button text 4.04:1 → 4.53:1 |
+| `nord` / `everforest` dark `--danger` | default `#E5776A` | `#ED8F84` | 4.27 / 4.15:1 on `--surface` → 4.66 / 4.76:1 |
+
+`rose-pine` light body text is 6.66:1 (above the 4.5:1 requirement, below the cobalt
+7:1 AAA gate). The supplied `--ink #575279` was kept rather than darkened; cobalt keeps its
+own 7:1 assertion. The light palettes intentionally do **not** make `--raise` brighter than
+`--surface` (the supplied values make them equal, or in Rose Pine's case one level apart):
+in daylight the paper desk is the highest value, and the invariant that matters is
+**well sinks below canvas** in both modes, while dark keeps **raise > surface > canvas**.
+
 ### Appearance and the cue face
 
-Appearance is **not** a theme picker. It is one preference with three values — `auto` (follow the
-system, the default), `light` (daylight proofing), `dark` (dubbing booth) — plus one orthogonal
-preference, the **cue font**: `sans` (Hiragino Sans, default) or `mincho` (Hiragino Mincho).
+Appearance is **not** the whole theme. It is one preference with three values — `auto` (follow the
+system, the default), `light` (daylight proofing), `dark` (dubbing booth) — plus two orthogonal
+preferences: the **interface palette** (six base-colour skins, §Palettes) and the **cue font**:
+`sans` (Hiragino Sans, default) or `mincho` (Hiragino Mincho).
 
 The preference lives in **Settings → 外观**; the titlebar button and `⇧⌘A` are a **two-state
 switch** (现在 ⇄ 另一面), resolved from what is on screen. So under `auto` + a light system, one
@@ -269,7 +345,9 @@ press still lands on dark (it writes the explicit `dark` preference). `auto` is 
 that button's cycle.
 
 - `html[data-theme]` carries only the **resolved** value, `light` or `dark`. There is no third
-  colour world; mincho changes `--font-cue` and nothing else.
+  colour world; `html[data-palette]` carries the skin, and mincho changes `--font-cue` and
+  nothing else. The palette preference lives in `localStorage['kikusub.palette']`, inside the
+  build's own `--user-data-dir` — never in a shared config file.
 - Following the system is the HIG-correct default (`dark-mode.md › Best practices`: avoid an
   app-specific appearance setting). The manual override exists because this tool is used at night
   for hours; it lives in Settings, not as a permanent toolbar switch.
@@ -505,7 +583,8 @@ with the content. `prefers-reduced-motion` stops both.
 ## Notes on Implementation
 
 The high-fidelity prototype lives in `.impeccable/prototype/` (workspace root, not shipped). It is static HTML/CSS/JS, rendered through headless Chrome because the real app must not open a window. The production implementation must:
-- keep the `html[data-theme]` token mechanism with exactly **two** appearances — light (daylight proofing) and dark (dubbing booth) — resolved from the `auto` / `light` / `dark` preference; mincho is `html[data-cue-font='mincho']`, a cue face on the same palette, never a third colour world;
+- keep the `html[data-theme]` token mechanism with exactly **two** appearances — light (daylight proofing) and dark (dubbing booth) — resolved from the `auto` / `light` / `dark` preference; `html[data-palette]` is a second, orthogonal axis (six base-colour skins, default `cobalt`), and mincho is `html[data-cue-font='mincho']`, a cue face on the same palette, never a third colour world;
+- derived tokens are computed with `color-mix(in srgb, var(…))`; adding a palette means two `[data-palette][data-theme]` blocks plus one `PALETTES` entry, never a component branch;
 - respect `ReviewView.svelte` and `store.svelte.ts` line budgets (only shrink; split logic first);
 - preserve the review interaction contracts (4 px click slop, `duration/69` zoom, 50-step history);
 - route every screenshot through `KIKUSUB_DEV_SEED` + `--screenshot` or `capture_matrix.sh`, never a visible window.
@@ -577,6 +656,17 @@ produced three defects and three rulings:
   11 px glyph clears 4.5:1 on every surface it can land on.
 - **The import page holds one sheet** and two hairline-separated sections; the duplicated
   "switch film" bar and its extension pills are gone. See *The Import Page Has One Sheet Rule*.
+
+**Batch 3 additions (2026-11-26).** The six-palette system above shipped with the Settings →
+外观与朗读 palette picker (six restrained previews that follow the current light/dark, click to
+apply). `verify_phase2_shell.mjs` now measures all 6 × 2 combinations in one renderer process:
+body ink, 11 px labels (on paper / well / surface), accent text on paper / canvas / surface,
+white primary-button text in normal and hover states, danger / warn / success text, input
+border visibility (`--well-line` alpha and contrast), and the luminance direction
+(`well < canvas`; dark `raise > surface > canvas`). `tools/shots/verify_ai_toolbar_controls.mjs`
+still guards the control edges on the AI pages. Screenshots: `p2-palette-settings-{light,dark}.png`
+and `p2-palette-{rose-pine,nord,cinema-amber}-{light,dark}.png` under
+`docs/images/refactor-2026-11/`.
 
 **Parallel install and data isolation.** The user's current installed `KikuSub.app` is their daily
 driver and must keep working untouched. A redesign build is only ever a *separate* artefact
