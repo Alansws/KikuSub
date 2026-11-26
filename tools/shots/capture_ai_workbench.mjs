@@ -15,7 +15,8 @@
  * 选项：
  *   --out DIR           输出目录，默认 docs/images/shots/current-ai
  *   --theme LIST        light,dark,mincho（默认全跑）
- *   --states LIST       polish-dual,reshape-draft,dual（默认全跑）
+ *   --states LIST       polish-dual,polish-paste,reshape-draft,reshape-paste,
+ *                       translate-proposal,translate-paste,dual（默认全跑）
  *   --size WxH          默认 1360x838
  *   --compare DIR       只比对，不写基线；打印每张图的 PSNR
  *   --no-sandbox        追加 Electron --no-sandbox（沙箱 / CI 环境）
@@ -35,7 +36,63 @@ const BASE = path.join(os.tmpdir(), 'kikusub-ai-workbench-shots');
 const FIXTURE_OUT = path.join(BASE, 'out');
 const DEFAULT_OUT = path.join(ROOT, 'docs/images/shots/current-ai');
 const ALL_THEMES = ['light', 'dark', 'mincho'];
-const ALL_STATES = ['polish-dual', 'reshape-draft', 'dual'];
+const ALL_STATES = [
+  'polish-dual',
+  'polish-paste',
+  'reshape-draft',
+  'reshape-paste',
+  'translate-proposal',
+  'translate-paste',
+  'dual',
+];
+
+const PASTE_SRT = `1
+00:00:00,000 --> 00:00:01,400
+你好，好久不见。
+
+2
+00:00:01,500 --> 00:00:02,900
+你真的变了好多。
+
+3
+00:00:03,000 --> 00:00:04,600
+我一直在这里等着你。
+
+4
+00:00:04,700 --> 00:00:06,200
+只有下雨天，你才会来这里。
+
+5
+00:00:06,300 --> 00:00:07,800
+所以今天我也试着来了。
+
+6
+00:00:07,900 --> 00:00:09,400
+我有话想跟你说。
+
+7
+00:00:09,500 --> 00:00:11,000
+那是……非常重要的事。
+
+8
+00:00:11,100 --> 00:00:12,600
+可是，我说不好。
+
+9
+00:00:12,700 --> 00:00:14,200
+能再给我一点时间吗。
+
+10
+00:00:14,300 --> 00:00:15,800
+嗯，没关系。
+
+11
+00:00:15,900 --> 00:00:17,400
+那，我们一起走走吧。
+
+12
+00:00:17,500 --> 00:00:19,000
+……谢谢你。`;
 
 const RESHAPE_SRT = `1
 00:00:00,000 --> 00:00:02,900
@@ -245,6 +302,40 @@ proposal = proposals.build_proposal(
 proposal_path = proposals.proposal_path(out, media.stem, 'polish')
 proposal_path.write_text(proposals.dump_proposal(proposal), encoding='utf-8')
 
+# 译文提案：与润色同源、同一源指纹，走 zh-Hans 平行轨。
+zh = [
+    '你好，好久不见。',
+    '你真的变了好多。',
+    '我一直在这里等着你。',
+    '只有下雨天，你才会来这里。',
+    '所以今天我也试着来了。',
+    '我有话想跟你说。',
+    '那是……非常重要的事。',
+    '可是，我说不好。',
+    '能再给我一点时间吗。',
+    '嗯，没关系。',
+    '那，我们一起走走吧。',
+    '……谢谢你。',
+]
+translate_items = [
+    {'i': idx, 'after': zh[(idx - 1) % len(zh)], 'note': ''}
+    for idx in range(1, len(cue_objects) + 1)
+]
+translate = proposals.build_proposal(
+    kind='translate',
+    src_lang='ja',
+    texts=[cue.text for cue in cue_objects],
+    items=translate_items,
+    model='fake-demo',
+    entry='skill',
+    dst_lang='zh-Hans',
+    source_path=str(srt_path),
+    created_at=FIXED_AT,
+)
+translate_path = proposals.proposal_path(out, media.stem, 'translate', 'zh-Hans')
+translate_path.write_text(proposals.dump_proposal(translate), encoding='utf-8')
+print(translate_path)
+
 stat = media.stat()
 fingerprint = f"{media.resolve()}|{stat.st_size}|{int(stat.st_mtime_ns)}"
 key = hashlib.sha1(fingerprint.encode()).hexdigest()[:16]
@@ -307,12 +398,88 @@ function evalFor(state, theme) {
   if (state === 'polish-dual') {
     return `(async () => {${common}
       document.querySelectorAll('.sb-item')[4]?.click();
-      ${sleep(1400)}
+      // 等提案读完（底栏出现）再切双源，否则会拍到「正在读取建议…」的空页。
+      await (async () => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end && !document.querySelector('.aiw-applybar')) await sleep(120);
+      })();
+      await sleep(400);
       [...document.querySelectorAll('button')]
         .find((b) => b.textContent.trim() === '双源')?.click();
       ${sleep(1400)}
       document.querySelector('.aiw-check input')?.click();
       ${sleep(300)}
+      return 'ok';
+    })()`;
+  }
+
+  if (state === 'polish-paste') {
+    return `(async () => {${common}
+      document.querySelectorAll('.sb-item')[4]?.click();
+      await (async () => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end && !document.querySelector('.aiw-applybar')) await sleep(120);
+      })();
+      await sleep(400);
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === '双源')?.click();
+      ${sleep(900)}
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === '粘贴回复')?.click();
+      ${sleep(500)}
+      const box = document.querySelector('.paste-box');
+      if (box) {
+        box.value = ${JSON.stringify(PASTE_SRT)};
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      ${sleep(500)}
+      return 'ok';
+    })()`;
+  }
+
+  if (state === 'reshape-paste') {
+    return `(async () => {${common}
+      document.querySelectorAll('.sb-item')[5]?.click();
+      ${sleep(1200)}
+      const box = document.querySelector('.aiw-drop textarea');
+      if (box) {
+        box.value = ${JSON.stringify(RESHAPE_SRT)};
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      ${sleep(500)}
+      return 'ok';
+    })()`;
+  }
+
+  if (state === 'translate-proposal') {
+    return `(async () => {${common}
+      document.querySelectorAll('.sb-item')[6]?.click();
+      await (async () => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end && !document.querySelector('.aiw-applybar')) await sleep(120);
+      })();
+      ${sleep(400)}
+      return 'ok';
+    })()`;
+  }
+
+  if (state === 'translate-paste') {
+    return `(async () => {${common}
+      document.querySelectorAll('.sb-item')[6]?.click();
+      await (async () => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end && !document.querySelector('.aiw-applybar')) await sleep(120);
+      })();
+      ${sleep(400)}
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === '粘贴结果')?.click();
+      ${sleep(500)}
+      const box = document.querySelector('.paste-box');
+      if (box) {
+        box.value = ${JSON.stringify(PASTE_SRT)};
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      ${sleep(500)}
       return 'ok';
     })()`;
   }

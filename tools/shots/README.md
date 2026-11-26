@@ -72,9 +72,12 @@ node tools/shots/capture_ai_workbench.mjs --out /tmp/ai-current --no-sandbox
 node tools/shots/capture_ai_workbench.mjs --out /tmp/ai-current --compare docs/images/shots/baseline
 ```
 
-状态：`polish-dual`（A 12 / B 9 / AI 终稿）、`reshape-draft`（粘入 9 条新稿后的新旧对照）、
+状态：`polish-dual`（A 12 / B 9 / AI 终稿）、`polish-paste`（锁轴页展开粘贴框）、
+`reshape-draft`（粘入 9 条新稿后的新旧对照）、`reshape-paste`（重排页展开粘贴框）、
+`translate-proposal`（双语翻译已有译文提案）、`translate-paste`（翻译页展开粘贴框）、
 `dual`（双引擎差异表）。输出名 `<state>-<theme>-<1360x838>.png`，与 `capture_matrix.sh` 一致。
 夹具在系统临时目录生成，固定了提案与 B 版边车的时间戳，因此同一台机器上可逐像素复现。
+`translate-proposal` / `translate-paste` 需要 `media.zh-Hans.ai-translate.json` 夹具（脚本自动生成）。
 
 ## 断句重排分段计划回归
 
@@ -126,6 +129,22 @@ node tools/shots/verify_import_page.mjs
 三块顺序与分区标题、五个扩展名 chip、本页按钮无尾 `…`、列表 / 网格切换仍可用。
 截图落在系统临时目录的 `kikusub-import-verify/import.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.28，批次记录见 `docs/frontend-refactor-2026-11.md` §8.10。
+
+## AI 工作台控件可见性回归（第二阶段 Batch 2）
+
+亮色 `--well-line` 曾是 `transparent`，而 `--well #F2F2F7` 与工具栏 `--paper #F5F5F7` 只差两个
+色阶，于是所有 `<select>` / 数字框在灰底上隐身，只剩一枚三角。这个脚本**读计算样式**而不是
+看截图，把整类问题冻住（亮 / 暗各 11 条）：
+
+```bash
+node tools/shots/verify_ai_toolbar_controls.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_ai_toolbar_controls.mjs
+```
+
+断言：`--well-line` alpha ≥0.10；`--font-cue` 以 Hiragino Sans 起头；`.aiw-page` / `.aiw-head`
+与 `--canvas` 同色、`.aiw-cmd-row` 透明且只有 1px 发丝线；`.aiw-head` 里每个下拉 / 输入控件都
+有 ≥1px、alpha ≥0.10 的边线（或与真实台面 ≥0.025 明度差）；纸白键同样有边线；下拉框与按钮
+同为 28px；工具栏动作按钮无尾 `…`。批次记录见 `docs/frontend-refactor-2026-11.md` §8.11。
 
 ## 清理标点回归
 
