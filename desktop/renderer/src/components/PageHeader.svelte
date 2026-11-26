@@ -54,6 +54,18 @@
     line-height: var(--lh-body);
     color: var(--text-2);
   }
+  /* 页头动作是「次级按钮」，不是一段裸链接：
+     纸白台面上透明底的 ghost 只剩一行蓝/灰字，看起来像飘在行末的链接
+     （2026-11-26 真机报障：「去双语翻译」「去转写页」都是这个病）。
+     这里只给页头这一层加淡填充，标题栏里的图标 ghost 仍然是透明的。 */
+  .page-actions :global(.btn.ghost) {
+    background: var(--well);
+    color: var(--text-2);
+  }
+  .page-actions :global(.btn.ghost:hover:not(:disabled)) {
+    background: var(--well-hover);
+    color: var(--text);
+  }
   .page-actions {
     display: flex;
     align-items: center;

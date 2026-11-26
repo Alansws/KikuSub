@@ -200,7 +200,7 @@
 <div class="ai aiw-page">
   <GapFillCard />
   <AiBatchToolbar
-    title="翻译"
+    title="双语翻译"
     channel={ai.channel}
     channels={['api', 'manual']}
     apiNote="设置 → AI 优化里启用并填写 API Key；也可以直接用「外部手动」"
@@ -282,16 +282,21 @@
       >{aiBatchActive() ? '复制本批提示词' : '复制提示词'}</button>
       <span class="aiw-arrow" aria-hidden="true">→</span>
       <button
-        class="btn ghost"
+        class="btn"
         onclick={togglePaste}
         disabled={!app.cues.length}
         title="粘贴模型返回的 SRT，按时间轴对齐原句"
-      >{ai.pasteOpen ? '收起粘贴' : '粘贴结果…'}</button>
-      <button class="btn ghost" onclick={importAiProposal} title="导入一份外部生成的提案文件">
-        导入建议…
+      >{ai.pasteOpen ? '收起粘贴' : '粘贴结果'}</button>
+      <button class="btn" onclick={importAiProposal} title="导入一份外部生成的提案文件">
+        导入建议
       </button>
     {/snippet}
 
+    {#snippet note()}
+      <Icon name="quote" size={11} />
+      <span>译文走平行轨：原文与时间轴都不动，采纳后回核对台逐句对照。</span>
+      <button class="aiw-link" onclick={() => setView('review')}>回核对台 →</button>
+    {/snippet}
     {#snippet statusExtra()}
       {#if ai.proposal}
         <span
@@ -388,7 +393,8 @@
         <button class="btn primary" onclick={parsePaste} disabled={ai.parsing || !ai.pasteText.trim()}>
           {ai.parsing ? '解析中…' : aiBatchActive() ? '解析并回填本批' : '解析成建议'}
         </button>
-        <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
+        <button class="btn" onclick={() => (ai.pasteOpen = false)}>取消</button>
+        <div class="aiw-spacer"></div>
         <label class="chk" title="开启后回到旧的等条数强校验：条数不符整批拒绝">
           <input type="checkbox" bind:checked={ai.strictCount} />
           严格要求条数一致
@@ -463,7 +469,7 @@
               onclick={startAiTranslate}
               disabled={ai.generating || !apiReady}
             >{ai.generating ? `生成中 ${ai.progress}%` : '生成译文建议'}</button>
-            <button class="aiw-link" onclick={importAiProposal}>导入建议文件…</button>
+            <button class="aiw-link" onclick={importAiProposal}>导入建议文件</button>
             {#if visibleErrors.length}
               <span class="aiw-blank-note"><Icon name="warn" size={11} />{visibleErrors[0]}</span>
             {/if}
@@ -481,8 +487,8 @@
             <button class="btn primary" onclick={() => void copyAiPrompt()} disabled={!app.cues.length}>
               复制提示词
             </button>
-            <button class="btn ghost" onclick={togglePaste}>粘贴结果…</button>
-            <button class="aiw-link" onclick={importAiProposal}>导入建议文件…</button>
+            <button class="btn" onclick={togglePaste}>粘贴结果</button>
+            <button class="aiw-link" onclick={importAiProposal}>导入建议文件</button>
             {#if visibleErrors.length}
               <span class="aiw-blank-note"><Icon name="warn" size={11} />{visibleErrors[0]}</span>
             {/if}
@@ -558,10 +564,11 @@
           </div>
           {#if hasNotes}<div class="c-note">{row.note}</div>{/if}
           <button
-            class="pin"
+            class="aiw-pin"
             class:on={row.accepted}
             onclick={() => toggleAiAccept(row.i)}
-            title={row.accepted ? '采纳这一条（点击排除）' : '已排除（点击采纳）'}
+            title={row.accepted ? '已采纳（点击排除）' : '已排除（点击采纳）'}
+            aria-label={row.accepted ? `排除第 ${row.i} 条` : `采纳第 ${row.i} 条`}
           >
             <Icon name="check" size={11} />
           </button>
@@ -599,7 +606,7 @@
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    padding: 6px 14px;
+    padding: 6px var(--sp-6);
     font-size: 12px;
     line-height: 1.5;
     border-bottom: 1px solid var(--separator-soft);
@@ -613,34 +620,39 @@
     background: var(--warn-soft);
     color: var(--warn);
   }
+  /* 与锁轴润色同一套粘贴区语法：纸白台面 + 发丝线收口，不铺灰底。 */
   .paste {
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
-    padding: 10px 14px;
+    padding: var(--sp-3) var(--sp-6) 14px;
     border-bottom: 1px solid var(--separator);
-    background: var(--bg-inspector);
+    background: transparent;
     flex: 0 0 auto;
   }
   .paste-head {
     font-size: 12px;
     color: var(--text-2);
-    line-height: 1.6;
+    line-height: 1.7;
+  }
+  .paste-head b {
+    color: var(--text);
   }
   .paste-box {
     width: 100%;
-    min-height: 130px;
+    min-height: 132px;
     max-height: 40vh;
     resize: vertical;
     font-family: var(--font-mono);
     font-size: 12px;
-    line-height: 1.5;
-    padding: var(--sp-2) 10px;
+    line-height: 1.6;
+    padding: 10px var(--sp-3);
     border-radius: var(--rad-card);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well-focus);
     color: var(--text);
     outline: none;
+    transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
   }
   .paste-box:focus {
     border-color: var(--accent);
@@ -651,6 +663,7 @@
     align-items: center;
     gap: var(--sp-2);
     flex-wrap: wrap;
+    min-height: 28px;
   }
   .paste-hint {
     margin-left: auto;
@@ -670,7 +683,7 @@
     grid-template-columns: 92px minmax(0, 1fr) minmax(0, 1fr) 78px 26px;
     gap: 10px;
     align-items: start;
-    padding: 6px 14px;
+    padding: var(--sp-2) var(--sp-6);
   }
   .cols.no-notes,
   .row.no-notes {
@@ -681,11 +694,12 @@
     top: 0;
     z-index: 1;
     font-size: 12px;
+    font-weight: 500;
     color: var(--text-3);
-    background: var(--bg-content);
+    background: var(--canvas);
     border-bottom: 1px solid var(--separator);
-    padding-top: 5px;
-    padding-bottom: 5px;
+    padding-top: 7px;
+    padding-bottom: 7px;
   }
   .list {
     flex: 1;
@@ -695,9 +709,9 @@
   .row {
     border-bottom: 1px solid var(--separator-soft);
     font-size: 12.5px;
-    line-height: 1.55;
+    line-height: 1.6;
     content-visibility: auto;
-    contain-intrinsic-size: auto 42px;
+    contain-intrinsic-size: auto 46px;
   }
   .row:hover {
     background: var(--row-hover);
@@ -714,16 +728,24 @@
     border: 0;
     background: transparent;
     padding: 0;
-    color: var(--accent);
+    color: var(--ink-2);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums;
     cursor: pointer;
     text-align: left;
   }
+  .tc:hover {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
   .idx {
-    font-size: 12px;
-    color: var(--text-3);
+    font-size: 10.5px;
+    line-height: 14px;
+    color: color-mix(in srgb, var(--text-3) 68%, transparent);
     font-variant-numeric: tabular-nums;
   }
   .c-side,
@@ -736,14 +758,17 @@
     color: var(--text-2);
   }
   .right {
-    border-radius: 4px;
-    padding: 1px var(--sp-1);
-    margin: -1px -4px;
+    border-radius: 5px;
+    padding: 2px 6px;
+    margin: -2px -6px;
     cursor: text;
-    min-height: 18px;
+    min-height: 20px;
+    border: 1px solid transparent;
+    transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
   }
   .row.changed .right {
     background: var(--accent-soft);
+    border-color: var(--accent-line);
   }
   .row.changed .left {
     color: var(--text);
@@ -757,7 +782,7 @@
     padding: 3px 5px;
     border-radius: 4px;
     border: 1px solid var(--accent);
-    background: var(--bg-content);
+    background: var(--well-focus);
     color: var(--text);
     outline: none;
   }
@@ -813,21 +838,4 @@
   }
   .note.align-out {
     border-left: 3px solid var(--danger);
-  }
-  .pin {
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: transparent;
-    color: var(--text-3);
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-  }
-  .pin.on {
-    border-color: transparent;
-    background: var(--accent);
-    color: var(--on-accent);
-  }
-</style>
+  }</style>

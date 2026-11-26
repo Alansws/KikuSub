@@ -14,6 +14,10 @@
     save: '<path d="M3.2 2.4h7.6L13.6 5v7a1.6 1.6 0 0 1-1.6 1.6H4A1.6 1.6 0 0 1 2.4 12V4a1.6 1.6 0 0 1 1.6-1.6z"/><path d="M5.2 2.4v3.4h5.2V2.4"/><rect x="4.8" y="8.6" width="6.4" height="5" rx=".8"/>',
     gear: '<circle cx="8" cy="8" r="4.2"/><circle cx="8" cy="8" r="1.7"/><path d="M8 1.2v2.6M8 12.2v2.6M14.8 8h-2.6M3.8 8H1.2M12.8 3.2l-1.9 1.9M5.1 10.9l-1.9 1.9M12.8 12.8l-1.9-1.9M5.1 5.1 3.2 3.2"/>',
     moon: '<path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8 5.6 5.6 0 1 0 13.2 9.6z"/>',
+    // 外观三档（2026-11-25）：auto = 半明半暗的圆，light = 太阳，dark = 月亮
+    'appearance-auto':
+      '<circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/>',
+    sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1.2v1.9M8 12.9v1.9M1.2 8h1.9M12.9 8h1.9M3.3 3.3l1.35 1.35M11.35 11.35l1.35 1.35M12.7 3.3l-1.35 1.35M4.65 11.35 3.3 12.7"/>',
     sidebar:
       '<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2"/><path d="M6.2 2.8v10.4"/>',
     // 侧栏折叠开关（2026-11-24）：MacWhisper 那颗「侧栏」图标 —— 圆角外框 + 左列实底，
@@ -42,6 +46,11 @@
     plus: '<path d="M8 3v10"/><path d="M3 8h10"/>',
     minus: '<path d="M3 8h10"/>',
     close: '<path d="M4.2 4.2 11.8 11.8"/><path d="M11.8 4.2 4.2 11.8"/>',
+    // 溢出菜单的「⋯」：三颗实心点，垂直居中靠几何而不是字体基线
+    // （Step 4.2.1 起检查器的译文轨菜单也用它）。
+    // 时间轴锁定（锁轴润色页）：闭合的挂锁，描边风格与其它图标一致
+    lock: '<rect x="3.2" y="7" width="9.6" height="6.8" rx="1.6"/><path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7"/><path d="M8 9.8v1.6"/>',
+    more: '<circle cx="3.3" cy="8" r="1.6" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/><circle cx="12.7" cy="8" r="1.6" fill="currentColor" stroke="none"/>',
     'chevron-left': '<path d="M10 3.5 5.5 8 10 12.5"/>',
     'chevron-right': '<path d="M6 3.5 10.5 8 6 12.5"/>',
     'chevron-down': '<path d="M3.5 6 8 10.5 12.5 6"/>',

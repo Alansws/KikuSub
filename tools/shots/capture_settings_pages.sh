@@ -4,6 +4,11 @@
 #   bash tools/shots/capture_settings_pages.sh            # 输出到 /tmp/kikusub-settings-pages
 #   bash tools/shots/capture_settings_pages.sh docs/images/shots/current
 #   KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_settings_pages.sh
+#   KIKUSUB_SETTINGS_SHOT_SIZE=1440x880 bash tools/shots/capture_settings_pages.sh DIR
+#
+# 视口默认 1440×880（不是 1440×900）：macOS 的可视工作区高度扣掉菜单栏与 Dock 后通常
+# 只有 885pt 左右，请求 900 会被系统压回 885，落盘文件名却还写着 900——本项目踩过
+# 「文件名一直骗人」的亏。要更高的视口就在支持的机器上显式传 KIKUSUB_SETTINGS_SHOT_SIZE。
 #
 # 为什么单独一个脚本：`capture_matrix.sh` 的 `settings` 状态只点侧栏，切视图动画 + 引擎注册表
 # 加载常常没跑完，截出来是半透明的骨架屏（「正在读取引擎配置…」「0/0 引擎」）。这里在 eval
@@ -14,7 +19,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="${1:-/tmp/kikusub-settings-pages}"
-SIZE=1440x900
+SIZE="${KIKUSUB_SETTINGS_SHOT_SIZE:-1440x880}"
 ELECTRON_ARGS="${KIKUSUB_SHOT_ELECTRON_ARGS:-}"
 case "$OUT_DIR" in
   -h|--help) sed -n '2,12p' "$0"; exit 0 ;;

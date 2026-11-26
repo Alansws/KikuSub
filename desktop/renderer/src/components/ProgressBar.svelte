@@ -57,68 +57,35 @@
       background-color 180ms ease;
     will-change: transform;
   }
-  .progress:not(.done):not(.error):not(.indeterminate) .fill {
-    box-shadow: 0 0 8px var(--accent-soft);
-  }
-  /* 运行中扫过的一道柔光：只在确定进度时出现，完成/失败立即停 */
-  .fill::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      rgba(255, 255, 255, 0.3),
-      transparent
-    );
-    transform: translateX(-120%);
-    animation: progress-shimmer 1.4s linear infinite;
-  }
+  /* 确定进度就是一条纯色填充：不再扫一道柔光（2026-11-25 Step 5 去掉）。
+     进度本身在动，再加一条无限循环的高光只会抢注意力；零偏移的蓝色光晕同理。 */
   .done .fill {
     background: var(--success);
   }
   .error .fill {
     background: var(--danger);
   }
-  .done .fill::after,
-  .error .fill::after {
-    display: none;
-  }
 
+  /* 不确定进度：一块固定宽度的填充在原地轻微呼吸，不再横向来回扫。
+     横向运动会读成「有条进度在走」并抢视线；呼吸只表达「还在跑」。 */
   .indeterminate .fill {
     width: 34%;
     transform: none;
-    animation: progress-indeterminate 1.25s ease-in-out infinite;
-  }
-  .indeterminate .fill::after {
-    display: none;
+    animation: progress-breathe 1.6s ease-in-out infinite;
   }
 
-  @keyframes progress-shimmer {
-    0% {
-      transform: translateX(-120%);
-    }
-    60%,
+  @keyframes progress-breathe {
+    0%,
     100% {
-      transform: translateX(220%);
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
     }
   }
-  @keyframes progress-indeterminate {
-    0% {
-      transform: translateX(-130%);
-    }
-    100% {
-      transform: translateX(330%);
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .fill {
       transition: none;
-    }
-    .fill::after {
-      animation: none;
-      display: none;
     }
     .indeterminate .fill {
       width: 100%;

@@ -213,7 +213,7 @@
     gap: var(--sp-2);
     padding: var(--sp-3) var(--sp-6);
     border-top: 1px solid var(--hero-border);
-    background: var(--raise);
+    background: var(--surface);
   }
   .foot-note {
     margin-left: auto;

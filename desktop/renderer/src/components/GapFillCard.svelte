@@ -208,7 +208,8 @@
   .gap-card {
     flex: 0 0 auto;
     border-bottom: 1px solid var(--separator);
-    background: var(--bg-content);
+    /* 页内状态条直接落在台面上，不再铺一层 --surface 白带。 */
+    background: transparent;
     font-size: 12px;
     color: var(--text-2);
   }
@@ -219,7 +220,7 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    padding: 6px 14px;
+    padding: 7px var(--sp-6);
     min-width: 0;
   }
   .gap-title {
@@ -273,7 +274,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
-    padding: 0 14px 10px;
+    padding: 0 var(--sp-6) 10px;
     border-top: 1px solid var(--separator-soft);
   }
   .gap-hint,
@@ -344,8 +345,8 @@
     line-height: 1.5;
     padding: var(--sp-2) 10px;
     border-radius: var(--rad-card);
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     outline: none;
   }
@@ -373,9 +374,9 @@
     flex-direction: column;
     max-height: 42vh;
     overflow: auto;
-    border: 1px solid var(--separator);
+    border: 1px solid var(--well-line);
     border-radius: 6px;
-    background: var(--bg-content);
+    background: var(--well);
   }
   .gap-list-head,
   .gap-item {
@@ -429,7 +430,7 @@
   }
   .gap-input:focus {
     border-color: var(--accent);
-    background: var(--bg-content);
+    background: var(--well-focus);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .pin {

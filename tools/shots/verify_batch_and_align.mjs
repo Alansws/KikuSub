@@ -145,7 +145,7 @@ const EVAL = String.raw`
       await sleep(900);
 
       // ------------------------------------------------------------------ 润色
-      sidebar('润色')?.click();
+      sidebar('锁轴润色')?.click();
       await waitFor(() => document.querySelector('.aiw-page'));
       await sleep(1000);
       await useManual(document.querySelector('.aiw-page'));
@@ -197,7 +197,7 @@ const EVAL = String.raw`
       const polishMismatchToast = toastText();
 
       // ------------------------------------------------------------------ 翻译
-      sidebar('翻译')?.click();
+      sidebar('双语翻译')?.click();
       await waitFor(() => document.querySelector('.ai'));
       await sleep(1000);
       await useManual(document.querySelector('.ai'));
@@ -241,7 +241,7 @@ const EVAL = String.raw`
       const strictToast = toastText();
 
       // ------------------------------------------------------------------ 断句重排
-      sidebar('断句重排')?.click();
+      sidebar('重排润色')?.click();
       await waitFor(() => document.querySelector('.reshape'));
       await sleep(1200);
       const reshapeHasPicker = Boolean(document.querySelector('.reshape .aiw-title-row .clip-scope'));

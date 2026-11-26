@@ -14,7 +14,15 @@ cd "$REPO_ROOT"
 
 source tools/pack/_rmtree.sh
 
-APP="build/pack/KikuSub.app"
+# 默认产物与现役包完全一致（正常发版不受影响）。试用版 / 双开包通过环境变量
+# 换独立产物名、bundle id 与数据根，见 tools/pack/build_trial.sh 与
+# docs/frontend-refactor-2026-11.md §0.1。
+APP_NAME="${KIKUSUB_APP_NAME:-KikuSub}"
+BUNDLE_ID="${KIKUSUB_BUNDLE_ID:-com.kikusub.desktop}"
+PACK_DIR="${KIKUSUB_PACK_DIR:-build/pack}"
+ISOLATE="${KIKUSUB_ISOLATION:-0}"
+DATA_DIR_NAME="${KIKUSUB_DATA_DIR_NAME:-$APP_NAME}"
+APP="$PACK_DIR/$APP_NAME.app"
 ELECTRON_APP="desktop/node_modules/electron/dist/Electron.app"
 SIDECAR="build/pack/dist/sidecar"
 CLI="build/pack/dist/kikusub"
@@ -64,10 +72,12 @@ if [ ! -f "docs/app-icon.png" ]; then
   echo "❌ 缺少 docs/app-icon.png（应用图标唯一源）；没有它不允许继续装配" >&2
   exit 1
 fi
-rm_tree "build/pack/icon.iconset"
-swift tools/pack/make_icon.swift docs/app-icon.png "build/pack/icon.iconset"
-mkdir -p desktop/build
-iconutil -c icns "build/pack/icon.iconset" -o desktop/build/icon.icns
+mkdir -p "$PACK_DIR" desktop/build
+rm_tree "$PACK_DIR/icon.iconset"
+swift tools/pack/make_icon.swift docs/app-icon.png "$PACK_DIR/icon.iconset"
+iconutil -c icns "$PACK_DIR/icon.iconset" -o "$PACK_DIR/icon.icns"
+# DMG 卷图标仍读 desktop/build/icon.icns（build_dmg.sh），这里同步刷一份。
+cp "$PACK_DIR/icon.icns" desktop/build/icon.icns
 # 开发模式（npx electron .）没有 Info.plist，Dock 图标走 desktop/build/icon.png。
 # 这里一起刷新，否则改完图标跑开发模式仍是上一次拷进去的旧图。
 cp docs/app-icon.png desktop/build/icon.png
@@ -78,7 +88,7 @@ echo "== 1/8 复制 Electron 框架 =="
 # 就会踩（torch/_dynamo/config.py: default_debug_dir_root），于是界面上只剩一句
 # "[Errno 2] No such file or directory"，跟视频/模型毫无关系，极难排查。
 # rebuild.sh 里也有收尾，但排在这步**之后**；所以这里必须自己挡在前面。
-APP_EXE="$APP/Contents/MacOS/KikuSub"
+APP_EXE="$APP/Contents/MacOS/$APP_NAME"
 if pgrep -f "$APP_EXE" >/dev/null 2>&1; then
   echo "== 关闭正在运行的旧实例（避免装配时抽掉它的 cwd）=="
   pkill -TERM -f "$APP_EXE" >/dev/null 2>&1 || true
@@ -111,7 +121,7 @@ rm -rf "$APP/Contents/Resources/default_app.asar"
 rm -f "$APP/Contents/Resources/electron.icns"
 
 echo "== 2/8 改名主可执行文件 =="
-mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/KikuSub"
+mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/$APP_NAME"
 
 echo "== 3/8 写入 Info.plist =="
 # 版本号只有一个来源：desktop/package.json。Info.plist 的 CFBundleShortVersionString
@@ -127,10 +137,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>KikuSub</string>
-  <key>CFBundleDisplayName</key><string>KikuSub</string>
-  <key>CFBundleExecutable</key><string>KikuSub</string>
-  <key>CFBundleIdentifier</key><string>com.kikusub.desktop</string>
+  <key>CFBundleName</key><string>${APP_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
+  <key>CFBundleExecutable</key><string>${APP_NAME}</string>
+  <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -174,6 +184,19 @@ cp -R desktop/renderer/dist "$APP/Contents/Resources/app/renderer-dist"
 mkdir -p "$APP/Contents/Resources/app/renderer"
 mv "$APP/Contents/Resources/app/renderer-dist" "$APP/Contents/Resources/app/renderer/dist"
 # 包内 package.json 用同一个 APP_VERSION（第 3 步已读取并校验过）。
+# 隔离包多写 productName：Electron 的默认应用名/菜单标题跟着它走；正式包不写，
+# 保持现有 userData 目录（kikusub-desktop）不变。
+if [ "$ISOLATE" = "1" ]; then
+cat > "$APP/Contents/Resources/app/package.json" <<JSON
+{
+  "name": "kikusub-desktop",
+  "productName": "$APP_NAME",
+  "version": "$APP_VERSION",
+  "private": true,
+  "main": "main/main.cjs"
+}
+JSON
+else
 cat > "$APP/Contents/Resources/app/package.json" <<JSON
 {
   "name": "kikusub-desktop",
@@ -182,13 +205,25 @@ cat > "$APP/Contents/Resources/app/package.json" <<JSON
   "main": "main/main.cjs"
 }
 JSON
+fi
+
+# 隔离包的身份文件：主进程据此换产品名、userData 与数据根。正式包不写这个文件，
+# 于是所有默认值（KikuSub / com.kikusub.desktop / Application Support/KikuSub）原样保留。
+if [ "$ISOLATE" = "1" ]; then
+cat > "$APP/Contents/Resources/app-isolation.json" <<JSON
+{
+  "appName": "$APP_NAME",
+  "dataDirName": "$DATA_DIR_NAME"
+}
+JSON
+fi
 # 随包的 Agent 技能（设置页「一键配置」从这里复制到 ~/.agents/skills/）
 if [ -d "desktop/resources/skill" ]; then
   cp -R desktop/resources "$APP/Contents/Resources/app/resources"
 else
   echo "⚠️ 缺少 desktop/resources/skill，一键配置按钮会不可用" >&2
 fi
-cp desktop/build/icon.icns "$APP/Contents/Resources/icon.icns"
+cp "$PACK_DIR/icon.icns" "$APP/Contents/Resources/icon.icns"
 cp presets.json "$APP/Contents/Resources/python-presets.json" 2>/dev/null || true
 
 echo "== 5/8 放入 Python sidecar（$(du -sh "$SIDECAR" | cut -f1)，慢）=="
@@ -242,6 +277,10 @@ else
   echo "   要做出「双击即用」的包：bash tools/pack/fetch_ffmpeg.sh" >&2
 fi
 
+if [ "$ISOLATE" = "1" ]; then
+  echo "== 7/8 隔离包：不碰现役 Application Support，也不预建模型软链 =="
+  echo "   首次启动时在向导里把模型目录指向现有 models/ 即可（不与旧版共享数据目录）"
+else
 echo "== 7/8 模型目录（本机自用：指向仓库里已下载的 6.6 GB）=="
 APPSUP="${KIKUSUB_APP_SUPPORT_DIR:-$HOME/Library/Application Support/KikuSub}"
 mkdir -p "$APPSUP"
@@ -254,12 +293,13 @@ elif [ -e "$APPSUP/models" ]; then
 else
   echo "⚠️ 仓库里没有 models/，首次转写会触发下载"
 fi
+fi
 
 # 硬断言：主可执行文件必须还是 Electron 那一份。Electron 的主二进制只有 33KB
 # （真正的框架在 Frameworks/），所以不能按体积判断；用逐字节比较最可靠。
 # 放在 MacOS 下的 CLI 会被大小写不敏感文件系统当成同一个文件，把 App 静默换成
 # CLI——这里必须在签名前拦住。
-if ! cmp -s "$APP/Contents/MacOS/KikuSub" "$ELECTRON_APP/Contents/MacOS/Electron"; then
+if ! cmp -s "$APP/Contents/MacOS/$APP_NAME" "$ELECTRON_APP/Contents/MacOS/Electron"; then
   echo "❌ 主可执行文件与 Electron 不一致，疑似被覆盖（大小写冲突）" >&2
   exit 1
 fi

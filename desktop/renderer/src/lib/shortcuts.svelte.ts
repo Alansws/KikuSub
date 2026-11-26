@@ -305,7 +305,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   },
   {
     id: 'view.polish',
-    label: '润色',
+    label: '锁轴润色',
     group: '视图',
     scope: 'view',
     def: 'mod+5',
@@ -313,7 +313,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   },
   {
     id: 'view.reshape',
-    label: '断句重排',
+    label: '重排润色',
     group: '视图',
     scope: 'view',
     def: 'mod+6',
@@ -321,7 +321,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   },
   {
     id: 'view.translate',
-    label: '翻译',
+    label: '双语翻译',
     group: '视图',
     scope: 'view',
     def: 'mod+7',
@@ -355,6 +355,7 @@ export const FIXED_SHORTCUTS: FixedShortcut[] = [
   { id: 'system.settings', label: '设置', combo: 'mod+,', reason: 'macOS 菜单' },
   { id: 'system.open', label: '打开…', combo: 'mod+o', reason: '文件菜单' },
   { id: 'system.export', label: '导出…', combo: 'mod+e', reason: '文件菜单' },
+  { id: 'system.saveDraft', label: '暂存工作草稿', combo: 'mod+s', reason: '文件菜单' },
   { id: 'system.undo', label: '撤回', combo: 'mod+z', reason: '编辑菜单' },
   { id: 'system.redo', label: '重做', combo: 'mod+shift+z', reason: '编辑菜单' },
   { id: 'system.inspector', label: '切换检查器', combo: 'mod+alt+i', reason: '显示菜单' },

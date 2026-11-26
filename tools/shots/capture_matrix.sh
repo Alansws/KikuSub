@@ -27,8 +27,10 @@ STATES="import transcribe review dual polish reshape translate prompts export se
 # `tools/shots/readme-seed.json`——时间落在《言叶之庭》那座桥约 1:58 处，
 # 首屏截图才不会是一块黑画面。
 SEED_FILE="$REPO_ROOT/tools/shots/seed.json"
-# 主题：light（默认，沿用旧文件名）/ dark / mincho。显式传 --theme 时文件名带主题后缀，
-# 方便一次跑完三套主题再并排看；不传时保持原来的 <state>-<size>.png，基线比对不受影响。
+# 外观：light（默认，沿用旧文件名）/ dark / mincho。
+# 2026-11-25 起外观模型拆成「明暗（light/dark）」+「字幕字体（黑体/明朝）」：
+# --theme mincho = light 外观 + 明朝字幕字体（旧名保留，方便既有命令与基线文件名不变）。
+# 显式传 --theme 时文件名带主题后缀；不传时保持 <state>-<size>.png，基线比对不受影响。
 THEME=""
 # 沙箱环境（例如 CI 容器）里 Electron 起不来时，用 KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox 追加。
 ELECTRON_ARGS="${KIKUSUB_SHOT_ELECTRON_ARGS:-}"
@@ -56,9 +58,18 @@ esac
 suffix() {
   [ -n "$THEME" ] && echo "-$THEME" || true
 }
+# 注意：只写 DOM 属性只能骗过第一帧的 CSS；真正的状态在 localStorage，
+# 所以两处都写。mincho 走 data-cue-font，不再往 data-theme 塞第三个值。
 theme_eval() {
-  [ -n "$THEME" ] && \
-    echo "document.documentElement.dataset.theme='${THEME}';localStorage.setItem('kikusub.theme','${THEME}');" || true
+  case "${THEME:-}" in
+    "") ;;
+    mincho)
+      echo "document.documentElement.dataset.cueFont='mincho';localStorage.setItem('kikusub.cueFont','mincho');"
+      ;;
+    *)
+      echo "document.documentElement.dataset.theme='${THEME}';localStorage.setItem('kikusub.appearance','${THEME}');"
+      ;;
+  esac
 }
 
 [ -d "$REPO_ROOT/desktop/node_modules/electron" ] || { echo "缺少 desktop/node_modules/electron" >&2; exit 3; }

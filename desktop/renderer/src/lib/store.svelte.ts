@@ -61,7 +61,7 @@ import {
   saveExportStyleLocal,
 } from './exportStorage';
 import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
-import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
+import type { ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 import { markExplicitJump } from './reviewViewport';
 import { isSubtitlePath, pickVideoExportDir } from './mediaPath';
@@ -102,7 +102,7 @@ export const app = $state({
 
   // 界面
   view: 'import' as View,
-  /** 外观 id（不是 scss 类名）：'light' / 'dark' 属于青空，'mincho' 是明朝墨。 */
+  /** 解析后的外观（写进 `html[data-theme]`）：只有 'light' / 'dark'。 */
   theme: 'light' as ThemeId,
   inspectorOpen: true,
   /** 右侧检查器当前页签：当前条目 / 质检待核。 */
@@ -1065,11 +1065,7 @@ export async function boot(port: number, token: string) {
     void loadExportStyles();
     // 设备探测在 sidecar 的后台预热线程里；先让界面出来，再补一次配置
     scheduleDeviceRefresh();
-    // 恢复上次外观（main.ts 在挂载前已同步应用过一次，这里只补齐状态）
-    const saved = localStorage.getItem('kikusub.theme');
-    // 旧版本把「明朝墨」存成 'cool'，读到就迁移一次
-    const restored = saved === 'cool' ? 'mincho' : saved;
-    setTheme(isThemeId(restored) ? restored : app.theme);
+    // 外观已在 main.ts 挂载前应用（lib/appearanceState.svelte.ts），这里不再重算
     // 双击文件/拖到 Dock 启动时，open-file 可能早于内核就绪；这里补做导入。
     const pending = pendingMediaPath;
     pendingMediaPath = '';
@@ -1191,37 +1187,6 @@ export function markSidecarDown() {
       : '内核已断开，正在自动重启…',
     'warn',
   );
-}
-
-export function setTheme(theme: ThemeId) {
-  const next: ThemeId = isThemeId(theme) ? theme : 'light';
-  app.theme = next;
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem('kikusub.theme', next);
-  // 青空的两档明暗记在单独一把 key 上：从明朝墨切回来时回到上次那一档
-  if (skinOf(next) === 'clear') localStorage.setItem('kikusub.mode', schemeOf(next));
-  // 原生 vibrancy / 红绿灯区域跟随应用主题，否则深色模式下侧栏会透成浅色。
-  window.kikusub?.setTheme?.(next);
-}
-
-/** 切主题。单色主题直接落到它唯一的基调；青空回到上次用过的明暗。 */
-export function setSkin(skin: SkinId) {
-  if (skin === 'mincho') {
-    setTheme('mincho');
-    return;
-  }
-  setTheme(localStorage.getItem('kikusub.mode') === 'dark' ? 'dark' : 'light');
-}
-
-/** 只切明暗。单色主题没有第二档，直接忽略。 */
-export function setMode(mode: Scheme) {
-  if (skinOf(app.theme) !== 'clear') return;
-  setTheme(mode);
-}
-
-export function toggleTheme() {
-  // 月亮按钮永远翻到「另一种明暗」：青空里明暗互换；明朝墨没有自己的深色，按它就回深色那套。
-  setTheme(app.theme === 'dark' ? 'light' : 'dark');
 }
 
 export function setView(view: View) {

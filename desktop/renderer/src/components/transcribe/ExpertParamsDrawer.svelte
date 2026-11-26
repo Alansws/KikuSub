@@ -89,22 +89,18 @@
     aria-controls="expert-params-body"
     onclick={() => (open = !open)}
   >
-    <span class="expert-title">
-      <Icon name="gear" size={13} />
-      <span>专家参数与预设</span>
-      <span class="expert-sub">VAD / 分句阈值</span>
+    <span class="chev" class:open aria-hidden="true">
+      <Icon name="chevron-right" size={11} />
     </span>
+    <span class="expert-title">专家参数与预设 · VAD / 分句阈值</span>
     <span class="expert-meta">
       {#if deletablePreset}
         当前预设：{deletablePreset}{#if changedCount} · 已改 {changedCount} 项{/if}
       {:else if open}
         收合
       {:else}
-        {paramCount ? `${paramCount} 项参数` : '按需调整'}{#if changedCount} · 已改 {changedCount} 项{/if} · 展开
+        {paramCount ? `${paramCount} 项` : '按需调整'}{#if changedCount} · 已改 {changedCount} 项{/if}
       {/if}
-      <span class="chev" class:open aria-hidden="true">
-        <Icon name="chevron-right" size={11} />
-      </span>
     </span>
   </button>
 
@@ -156,71 +152,46 @@
 </section>
 
 <style>
+  /* 折叠行本身是页面里的一条发丝线分隔：34px 高，展开后在原位长出参数面板，
+     不另起一张卡（Cue Script：一张纸，不是一叠卡）。 */
   .expert {
-    border: 1px solid var(--separator-soft);
-    border-radius: 10px;
-    background: var(--bg-content);
+    border-top: 1px solid var(--line);
     min-width: 0;
-    overflow: hidden;
   }
   .expert.open {
-    border-color: var(--separator);
+    border-bottom: 1px solid var(--line);
   }
 
   .expert-head {
     appearance: none;
     width: 100%;
+    height: 34px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--sp-3);
-    padding: 11px var(--sp-4);
+    gap: var(--sp-2);
+    padding: 0 var(--sp-1);
     border: 0;
     background: transparent;
-    color: var(--text);
+    color: var(--text-2);
     font: inherit;
+    font-size: 11.5px;
     text-align: left;
     cursor: default;
     min-width: 0;
   }
   .expert-head:hover {
-    background: var(--fill);
+    color: var(--text);
   }
-  .expert.open .expert-head {
-    border-bottom: 1px solid var(--separator-soft);
-    background: var(--fill);
+  .expert-head:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: -2px;
   }
 
-  .expert-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--text-2);
-  }
-  .expert-sub {
-    font-weight: 400;
-    font-size: 11px;
-    color: var(--text-3);
-  }
-  .expert-meta {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 auto;
-    max-width: 55%;
-    font-size: 11px;
-    color: var(--text-3);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
   .chev {
     display: grid;
     place-items: center;
     color: var(--text-3);
+    flex: 0 0 auto;
     transition: transform 160ms var(--ease);
   }
   .chev.open {
@@ -228,11 +199,26 @@
     color: var(--accent);
   }
 
+  .expert-title {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .expert-meta {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
   .expert-body {
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
-    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    padding: var(--sp-3) 0 var(--sp-4);
     min-width: 0;
   }
 
@@ -251,9 +237,9 @@
   .preset-bar select {
     appearance: none;
     height: 26px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background-color: var(--bg-content);
+    border-radius: var(--rad-control);
+    border: 0;
+    background-color: var(--well);
     color: var(--text);
     font: inherit;
     font-size: 12.5px;
@@ -272,7 +258,7 @@
   }
   .preset-hint {
     margin: 0;
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1.5;
     color: var(--text-3);
     text-wrap: pretty;

@@ -132,8 +132,8 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
    禁止按域拆历史、禁止双栈。
 6. **用户报障过的交互不许改回**：单击跳转 vs 框选阈值、进度条复用 click-to-seek、
    缩放步进 `duration/69`——改回去等于复活旧 bug。
-7. **主题只走令牌**：加主题 = `app.css` 一块 `html[data-theme='<id>']` 覆盖 + 注册表一条；
-   组件内不写主题专属色，分隔线不许退回 5% 灰。
+7. **主题只走令牌**：色板 = `app.css` 两块 `html[data-palette][data-theme]` + 注册表一条；
+   组件不写主题分支，分隔线不许退回 5% 灰。
 8. **导出设置必须进历史**：一律走 `setExportMode / setExportTrack / setExportResolution /
    setExportQuality / setExportSrt / setExportOutDir / updateExportStyle / applyExportStylePreset /
    resetExportStyle`，禁止直接写 `exporter.*`。
@@ -143,7 +143,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
     或跑 `node tools/shots/verify_reshape_flow.mjs` / `verify_review_transport.mjs`；
     只看编译通过不算验证。**「手点一遍」不许成为打开窗口的理由**（§0.5）。
-11. **两个大文件只许变短**（`lib/store.svelte.ts` 3255 / `views/ReviewView.svelte` 2619 行）：
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3217 / `views/ReviewView.svelte` 1769 行）：
     改它们前先把**这次要用到的**纯逻辑抽到 `lib/`（单独 commit，行为不变）再接线；
     守卫 `tests/test_big_file_budget.py`，抽完把预算下调。
 12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag` / `reviewable`），推理对象与分派进 `core/pipeline.py`；

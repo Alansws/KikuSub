@@ -16,6 +16,12 @@
 
   type RecentView = 'list' | 'grid';
 
+  /**
+   * 第二阶段 Batch 1（2026-11-26 用户拍板）：本页的核心心智只有「拖入新片源或字幕」。
+   * 第一阶段为「已有工程」加的那张**继续当前工程**卡（继续核对 ⌘3 / 换片…）已整张删除：
+   * 它把大拖放区挤成了次要点位，而「接着干」本来就有两条更顺的路径——点「最近打开」里的
+   * 那一条，或直接去核对台。所以**无论当前有没有工程，本页都保持同一块大拖放区**。
+   */
   let recents = $state<Recent[]>([]);
   /** 「最近打开」的呈现方式：列表（信息密度高）或图标（封面画廊）。 */
   let recentView = $state<RecentView>('list');
@@ -140,7 +146,9 @@
     subtitle="把视频拖进窗口，或按 ⌘O 选择文件。导入不会复制文件——只记录路径。"
   />
 
-  <button class="dropzone" onclick={pick}>
+  <!-- 本页的主视觉：一块大虚线拖放区。无论当前有没有打开的工程，形态都不变——
+       导入页的心智是「拖入新片源或字幕」；要接着干上一部，点下面的最近打开或去核对台即可。 -->
+  <button class="dropzone" onclick={pick} title="拖入视频或字幕，或打开选择文件（⌘O）">
     <span class="dz-ico"><Icon name="tray" size={20} /></span>
     <span class="dz-title">拖入视频或字幕</span>
     <span class="dz-sub">
@@ -148,12 +156,14 @@
     </span>
   </button>
 
+  <!-- 代理能力说明：它回答「拖进来却放不出来怎么办」，紧跟主视觉下方一行，
+       不占卡片、不抢焦点。 -->
   <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
     MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
   </p>
 
   {#if exportDir}
-    <div class="ins-h" style="margin-top:22px">导出文件夹</div>
+    <div class="ins-h section-h">导出文件夹</div>
     <div class="export-card">
       <span class="ec-ico"><Icon name="folder" size={15} /></span>
       <span class="ec-main">
@@ -166,13 +176,13 @@
       <!-- 次级入口：导入原文是「接着上次的活干」，不是本页主流程（拖入素材才是），
            所以用描边按钮，别和拖入区抢主操作的视觉重心。 -->
       <button class="btn tiny" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台（可选，接着上次的活干）">
-        <Icon name="export" size={10} />导入原文…
+        <Icon name="export" size={10} />导入原文
       </button>
     </div>
   {/if}
 
   {#if recents.length}
-    <div class="ins-h" style="margin-top:22px">
+    <div class="ins-h section-h">
       <span>最近打开</span>
       <div class="seg compact" role="group" aria-label="最近打开的显示方式">
         <button
@@ -273,6 +283,7 @@
       </div>
     {/if}
   {/if}
+
 </div>
 
 <style>
@@ -282,16 +293,27 @@
     overflow-y: auto;
     padding: var(--sp-8) var(--sp-10) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 720px);
+    /* 导入页是单栏页面的例外：内容列是 760，比 1040 窄（拖放区不需要满行），
+       所以居中之后左右留白更大——这里刻意让它居中，而不是贴左。 */
+    grid-template-columns: minmax(0, var(--measure-card));
     justify-content: center;
     align-content: start;
+    background: var(--canvas);
+  }
+
+  /* 分区标题：拖放区之下的两块辅助信息（导出文件夹 / 最近打开）共用同一条节奏：
+     标题 11px 标签 + 下方一条发丝线（在块自己的 border-top 上）。 */
+  .section-h {
+    margin-top: var(--sp-6);
+    padding-bottom: var(--sp-2);
+    border-bottom: 0;
   }
 
   .note {
     font-size: var(--fs-label);
     line-height: 1.7;
     color: var(--text-3);
-    margin: 14px 0 0;
+    margin: var(--sp-3) 0 0;
     max-width: 640px;
   }
 
@@ -336,32 +358,38 @@
     font-size: var(--fs-label);
     color: var(--text-3);
   }
+  /* 扩展名走 Data 档（DESIGN.md typography.data）：等宽、中性、不做成药丸。 */
   code {
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
+    letter-spacing: 0.01em;
     background: var(--fill);
     padding: 1px var(--sp-1);
-    border-radius: 4px;
+    border-radius: var(--rad-control);
   }
 
+  /* 导出文件夹：**一行**读数 + 两个动作，不再是一条灰色长条砖。
+     它是「上次转写的字幕在哪」，属于辅助信息；用标题 + 发丝线分区，
+     下面这一行直接就落在台面上（透明底），只有图标占一个凹槽。 */
   .export-card {
     display: flex;
     align-items: center;
     gap: 10px;
-    border: 1px solid var(--separator-soft);
-    border-radius: 8px;
-    padding: 10px var(--sp-3);
-    background: var(--bg-content);
+    border: 0;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    padding: var(--sp-3) 0 0;
+    background: transparent;
   }
   .ec-ico {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    background: var(--fill);
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: var(--well);
     display: grid;
     place-items: center;
     color: var(--text-2);
-    flex: 0 0 30px;
+    flex: 0 0 28px;
   }
   .ec-main {
     display: flex;
@@ -382,15 +410,19 @@
     white-space: nowrap;
   }
 
+  /* 最近打开：**行 + 发丝线**，不再是整块灰色容器。
+     缩略图占一个 well（那里真的该有底色：它是张封面），行本身落在台面上。 */
   .recent {
-    border: 1px solid var(--separator-soft);
-    border-radius: 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
     overflow: hidden;
+    border-top: 1px solid var(--rule);
   }
   .recent-row {
     display: flex;
     align-items: stretch;
-    border-bottom: 1px solid var(--separator-soft);
+    border-bottom: 1px solid var(--rule);
   }
   .recent-row:last-child {
     border-bottom: 0;

@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * 右侧检查器（348px）：页签 + 「当前条目 / 质检待核 / 章节」三页。
+   * 右侧检查器的页签外壳：「当前条目 / 质检待核 / 章节」。
    *
    * 2026-11-21（Step 3）拆成子组件后，这里只做两件事：页签、装页签内容
    * （挂载点仍在 `App.svelte`：只有核对台显示它）。原来 2200 行的单文件让每次动
@@ -10,7 +10,13 @@
    * - 「质检待核」→ `QaPanel mode="docked"`（不遮挡画面）
    * - 「章节」   → `ChaptersPanel.svelte`
    * - 保存栏已移出检查器（2026-11-24 Phase 1）：暂存走底栏 `DraftDock`，
- *   导出走顶栏「导出」与导出视图。检查器只留「与当前条目/队列/章节有关」的内容。
+   *   导出走顶栏「导出」与导出视图。检查器只留「与当前条目/队列/章节有关」的内容。
+   *
+   * 2026-11-25（Step 4.2）：页签从「蓝底胶囊」换成台本的**底下划线**语法——
+   * 选中 = 深墨 + 2px 蓝铅笔底线，计数退成等宽数字。理由有两条：一是同一屏里
+   * `.seg`（原文/译文/双语、产出的分段）已经占用了「白色凸起胶囊」，页签再用
+   * 第三种选中语法会把「这一屏哪个控件是分段」搞混；二是台本页签本来就是
+   * 「翻到哪一叠纸」，底线比涂色更像纸上的标记。
    */
   import Icon from './Icon.svelte';
   import QaPanel from './QaPanel.svelte';
@@ -59,7 +65,11 @@
       title="质检待核队列"
     >
       质检待核
-      {#if qaPending}<b>{qaPending}</b>{/if}
+      {#if qaPending}
+        <!-- 这个数字不是「读数」，是「还有几句要你动手」：和字幕表页边的待核朱点
+             同义，所以它用朱红微胶囊，而不是像「章节 3」那样的等宽灰数字。 -->
+        <span class="tab-badge" aria-label={`${qaPending} 条待核`}>{qaPending}</span>
+      {/if}
     </button>
     <button
       class="insp-tab"
@@ -99,70 +109,95 @@
 
 <style>
   .inspector {
-    width: 348px;
-    flex: 0 0 348px;
-    background: var(--paper);
-    border-left: 1px solid var(--line-2);
+    width: var(--inspector-w);
+    flex: 0 0 var(--inspector-w);
+    /* 检查器夹在台面与铬件之间的一档：浅色下比台面暗半阶、比侧栏浅半阶；
+       深色下比舞台亮一阶。三块并排时每两块都能读出边界。 */
+    background: var(--bg-inspector);
+    border-left: 1px solid var(--line);
     overflow: hidden;
     display: flex;
     flex-direction: column;
     transition: width var(--dur-panel) var(--ease), flex-basis var(--dur-panel) var(--ease),
       opacity 140ms var(--ease);
   }
+  /* 左右各 16：台词框拿到 316px，比 20 多 8px；三版对照的长句少折一行。
+     纵向 flex：让 InspectorMeta 的 `margin-top: auto` 把它钉在检查器底缘，
+     内容短的时候空白落在中间而不是底部（2026-11-26 真机反馈）。 */
   .ins-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: var(--sp-3) var(--sp-5) var(--sp-4);
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    display: flex;
+    flex-direction: column;
   }
   .insp-tabs {
-    flex: 0 0 auto;
+    flex: 0 0 42px;
     display: flex;
-    align-items: center;
-    gap: 2px;
-    min-height: 40px;
+    align-items: stretch;
+    gap: var(--sp-1);
+    height: 42px;
     padding: 0 var(--sp-3);
-    border-bottom: 1px solid var(--line-2);
-    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-inspector);
   }
+  /* 页签 = 台本的分隔页：字重 + 一段蓝铅笔底线，不涂底 */
   .insp-tab {
     appearance: none;
+    position: relative;
     border: 0;
     background: transparent;
     color: var(--ink-3);
     font: inherit;
     font-size: 12.5px;
     line-height: 16px;
-    height: 28px;
-    padding: 0 9px;
-    border-radius: 6px;
+    padding: 0 2px;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     white-space: nowrap;
+    transition: color var(--dur-fast) var(--ease);
   }
-  /* G15：这是检查器里的「第一套语法」，下方 CuePane 的 .seg 已向它对齐。
-     两者现在都是「选中 = accent-soft 底 + accent-text 字 + 600」。 */
+  .insp-tab + .insp-tab {
+    margin-left: 10px;
+  }
   .insp-tab:hover {
-    background: var(--fill);
     color: var(--ink-2);
   }
   .insp-tab.on {
-    background: var(--accent-soft);
-    color: var(--accent-text);
+    color: var(--ink);
     font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--accent);
   }
+  /* 计数是读数，不是徽标：等宽数字 + 第二级文字色，不抢页签名 */
   .insp-tab b {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .insp-tab.on b {
+    color: var(--accent-text);
+  }
+  /* 待核数 = 朱红微胶囊（2026-11-26 真机反馈：原来的极淡灰数字起不到警示作用）。
+     11px 等宽数字，朱红文字压在 10% 朱红底上：日间 4.9:1 / 夜间 5.6:1，均过 4.5；
+     胶囊高度比页签行矮一档，选中时也不会把页签顶高。 */
+  .insp-tab .tab-badge {
+    display: inline-grid;
+    place-items: center;
     min-width: 16px;
     height: 15px;
-    padding: 0 var(--sp-1);
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--on-accent);
-    display: grid;
-    place-items: center;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--danger-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 24%, transparent);
+    color: var(--danger);
+    font-family: var(--font-mono);
     font-size: 10.5px;
     font-weight: 600;
+    line-height: 1;
     font-variant-numeric: tabular-nums;
   }
   .tabs-spacer {
@@ -171,15 +206,16 @@
   .tabs-index {
     font-family: var(--font-mono);
     font-weight: 400;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    align-self: center;
     margin-right: 2px;
   }
   /* 只有紧凑模式的抽屉才需要显式的关闭入口（桌面由工具栏开关控制） */
   .ins-close {
     display: none;
   }
-
 
   .inspector.hidden {
     width: 0;
@@ -188,7 +224,6 @@
     overflow: hidden;
     border-left-color: transparent;
   }
-
 
   /* 紧凑模式（≤900px）：不再占列，改成右侧抽屉。
      收起 = 平移出屏幕（不动 width，避免每次开关都触发布局）；
@@ -199,7 +234,7 @@
       top: 0;
       right: 0;
       bottom: 0;
-      width: min(348px, 92vw);
+      width: min(var(--inspector-w), 92vw);
       flex: 0 0 auto;
       z-index: 20;
       border-left: 1px solid var(--line);
@@ -213,7 +248,7 @@
       transform: none;
     }
     .inspector.hidden {
-      width: min(348px, 92vw);
+      width: min(var(--inspector-w), 92vw);
       flex-basis: auto;
       opacity: 1;
       border-left-color: transparent;
@@ -227,7 +262,8 @@
       width: 22px;
       height: 22px;
       padding: 0;
-      margin: -4px -4px 0 0;
+      margin: 0 -4px 0 0;
+      align-self: center;
       border: 0;
       border-radius: 4px;
       background: transparent;

@@ -84,7 +84,13 @@ const EVAL = String.raw`
       selected: text(document.querySelector('.row-sel .c-idx')),
       track: picked(),
       cueTime: Math.round((document.querySelector('video')?.currentTime ?? -1) * 10) / 10,
-      hasTranslation: Boolean(document.querySelector('.track-meta .link')),
+      // Step 4.2.1：整轨读数与 ⋯ 入口压成一条 24px 状态条（原 .track-meta / .track-links）
+      trackBar: box('.track-bar'),
+      trackStatus: box('.tb-status'),
+      trackMore: box('.tb-more'),
+      trackBarText: (document.querySelector('.track-bar')?.textContent ?? '')
+        .replace(/\s+/g, ' ')
+        .trim(),
       scrollH: scroll.scrollHeight,
       clientH: scroll.clientHeight,
       // 操作区：显示模式 → AI 判定。检查器里已经没有保存卡片了
@@ -101,12 +107,13 @@ const EVAL = String.raw`
 
     const statusbar = document.querySelector('.statusbar');
     const statusDock = {
-      shown: Boolean(statusbar?.querySelector('.draft-dock')),
-      hasSave: [...(statusbar?.querySelectorAll('.draft-dock button') ?? [])].some((b) =>
-        (b.textContent || '').includes('暂存'),
-      ),
+      // 2026-11-25（Step 4.2 修口径）：底栏在 Step 3 就回到「只读状态条」了——
+      // 暂存 / 恢复进了「文件」菜单（⌘S），底栏只剩一句 .draft-state 读数。
+      // 这条断言原来还在找 draft-dock 与暂存按钮，所以从 Step 3 起一直是红的。
+      shown: Boolean(statusbar?.querySelector('.draft-state')),
+      readOnly: (statusbar?.querySelectorAll('.btn') ?? []).length === 0,
       // 底栏不该把草稿状态藏起来（它不是折叠区）
-      label: (statusbar?.querySelector('.draft-dock .dd-state')?.textContent || '').trim(),
+      label: (statusbar?.querySelector('.draft-state')?.textContent || '').trim(),
     };
 
     // 展开朗读面板：语速 / 上传 / 截取 / 音色库 / 管理都在这里，不常驻占高度
@@ -239,6 +246,20 @@ check('视频真的 seek 到第 1 条字幕', Math.abs(before.cueTime - 28.5) < 
 // ---- 2) 有译文轨时默认双语 ----
 check('有译文轨时默认双语', before.track === '双语', before.track);
 
+// ---- 2.1) 译文轨状态条：单行、危险动作不在常驻区 ----
+check(
+  '译文轨状态条只有一行（读数与 ⋯ 同一行）',
+  Boolean(before.trackBar && before.trackStatus && before.trackMore) &&
+    before.trackBar.height <= 26 &&
+    Math.abs(before.trackStatus.top - before.trackMore.top) <= 4,
+  { bar: before.trackBar, status: before.trackStatus, more: before.trackMore },
+);
+check(
+  '整轨维护动作收进 ⋯ 菜单：条上不常驻「删除译文」',
+  !before.trackBarText.includes('删除译文') && !before.trackBarText.includes('撤销译文'),
+  before.trackBarText,
+);
+
 // ---- 3) 右侧检查器不溢出 ----
 check(
   '操作区（到 AI 判定）在可视高度内，无需滚动',
@@ -251,8 +272,8 @@ check(
   { dockTop: before.dockTop },
 );
 check(
-  '底栏有暂存入口且只在核对屏出现',
-  statusDock.shown === true && statusDock.hasSave === true && statusDock.label.length > 0,
+  '底栏有只读的草稿状态且只在核对屏出现',
+  statusDock.shown === true && statusDock.readOnly === true && statusDock.label.length > 0,
   statusDock,
 );
 // 同一行 = 顶边相差不超过 3px（select 外壳比按钮矮 2px，垂直居中会差 1px）

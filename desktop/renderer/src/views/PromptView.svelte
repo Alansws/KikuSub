@@ -216,14 +216,14 @@
     subtitle={'单击选中、双击编辑；复制时自动填入当前字幕与目标语种。'}
   >
     <span class="cue-meta">{app.cues.length} 条字幕</span>
-    <button class="btn ghost" onclick={() => setView('polish')} title="回到润色页">
-      <Icon name="doc" size={11} />润色页
+    <button class="btn ghost" onclick={() => setView('polish')} title="回到锁轴润色（⌘5）">
+      <Icon name="doc" size={11} />锁轴润色
     </button>
-    <button class="btn ghost" onclick={() => setView('reshape')} title="回到断句重排页">
-      <Icon name="split" size={11} />断句重排页
+    <button class="btn ghost" onclick={() => setView('reshape')} title="回到重排润色（⌘6）">
+      <Icon name="split" size={11} />重排润色
     </button>
-    <button class="btn ghost" onclick={() => setView('translate')} title="回到翻译页">
-      <Icon name="quote" size={11} />翻译页
+    <button class="btn ghost" onclick={() => setView('translate')} title="回到双语翻译">
+      <Icon name="quote" size={11} />双语翻译
     </button>
     <button class="btn primary" onclick={() => beginEdit('__new__')} disabled={Boolean(editingId)}>
       <Icon name="plus" size={11} />新建模板
@@ -429,12 +429,14 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
-       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
+    /* 单栏页面共用的页面骨架：24px 左右内边距 + 1040 内容列。
+       2026-11-26：从「左对齐」改成**居中**——大窗口下原来右侧会甩出一大块空白，
+       看起来像内容被贴死在左缘。统一 max-width + 居中后，所有单栏页面在同一
+       窗口宽度下仍然共享同一条左缘（谁都不用自己发明 1120 / 1000 / 960）。 */
     padding: var(--sp-8) var(--sp-6) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 1040px);
-    justify-content: start;
+    grid-template-columns: minmax(0, var(--measure-page));
+    justify-content: center;
     align-content: start;
   }
   .tabs {
@@ -505,10 +507,11 @@
     grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
     gap: 14px;
   }
+  /* 模板卡：台面上的一块凹陷填充（无描边）。白台面上再叠白卡是这次要消灭的那层。 */
   .card {
-    border: 1px solid var(--line-2);
+    border: 1px solid transparent;
     border-radius: 12px;
-    background: var(--raise);
+    background: var(--well);
     padding: var(--sp-4) var(--sp-4) var(--sp-3);
     display: flex;
     flex-direction: column;
@@ -519,12 +522,11 @@
     min-width: 0;
   }
   .card:hover {
-    border-color: var(--fill-strong);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+    background: var(--well-hover);
   }
   .card.selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
   }
   .card.editing {
     cursor: default;
@@ -532,6 +534,7 @@
   }
   .card.new {
     border-style: dashed;
+    border-color: var(--line);
   }
   .card-top {
     display: flex;
@@ -663,8 +666,8 @@
     font-size: 12px;
     padding: 6px 9px;
     border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well);
     color: var(--text);
     outline: none;
     min-width: 0;

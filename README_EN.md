@@ -25,6 +25,8 @@
 
 > The footage is a *The Garden of Words* demo clip, showing the Japanese source, Chinese translation and frame-by-frame waveform review.
 
+The interface is a desktop visual language called **Cue Script**: four navigation stages (01 Prepare / 02 Review / 03 Source / 04 Deliver) ordered the way the work actually happens, paper-white by day and neutral charcoal by night. **Six dual-mode palettes** (Royal Cobalt / Nordic Night / Rose Pine / Everforest / Latte & Mocha / Darkroom Amber) switch with one click under Settings → Appearance, and the three preference axes are independent: light/dark, palette, and cue font (sans / Mincho).
+
 ---
 
 ## What KikuSub is for
@@ -47,7 +49,15 @@ Plenty of tools turn speech into text, but they tend to stall in three places wh
 - **Can't hear it? Just describe it**: when neither engine gets a breathy word right — or the whole line is blank — type what you heard (a misheard kana or romaji hint, e.g. "sounds like sugoi / very quiet") into the side panel, and the AI uses three lines of context on each side to recover the most plausible Japanese.
 - **You always make the call**: AI corrections, polish and translations arrive as side-by-side proposals; nothing overwrites your script on its own. If you are working with sensitive dialogue or want a fully offline run, point single-line correction at local LM Studio / Ollama and no cloud service is involved.
 
-### 3. From subtitles to a chaptered bilingual video in one app
+### 3. Three AI lanes, each with one job: locked-axis polish, re-segment polish, bilingual translation
+
+![Locked-axis polish: A is the current review-desk script, B is the other engine's reference, and the AI draft is compared line by line — nothing lands until you accept](docs/images/polish-view.jpg)
+
+- **Lock the axis first, then talk about wording**: "Locked-axis polish" changes text only — cue count and timecodes stay 1:1 — and returns you to the review desk line by line. Only when the segmentation itself is wrong do you move to "Re-segment polish", the lane that explicitly may change cue count and timecodes.
+- **One bar tells you what is being changed**: all three lanes share the same work bar — template, range and this batch (`1 ~ 12`, 150 per batch) sit on one line, so which slice and which lines are in play is visible at a glance. The bottom bar always shows "changed N · accepted N", and one `⌘Z` reverts the whole batch.
+- **It works with no API key**: with no key configured the app defaults to the "External manual" lane — copy the prompt to any web model and paste the reply back; alignment is automatic. Point the whole chain at local LM Studio / Ollama to keep it offline.
+
+### 4. From subtitles to a chaptered bilingual video in one app
 
 ![Export: subtitles only, burned-in hard subs or soft-subtitle packaging, with six built-in styles previewed live on the video](docs/images/export.jpg)
 
@@ -61,9 +71,9 @@ Plenty of tools turn speech into text, but they tend to stall in three places wh
 
 | 1. Import | 2. Transcribe | 3. Review & translate | 4. Export |
 | --- | --- | --- | --- |
-| Drag in video, audio or existing subtitles. For MKV / HEVC files the browser engine cannot play, one click in the black frame builds a lightweight viewing proxy | Pick "Japanese natural dialogue" or "Per-syllable precise timeline", and enable "strong BGM / song vocal separation" or just transcribe a range as needed. Detailed parameters stay in a drawer at the bottom until you need them | Drag the waveform in the review desk to adjust timing, or switch to dual-engine review and the AI pages for proofreading, re-segmentation and Chinese translation | Export SRT / VTT / TXT, or render a finished video at your chosen resolution and bitrate with bilingual subtitles and chapters |
+| Drag in video, audio or existing subtitles. For MKV / HEVC files the browser engine cannot play, one click in the black frame builds a lightweight viewing proxy | Pick "Japanese natural dialogue" or "Per-syllable precise timeline", and enable "strong BGM / song vocal separation" or just transcribe a range as needed. Detailed parameters stay in a drawer at the bottom until you need them | Drag the waveform in the review desk to adjust timing, or switch to dual-engine review and the three AI lanes (locked-axis polish / re-segment polish / bilingual translation) for proofreading, re-segmentation and Chinese translation | Export SRT / VTT / TXT, or render a finished video at your chosen resolution and bitrate with bilingual subtitles and chapters |
 
-![Translate: connect an API for automatic translation, or copy the prompt to a web LLM in one click and paste the reply back](docs/images/translate-view.jpg)
+![Translate: the translation rides a parallel track, leaving the source and timeline untouched; accept it and proofread line by line in the review desk](docs/images/translate-view.jpg)
 
 ---
 
@@ -74,7 +84,8 @@ Plenty of tools turn speech into text, but they tend to stall in three places wh
 | Japanese speech and breaths | Two engines tuned for Japanese film + onset alignment | All manual typing and timing | General models; breaths and quiet lines get dropped |
 | Rescuing an unclear line | Second-engine comparison + misheard-kana hints with context | Slow it down and guess | Edit by hand in a web form |
 | Review experience | Video + zoomable waveform + 50-step unified undo + QA queue | Dated UI, fiddly waveform and video setup | Mostly a plain table; frame-accurate timing is hard |
-| AI polish / translation | Cloud API, local LLM, or free copy-paste to a web AI | Export the text and wrestle with prompts | Upload your footage / audio to someone's server |
+| AI polish / translation | Locked-axis polish (keeps cue count and timecodes), re-segment polish (may change the timeline) and bilingual translation as three separate lanes; cloud API, local LLM, or free copy-paste to a web AI | Export the text and wrestle with prompts | Upload your footage / audio to someone's server |
+| Interface | Six dual-mode palettes, independent light/dark and cue-font axes; built for long solo sessions and keyboard-first work | Single theme; dark mode usually bolted on | One fixed web skin |
 | Privacy and cost | Fully local, free and open source; no account, no per-minute billing | Free | Billed per minute; your media leaves your machine |
 
 ![Settings: hardware acceleration status, per-model disk usage and measured performance at a glance](docs/images/settings.jpg)
@@ -126,6 +137,7 @@ If you are a heavy-tuning fansub user, run local LLMs, or want to build from sou
 - **One 50-step undo line**: subtitle add/delete, timing drags, AI adoption, QA state and export settings share one history; click any step to jump there, or `⌘Z` to go back.
 - **Voice reference and character voice cloning**: macOS system Japanese voices read lines aloud by default; or take a 3–10 second sample of a character from the video and clone it zero-shot with the local OmniVoice model (downloaded on demand, unloaded after 5 idle minutes).
 - **Chapters and cue points**: insert a cue point at the playhead or turn a selection into a chapter at any time; they appear as bands and flags on the waveform, can be written into the MP4 / MKV container on export, and a single chapter can be exported with the timeline rebased to zero.
+- **Three independent appearance axes**: light/dark (follow system / Daylight Proof / Night Dubbing), palette (Royal Cobalt / Nordic Night / Rose Pine / Everforest / Latte & Mocha / Darkroom Amber) and cue font (sans / Mincho) each answer one question — wanting a different cue font no longer drags the whole colour scheme along. The title-bar button flips day/night in one click; `auto` lives in Settings only.
 
 </details>
 
@@ -134,7 +146,8 @@ If you are a heavy-tuning fansub user, run local LLMs, or want to build from sou
 
 ![Polish and comparison: single-source or dual-source three-column comparison, applied in batches](docs/images/polish-view.jpg)
 
-- **Strict timeline protection**: whether proposals come from a built-in API or a web model pasted back in, AI proposals carry no timestamps — the app fills text back by source fingerprint (`digest`) and cue index, so proposals expire automatically once the source subtitles change and can never land in the wrong place. To re-split lines and timing, use the dedicated "Re-segment" lane.
+- **Strict timeline protection**: whether proposals come from a built-in API or a web model pasted back in, AI proposals carry no timestamps — the app fills text back by source fingerprint (`digest`) and cue index, so proposals expire automatically once the source subtitles change and can never land in the wrong place. To re-split lines and timing, use the dedicated "Re-segment polish" lane.
+- **Three lanes, three jobs**: "Locked-axis polish" keeps cue count and timecodes 1:1 and changes text only; "Re-segment polish" may redraw cue boundaries and timing; "Bilingual translation" rides a parallel track with the source and timeline untouched. All three share the same template library and proposal validation, and all return you to the review desk after applying.
 - **Switch channels freely**: with no API key configured, the app defaults to "External manual", which batches prompt copying and aligns pasted results by timestamp on the way back (it does not require the web model to return the exact same number of lines).
 - **Local key security and independent judgement override**: API keys are encrypted with a local master key using AES-256-GCM. Under Settings → AI & skills → Advanced, single-line judgement can point at its own local model (e.g. an uncensored fine-tune in LM Studio / Ollama) with automatic calibration of `2048 / 4096 / 8192` context tiers, independent of the global polish / translation configuration.
 - **Agent skill**: install with one click to `~/.agents/skills/kikusub-subtitle` and generate standard polish or translation proposals from the current subtitle file in an external AI assistant (contract: [`docs/contracts/ai-proposal.md`](docs/contracts/ai-proposal.md)).

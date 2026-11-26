@@ -8,11 +8,14 @@
 | 文档 | 什么时候看 |
 | --- | --- |
 | [contracts/ai-proposal.md](contracts/ai-proposal.md) | 改 AI 提案 / 润色 / 翻译 / 结构建议 / 断句重排 / 技能之前必读：AI 这条线的**唯一现行契约**，含冻结决定 D-1～D-6 与验收断言 A1–A10。 |
+| [../DESIGN.md](../DESIGN.md) | **设计系统**：Cue Script 的色板、字阶、布局、组件与规则；改 UI 前必读。 |
+| [../PRODUCT.md](../PRODUCT.md) | **产品事实**：用户、定位、运行上下文、能力与约束、产品原则。 |
 | [../AGENTS.md](../AGENTS.md) | **索引**：项目定位、仓库结构、红线与改动纪律、契约索引（2026-11-13 起瘦身为索引，正文拆到 `contracts/`）。 |
 | [contracts/engineering-practice.md](contracts/engineering-practice.md) | **方法论**：长期项目的五类失控与五道护栏在本仓库的落点、规则→测试的升级路径、多模型协作命令。新接手先读这份。 |
 | [contracts/params-and-presets.md](contracts/params-and-presets.md) | **参数与预设**：默认值唯一来源、预设必须绑定引擎、跨引擎载入 409、四套种子预设的素材条件与旧预设处理。改参数面板或 `presets.json` 前必读。 |
 | [contracts/](contracts/) | **分域契约正文**：`review-console.md`（核对台/内核边界/历史/主题）、`desktop-lifecycle.md`（启动/日志/退出清理）、`ai-proposal.md`（AI 提案 / 润色 / 翻译 / 结构建议 / 断句重排 / 技能，含冻结决定 D-1～D-6 与验收断言 A1–A10）、`export-and-prompt.md`（提示词/成片导出/代理）。改哪块先读哪份。 |
 | [contracts/in-progress.md](contracts/in-progress.md) | **进行中的专项**：转录引擎标定、日语引擎优化路线（P0–P3）做到哪一步、下一步是什么、止损线在哪里。接手跨会话任务先读这份。 |
+| [frontend-refactor-2026-11.md](frontend-refactor-2026-11.md) | **本轮前端重塑主台账（2026-11）**：Cue Script 视觉世界、四段导航与「锁轴润色 / 重排润色 / 双语翻译」命名、五步路线、HIG 审查与高保真原型。开始任何 UI 改动前先读这份；旧 plan 已由它取代。 |
 | [ui-refactor-plan.md](ui-refactor-plan.md) | **本轮界面重构的分步计划（Step 1–8）**：单步停靠执行，每一步的改动范围、自检命令与停靠验收。做其中任意一步前先读「全局约束」与自己那一步。 |
 | [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) | **界面骨架与视觉规则的存量审计**：七步 UI 提示词逐条适配判定、六维实测（强调色 4.15:1、184 处 <12px、五种页面左缘）、七级字阶与一色一职规则、14 条差距清单。改页面骨架、字号或强调色前先读第 4 节规则与第 6 节任务表。 |
 | [review.md](review.md) | **合入前自审清单**：Review 四件事的可执行版本、本仓库的硬检查、单模型下的三个补偿动作（隔一轮再读 / 给置信度 / 换入口找问题）。配合 PR 模板用。 |

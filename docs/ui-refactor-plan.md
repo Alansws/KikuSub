@@ -2,6 +2,9 @@
 created: 2026-11-21 15:43
 updated: 2026-11-21 18:56
 ---
+> **2026-11-25：本计划已被 [frontend-refactor-2026-11.md](frontend-refactor-2026-11.md) 取代。**
+> 保留为历史记录；Step 1–8 中的大部分已完成/已作废，不要按本文件继续改代码。
+
 > **全局约束（Agent 必须始终遵守）**：
 >
 > 1. **严格遵守 AGENTS.md**：开发在 app/macos 分支；严禁触发窗口弹窗（所有界面验证走 npx electron . --screenshot=... 静默截图 + read_image 查验）；每次改 .svelte 必跑 npm run check && npm run check:svelte（TypeScript 错误只降不升）；改 core/ 必跑 pytest -q。

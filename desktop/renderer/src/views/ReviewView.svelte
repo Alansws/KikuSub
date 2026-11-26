@@ -18,13 +18,12 @@
    * - 质检面板通过 store 的 focusRange 定位到这里，跳转是真的跳。
    */
   import { tick as nextTick, untrack } from 'svelte';
-  import Icon from '../components/Icon.svelte';
-  import ProxyGate from '../components/ProxyGate.svelte';
   import ReviewTransport from '../components/review/ReviewTransport.svelte';
   import ReviewWaveTrack from '../components/review/ReviewWaveTrack.svelte';
   import ReviewStage from '../components/review/ReviewStage.svelte';
   import ReviewTable from '../components/review/ReviewTable.svelte';
-  import ChapterTrack from '../components/ChapterTrack.svelte';
+  import ReviewContextMenu from '../components/review/ReviewContextMenu.svelte';
+  import ReviewVoiceDialog from '../components/review/ReviewVoiceDialog.svelte';
   import { api, mediaUrl } from '../lib/api';
   import { logEvent } from '../lib/api';
   import {
@@ -33,48 +32,25 @@
     closeFind,
     deleteCue,
     deleteCues,
-    extractTtsVoiceFromCue,
     findState,
     focusRange,
     importProxyFromFile,
-    insertCueAt,
     isTranslationStale,
-    jumpToCue,
-    mergeCuesAt,
     play,
     previewRange,
-    replaceAllInTracks,
-    replaceInCue,
-    replaceInTranslation,
     seekTo,
     qa,
     setTrackMode,
-    splitCueAt,
     startProxyJob,
     toast,
     translationAt,
-    translationTextAt,
     transcribeRange,
-    tts,
   } from '../lib/store.svelte';
   import { chapters, loadChapters, seekToMark } from '../lib/chapters.svelte';
-  import { dual } from '../lib/dualReview.svelte';
+  import { cueMarks } from '../lib/reviewMargin';
   import { jobBusy } from '../lib/jobState';
-  import { comboOf, formatCombo } from '../lib/shortcuts.svelte';
-  import { formatDuration, tc, tcShort } from '../lib/time';
+  import { tcShort } from '../lib/time';
   import { isTypingTarget } from '../lib/typing';
-  import {
-    collectFindHits,
-    countSkippedHits,
-    filterSkippedHits,
-    findHitKey,
-    highlightSegments,
-    ordinalOfHit,
-    skippedStartsByCueTrack,
-    type FindHit,
-    type FindSkipAnchor,
-    type FindTrack,
-  } from '../lib/findMatches';
   import {
     BLANK_FRAME_TIMEOUT_MS,
     hasDecodedFrame,
@@ -95,7 +71,11 @@
     rangeSelection,
     stepSelection,
   } from '../lib/selection';
-  import { canSplitAt } from '../lib/cueEdit';
+  import {
+    captionLinesAt,
+    cueDisplayText,
+    cueIndexAtTimeExclusive,
+  } from '../lib/reviewCues';
   import { collectSnapTargets, snapCueTimes, snapThreshold } from '../lib/cueSnap';
   import { createScrubber, createScrubPan } from '../lib/scrub';
   import { snapPrefs } from '../lib/snapPrefs.svelte';
@@ -110,7 +90,7 @@
     zoomTimelineView,
   } from '../lib/timelineView';
   import { roundRect } from '../lib/waveformDraw';
-  import { paintReviewCanvas } from '../lib/waveformCanvas';
+  import { binsForWidth, paintReviewCanvas } from '../lib/waveformCanvas';
   import {
     cachedPeaks,
     peakCacheKey,
@@ -118,10 +98,12 @@
     readViewportForRestore,
     rememberViewport,
     resolveCueIndex,
+    snapshotOf,
     storePeaks,
     takeExplicitJump,
   } from '../lib/reviewViewport';
   import { claimTranslationDefault, planInitialReviewView } from '../lib/reviewStart';
+  import { createReviewFind } from '../lib/reviewFind.svelte';
   import { revealScrollTop, rowHeightFor, virtualWindow } from '../lib/reviewTable';
   import {
     clampStageHeight,
@@ -206,8 +188,6 @@
   const PLAYHEAD_GRAB = 8; // 播放头两侧的抓取宽度（px）
   const CLICK_SLOP = 4; // 按下后移动超过它才算框选，否则算单击跳转
 
-  const laneTopOf = (h: number) => h - RESIZE_H - LANE_H;
-
   // 光标与高亮（悬停/拖动的字幕块用 key 标识，双语同区间的两行算同一块）
   let waveCursor = $state('crosshair');
   let hoverKey = $state('');
@@ -233,14 +213,11 @@
   const multiKeys = $derived(laneSelection.filter((key) => app.cues.some((cue) => laneKey(cue) === key)));
   /** 「以此句音频新建音色」浮层：命名 + 可选参考文本。 */
   let voiceDialog = $state<{ index: number; name: string; refText: string } | null>(null);
-  let voiceBusy = $state(false);
-  let voiceNameEl = $state<HTMLInputElement | null>(null);
 
   // 视频进度条拖动
   let trackDrag = $state(false);
   // 最近一次自动滚到/选中过的字幕行，避免同一句反复滚动
   let lastRevealed = -1;
-
 
   // 有代理就走代理：Chromium 解不开 MKV / HEVC，原片喂进去只会黑屏。
   const src = $derived(
@@ -305,71 +282,15 @@
   });
 
   // 当前播放到的字幕。双语 SRT 的两行区间完全相同，必须一起显示。
+  // 纯计算在 lib/reviewCues（二分查找 + 分块 + 轨道拼行），这里只保留依赖。
   const captionLines = $derived.by(() => {
     // 显式依赖：切换显示模式或译文更新时，画面字幕要立刻跟着变
     void app.track;
     void app.translations[app.trackLang]?.texts.length;
-    const cues = app.cues;
-    if (!cues.length) return [] as string[];
-    const t = play.time;
-    let lo = 0;
-    let hi = cues.length - 1;
-    let hit = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const c = cues[mid];
-      if (t < c.start) hi = mid - 1;
-      else if (t >= c.end) lo = mid + 1;
-      else {
-        hit = mid;
-        break;
-      }
-    }
-    if (hit < 0) return [];
-    const key = `${cues[hit].start}:${cues[hit].end}`;
-    const lines: string[] = [];
-    let i = hit;
-    while (i >= 0 && `${cues[i].start}:${cues[i].end}` === key) i -= 1;
-    const idxs: number[] = [];
-    for (let k = i + 1; k < cues.length; k += 1) {
-      if (`${cues[k].start}:${cues[k].end}` !== key) break;
-      if (cues[k].text.trim()) idxs.push(k);
-    }
-
-    // 画面字幕跟着「原文 / 译文 / 双语」切换：双语是原文在上、译文在下。
-    // 译文缺失时退回原文，绝不在画面上留空行。
-    //
-    // 一条 cue 里可能带 `\n`（外部 SRT 的硬换行、旧版双语文件）：必须拆成多行
-    // 交给叠加层，否则 `white-space` 会把它压成「日文 中文」一行（用户报过）。
-    for (const k of idxs) {
-      const sourceLines = captionTextLines(cues[k].text);
-      const targetLines = captionTextLines(translationAt(k));
-      if (app.track === 'target') {
-        lines.push(...(targetLines.length ? targetLines : sourceLines));
-      } else if (app.track === 'both') {
-        lines.push(...sourceLines);
-        if (targetLines.length) lines.push(...targetLines);
-      } else {
-        lines.push(...sourceLines);
-      }
-    }
-    return lines;
+    return captionLinesAt(app.cues, play.time, app.track, translationAt);
   });
 
-  const cueIndex = $derived.by(() => {
-    const t = play.time;
-    const cues = app.cues;
-    let lo = 0;
-    let hi = cues.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const c = cues[mid];
-      if (t < c.start) hi = mid - 1;
-      else if (t >= c.end) lo = mid + 1;
-      else return mid;
-    }
-    return -1;
-  });
+  const cueIndex = $derived(cueIndexAtTimeExclusive(app.cues, play.time));
 
   /**
    * 当前画面对应的「字幕块」区间。双语 SRT 的日/中两行完全同区间，
@@ -383,6 +304,8 @@
   // 双语是**固定双行高**：自动测量会和虚拟滚动的绝对定位打架（开发文档 §6.3.2）。
   // 窗口计算是纯函数，在 lib/reviewTable.ts（可单测，也不占这里的行数预算）。
   const rowHeight = $derived(rowHeightFor(app.track));
+  /** 页边记号：待核 / 已核来自质检队列；蓝铅笔只在「原文」模式下点——译文已经摊在表里时它什么也没多说。 */
+  const marks = $derived(cueMarks(app.cues, qa.payload, app.track === 'source' ? app.translations[app.trackLang]?.texts : null));
   const vwin = $derived(
     virtualWindow({ scrollTop, viewH, total: app.cues.length, rowH: rowHeight }),
   );
@@ -435,19 +358,6 @@
     return viewStart + ratio * viewSpan;
   }
 
-  /** 当前核对台状态 → 可持久化的现场快照。 */
-  function currentSnapshot() {
-    const cue = app.cues[play.selected];
-    return {
-      cueIndex: play.selected,
-      cueTime: cue?.start ?? 0,
-      playhead: play.time,
-      viewStart,
-      span: viewSpan,
-      selection: selection ? { start: selection.start, end: selection.end } : null,
-    };
-  }
-
   /** 把某部影片的现场落盘（默认当前片）。切换影片前必须先调一次。 */
   function persistViewport(path = app.media?.path ?? '') {
     if (!path) return;
@@ -455,7 +365,10 @@
     // 那一刻视窗还是「全片 1.0×」的复位值，写下去会变成现场快照，
     // 下一次打开反而把它当用户位置恢复回来了。
     if (restoreDoneFor !== path) return;
-    rememberViewport(path, currentSnapshot());
+    rememberViewport(
+      path,
+      snapshotOf(app.cues, play.selected, play.time, viewStart, viewSpan, selection),
+    );
   }
 
   // 章节标记按媒体加载；检查器里的「将选区设为章节」需要当前时间选区。
@@ -499,16 +412,8 @@
   let peakSeq = 0;
   let peakTimer = 0;
 
-  /**
-   * 采样点数按像素的 3 倍取：放大到 1 秒视窗时仍有足够包络，不会退化成一排
-   * 可数的柱子。服务端只读这一小段样本，成本可忽略。缓存键必须带上它。
-   */
-  function binsFor(width: number) {
-    return Math.max(512, Math.min(12000, Math.round(width * 3)));
-  }
-
   async function fetchPeaks(id: string, from: number, span: number, width: number) {
-    const bins = binsFor(width);
+    const bins = binsForWidth(width);
     const key = peakCacheKey(id, from, span, bins);
     const hit = cachedPeaks(key);
     if (hit) {
@@ -541,7 +446,7 @@
     const from = viewStart;
     const span = viewSpan;
     if (!id || width <= 0 || span <= 0) return;
-    const hit = cachedPeaks(peakCacheKey(id, from, span, binsFor(width)));
+    const hit = cachedPeaks(peakCacheKey(id, from, span, binsForWidth(width)));
     if (hit) {
       // 同步命中：不等 70ms 防抖，也不重新请求——切页回来时波形立刻就在
       peaks = hit;
@@ -1235,36 +1140,11 @@
     return viewStart + viewSpan;
   }
 
-  /**
-   * 把浮层挂到 body 下。
-   *
-   * `.view-enter.animated` 的切页动画带 `animation-fill-mode: both`，结束后
-   * 计算出的 transform 仍是 identity matrix——它会让 `position: fixed` 相对
-   * 这个容器定位，于是右键菜单被整体推开了「侧栏 + 工具栏」那么多（用户报过
-   * 「菜单离鼠标太远」）。挂到 body 后 clientX/clientY 才是真正的视口坐标。
-   */
-  function portal(node: HTMLElement) {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.remove();
-      },
-    };
-  }
-
-  /** 光标下是否有字幕；返回下标，没有就 -1。 */
-  function cueUnder(t: number): number {
-    for (let i = 0; i < app.cues.length; i += 1) {
-      if (app.cues[i].start <= t && t <= app.cues[i].end) return i;
-    }
-    return -1;
-  }
-
   /** 右键：菜单出现在光标处；越靠近窗口边缘越往回收，避免被裁掉。 */
   function onWaveContextMenu(e: MouseEvent) {
     e.preventDefault();
     const t = Math.max(0, Math.min(duration || Number.POSITIVE_INFINITY, timeAt(e.clientX)));
-    const hit = cueUnder(t);
+    const hit = cueIndexAtTime(app.cues, t);
     if (hit >= 0) play.selected = hit;
     // 合并目标：优先用刚框选的区间，其次用底部轨道的 ⌘ 多选。
     let merge: number[] = [];
@@ -1289,29 +1169,6 @@
     const x = Math.min(e.clientX, window.innerWidth - 236);
     const y = Math.min(e.clientY, window.innerHeight - 190);
     contextMenu = { x, y, t: cue?.start ?? timeAt(e.clientX), index, merge };
-  }
-
-  function canSplitHere(): boolean {
-    const menu = contextMenu;
-    if (!menu || menu.index < 0) return false;
-    const cue = app.cues[menu.index];
-    return Boolean(cue && canSplitAt(cue, menu.t));
-  }
-
-  function splitHere() {
-    const menu = contextMenu;
-    contextMenu = null;
-    if (!menu || menu.index < 0) return;
-    laneSelection = [];
-    selection = null;
-    void splitCueAt(menu.index, menu.t);
-  }
-
-  function mergeHere(indices: number[]) {
-    contextMenu = null;
-    laneSelection = [];
-    selection = null;
-    void mergeCuesAt(indices);
   }
 
   async function deleteSelectedNow() {
@@ -1339,51 +1196,6 @@
   /** 供 App 的「删除选中的字幕」快捷键调用。 */
   export function api_deleteSelected() {
     void deleteSelectedNow();
-  }
-
-  async function addCueHere() {
-    const t = contextMenu?.t ?? play.time;
-    contextMenu = null;
-    await insertCueAt(t);
-  }
-
-  /** 右键「以此句音频新建音色…」：先给角色起名，再让后端精确切片。 */
-  function openVoiceDialog(index: number) {
-    contextMenu = null;
-    const cue = app.cues[index];
-    if (!cue) return;
-    voiceDialog = {
-      index,
-      name: `角色 ${tts.custom.length + 1}`,
-      refText: cue.text,
-    };
-  }
-
-  // 浮层打开后把焦点放进名字输入框（比 autofocus 更可控，也不会触发 Svelte 的无障碍告警）
-  $effect(() => {
-    if (!voiceDialog) return;
-    void nextTick().then(() => {
-      voiceNameEl?.focus();
-      voiceNameEl?.select();
-    });
-  });
-
-  async function createVoiceFromCue() {
-    if (!voiceDialog) return;
-    const name = voiceDialog.name.trim();
-    if (!name) {
-      toast('先给这个音色起个名字', 'warn');
-      return;
-    }
-    voiceBusy = true;
-    try {
-      await extractTtsVoiceFromCue(voiceDialog.index, name, voiceDialog.refText);
-      voiceDialog = null;
-    } catch (err) {
-      toast(`提取音色失败：${(err as Error).message}`, 'error');
-    } finally {
-      voiceBusy = false;
-    }
   }
 
   function onWavePointerUp(e: PointerEvent) {
@@ -1428,7 +1240,6 @@
       }
     }
   }
-
 
   function onWaveWheel(e: WheelEvent) {
     e.preventDefault();
@@ -1480,10 +1291,6 @@
     setView(center - span / 2, span);
   }
 
-  function clearSelection() {
-    selection = null;
-  }
-
   function toggleFollow() {
     follow = !follow;
     // 开启的瞬间就把当前播放头带回画面，不必先播放一下
@@ -1502,350 +1309,8 @@
   }
 
   // ---------------- 查找与替换（⌘F，覆盖原文 / 译文 / 双语） ----------------
-  let findInput = $state<HTMLInputElement | null>(null);
-  /** 正在提交单处替换：挡住连点，避免两个 patch 请求把 pos 抢乱。 */
-  let findBusy = $state(false);
-
-  let findSkipped = $state<FindSkipAnchor[]>([]);
-
-  /**
-   * 搜索范围跟随当前显示模式：原文只搜原文、译文只搜译文、双语两条都搜。
-   * 双语里同一个词可能同时命中上下两行，所以命中记录必须带 track，替换时
-   * 才能改对那张表（原文进 review_cues，译文进 translations[lang]）。
-   */
-  const findTracks = $derived<FindTrack[]>(
-    app.track === 'target' ? ['target'] : app.track === 'both' ? ['source', 'target'] : ['source'],
-  );
-
-  /** 所有命中（含已跳过）：记录属于第几条 / 哪条轨 / 在文本里的起止。 */
-  const rawFindMatches = $derived(
-    collectFindHits(
-      app.cues,
-      findTracks,
-      findState.query,
-      findState.caseSensitive,
-      translationTextAt,
-    ),
-  );
-
-  const skippedFindKeys = $derived(new Set(findSkipped.map(findHitKey)));
-  /** 待处理命中：跳过的不再参与上一处/下一处/替换，本轮到它就直接略过。 */
-  const findMatches = $derived(filterSkippedHits(rawFindMatches, skippedFindKeys));
-  const skippedHitCount = $derived(
-    findSkipped.length ? countSkippedHits(rawFindMatches, skippedFindKeys) : 0,
-  );
-  /** 某一轨里被跳过的起点，渲染删除线用；单行字幕与原文下标一致。 */
-  const skippedStarts = $derived(skippedStartsByCueTrack(findSkipped));
-
-  const matchedCueSet = $derived(
-    new Set((findState.open ? findMatches : []).map((hit) => hit.cue)),
-  );
-
-  /** 当前这一处（未跳过的）在原始命中里的序号，用来只点亮同一个词里的那一处。 */
-  const currentFind = $derived.by(() => {
-    if (!findState.open) return null;
-    const hit = findMatches[findState.pos];
-    if (!hit) return null;
-    return { ...hit, ordinal: ordinalOfHit(rawFindMatches, hit) };
-  });
-
-  const findPrevKey = $derived(formatCombo(comboOf('review.findPrev')));
-  const findNextKey = $derived(formatCombo(comboOf('review.findNext')));
-
-  function resetFindSession() {
-    findSkipped = [];
-    findState.pos = 0;
-  }
-
-  $effect(() => {
-    const nonce = findState.focusNonce;
-    void nonce;
-    if (!findState.open) return;
-    void nextTick().then(() => {
-      findInput?.focus();
-      findInput?.select();
-    });
-  });
-
-  // 关掉查找栏就结束「本轮」：下次重开时不记得上一轮跳过过谁。
-  $effect(() => {
-    if (!findState.open && findSkipped.length) findSkipped = [];
-  });
-
-  // 原文 / 译文 / 双语切换会改变搜索范围，旧的跳过锚点不再对应同一批命中。
-  let lastFindTracksKey = '';
-  $effect(() => {
-    const key = findTracks.join(',');
-    if (key === lastFindTracksKey) return;
-    const firstRun = !lastFindTracksKey;
-    lastFindTracksKey = key;
-    if (!firstRun) resetFindSession();
-  });
-
-  // 替换 / 跳过之后匹配数会变少：把当前位置拉回合法范围
-  $effect(() => {
-    const total = findMatches.length;
-    if (total === 0) {
-      if (findState.pos !== 0) findState.pos = 0;
-      return;
-    }
-    if (findState.pos >= total) findState.pos = 0;
-  });
-
-  /**
-   * 替换掉某条字幕里的一处命中后，同一轨后面那些跳过锚点的起点会整体左/右移。
-   * 不平移的话，被跳过的逗号会因为前一个逗号被删掉而“复活”。
-   */
-  function shiftFindAnchors(
-    cue: number,
-    track: FindTrack,
-    at: number,
-    removed: number,
-    inserted: number,
-  ) {
-    if (!findSkipped.length) return;
-    const delta = inserted - removed;
-    if (!delta) return;
-    let changed = false;
-    const next = findSkipped.map((anchor) => {
-      if (anchor.cue !== cue || anchor.track !== track) return anchor;
-      if (anchor.start <= at) return anchor;
-      changed = true;
-      return { ...anchor, start: Math.max(at, anchor.start + delta) };
-    });
-    if (changed) findSkipped = next;
-  }
-
-  function revealFindHit(hit: FindHit | undefined) {
-    if (!hit) return;
-    jumpToCue(hit.cue);
-  }
-
-  /**
-   * 整批替换未跳过的命中以后，同一轨里被跳过的字符会随前面的删/插整体平移。
-   * 按替换前的未跳过命中累计位移，把跳过锚点搬到新位置，删除线才不会消失。
-   */
-  function reseatSkippedAfterReplaceAll(hits: FindHit[], inserted: number) {
-    if (!findSkipped.length) return;
-    const byTrack = new Map<string, FindHit[]>();
-    for (const hit of hits) {
-      const key = `${hit.cue}:${hit.track}`;
-      let list = byTrack.get(key);
-      if (!list) {
-        list = [];
-        byTrack.set(key, list);
-      }
-      list.push(hit);
-    }
-    findSkipped = findSkipped.map((anchor) => {
-      let shift = 0;
-      for (const hit of byTrack.get(`${anchor.cue}:${anchor.track}`) ?? []) {
-        if (hit.start < anchor.start) shift += inserted - (hit.end - hit.start);
-      }
-      return shift ? { ...anchor, start: Math.max(0, anchor.start + shift) } : anchor;
-    });
-  }
-
-  function findGo(delta: number) {
-    if (findBusy) return;
-    const total = findMatches.length;
-    if (!total) {
-      toast(
-        rawFindMatches.length
-          ? '本轮匹配都已跳过，改一下查找词可以重新开始'
-          : '没有找到匹配的文本',
-        'warn',
-      );
-      return;
-    }
-    findState.pos = (findState.pos + delta + total) % total;
-    revealFindHit(findMatches[findState.pos]);
-  }
-
-  async function findReplaceCurrent() {
-    if (!findState.query || findBusy) return;
-    const total = findMatches.length;
-    if (!total) {
-      toast(
-        rawFindMatches.length
-          ? '本轮匹配都已跳过，改一下查找词可以重新开始'
-          : '没有可替换的匹配',
-        'warn',
-      );
-      return;
-    }
-    const hit = findMatches[Math.min(findState.pos, total - 1)];
-    if (!hit) return;
-    const posBefore = findState.pos;
-    const query = findState.query;
-    const replacement = findState.replacement;
-    const caseSensitive = findState.caseSensitive;
-    const removed = hit.end - hit.start;
-    findBusy = true;
-    try {
-      const ok =
-        hit.track === 'source'
-          ? await replaceInCue(hit.cue, query, replacement, caseSensitive, hit.start)
-          : await replaceInTranslation(hit.cue, query, replacement, caseSensitive, hit.start);
-      if (!ok) return;
-      const where = hit.track === 'source' ? '原文' : '译文';
-      // 请求期间用户把查找栏关了：替换照常生效，但不要再抢选中/滚动。
-      if (!findState.open) {
-        toast(`已替换 1 处${where}`);
-        return;
-      }
-      // 请求期间用户改了查找条件：替换已经发生，但不要拿旧位置继续前进。
-      if (findState.query !== query || findState.caseSensitive !== caseSensitive) {
-        toast(`已替换 1 处${where}`);
-        return;
-      }
-      // 被替换的命中已经从数组消失，后面的跳过锚点要跟着平移。
-      shiftFindAnchors(hit.cue, hit.track, hit.start, removed, replacement.length);
-      const left = findMatches.length;
-      if (!left) {
-        findState.pos = 0;
-        // 还有没被替换的命中，说明它们都已经标记跳过了，不能因为“没得替换”就清标记。
-        if (!rawFindMatches.length) findSkipped = [];
-        toast(
-          rawFindMatches.length
-            ? '已替换完最后一处待处理匹配，其余都已跳过'
-            : '已替换最后一处，本轮没有待处理匹配了',
-        );
-        return;
-      }
-      let wrapped = false;
-      if (posBefore >= left) {
-        findState.pos = 0;
-        wrapped = true;
-      } else {
-        findState.pos = Math.min(posBefore, left - 1);
-      }
-      revealFindHit(findMatches[findState.pos]);
-      toast(`已替换 1 处${where}${wrapped ? '，已回到第一处' : ''}`);
-    } finally {
-      findBusy = false;
-    }
-  }
-
-  /** 跳过当前这一处：不写字幕、不进历史，本轮不再回到它。 */
-  function findSkip() {
-    if (!findState.query || findBusy) return;
-    const total = findMatches.length;
-    if (!total) {
-      toast(
-        rawFindMatches.length
-          ? '本轮匹配都已跳过，改一下查找词可以重新开始'
-          : '没有可跳过的匹配',
-        'warn',
-      );
-      return;
-    }
-    const hit = findMatches[Math.min(findState.pos, total - 1)];
-    if (!hit) return;
-    const posBefore = findState.pos;
-    const key = findHitKey(hit);
-    if (!skippedFindKeys.has(key)) {
-      findSkipped = [...findSkipped, { cue: hit.cue, track: hit.track, start: hit.start }];
-    }
-    const left = findMatches.length;
-    if (!left) {
-      toast('已跳过最后一处，本轮没有待处理匹配了');
-      return;
-    }
-    let wrapped = false;
-    if (posBefore >= left) {
-      findState.pos = 0;
-      wrapped = true;
-    } else {
-      findState.pos = Math.min(posBefore, left - 1);
-    }
-    revealFindHit(findMatches[findState.pos]);
-    toast(`已跳过 1 处，本轮剩余 ${left} 处${wrapped ? '（已回到第一处）' : ''}`);
-  }
-
-  async function findReplaceAll() {
-    if (!findState.query || findBusy) return;
-    const query = findState.query;
-    const replacement = findState.replacement;
-    const caseSensitive = findState.caseSensitive;
-    const activeBefore = findMatches.slice();
-    findBusy = true;
-    try {
-      // 原文 + 译文一次提交：双语模式下只压一步历史，⌘Z 一次退干净。
-      const counts = await replaceAllInTracks(
-        query,
-        replacement,
-        caseSensitive,
-        findTracks,
-        skippedFindKeys,
-      );
-      const count = counts.source + counts.target;
-      if (!count) {
-        toast(
-          skippedHitCount ? '剩余命中都已跳过，没有可替换的' : '没有找到匹配的文本',
-          'warn',
-        );
-        return;
-      }
-      findState.pos = 0;
-      // 请求期间用户改了查找条件：跳过集合已经被重置，不要再用旧位移去搬。
-      if (findState.query === query && findState.caseSensitive === caseSensitive) {
-        reseatSkippedAfterReplaceAll(activeBefore, replacement.length);
-      }
-      const kept = skippedHitCount;
-      const detail =
-        counts.source && counts.target
-          ? `（原文 ${counts.source} / 译文 ${counts.target}）`
-          : counts.target
-            ? '（译文）'
-            : '';
-      toast(`已替换 ${count} 处${detail}${kept ? `，跳过 ${kept} 处保持原样` : ''}`);
-    } finally {
-      findBusy = false;
-    }
-  }
-
-  /** 画面叠加层：一条 cue 里的硬换行拆成多行，空行丢掉。 */
-  function captionTextLines(text: string): string[] {
-    return String(text || '')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-  }
-
-  /**
-   * 表格里一行只能放一行文字（虚拟列表固定行高），多行 cue 用「 / 」分隔显示，
-   * 不再让 newline 被 nowrap 压成一个空格——两种语言粘在一起看起来像识别错误。
-   * 完整原文仍在检查器文本框里按原样编辑。
-   */
-  function cueDisplayText(text: string): string {
-    return captionTextLines(text).join(' / ');
-  }
-
-  /** 切片逻辑在 lib/findMatches（纯函数），这里只把当前的查找上下文接进来。 */
-  const highlight = (
-    text: string,
-    track: FindTrack,
-    currentOrdinal: number,
-    skipped?: Set<number>,
-  ) =>
-    highlightSegments(text, track, currentOrdinal, skipped, {
-      open: findState.open,
-      query: findState.query,
-      caseSensitive: findState.caseSensitive,
-      tracks: findTracks,
-    });
-
-  /** 当前命中在这条 cue / 这条轨里的序号；不是当前行返回 -1。 */
-  function currentOrdinalFor(index: number, track: FindTrack): number {
-    const cur = currentFind;
-    if (!cur || cur.cue !== index || cur.track !== track) return -1;
-    return cur.ordinal;
-  }
-
-  function skippedStartsFor(index: number, track: FindTrack): Set<number> | undefined {
-    return skippedStarts.get(`${index}:${track}`);
-  }
+  // 命中 / 跳过 / 当前处 / 替换都收在 lib/reviewFind.svelte.ts；这里只接线。
+  const find = createReviewFind();
 
   async function retranscribeRow(i: number) {
     if (busy) {
@@ -2039,7 +1504,7 @@
   /** 供 App 的「查找：上一处 / 下一处」快捷键调用。 */
   export function api_findStep(delta: number) {
     if (!findState.open) return;
-    findGo(delta);
+    find.go(delta);
   }
 </script>
 
@@ -2117,7 +1582,7 @@
       onSendSelection={sendSelectionToTranscribe}
       onSeekSelection={() => selection && seekTo(selection.start, { stopAt: selection.end, play: true })}
       onClearLane={() => (laneSelection = [])}
-      onClearSelection={clearSelection}
+      onClearSelection={() => (selection = null)}
     />
   </div>
 
@@ -2183,36 +1648,38 @@
       selected: play.selected,
       multiKeys,
       activeKey,
-      matchedSet: matchedCueSet,
-      findCue: currentFind?.cue ?? -1,
+      marks,
+      matchedSet: find.matchedCues,
+      findCue: find.current?.cue ?? -1,
       busy,
       displayText: cueDisplayText,
       translationAt,
       isStale: isTranslationStale,
-      highlight,
-      ordinalFor: currentOrdinalFor,
-      skippedFor: skippedStartsFor,
+      highlight: find.highlight,
+      ordinalFor: find.ordinalFor,
+      skippedFor: find.skippedFor,
     }}
     find={{
       open: findState.open,
       query: findState.query,
       replacement: findState.replacement,
       caseSensitive: findState.caseSensitive,
-      count: findMatches.length,
+      count: find.matches.length,
       total: findState.pos,
-      rawTotal: rawFindMatches.length,
-      skipped: skippedHitCount,
-      busy: findBusy,
-      prevKey: findPrevKey,
-      nextKey: findNextKey,
-      onInput: resetFindSession,
-      onGo: findGo,
-      onReplace: () => void findReplaceCurrent(),
-      onSkip: findSkip,
-      onReplaceAll: findReplaceAll,
+      rawTotal: find.rawMatches.length,
+      skipped: find.skippedCount,
+      busy: find.busy,
+      prevKey: find.prevKey,
+      nextKey: find.nextKey,
+      onQuery: find.setQuery,
+      onReplacement: find.setReplacement,
+      onGo: find.go,
+      onReplace: () => void find.replaceCurrent(),
+      onSkip: find.skip,
+      onReplaceAll: find.replaceAll,
       onToggleCase: () => {
         findState.caseSensitive = !findState.caseSensitive;
-        resetFindSession();
+        find.resetSession();
       },
       onClose: closeFind,
     }}
@@ -2232,148 +1699,34 @@
     rowaudition={(i) => previewRange(app.cues[i].start, app.cues[i].end)}
     rowretranscribe={retranscribeRow}
     onrows={(node) => (rowsEl = node)}
-    findInput={(node) => (findInput = node)}
+    findInput={find.bindInput}
   />
-  {#if contextMenu}
-    <button
-      class="ctx-backdrop"
-      use:portal
-      aria-label="关闭菜单"
-      onclick={() => (contextMenu = null)}
-    ></button>
-    <div
-      class="ctx-menu"
-      use:portal
-      style="left:{contextMenu.x}px;top:{contextMenu.y}px"
-      role="menu"
-      aria-label="音轨菜单"
-    >
-      <div class="ctx-head">
-        <span>{tcShort(contextMenu.t)}</span>
-        <span class="ctx-hint">
-          {contextMenu.index >= 0 ? `第 ${contextMenu.index + 1} 句` : '0.8 秒'}
-        </span>
-      </div>
-      {#if contextMenu.merge.length >= 2}
-        <button
-          class="ctx-item"
-          onclick={() => mergeHere(contextMenu!.merge)}
-          role="menuitem"
-        >
-          <Icon name="merge" size={12} />
-          <span class="ctx-label">合并这 {contextMenu.merge.length} 句字幕</span>
-          <span class="ctx-hint">一起合并</span>
-        </button>
-        <div class="ctx-sep"></div>
-      {/if}
-      {#if contextMenu.index >= 0}
-        {#if canSplitHere()}
-          <button class="ctx-item" onclick={splitHere} role="menuitem">
-            <Icon name="split" size={12} />
-            <span class="ctx-label">切割字幕</span>
-            <span class="ctx-hint">分成两句</span>
-          </button>
-        {/if}
-        <button
-          class="ctx-item"
-          onclick={() => openVoiceDialog(contextMenu!.index)}
-          role="menuitem"
-        >
-          <Icon name="speaker" size={12} />
-          <span class="ctx-label">以此句音频新建音色…</span>
-        </button>
-        <button
-          class="ctx-item"
-          onclick={() => {
-            const index = contextMenu.index;
-            const c = app.cues[index];
-            contextMenu = null;
-            if (c) previewRange(c.start, c.end);
-          }}
-          role="menuitem"
-        >
-          <Icon name="play" size={12} />
-          <span class="ctx-label">试听这句原声</span>
-        </button>
-        <div class="ctx-sep"></div>
-      {/if}
-      <button class="ctx-item" onclick={addCueHere} role="menuitem">
-        <Icon name="plus" size={12} />
-        <span class="ctx-label">添加字幕</span>
-        <span class="ctx-hint">在光标处居中插入空字幕</span>
-      </button>
-    </div>
-  {/if}
-
-  {#if voiceDialog}
-    {@const vc = app.cues[voiceDialog.index]}
-    <button
-      class="vd-backdrop"
-      use:portal
-      aria-label="关闭新建音色"
-      onclick={() => {
-        if (!voiceBusy) voiceDialog = null;
-      }}
-    ></button>
-    <div class="vd" use:portal role="dialog" aria-modal="true" aria-label="新建克隆音色">
-      <div class="vd-head">以此句音频新建音色</div>
-      <div class="vd-sub">
-        {#if vc}
-          第 {voiceDialog.index + 1} 句 · {tcShort(vc.start)}–{tcShort(vc.end)}
-          <span class="vd-dur">{(vc.end - vc.start).toFixed(1)}s</span>
-        {/if}
-      </div>
-      <label class="vd-field">
-        <span>音色名</span>
-        <input
-          bind:this={voiceNameEl}
-          bind:value={voiceDialog.name}
-          maxlength="40"
-          placeholder="角色名，例如「女主角」"
-          onkeydown={(e) => {
-            if (e.key === 'Enter' && !voiceBusy) {
-              e.preventDefault();
-              void createVoiceFromCue();
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              voiceDialog = null;
-            }
-          }}
-        />
-      </label>
-      <label class="vd-field">
-        <span>参考文本（这句的日文，用于对齐声线）</span>
-        <textarea bind:value={voiceDialog.refText} rows="2"></textarea>
-      </label>
-      <p class="vd-note">
-        后端会用 ffmpeg 从当前视频精确切出这句的人声（前后各留 0.2 秒），
-        3–10 秒最稳。{tts.engine && !tts.engine.installed
-          ? '提取不需要模型；朗读前再到右侧点「下载克隆模型」。'
-          : ''}
-      </p>
-      <div class="vd-actions">
-        <button class="btn mini" onclick={() => (voiceDialog = null)} disabled={voiceBusy}>
-          取消
-        </button>
-        <span class="vd-spacer"></span>
-        <button class="btn mini primary" onclick={createVoiceFromCue} disabled={voiceBusy}>
-          {voiceBusy ? '提取中…' : '提取并保存'}
-        </button>
-      </div>
-    </div>
-  {/if}
+  <ReviewContextMenu
+    bind:menu={contextMenu}
+    bind:selection
+    bind:laneSelection
+    bind:voiceDialog
+  />
+  <ReviewVoiceDialog bind:dialog={voiceDialog} />
 </div>
 
 <style>
+  /* 核对台是三块不同明度的面（2026-11-26 深碳阶）：
+     舞台是房间（--stage-bg，最深）→ 走带 + 时间轴坞（--paper，一阶亮）→
+     台本表（--raise，再亮一阶）。这样影片与波形条自然跳出来，而不是
+     在「一块近黑到底」的板子上失去参照。 */
   .review {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    background: var(--paper);
   }
 
+  /* 时间轴与走带、字幕表共用同一条 16px 页边（Step 4.2 的最大视口原则：
+     外框留白只留一次，竖向空间全部让给画面 / 波形 / 表格）。 */
   .timeline {
-    padding: 6px 26px 0;
+    padding: 2px var(--sp-4) 0;
     flex: 0 0 auto;
   }
 
@@ -2383,168 +1736,7 @@
     display: flex;
     flex-direction: column;
     flex: 0 0 auto;
-  }
-
-  /* ---------------- 音轨右键菜单 ---------------- */
-  .ctx-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    border: 0;
-    padding: 0;
-    background: transparent;
-    cursor: default;
-  }
-  .ctx-sep {
-    height: 1px;
-    margin: 3px var(--sp-1);
-    background: var(--separator-soft);
-  }
-  .ctx-menu {
-    position: fixed;
-    z-index: 71;
-    width: 244px;
-    padding: var(--sp-1);
-    border-radius: 4px;
-    background: var(--bg-content);
-    border: 1px solid var(--separator);
-    box-shadow: var(--shadow-pop);
-  }
-  .ctx-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--sp-2);
-    padding: var(--sp-1) 7px 5px;
-    margin-bottom: 3px;
-    border-bottom: 1px solid var(--separator-soft);
-    font-size: 12px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  }
-  .ctx-item {
-    appearance: none;
-    border: 0;
-    background: transparent;
-    color: var(--text);
-    font: inherit;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 7px;
-    border-radius: 4px;
-    cursor: pointer;
-    text-align: left;
-  }
-  .ctx-item:hover {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-  .ctx-label {
-    flex: 0 0 auto;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-  .ctx-hint {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    color: var(--text-3);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-align: right;
-  }
-
-  /* ---------------- 以此句音频新建音色 ---------------- */
-  .vd-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 80;
-    border: 0;
-    padding: 0;
-    margin: 0;
-    background: rgba(0, 0, 0, 0.28);
-    backdrop-filter: blur(1px);
-    cursor: default;
-  }
-  .vd {
-    position: fixed;
-    z-index: 81;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: min(340px, calc(100vw - 48px));
-    padding: 14px var(--sp-4) var(--sp-3);
-    border-radius: 8px;
-    background: var(--bg-content);
-    border: 1px solid var(--separator);
-    box-shadow: var(--shadow-pop);
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .vd-head {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .vd-sub {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: -5px;
-    font-size: 11px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-  }
-  .vd-dur {
-    padding: 0 5px;
-    border-radius: 3px;
-    background: var(--separator-soft);
-  }
-  .vd-field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-1);
-    font-size: 11px;
-    color: var(--text-3);
-  }
-  .vd-field input,
-  .vd-field textarea {
-    width: 100%;
-    box-sizing: border-box;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--bg-inset, var(--raise));
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    padding: 5px 7px;
-    resize: vertical;
-  }
-  .vd-field input:focus,
-  .vd-field textarea:focus {
-    outline: none;
-    border-color: var(--accent-line);
-    box-shadow: 0 0 0 2px var(--accent-soft);
-  }
-  .vd-note {
-    margin: 0;
-    font-size: 11px;
-    line-height: 16px;
-    color: var(--text-3);
-  }
-  .vd-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    padding-top: 2px;
-  }
-  .vd-spacer {
-    flex: 1;
+    background: var(--stage-bg);
   }
 
   /* ============================================================
@@ -2561,23 +1753,12 @@
     .stage {
       padding: var(--sp-3) var(--sp-4) 0;
     }
-    /* 200% 下保持 592×333 会把播放条推出首屏：按「视频 + 播放行 + 工具行」
-       正好占满一屏可用高度来定宽，波形与表格往下滚一屏即可。 */
-    .player {
-      width: min(640px, 100%, calc((100vh - 170px) * 16 / 9));
-    }
     .timeline {
-      padding: 6px var(--sp-4) 0;
+      padding: 2px var(--sp-4) 0;
     }
-    .table-area {
-      flex: 0 0 auto;
-      height: clamp(200px, 52vh, 300px);
-      margin: 6px var(--sp-4) var(--sp-4);
-    }
-    .transport,
-    .tl-tools {
-      gap: 7px;
-    }
+    /* 紧凑模式里 `.player` / `.table-area` / `.transport` 的规则已经搬回它们
+       各自的组件（ReviewStage / ReviewTable / ReviewTransport）：Svelte 的
+       scoped 样式到不了子组件，写在这里的三条从来就没生效过。 */
   }
 
 </style>

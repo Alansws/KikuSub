@@ -2,21 +2,32 @@ import './error-capture';
 import { mount } from 'svelte';
 import './app.css';
 import App from './App.svelte';
+import { resolveTheme } from './lib/themes';
+import { readAppearancePrefs } from './lib/appearance';
+import { initAppearance } from './lib/appearanceState.svelte';
 
 /**
  * 在挂载前先把外观定下来。
  *
- * 以前主题要等 sidecar 握手完成（`boot()`）才写进 `<html data-theme>`，于是
+ * 以前外观要等 sidecar 握手完成（`boot()`）才写进 `<html data-theme>`，于是
  * 深色模式每次启动都会先闪一下浅色侧栏；同时主进程的原生 vibrancy 还停在
  * 系统外观，红绿灯那一列会透成灰白。这里同步应用一次，并通知主进程。
+ *
+ * 2026-11-25：外观模型改成「偏好（auto/light/dark）× 系统外观 → data-theme」，
+ * 字幕字体单独一个 `data-cue-font`。旧的三主题 key 在这里只做只读迁移，
+ * 真正的迁移落在 store 的 `initAppearance()`（它会清掉旧 key）。
  */
-const savedTheme = localStorage.getItem('kikusub.theme');
-// 旧版本把「明朝墨」存成 'cool'：冷启动时先迁移，避免闪一下默认主题
-const bootTheme = savedTheme === 'cool' ? 'mincho' : savedTheme;
-if (bootTheme === 'dark' || bootTheme === 'light' || bootTheme === 'mincho') {
-  document.documentElement.dataset.theme = bootTheme;
-  window.kikusub?.setTheme?.(bootTheme);
-}
+const prefs = readAppearancePrefs(localStorage);
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+document.documentElement.dataset.theme = resolveTheme(prefs.appearance, systemDark ? 'dark' : 'light');
+// 色板与明暗正交：cobalt 是默认，没有偏好时也显式落属性，CSS 才能只写覆写块。
+document.documentElement.dataset.palette = prefs.palette;
+document.documentElement.dataset.cueFont = prefs.cueFont;
+window.kikusub?.setAppearance?.(prefs.appearance);
+
+// 补齐 store 状态、迁旧 key、挂上「系统外观变化」监听（auto 时要实时跟着变）
+initAppearance();
 
 // Svelte 5 用 mount()，不再是 new App()
 mount(App, { target: document.getElementById('app')! });

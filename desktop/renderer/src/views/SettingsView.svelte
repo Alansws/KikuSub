@@ -117,12 +117,14 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    /* G5：与转写页共用同一套页面骨架 —— 24px 左右内边距 + 1040 内容列 + 左对齐。
-       原来各页自定义 1120 / 1000 并居中，导致左缘 276 / 294 / 260 三档漂移。 */
+    /* 单栏页面共用的页面骨架：24px 左右内边距 + 1040 内容列。
+       2026-11-26：从「左对齐」改成**居中**——大窗口下原来右侧会甩出一大块空白，
+       看起来像内容被贴死在左缘。统一 max-width + 居中后，所有单栏页面在同一
+       窗口宽度下仍然共享同一条左缘（谁都不用自己发明 1120 / 1000 / 960）。 */
     padding: var(--sp-8) var(--sp-6) var(--sp-12);
     display: grid;
-    grid-template-columns: minmax(0, 1040px);
-    justify-content: start;
+    grid-template-columns: minmax(0, var(--measure-page));
+    justify-content: center;
     align-content: start;
   }
   .head-meta {
@@ -137,9 +139,9 @@
   .head-key {
     margin-left: 6px;
     padding: 1px 6px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--well-line);
     border-radius: 5px;
-    background: var(--bg-content);
+    background: var(--well);
     color: var(--text-3);
     font-family: var(--font-sans);
     font-size: 11.5px;

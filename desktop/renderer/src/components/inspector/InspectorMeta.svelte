@@ -1,13 +1,16 @@
 <script lang="ts">
   /**
-   * 检查器底部的只读信息：当前字幕来源 / 质检速览 / 生效参数 / 输出。
+   * 检查器底部的只读信息——2026-11-25（Step 4.2）按 `distill` 收成三件事：
+   * **质检速览**（只在有问题时出现）、**当前字幕的来源**（只在换过稿时出现）、
+   * **任务报告入口**。
    *
-   * 2026-11-21 从 Inspector.svelte 抽出来（Step 3）。这些是**读**的内容，不参与
-   * 核对操作；抽成独立组件后，`Inspector` 只剩页签、当前条目与保存栏。
+   * 删掉的是「生效参数（设备 / 引擎 / 版本 / 参数）」与「输出（文件 / 条数 / 字数）」：
+   * 设备与引擎在底栏、条数与字数在底栏、文件名在标题栏，参数与版本属于任务报告——
+   * 同一组读数在三处出现，正是用户说的「重复视觉噪音」。现在只在需要的地方出现一次，
+   * 完整的一份留在「任务报告」里（这里是它在核对台的唯一入口）。
    *
-   * 「换了一版字幕（导入 / 恢复草稿）后不要引用上一次转写的数字」这条规则
-   * 仍然在这里唯一实现：`report` 会按 `review_source.job_id` 校验，对不上就当
-   * 没有报告。
+   * 「换了一版字幕（导入 / 恢复草稿）后不要引用上一次转写的数字」这条规则仍然在这里
+   * 唯一实现：`report` 会按 `review_source.job_id` 校验，对不上就当没有报告。
    */
   import Icon from '../Icon.svelte';
   import { app, setView } from '../../lib/store.svelte';
@@ -37,163 +40,136 @@
     if (sourceJob && data.job_id && sourceJob !== data.job_id) return null;
     return data;
   });
-  const reportStale = $derived(Boolean(app.report && !imported && !report));
   const quality = $derived(report?.quality ?? null);
-  const outputName = $derived.by(() => {
-    if (source?.name) return source.name;
-    if (report?.out_filename) return report.out_filename;
-    const fromReport = report?.overview?.find((r) => r.label === '字幕文件名')?.value;
-    return fromReport ?? app.media?.name ?? '—';
-  });
+  const coverage = $derived(Number(quality?.coverage ?? 0));
+  const lowConf = $derived(Number(quality?.low_confidence ?? 0));
+  const outputName = $derived(source?.name || app.media?.name || '');
   const sourcePath = $derived(source?.path || '');
 </script>
 
-  {#if imported}
-    <!--
-      换了一版字幕（导入 / 恢复草稿）后，转写报告与质检队列属于另一版内容。
-      这里不再展示它们的数字，改用当前字幕自己的来源与条数，避免“面板说 A、
-      核对台在用 B”。
-    -->
-    <div class="meta-sec">
-      <div class="meta-h">当前字幕</div>
-      <div class="source-row">
-        <span class="source-badge">{sourceLabel}</span>
-        <span class="source-name" title={sourcePath || outputName}>{outputName}</span>
-      </div>
-      <p class="meta-note">
-        质检速览与生效参数属于这次转写，和当前导入的字幕不是同一版；整片转写后会重新生成。
-      </p>
-      {#if app.media}
-        <button class="meta-link" onclick={() => setView('transcribe')}>
-          去转写
-          <Icon name="chevron-right" size={10} />
-        </button>
-      {/if}
-    </div>
-  {:else if quality}
-    <div class="meta-sec">
-      <div class="meta-h">质检速览</div>
+<footer class="meta-foot">
+  <div class="foot-row">
+    {#if imported}
+      <!--
+        换了一版字幕（导入 / 恢复草稿）后，转写报告与质检队列属于另一版内容。
+        这里不再展示它们的数字，只说清「这一版是哪来的」，避免“面板说 A、核对台在用 B”。
+      -->
+      <span class="source-badge">{sourceLabel}</span>
+      <span class="source-name" title={sourcePath || outputName}>{outputName || '—'}</span>
+    {:else if coverage || lowConf}
       <div class="chips">
-        <span
-          class="chip"
-          class:ok={(quality.coverage ?? 0) === 0}
-          class:warn={(quality.coverage ?? 0) > 0}
-        >
-          漏检 <b>{quality.coverage ?? 0}</b>
-        </span>
-        <span
-          class="chip"
-          class:ok={(quality.low_confidence ?? 0) === 0}
-          class:warn={(quality.low_confidence ?? 0) > 0}
-        >
-          低置信 <b>{quality.low_confidence ?? 0}</b>
-        </span>
+        {#if coverage}
+          <span class="chip warn">漏检 <b>{coverage}</b></span>
+        {/if}
+        {#if lowConf}
+          <span class="chip warn">低置信 <b>{lowConf}</b></span>
+        {/if}
       </div>
-    </div>
-  {/if}
-
-  {#if !imported}
-    <div class="meta-sec">
-      <div class="meta-h">生效参数</div>
-      {#if report?.params?.length}
-        {#each report.params.slice(0, 6) as row (row.label)}
-          <div class="kv"><span class="k">{row.label}</span><span class="v">{row.value}</span></div>
-        {/each}
-      {:else}
-        <div class="kv"><span class="k">设备</span><span class="v mono">{app.config?.device ?? '—'}</span></div>
-        <div class="kv"><span class="k">引擎</span><span class="v">{app.config?.engines?.find((e) => e.key === app.engine)?.label ?? '—'}</span></div>
-        <div class="kv"><span class="k">版本</span><span class="v mono">v{app.config?.version ?? '—'}</span></div>
-        <div class="kv"><span class="k">参数</span><span class="v muted">转写后可见</span></div>
-      {/if}
-      {#if reportStale}
-        <p class="meta-note">报告属于另一次转写，已隐藏；重新整片转写后会恢复。</p>
-      {/if}
-    </div>
-  {/if}
-
-  <div class="meta-sec">
-    <div class="meta-h">输出</div>
-    <div class="kv">
-      <span class="k">文件</span>
-      <span class="v mono" title={sourcePath || outputName}>{outputName}</span>
-    </div>
-    <div class="kv"><span class="k">条数</span><span class="v">{app.cues.length} 条</span></div>
-    <div class="kv">
-      <span class="k">字符</span>
-      <span class="v">{app.cues.reduce((n, c) => n + c.text.length, 0)} 字</span>
-    </div>
+    {:else if !app.report}
+      <span class="foot-quiet">还没有质检速览 · 整片转写后生成</span>
+    {/if}
+    <div class="foot-spacer"></div>
+    {#if app.report && !imported}
+      <button class="meta-link" onclick={() => setView('report')} title="这一趟转写的完整参数、耗时与漏句清单">
+        任务报告
+        <Icon name="chevron-right" size={10} />
+      </button>
+    {/if}
   </div>
-
+  {#if imported}
+    <p class="meta-note">质检速览与生效参数属于上一次转写，和这一版字幕对不上；整片转写后会重新生成。</p>
+  {:else if coverage || lowConf}
+    <p class="meta-note">都在「质检待核」里逐条处理</p>
+  {/if}
+</footer>
 
 <style>
-  /* G16：检查器三层信息的层级原来几乎是平的 ——
-     分区标题 12/600、字段键 12.5/400、值 12/400，键比标题还大。
-     现在把三层拉开：标题 12.5/600 + 字距（像小标题）往下靠上，键降为 12/400/ink-3 退后，
-     值 12.5/500/ink 作为可读内容。分区线保留并稍微拉开，让「参数块」有起点。 */
-  .meta-sec {
-    margin-top: var(--sp-4);
-    padding: var(--sp-3) 0 0;
-    border-top: 1px solid var(--line-2);
+  /* 检查器底部的收尾区（2026-11-26 真机反馈：右栏底部几行信息下面留出一大块
+     尴尬空白）。两条规则：
+     1. `margin-top: auto` —— 内容短时它被推到检查器底缘，空白落在内容与收尾区
+        之间，读起来是「留白」，而不是「没写完」；
+     2. 一行收口 —— 状态（来源 / 漏检 / 低置信）在左，「任务报告」在右，同一条
+        基线上；说明最多一行小字，不再堆两个 section。 */
+  .meta-foot {
+    margin-top: auto;
+    padding: var(--sp-3) 0 2px;
+    border-top: 1px solid var(--line);
+    min-width: 0;
   }
-  .meta-h {
-    font-size: 12.5px;
+  .foot-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 20px;
+  }
+  .foot-spacer {
+    flex: 1;
+    min-width: var(--sp-2);
+  }
+  .foot-quiet {
+    min-width: 0;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--ink-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta-note {
+    margin: 5px 0 0;
+    font-size: 11.5px;
     line-height: 17px;
-    font-weight: 600;
-    color: var(--ink-2);
-    letter-spacing: 0.03em;
-    margin-bottom: 6px;
+    color: var(--ink-3);
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
   }
   .source-row {
     display: flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
-    margin: 2px 0 5px;
   }
+  /* 来源是「值」不是「状态」：底色退到 fill，只有文字说明它是哪一版 */
   .source-badge {
     flex: 0 0 auto;
     height: 18px;
     padding: 0 6px;
-    border-radius: 4px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-size: 12px;
+    border-radius: 3px;
+    background: var(--fill);
+    color: var(--ink-2);
+    font-size: 11px;
     line-height: 18px;
     font-weight: 500;
   }
   .source-name {
     min-width: 0;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 11.5px;
     color: var(--ink-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .meta-note {
-    margin: 6px 0 0;
-    font-size: 12px;
-    line-height: 17px;
-    color: var(--ink-3);
-  }
   .meta-link {
     appearance: none;
+    flex: 0 0 auto;
     border: 0;
     background: transparent;
-    color: var(--accent);
+    color: var(--ink-3);
     font: inherit;
-    font-size: 12px;
-    padding: var(--sp-1) 0 0;
+    font-size: 11.5px;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     gap: 1px;
+    cursor: pointer;
   }
   .meta-link:hover {
-    text-decoration: underline;
-  }
-  .muted,
-  .kv .v.muted {
-    color: var(--ink-3);
-    font-weight: 400;
+    color: var(--accent-text);
   }
 </style>

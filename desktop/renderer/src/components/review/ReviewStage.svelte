@@ -361,4 +361,12 @@
   .splitter:focus-visible {
     outline: none;
   }
+  /* 紧凑模式（≤900px）：保持 592×333 会把播放条推出首屏，所以按
+     「视频 + 播放行 + 工具行正好占一屏」来定宽（与 ReviewView 的紧凑规则配套）。
+     这条规则原来写在父组件里，scoped 样式到不了这里，等于没生效。 */
+  @media (max-width: 900px) {
+    .player {
+      width: min(640px, 100%, calc((100vh - 170px) * 16 / 9));
+    }
+  }
 </style>

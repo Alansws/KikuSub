@@ -1,29 +1,73 @@
 <script lang="ts">
   /**
-   * 「外观与朗读」页签：三张主题缩略图 + 朗读偏好。
+   * 「外观与朗读」页签：外观三选一 + 字幕字体 + 章节命名 + 朗读偏好。
    *
-   * 「明暗」不再是独立控件：青空浅 / 青空深本身就是两张卡，明朝墨固定浅色。
-   * 这样选主题只需要点一次，也不必先理解皮肤与明暗两层概念。
+   * 2026-11-25 用户拍板把两件事拆开了（见 DESIGN.md）：
+   * 1. **外观**默认跟随系统（HIG：不建议应用自己提供明暗开关），设置里保留
+   *    「日间校样 / 夜间配音」的显式覆盖，方便夜间长时间工作；
+   * 2. **明朝字幕字体**从主题配色里剥离，成为独立的「黑体 / 明朝」偏好。
    */
   import SettingsSection from '../../components/settings/SettingsSection.svelte';
+  import AppearancePicker from '../../components/settings/appearance/AppearancePicker.svelte';
   import ChapterNaming from '../../components/settings/appearance/ChapterNaming.svelte';
-  import ThemePicker from '../../components/settings/appearance/ThemePicker.svelte';
+  import CueFontPicker from '../../components/settings/appearance/CueFontPicker.svelte';
+  import PalettePicker from '../../components/settings/appearance/PalettePicker.svelte';
   import TtsPrefList from '../../components/settings/appearance/TtsPrefList.svelte';
-  import { app, setTheme } from '../../lib/store.svelte';
-  import { THEME_PREVIEWS } from '../../lib/themes';
+  import { app } from '../../lib/store.svelte';
+  import {
+    appearance,
+    setAppearance,
+    setCueFont,
+    setPalette,
+  } from '../../lib/appearanceState.svelte';
+  import {
+    APPEARANCE_SHOTS,
+    CUE_FONTS,
+    PALETTES,
+    appearanceName,
+    cueFontName,
+    paletteName,
+    type ThemeId,
+  } from '../../lib/themes';
 
-  const currentName = $derived(
-    THEME_PREVIEWS.find((preview) => preview.id === app.theme)?.name ?? app.theme,
+  const resolvedName = $derived(
+    APPEARANCE_SHOTS.find((shot) => shot.id === (app.theme as ThemeId))?.name ?? app.theme,
   );
 </script>
 
 <div class="sections">
   <SettingsSection
-    title="外观主题"
-    caption="点缩略图直接切换，立即生效。明朝墨是单色主题，固定浅色；另外两套是青空的明暗两档。"
-    meta={`当前：${currentName}`}
+    title="外观"
+    caption="默认跟随系统：白天是日间校样，入夜自动切夜间配音间。需要在长时间夜间工作时锁定深色，才用下面的覆盖。"
+    meta={`当前偏好：${appearanceName(appearance.preference)} → ${resolvedName}`}
   >
-    <ThemePicker current={app.theme} onselect={(id) => setTheme(id)} />
+    <AppearancePicker
+      current={appearance.preference}
+      resolved={app.theme as ThemeId}
+      systemDark={appearance.systemDark}
+      palette={appearance.palette}
+      onselect={(id) => setAppearance(id)}
+    />
+  </SettingsSection>
+
+  <SettingsSection
+    title="界面配色"
+    caption="六套双模色板，与上面的明暗正交：上面决定日间 / 夜间，这里决定这一面用哪套颜色。点一下立即生效，只换界面基色，不动字体、字号与布局。"
+    meta={`当前：${paletteName(appearance.palette)}（${PALETTES.length} 套 · 双模）`}
+  >
+    <PalettePicker
+      current={appearance.palette}
+      resolved={app.theme as ThemeId}
+      onselect={(id) => setPalette(id)}
+    />
+  </SettingsSection>
+
+  <SettingsSection
+    title="字幕字体"
+    caption="只换字幕（原文与译文）的字体，不改配色、字号与密度。黑体扫读更稳，明朝更接近成片观感。"
+    meta={`当前：${cueFontName(appearance.cueFont)}（${CUE_FONTS.length} 种）`}
+  >
+    <CueFontPicker current={appearance.cueFont} onselect={(id) => setCueFont(id)} />
   </SettingsSection>
 
   <SettingsSection

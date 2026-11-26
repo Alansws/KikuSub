@@ -14,20 +14,24 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--paper);
+  /* 2026-11-26 Batch 2：AI 三页是**页内工作区**，不是窗口铬件。
+     台面直接读 --canvas；--paper 只留给侧栏 / 标题栏 / 底栏。 */
+  background: var(--canvas);
 }
 
 .aiw-head {
   flex: 0 0 auto;
-  background: var(--paper);
+  background: var(--canvas);
   border-bottom: 1px solid var(--separator);
 }
 
+/* 页边与单栏页面同一个 24px（原来是 14px）：切页时标题的左缘不会横向跳，
+   AI 三页的表格仍然通栏（它们是满屏网格，不该被收进 1040 的列里）。 */
 .aiw-title-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-3) 14px var(--sp-2);
+  padding: var(--sp-3) var(--sp-6) var(--sp-2);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -228,16 +232,19 @@ button.aiw-count:hover {
 .aiw-select {
   font: inherit;
   font-size: 12px;
-  height: 26px;
-  max-width: 210px;
-  padding: 0 7px;
+  /* 与 .btn / 批次数字框同为 28px：一整行控件顶边与底边对齐。 */
+  height: 28px;
+  max-width: 230px;
+  padding: 0 8px;
   border-radius: var(--rad-control);
-  border: 1px solid var(--separator);
-  background: var(--raise);
+  border: 1px solid var(--well-line);
+  background: var(--well);
   color: var(--text);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .aiw-select:hover {
-  border-color: var(--accent-line);
+  border-color: var(--btn-line-hover);
+  background: var(--well-hover);
 }
 .aiw-select:focus-visible {
   outline: 2px solid var(--accent-ring);
@@ -246,13 +253,50 @@ button.aiw-count:hover {
 
 /* ---------- 第 2 行：执行通道一选一 + 该通道的动作 + 本次批次 ---------- */
 
+/* 标题下的一行「这页会/不会动时间轴」+ 同组下一页入口。
+   12px、第二级文字色，左缘与标题对齐（14px），不另占页边。 */
+.aiw-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  /* 与标题 / 命令栏 / 表格共用 24px 页边：切页时左缘不横跳。 */
+  padding: 0 24px 8px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--ink-3);
+}
+/* 页内指路是**次级入口**：常态读 --ink-2，悬停才上蓝。
+   它和说明文字在同一行，不该像主操作一样抢颜色。 */
+.aiw-note .aiw-link {
+  margin-left: 2px;
+  color: var(--ink-2);
+}
+.aiw-note .aiw-link:hover {
+  background: transparent;
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.aiw-note .note-ico {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+/* 「会改时间轴」用 warn：词已经说清了，颜色只是把风险再抬一档。 */
+.aiw-note .note-ico.warn {
+  color: var(--warn);
+}
+
+/* 命令栏与标题同落在纸白台面上，只用一条发丝线与说明行分开。
+   以前这里铺 --bg-inspector，形成「paper 页 → inspector 条 → 白表」三层灰带；
+   白键落在灰条上就是用户说的「灰底白框按钮」。 */
 .aiw-cmd-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   flex-wrap: wrap;
-  padding: 6px 14px;
-  background: var(--bg-inspector);
+  padding: 8px 24px;
+  background: transparent;
   border-top: 1px solid var(--separator-soft);
   min-width: 0;
 }
@@ -289,13 +333,11 @@ button.aiw-count:hover {
   color: var(--text);
 }
 .aiw-lane button.on {
+  /* 选中片就是抬升层：亮色纸白、暗色 #313135；不再往半透明蓝白里涂。 */
   background: var(--raise);
   color: var(--text);
   font-weight: 500;
   box-shadow: var(--shadow-seg);
-}
-html[data-theme='dark'] .aiw-lane button.on {
-  background: rgba(236, 241, 250, 0.14);
 }
 .aiw-lane button:disabled {
   color: var(--text-3);
@@ -371,7 +413,7 @@ html[data-theme='dark'] .aiw-lane button.on {
 /* ---------- 分段轨道：自适应均分铺满 ---------- */
 
 .aiw-rail-wrap {
-  padding: 0 14px 10px;
+  padding: 0 24px 10px;
 }
 .aiw-rail-head {
   display: flex;
@@ -395,9 +437,9 @@ html[data-theme='dark'] .aiw-lane button.on {
   gap: 7px;
   min-width: 0;
   padding: 6px 9px;
-  border: 1px solid var(--separator);
+  border: 1px solid var(--well-line);
   border-radius: var(--rad-card);
-  background: var(--raise);
+  background: var(--well);
   color: var(--text-2);
   font: inherit;
   text-align: left;
@@ -496,8 +538,9 @@ html[data-theme='dark'] .aiw-lane button.on {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--raise);
-  border: 1px solid var(--separator);
+  /* 面板是台面上一块凹陷填充（2026-11-26 去白框）；浮层才是 raise。 */
+  background: var(--well);
+  border: 0;
   border-radius: var(--rad-card);
   overflow: hidden;
 }
@@ -506,9 +549,10 @@ html[data-theme='dark'] .aiw-lane button.on {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 8px 12px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--separator-soft);
-  background: var(--bg-inspector);
+  /* 卡片本身是 well，标题带不再提亮成第三条灰带。 */
+  background: transparent;
   min-width: 0;
 }
 .aiw-card-title {
@@ -602,17 +646,24 @@ html[data-theme='dark'] .aiw-lane button.on {
 }
 
 /* 粘贴 / 拖入区：内容空时显示提示，内容有值时提示让位 */
+/* 粘贴 / 拖入区是一块**输入框**，不是又一层虚线卡片：
+   1px --well-line 实线 + 台本纸底色，焦点 / 拖入才换蓝边。
+   虚线留给真正的「整块拖放区」（导入页），这里不该再套一层框。 */
 .aiw-drop {
   position: relative;
   flex: 1;
   min-height: 132px;
   display: flex;
   flex-direction: column;
-  border: 1px dashed var(--separator);
+  border: 1px solid var(--well-line);
   border-radius: var(--rad-card);
-  background: var(--bg-inspector);
+  background: var(--well-focus);
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
   overflow: hidden;
+}
+.aiw-drop:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .aiw-drop.hot {
   border-color: var(--accent);
@@ -702,9 +753,10 @@ html[data-theme='dark'] .aiw-lane button.on {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 8px 12px;
+  padding: 9px 24px;
   border-top: 1px solid var(--separator);
-  background: var(--bg-inspector);
+  /* 与表格同台面：底栏只靠一条发丝线衔接，不再另铺一条灰。 */
+  background: var(--canvas);
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -727,11 +779,12 @@ html[data-theme='dark'] .aiw-lane button.on {
   display: grid;
   align-items: center;
   gap: 10px;
-  padding: 5px 14px;
+  padding: 7px 24px;
   font-size: 12px;
   line-height: 18px;
+  font-weight: 500;
   color: var(--text-3);
-  background: var(--bg-content);
+  background: var(--canvas);
   border-bottom: 1px solid var(--separator);
 }
 .aiw-list {
@@ -743,12 +796,14 @@ html[data-theme='dark'] .aiw-lane button.on {
   display: grid;
   align-items: start;
   gap: 10px;
-  padding: 6px 14px;
+  /* 与表头 / 命令栏同一 24px 页边，行距比旧版松半档，
+     长句两行时不至于挤成一块。 */
+  padding: 8px 24px;
   border-bottom: 1px solid var(--separator-soft);
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   content-visibility: auto;
-  contain-intrinsic-size: auto 42px;
+  contain-intrinsic-size: auto 46px;
 }
 .aiw-row:hover {
   background: var(--row-hover);
@@ -855,16 +910,57 @@ button.aiw-tc:focus-visible {
   background: var(--accent-soft);
 }
 .aiw-row.changed {
-  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  background: color-mix(in srgb, var(--accent) 3.5%, transparent);
 }
 .aiw-row.only-old {
   background: color-mix(in srgb, var(--danger) 5%, transparent);
 }
 .aiw-row.only-new {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  background: color-mix(in srgb, var(--accent) 4.5%, transparent);
 }
 .aiw-row.hit {
   background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* 行末采纳勾：一本干净的方形小键。
+   未采纳是「空格子」（边线可见、勾号不显示），采纳后才是稳定的蓝底白勾；
+   以前未采纳也画灰色勾，整列看起来像全选过。 */
+.aiw-pin {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--well-line);
+  background: var(--canvas);
+  color: transparent;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: 0 0 20px;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.aiw-pin:hover {
+  background: var(--well);
+  border-color: var(--btn-line-hover);
+  color: var(--text-3);
+}
+.aiw-pin.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.aiw-pin.on:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+  color: var(--on-accent);
+}
+.aiw-pin:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 /* 列表内的小块空态：不撑成整屏白板 */
@@ -881,16 +977,19 @@ button.aiw-tc:focus-visible {
 .aiw-inline-empty .dim {
   color: var(--text-3);
 }
+/* 页级空态（「还没有字幕」）：居中的一块凹陷填充，不是一条通栏虚线框。
+   通栏虚线框在满宽舞台上既不像卡、也不像表，只像一段没画完的边框。 */
 .aiw-empty {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-2);
-  margin: 14px;
-  padding: 16px;
-  border: 1px dashed var(--separator);
+  width: min(560px, 100%);
+  margin: auto;
+  padding: var(--sp-5) var(--sp-5);
+  border: 0;
   border-radius: var(--rad-card);
-  background: var(--bg-inspector);
+  background: var(--well);
 }
 .aiw-empty-title {
   font-size: 13px;
@@ -917,16 +1016,17 @@ button.aiw-tc:focus-visible {
   padding: var(--sp-6);
   overflow: auto;
 }
+/* 空态引导卡：不再是一张飘在白台面上的白卡，
+   而是一块凹陷填充（无描边、无阴影），内容仍居中。 */
 .aiw-blank-card {
   width: min(580px, 100%);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
   padding: var(--sp-5) var(--sp-5) var(--sp-4);
-  border: 1px solid var(--separator);
+  border: 0;
   border-radius: var(--rad-panel);
-  background: var(--raise);
-  box-shadow: var(--shadow-seg);
+  background: var(--well);
   color: var(--text-2);
 }
 .aiw-blank-head {
@@ -1018,9 +1118,9 @@ button.aiw-tc:focus-visible {
   gap: var(--sp-2);
   align-items: flex-start;
   padding: var(--sp-2) var(--sp-3);
-  border: 1px dashed var(--separator);
+  border: 0;
   border-radius: var(--rad-card);
-  background: var(--bg-inspector);
+  background: var(--fill);
 }
 .aiw-guide-icon {
   width: 24px;
@@ -1051,7 +1151,7 @@ button.aiw-tc:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 14px 6px;
+  padding: 0 24px 8px;
   min-width: 0;
 }
 .aiw-rail-wrap.compact .aiw-rail-head {
@@ -1121,7 +1221,7 @@ button.aiw-tc:focus-visible {
   padding: var(--sp-1);
   border: 1px solid var(--separator);
   border-radius: 8px;
-  background: var(--bg-content);
+  background: var(--raise);
   box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;

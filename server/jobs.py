@@ -789,18 +789,20 @@ class JobManager:
                 self._progress(job, ratio, f"正在用 {name} 复核第 {done}/{total} 条…")
 
             if separate_vocals:
-                texts = self._transcribe_windows_separated(
-                    job, media_path, engine_key, engine_config, windows, on_window
-                )
+                with self._idle.hold(engine_key, reason="另一引擎复核"):
+                    texts = self._transcribe_windows_separated(
+                        job, media_path, engine_key, engine_config, windows, on_window
+                    )
             else:
-                texts = transcribe_windows(
-                    self._resolve_engine(engine_key),
-                    windows,
-                    media_path=media_path,
-                    config=engine_config,
-                    progress_cb=on_window,
-                    cancel_event=job.token,
-                )
+                with self._idle.hold(engine_key, reason="另一引擎复核"):
+                    texts = transcribe_windows(
+                        self._resolve_engine(engine_key),
+                        windows,
+                        media_path=media_path,
+                        config=engine_config,
+                        progress_cb=on_window,
+                        cancel_event=job.token,
+                    )
             job.status = "done"
             job.ratio = 1.0
             job.percent = 100
@@ -957,12 +959,17 @@ class JobManager:
             # 字幕的落盘目录由设置里的「导出文件夹」决定；漏句清单 / 质检队列 /
             # 代理缓存仍然留在 output_dir（运行数据与用户交付物分开）。
             out_dir = Path(getattr(request, "export_dir", None) or self._output_dir)
-            result = runner(
-                request,
-                on_progress=lambda ratio, stage: self._progress(job, ratio, stage),
-                cancel_event=job.token,
-                output_dir=out_dir,
-            )
+            # 租约：整片转写可能跑几分钟到几十分钟，期间没有 touch 落地。没有租约时
+            # 空闲巡检会把正在解码的引擎卸掉 → `'NoneType' object is not callable`
+            # （2026-11-26 真机事故，core/transcribe.py:1708）。租约期内的卸载请求
+            # 由 EngineIdleReleaser 一律跳过，退出时重新计时。
+            with self._idle.hold(engine_key, reason="整片任务"):
+                result = runner(
+                    request,
+                    on_progress=lambda ratio, stage: self._progress(job, ratio, stage),
+                    cancel_event=job.token,
+                    output_dir=out_dir,
+                )
             job.status = "done"
             job.ratio = 1.0
             job.percent = 100
@@ -978,8 +985,7 @@ class JobManager:
                     job.result.update(self._apply_cues(session, request, result.cues, apply, job))
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
-            if engine_key:
-                self._idle.touch(engine_key)
+            # 空闲计时已由上面的 `hold` 退出时刷新，这里不再重复 touch。
             log.info(
                 "任务完成 | job=%s | cues=%s | apply=%s | session=%s",
                 job.id,
@@ -1052,12 +1058,13 @@ class JobManager:
                 runner = run_transcription
 
             self._progress(job, 0.01, "[1/2] 主引擎 · 准备转写…")
-            result_a = runner(
-                primary_request,
-                on_progress=pass_progress(0.02, 0.47, "[1/2] 主引擎"),
-                cancel_event=job.token,
-                output_dir=out_dir,
-            )
+            with self._idle.hold(primary_key, reason="双引擎 Pass A"):
+                result_a = runner(
+                    primary_request,
+                    on_progress=pass_progress(0.02, 0.47, "[1/2] 主引擎"),
+                    cancel_event=job.token,
+                    output_dir=out_dir,
+                )
             job.result = result_a.to_dict()
             apply_info: dict = {}
             if session is not None:
@@ -1097,12 +1104,13 @@ class JobManager:
             secondary_request.write_audit = False
             self._progress(job, 0.50, "[2/2] 副引擎复核 · 准备转写…")
             try:
-                result_b = runner(
-                    secondary_request,
-                    on_progress=pass_progress(0.51, 0.95, "[2/2] 副引擎复核"),
-                    cancel_event=job.token,
-                    output_dir=out_dir,
-                )
+                with self._idle.hold(secondary_key, reason="双引擎 Pass B"):
+                    result_b = runner(
+                        secondary_request,
+                        on_progress=pass_progress(0.51, 0.95, "[2/2] 副引擎复核"),
+                        cancel_event=job.token,
+                        output_dir=out_dir,
+                    )
             except CommandCancelled:
                 result_b = None
             except Exception as exc:  # noqa: BLE001 - B 失败不连累 A

@@ -393,6 +393,9 @@
       <div class="note err"><Icon name="warn" size={11} /><span>{dual.error}</span></div>
     {/if}
 
+    <!-- 对照表 = 一张台本纸（与核对台字幕表同一套原语）：表头是 11px 标签，
+         行是 30px 起的对照内容；外框留给页面 16px 页边。 -->
+    <div class="sheet">
     <div class="cols">
       <span class="c-time">时间码</span>
       <span class="c-side">A · 核对台当前版本（只读）</span>
@@ -504,6 +507,7 @@
         {/each}
       </div>
     {/if}
+    </div>
   {/if}
 </div>
 
@@ -513,13 +517,26 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--paper);
+    background: var(--canvas);
   }
+  /* 页头与核对台/转写页同一个 16px 页边与同一条发丝线：切页时标题不跳。 */
   .dual-head {
     flex: 0 0 auto;
-    padding: var(--sp-3) 14px var(--sp-2);
-    border-bottom: 1px solid var(--separator);
-    background: var(--paper);
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+    border-bottom: 1px solid var(--line);
+    background: var(--canvas);
+  }
+  /* 对照表：台本纸原语（纸白 + 1px --rule + 7px 圆角），左右各留 16px。 */
+  .sheet {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin: var(--sp-3) var(--sp-4) var(--sp-4);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--rad-card);
+    overflow: hidden;
   }
   .head-top {
     display: flex;
@@ -633,7 +650,7 @@
     padding: var(--sp-1);
     border: 1px solid var(--separator);
     border-radius: 8px;
-    background: var(--bg-content);
+    background: var(--raise);
     box-shadow: var(--shadow-pop);
     display: flex;
     flex-direction: column;
@@ -792,12 +809,14 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    font-size: 12px;
-    color: var(--text-3);
-    background: var(--bg-content);
-    border-bottom: 1px solid var(--separator);
-    padding-top: 5px;
-    padding-bottom: 5px;
+    font-size: var(--fs-label);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--raise);
+    border-bottom: 1px solid var(--line);
+    padding-top: 7px;
+    padding-bottom: 7px;
   }
   .cols .c-mark {
     text-align: center;
@@ -902,8 +921,8 @@
   /* 行内动作刻意做小：它们服务于「这一句」，不该比正文更抢眼。 */
   .act-btn {
     appearance: none;
-    height: 20px;
-    padding: 0 6px;
+    height: 22px;
+    padding: 0 7px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -913,7 +932,7 @@
     background: var(--raise);
     color: var(--text-2);
     font: inherit;
-    font-size: 11px;
+    font-size: 11.5px;
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;

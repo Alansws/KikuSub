@@ -331,7 +331,17 @@ if (r.error) {
 }
 
 console.log(JSON.stringify(r, null, 2));
-check('首屏：主稿 3 条 / 第二版还没有', r.initial.railHasPrimary && r.initial.railHasNoAlt, r.initial);
+// 右栏在 Cue Script 里改成「大数字 + 小字单位」（3 / 条 · 主稿），
+// 断言按去空白后的文本匹配，盯的是「有没有 3 条、有没有第二版」，不是排版。
+const railPlain = (r.initial.rail || '').replace(/\s+/g, '');
+check(
+  '首屏：主稿 3 条 / 第二版还没有',
+  railPlain.includes('3条') &&
+    railPlain.includes('主稿') &&
+    railPlain.includes('第二版') &&
+    railPlain.includes('还没有'),
+  r.initial.rail,
+);
 check('首屏：底栏「整片 → 主稿」', r.initial.plan.includes('整片 → 主稿（核对台）'), r.initial.plan);
 check('首屏：按钮是「开始转写」', r.initial.button === '开始转写', r.initial.button);
 check('区间：点「区间」出现两个时间框', r.manual.rangeInputs === true, r.manual);

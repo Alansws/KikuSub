@@ -15,6 +15,10 @@
 # （体积约为 PNG 的 1/3）；转换命令见 docs/sprints/2026-11-settings-redesign/落地记录.md。
 #
 # 依赖：desktop/node_modules/electron、可用的 sidecar（源码模式即可）。截图不抢焦点。
+#
+# **每张图都带独立的 --user-data-dir**：不隔离的话 Electron 会写用户真实的
+# `~/Library/Application Support/KikuSub`，等于用截图污染正在使用的旧版配置
+# （台账 docs/frontend-refactor-2026-11.md §0.1）。
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,6 +26,8 @@ OUT_DIR="/tmp/kikusub-settings-shots"
 SIZE="1360x838"
 DELAY="11000"
 ONLY=""
+# 沙箱 / CI 里 Electron 起不来时：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash ...
+EXTRA_ARGS="${KIKUSUB_SHOT_ELECTRON_ARGS:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -43,13 +49,19 @@ TABS="engines appearance ai env"
 THEMES="light dark mincho"
 DATA_ROOT="/tmp/kikusub-settings-matrix"
 
+# 外观卡片的顺序（2026-11-25 起）：0 跟随系统 / 1 日间校样 / 2 夜间配音。
 theme_index() {
   case "$1" in
-    light) echo 0 ;;
-    dark) echo 1 ;;
-    mincho) echo 2 ;;
+    light) echo 1 ;;
+    dark) echo 2 ;;
+    mincho) echo 1 ;;  # 明朝 = 日间校样 + 明朝字幕字体（字体在下面单独点）
     *) echo 0 ;;
   esac
+}
+
+# 明朝字幕字体卡（CueFontPicker 的第二张）
+cue_eval() {
+  [ "$1" = "mincho" ] && echo "document.querySelectorAll('.font-card')[1]?.click();" || true
 }
 
 shot() {  # $1=theme $2=tab $3=名字后缀 $4=额外 JS
@@ -58,6 +70,7 @@ shot() {  # $1=theme $2=tab $3=名字后缀 $4=额外 JS
   local out="$OUT_DIR/${name}.png"
   local idx; idx="$(theme_index "$theme")"
 
+  local cue_js; cue_js="$(cue_eval "$theme")"
   local extra_js=""
   [ -n "$extra" ] && extra_js="$extra"
 
@@ -69,7 +82,9 @@ shot() {  # $1=theme $2=tab $3=名字后缀 $4=额外 JS
   await sleep(700);
   document.querySelector('#set-tab-appearance')?.click();
   await sleep(600);
-  document.querySelectorAll('.theme-card')[${idx}]?.click();  // 主题卡：浅 / 深 / 明
+  document.querySelectorAll('.appearance-card')[${idx}]?.click();  // 外观卡：系统 / 日间 / 夜间
+  await sleep(400);
+  ${cue_js}
   await sleep(600);
   document.querySelector('#set-tab-${tab}')?.click();
   await sleep(900);
@@ -85,7 +100,8 @@ JS
     KIKUSUB_OUTPUT_DIR="$DATA_ROOT/out" KIKUSUB_DATA_DIR="$DATA_ROOT/data" \
     KIKUSUB_PREFERENCES_PATH="$DATA_ROOT/prefs.json" \
     KIKUSUB_DEV_EVAL="$eval_js" \
-    env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron . --screenshot="$out" \
+    env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS npx electron . \
+      --user-data-dir="$DATA_ROOT/profile-$name" $EXTRA_ARGS --screenshot="$out" \
       > "/tmp/kikusub-settings-${name}.log" 2>&1
   )
 

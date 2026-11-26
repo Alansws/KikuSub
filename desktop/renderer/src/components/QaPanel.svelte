@@ -719,7 +719,7 @@
 
 <style>
   .qa-panel {
-    background: var(--raise);
+    background: var(--surface);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -838,7 +838,7 @@
     border-radius: 999px;
     background: linear-gradient(
       90deg,
-      color-mix(in srgb, var(--accent) 68%, #fff),
+      color-mix(in srgb, var(--accent) 68%, var(--on-accent)),
       var(--accent)
     );
     transition: width 260ms var(--ease);
@@ -886,8 +886,10 @@
     font-weight: 500;
     box-shadow: 0 1px 2px rgba(27, 39, 64, 0.1), 0 0 0 0.5px rgba(27, 39, 64, 0.04);
   }
+  /* 暗色里台面（--raise）与分组槽（--fill）只差一档：把选中胶囊再抬 7% 墨，
+     依旧从当前色板来，不再写死一块蓝白。 */
   :global(html[data-theme='dark']) .groups button.on {
-    background: rgba(236, 241, 250, 0.14);
+    background: color-mix(in srgb, var(--raise) 93%, var(--ink));
   }
   .groups b {
     min-width: 15px;
@@ -1301,7 +1303,7 @@
     color: var(--danger);
   }
   .act.danger:hover:not(:disabled) {
-    background: rgba(179, 38, 30, 0.08);
+    background: var(--danger-soft);
     color: var(--danger);
   }
   .act.skip {

@@ -167,9 +167,10 @@
 </div>
 
 <style>
+  /* 时间轴是通栏的，不再包在圆角里：圆角在浅色下会露出四角的一小块画布，
+     看起来像「时间轴被裁掉了一点」。 */
   .wave-wrap {
     position: relative;
-    border-radius: 8px;
     background: transparent;
     overflow: hidden;
     touch-action: none;
@@ -188,11 +189,11 @@
     transform: translateX(-50%);
     background: var(--accent);
     color: var(--on-accent);
-    font-size: 12px;
-    line-height: 16px;
-    height: 16px;
-    padding: 0 6px;
-    border-radius: 4px;
+    font-size: var(--fs-mono);
+    line-height: 15px;
+    height: 15px;
+    padding: 0 5px;
+    border-radius: 3px;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -259,7 +260,6 @@
     bottom: 0;
     width: 1.5px;
     background: var(--accent);
-    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.55);
     pointer-events: none;
     will-change: left;
   }
@@ -288,15 +288,15 @@
   }
   .ph-flag {
     position: absolute;
-    top: 2px;
+    top: 1px;
     left: 50%;
     transform: translateX(-50%);
     background: var(--accent);
     color: var(--on-accent);
-    font-size: 12px;
-    line-height: 13px;
+    font-size: var(--fs-mono);
+    line-height: 14px;
     padding: 0 var(--sp-1);
-    height: 13px;
+    height: 14px;
     border-radius: 3px;
     font-variant-numeric: tabular-nums;
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -308,8 +308,8 @@
     inset: 0;
     display: grid;
     place-items: center;
-    font-size: 12px;
+    font-size: 11.5px;
     color: var(--text-3);
-    background: color-mix(in srgb, var(--bg-inspector) 74%, transparent);
+    background: color-mix(in srgb, var(--canvas) 78%, transparent);
   }
 </style>

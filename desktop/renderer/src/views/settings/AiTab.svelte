@@ -23,7 +23,7 @@
 <div class="sections">
   <SettingsSection
     title="AI 优化"
-    caption="用你自己的模型按全片语境修正识别错误。结果只生成建议，在润色 / 翻译页里逐条对照，确认后才写进核对台。"
+    caption="用你自己的模型按全片语境修正识别错误。结果只生成建议，在锁轴润色 / 双语翻译里逐条对照，确认后才写进核对台。"
     meta={keyState}
   >
     <AiPanel />

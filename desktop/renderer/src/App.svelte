@@ -25,25 +25,34 @@
     app,
     boot,
     cancelJob,
+    clearOriginalTrack,
     closeFind,
     findState,
+    importProxyFromFile,
+    importSubtitleFromExport,
+    importTranslationFromExport,
     insertCueAt,
     markQuitting,
     markSidecarDown,
     openFind,
     openMedia,
     play,
+    removeTranslationTrack,
+    restoreDraft,
     restoreLastSession,
     qa,
     redo,
+    saveDraft,
     setView,
+    startProxyJob,
     toast,
+    toggleCueHistory,
     toggleQaPanel,
-    toggleTheme,
     undo,
     type View,
   } from './lib/store.svelte';
   import { resolveShortcut, shortcuts } from './lib/shortcuts.svelte';
+  import { toggleAppearance } from './lib/appearanceState.svelte';
   import { openPunctPanel } from './lib/punctuationPanel.svelte';
   import { refreshAltReview } from './lib/dualReview.svelte';
   import { cancelChapterDraft, loadChapters, setChapterDraftEdge } from './lib/chapters.svelte';
@@ -222,6 +231,23 @@
     };
   });
 
+  /**
+   * 「内核未连接」遮罩上的手动出口：崩溃自动重连 3 次用完之后，用户不该只能重启 App。
+   * 成功只是把遮罩换回「正在启动转写内核…」；真正的连接状态仍由 sidecar:ready 决定。
+   */
+  let retrying = $state(false);
+  async function retryKernel() {
+    retrying = true;
+    try {
+      const ok = await window.kikusub.restartSidecar();
+      if (ok) app.connecting = true;
+    } catch {
+      /* 主进程拒绝（正在退出等）：保持遮罩，不假装成功 */
+    } finally {
+      retrying = false;
+    }
+  }
+
   function finishFirstRun() {
     if (setup) setup = { ...setup, firstRun: false };
   }
@@ -317,8 +343,37 @@
         case 'sidebar':
           toggleSidebar();
           break;
-        case 'theme':
-          toggleTheme();
+        case 'appearance':
+          // ⇧⌘A：直接翻转（日间校样 ⇄ 夜间配音）；跟随系统只在设置 → 外观
+          toggleAppearance();
+          break;
+        case 'history':
+          toggleCueHistory();
+          break;
+        case 'save-draft':
+          void saveDraft();
+          break;
+        case 'restore-draft':
+          void restoreDraft();
+          break;
+        // 「字幕与代理」菜单：与标题栏「⋯」里的同名动作走同一条路
+        case 'import-subtitle':
+          void importSubtitleFromExport();
+          break;
+        case 'import-translation':
+          void importTranslationFromExport();
+          break;
+        case 'proxy':
+          void startProxyJob();
+          break;
+        case 'import-proxy':
+          void importProxyFromFile();
+          break;
+        case 'clear-original':
+          void clearOriginalTrack();
+          break;
+        case 'clear-translation':
+          void removeTranslationTrack();
           break;
         case 'settings':
           setView('settings');
@@ -673,64 +728,67 @@
 />
 
 <div class="shell">
-  <Sidebar />
+  <!-- 标题栏横跨整窗：红绿灯永远落在它里面，侧栏不必再为原生控件让位 -->
+  <Toolbar bind:engine />
 
-  <div class="main">
-    <Toolbar bind:engine />
+  <div class="shell-body">
+    <Sidebar />
 
-    <div class="workspace">
-      <section class="content">
-        {#key app.view}
-        <div class="view-enter" class:animated={viewsAnimate}>
-        {#if app.view === 'import'}
-          <ImportView />
-        {:else if app.view === 'transcribe'}
-          <TranscribeView bind:engine />
-        {:else if app.view === 'review'}
-          <ReviewView bind:this={review} {engine} />
-        {:else if app.view === 'dual'}
-          <DualView />
-        {:else if app.view === 'polish'}
-          <PolishView />
-        {:else if app.view === 'reshape'}
-          <ReshapeView />
-        {:else if app.view === 'translate'}
-          <TranslateView />
-        {:else if app.view === 'prompts'}
-          <PromptView />
-        {:else if app.view === 'export'}
-          <ExportView />
-        {:else if app.view === 'report'}
-          <ReportView />
-        {:else if app.view === 'settings'}
-          <SettingsView />
+    <div class="main">
+      <div class="workspace">
+        <section class="content">
+          {#key app.view}
+          <div class="view-enter" class:animated={viewsAnimate}>
+          {#if app.view === 'import'}
+            <ImportView />
+          {:else if app.view === 'transcribe'}
+            <TranscribeView bind:engine />
+          {:else if app.view === 'review'}
+            <ReviewView bind:this={review} {engine} />
+          {:else if app.view === 'dual'}
+            <DualView />
+          {:else if app.view === 'polish'}
+            <PolishView />
+          {:else if app.view === 'reshape'}
+            <ReshapeView />
+          {:else if app.view === 'translate'}
+            <TranslateView />
+          {:else if app.view === 'prompts'}
+            <PromptView />
+          {:else if app.view === 'export'}
+            <ExportView />
+          {:else if app.view === 'report'}
+            <ReportView />
+          {:else if app.view === 'settings'}
+            <SettingsView />
+          {/if}
+          </div>
+          {/key}
+        </section>
+
+        {#if app.view === 'review'}
+          {#if compact && app.inspectorOpen}
+            <!-- 紧凑模式下检查器是抽屉：点空白处收起，Esc 同样关闭 -->
+            <button
+              class="ins-scrim"
+              aria-label="关闭检查器"
+              onclick={() => (app.inspectorOpen = false)}
+            ></button>
+          {/if}
+          <Inspector />
         {/if}
-        </div>
-        {/key}
-      </section>
 
-      {#if app.view === 'review'}
-        {#if compact && app.inspectorOpen}
-          <!-- 紧凑模式下检查器是抽屉：点空白处收起，Esc 同样关闭 -->
-          <button
-            class="ins-scrim"
-            aria-label="关闭检查器"
-            onclick={() => (app.inspectorOpen = false)}
-          ></button>
+        {#if qa.floating}
+          <QaPanel mode="floating" />
         {/if}
-        <Inspector />
-      {/if}
 
-      {#if qa.floating}
-        <QaPanel mode="floating" />
-      {/if}
+        {#if app.view === 'review' && arbitration.dialogOpen}
+          <ArbitrationDialog />
+        {/if}
+      </div>
 
-      {#if app.view === 'review' && arbitration.dialogOpen}
-        <ArbitrationDialog />
-      {/if}
+      <StatusBar {engine} />
     </div>
-
-    <StatusBar {engine} />
   </div>
 </div>
 
@@ -765,7 +823,13 @@
     <div class="overlay-card error">
       <Icon name="warn" size={18} />
       <div>内核未连接</div>
-      <div class="hint">状态栏会显示重连状态；持续失败请到「设置 → 日志与诊断」复制日志反馈。</div>
+      <div class="hint">
+        崩溃后会自动重连 3 次；都没成时点下面这颗按钮再拉一次。持续失败请到
+        「设置 → 日志与诊断」复制日志反馈。
+      </div>
+      <button class="btn retry" onclick={retryKernel} disabled={retrying}>
+        {retrying ? '正在重启内核…' : '重启内核'}
+      </button>
     </div>
   </div>
 {/if}
@@ -793,14 +857,14 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--scrim);
     backdrop-filter: blur(2px);
     display: grid;
     place-items: center;
     z-index: 200;
   }
   .overlay-card {
-    background: var(--bg-content);
+    background: var(--raise);
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);
@@ -819,6 +883,9 @@
     font-size: 12px;
     max-width: 260px;
     text-align: center;
+  }
+  .overlay-card .retry {
+    margin-top: var(--sp-2);
   }
   .spinner {
     width: 18px;
@@ -862,13 +929,14 @@
     animation: viewIn var(--dur-page) var(--ease) both;
   }
   /* 紧凑模式的抽屉遮罩：只盖住工作区，不挡工具栏（工具栏仍是拖窗与切换入口） */
+  /* 检查器的关闭遮罩：同样是中性遮罩，只是压在半透明浮层下面一档。 */
   .ins-scrim {
     position: absolute;
     inset: 0;
     z-index: 19;
     border: 0;
     padding: 0;
-    background: rgba(13, 20, 36, 0.22);
+    background: var(--scrim);
     cursor: default;
     animation: scrimIn 120ms var(--ease) both;
   }

@@ -120,7 +120,7 @@
     position: fixed;
     inset: 0;
     z-index: 340;
-    background: rgba(0, 0, 0, 0.32);
+    background: var(--scrim);
     backdrop-filter: blur(3px);
     display: grid;
     place-items: center;
@@ -131,7 +131,7 @@
     max-height: min(76vh, 680px);
     display: flex;
     flex-direction: column;
-    background: var(--bg-content);
+    background: var(--raise);
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);
@@ -193,7 +193,7 @@
   .group {
     position: sticky;
     top: 0;
-    background: var(--bg-content);
+    background: var(--raise);
     padding: var(--sp-2) 2px var(--sp-1);
     font-size: 12px;
     font-weight: 600;

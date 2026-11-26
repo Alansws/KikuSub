@@ -417,19 +417,26 @@
 </button>
 
 {#if panelOpen}
+  <!-- 面板头只有三件事：引擎状态、音色读数、一个**唯一的**收起动作。
+       2026-11-26 真机报障：头里重复写了一遍「朗读」（触发按钮就在上方），
+       又放 `×` 又放「收起」，两个关闭动作叠在一起。
+       现在只有一颗克制的「收起」文字按钮，图标与触发按钮不再撞（README 4）。 -->
   <div class="tts-panel" role="group" aria-label="朗读语速与音色库">
     <div class="tts-panel-head">
-      <b>朗读</b>
       <span class="tts-engine {engineTone}" title={engineTitle}>
         <i class="tts-status-dot" aria-hidden="true"></i>{engineLabel}
       </span>
-      <span class="tts-meta" title={selectedMeta}>{selectedMeta}</span>
-      <button class="tts-panel-close" onclick={togglePanel} title="收起" aria-label="收起朗读设置">
-        <Icon name="close" size={10} />
+      <button class="tts-panel-collapse" onclick={togglePanel} title="收起朗读设置">
+        收起
       </button>
     </div>
+    <!-- 音色的细节读数独占一行：348px 窄栏里把它塞进头部，只会把
+         「音量已对齐」压成「音量已…」（2026-11-26 真机报障）。 -->
+    <p class="tts-meta" title={selectedMeta}>{selectedMeta}</p>
 
-    <div class="tts-panel-row">
+    <!-- 两行等分网格，铺满检查器：第一行 语速 / 上传 / 截取，
+         第二行 音色库 / 管理。三个按钮与下拉同宽，右侧不再空出一块。 -->
+    <div class="tts-panel-grid cols-3">
       <div class="tts-select-wrap rate" title="语速">
         <select
           class="tts-select"
@@ -462,6 +469,9 @@
       >
         <Icon name="mic" size={12} /><span>截取</span>
       </button>
+    </div>
+
+    <div class="tts-panel-grid" class:cols-2={selectedTts?.kind === 'clone' && !ttsLibrary}>
       <button
         class="tts-action"
         class:on={ttsLibrary}
@@ -472,13 +482,14 @@
         {#if tts.custom.length}<b class="tts-count">{tts.custom.length}</b>{/if}
       </button>
       {#if selectedTts?.kind === 'clone' && !ttsLibrary}
+        <!-- 音色库管理：铅笔（编辑音色），不再复用触发面板的齿轮 -->
         <button
           class="tts-action"
           class:on={ttsManage}
           onclick={openManage}
-          title="重命名 / 修改参考文本 / 删除"
+          title="重命名 / 修改参考文本 / 删除这个音色"
         >
-          <Icon name="gear" size={12} /><span>管理</span>
+          <Icon name="pencil" size={12} /><span>管理</span>
         </button>
       {/if}
     </div>
@@ -726,58 +737,89 @@
     background: var(--fill);
     color: var(--ink);
   }
+  /* `flex: 1 0 100%` 的 basis 只有 306px（348 − 两侧 16 内边距 + 滚动条），
+     但 flex 项的自动最小尺寸默认是 `min-content`，而这一行按钮的 min-content
+     加起来比容器宽——于是 `flex-shrink: 0` 让它顶着 363px 撑出检查器右缘，
+     被 `overflow: hidden` 裁掉（2026-11-26 真机：最右一个按钮只剩半截）。
+     `min-width: 0` 是根因修复；两行分组是让它在 306px 里也排得规整。 */
+  /* 面板本身是一块**凹陷填充**（无描边），落在检查器那一层灰上：
+     它不是浮层，也不该是一张白卡（2026-11-26 去白框）。 */
   .tts-panel {
     flex: 1 0 100%;
     order: 10;
+    min-width: 0;
     margin-top: var(--sp-2);
-    padding: var(--sp-2) var(--sp-3) var(--sp-3);
-    border: 1px solid var(--line-2);
+    padding: var(--sp-2) var(--sp-2) 10px;
+    border: 0;
     border-radius: 8px;
-    background: var(--raise);
+    background: var(--well);
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
+    gap: 7px;
+    box-sizing: border-box;
   }
   .tts-panel-head {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
     min-width: 0;
+    padding-left: 2px;
   }
-  .tts-panel-head b {
-    flex: 0 0 auto;
-    font-size: 12px;
-    line-height: 16px;
-    font-weight: 600;
-    color: var(--ink-2);
-  }
-  .tts-panel-head .tts-meta {
-    flex: 1 1 auto;
-    min-width: 0;
-    text-align: right;
-  }
-  .tts-panel-close {
+  /* 唯一的重置动作：一颗 20px 高的文字按钮，不抢面板里的动作按钮 */
+  .tts-panel-collapse {
     appearance: none;
-    flex: 0 0 20px;
-    width: 20px;
+    flex: 0 0 auto;
+    margin-left: auto;
     height: 20px;
-    padding: 0;
+    padding: 0 7px;
     border: 0;
     border-radius: 4px;
     background: transparent;
     color: var(--ink-3);
-    display: grid;
-    place-items: center;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
   }
-  .tts-panel-close:hover {
-    background: var(--fill);
+  .tts-panel-collapse:hover {
+    background: var(--fill-strong);
     color: var(--ink);
   }
-  .tts-panel-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
+  .tts-panel-collapse:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
+  }
+  /* 等分网格：所有控件同宽、彼此对齐、铺满整行。
+     `minmax(0, 1fr)` 让长文案（「音色库 1」）也能缩，不会撑破 306px。 */
+  .tts-panel-grid {
+    display: grid;
     gap: var(--sp-1);
+    min-width: 0;
+  }
+  .tts-panel-grid.cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tts-panel-grid.cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .tts-panel-grid > .tts-action,
+  .tts-panel-grid > .tts-select-wrap {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+  /* 下拉与动作按钮同高同语言：都是一层细描边的控件，不再一高一低 */
+  .tts-panel .tts-select-wrap {
+    height: 24px;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: transparent;
+  }
+  .tts-panel .tts-select-wrap:hover {
+    background: var(--fill);
+  }
+  .tts-panel .tts-select {
+    font-size: 11.5px;
+    padding: 0 18px 0 7px;
   }
   .mini {
     height: 26px;
@@ -898,10 +940,13 @@
     pointer-events: none;
     color: var(--ink-3);
   }
-  .tts-meta {
-    padding-left: 2px;
-    font-size: 10.5px;
-    line-height: 13px;
+  /* 音色读数：面板里的独立一行，11px，允许在极窄时省略（title 里有完整值） */
+  .tts-panel > .tts-meta {
+    display: block;
+    margin: -2px 0 0;
+    padding-left: 0;
+    font-size: 11px;
+    line-height: 15px;
     color: var(--text-3);
     white-space: nowrap;
     overflow: hidden;
@@ -1031,7 +1076,7 @@
   .voice-panel {
     margin: 2px 0 var(--sp-1);
     padding: 9px;
-    border: 1px solid var(--line-2);
+    border: 0;
     border-radius: 8px;
     background: var(--fill);
     display: flex;
@@ -1099,7 +1144,7 @@
     width: 100%;
     box-sizing: border-box;
     padding: var(--sp-1) 7px;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: 6px;
     background: var(--raise);
     color: var(--ink);
@@ -1133,14 +1178,15 @@
     line-height: 14px;
     color: var(--text-3);
   }
+  /* 音色清单是面板内部的一层列表：无描边、无白底，靠分隔线与行悬停区分。 */
   .voice-list {
     display: flex;
     flex-direction: column;
     max-height: 208px;
     overflow-y: auto;
-    border: 1px solid var(--line-2);
+    border: 0;
     border-radius: 8px;
-    background: var(--raise);
+    background: transparent;
   }
   .voice-row {
     display: flex;

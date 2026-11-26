@@ -182,21 +182,23 @@
 </div>
 
 <style>
+  /* 「本次批次」是一组字段，不是一个灰条：外圈只留一条极轻的发丝线做分组，
+     里面的数字框各自有白底 + 1px 清晰边线（--well-line）。 */
   .cue-batch {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     min-width: 0;
     flex-wrap: wrap;
-    padding: 2px 6px;
+    padding: 3px var(--sp-2);
     border: 1px solid var(--separator-soft);
-    border-radius: 6px;
-    background: var(--bg-content);
-    font-size: 11.5px;
-    color: var(--text-3);
+    border-radius: 7px;
+    background: transparent;
+    font-size: 12px;
+    color: var(--text-2);
   }
   .cue-batch.manual {
-    border-color: var(--accent-soft);
+    border-color: var(--accent-line);
     background: var(--accent-soft);
   }
   .batch-label {
@@ -204,14 +206,16 @@
   }
   .batch-no,
   .batch-size-no {
-    width: 44px;
+    width: 46px;
+    height: 22px;
     font: inherit;
+    font-size: 12px;
     font-variant-numeric: tabular-nums;
     text-align: center;
-    padding: 1px 3px;
+    padding: 0 var(--sp-1);
     border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: var(--bg-content);
+    border: 1px solid var(--well-line);
+    background: var(--well-focus);
     color: var(--text);
     outline: none;
   }
@@ -221,7 +225,7 @@
     box-shadow: 0 0 0 2px var(--accent-soft);
   }
   .batch-size-no {
-    width: 36px;
+    width: 38px;
   }
   .batch-tilde {
     color: var(--text-3);
@@ -236,13 +240,18 @@
   .batch-step,
   .batch-reset {
     border: 0;
+    border-radius: 4px;
     background: transparent;
-    color: var(--accent);
+    color: var(--accent-text);
     font: inherit;
-    font-size: 11.5px;
+    font-size: 12px;
     cursor: pointer;
-    padding: 1px 3px;
+    padding: 2px 5px;
     white-space: nowrap;
+  }
+  .batch-step:hover:not(:disabled),
+  .batch-reset:hover:not(:disabled) {
+    background: var(--fill);
   }
   .batch-step:disabled,
   .batch-reset:disabled {
@@ -255,7 +264,8 @@
   .batch-size {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: var(--sp-1);
+    color: var(--text-3);
     white-space: nowrap;
   }
 </style>

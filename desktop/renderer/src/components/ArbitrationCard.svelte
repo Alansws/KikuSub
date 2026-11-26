@@ -228,11 +228,15 @@
       <span>重置对话后重新开始</span>
     </button>
   {:else if setupHint && !record}
-    <p class="arb-tip warn">{setupHint}</p>
-    <button class="arb-run" onclick={goSettings} title="打开设置 → AI 优化">
-      <Icon name="gear" size={12} />
-      <span>{cfg ? '去设置' : '重试读取配置'}</span>
-    </button>
+    <!-- 未配置时只占一行：说明 + 去设置，不再是一个悬在空白上的白底按钮
+         （2026-11-26 真机反馈：检查器底部那截「文字 + 大白按钮」显得没做完）。 -->
+    <div class="arb-setup">
+      <p class="arb-tip warn">{setupHint}</p>
+      <button class="arb-run inline" onclick={goSettings} title="打开设置 → AI 优化">
+        <Icon name="gear" size={11} />
+        <span>{cfg ? '去设置' : '重试读取配置'}</span>
+      </button>
+    </div>
   {:else}
     {#if record}
       <!-- 第三行：结果紧贴在 A / B 两行下面，点完「重新判定」结果就出现在眼前，
@@ -366,14 +370,16 @@
 </section>
 
 <style>
-  /* 第三行在「三版对照」这张卡里，用一条虚线把它和 A / B 两版分开；
-     整块不再有自己的边框（外面那圈归 SecondOpinionCard）。 */
+  /* 第三行在「三版对照」这张卡里，用一条发丝线把它和 A / B 两版分开；
+     整块不再有自己的边框（外面那圈归 SecondOpinionCard）。
+     2026-11-25（Step 4.2）：虚线改实线——Cue Script 里只有「磁吸参考线」和
+     「章节草稿的待定端点」是虚线，分隔一律用 1px 发丝线，虚线会被读成占位框。 */
   .arb {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
     padding-top: var(--sp-1);
-    border-top: 1px dashed var(--line-2);
+    border-top: 1px solid var(--line);
   }
   /* 这一行是第三版的标签行：角色 + 徽章 + 朗读 + 复制，和上面 A / B 两行的头对齐。 */
   .arb-head {
@@ -603,35 +609,74 @@
     gap: var(--sp-1);
     margin-top: var(--sp-1);
   }
+  /* 与「三版对照」的复核 CTA 同一套二级按钮语法（纸面 + 发丝线）。
+     它原来是整条通栏的蓝底横幅：一屏里三条蓝横幅，读不出哪个才是主操作。 */
   .arb-run {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
+    align-self: flex-start;
     gap: 5px;
-    width: 100%;
-    height: 28px;
+    height: var(--ctl-h);
     padding: 0 10px;
-    border: 1px solid var(--accent-line);
-    border-radius: 7px;
-    background: var(--accent-soft);
-    color: var(--accent-hover);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: var(--surface);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .arb-run :global(svg) {
+    color: var(--ink-3);
   }
   .arb-run:hover:not(:disabled) {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent-soft) 70%, var(--raise));
+    border-color: var(--accent-line);
+    color: var(--accent-text);
   }
-  .arb-run:active:not(:disabled) {
-    transform: scale(0.99);
+  .arb-run:hover:not(:disabled) :global(svg) {
+    color: var(--accent-text);
   }
   .arb-run:disabled {
-    opacity: 0.6;
+    color: var(--ink-muted);
+    border-color: var(--line-2);
+    background: var(--fill);
     cursor: default;
+  }
+  /* 「还没配置」是一行状态：说明在左，动作在右，动作退成蓝铅笔文字链接。 */
+  .arb-setup {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+  .arb-setup .arb-tip {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .arb-run.inline {
+    align-self: center;
+    flex: 0 0 auto;
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent-text);
+    font-size: 11.5px;
+    font-weight: 500;
+  }
+  .arb-run.inline:hover:not(:disabled) {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
+  .arb-run.inline :global(svg) {
+    color: var(--accent-text);
   }
   .mini {
     height: 26px;

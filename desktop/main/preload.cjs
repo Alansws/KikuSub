@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('kikusub', {
   getSidecar: () => ipcRenderer.invoke('sidecar:get'),
   onSidecarReady: (cb) => on('sidecar:ready', cb),
   onSidecarDown: (cb) => on('sidecar:down', cb),
+  /** 用户在「内核未连接」遮罩上手点「重启内核」。 */
+  restartSidecar: () => ipcRenderer.invoke('sidecar:restart'),
 
   // 原生对话框
   pickMedia: () => ipcRenderer.invoke('dialog:pick-media'),
@@ -76,8 +78,9 @@ contextBridge.exposeInMainWorld('kikusub', {
   // 窗口状态
   setTitle: (title) => ipcRenderer.send('window:set-title', title),
   setDocumentEdited: (dirty) => ipcRenderer.send('window:set-dirty', dirty),
-  // 应用主题 → 原生 vibrancy / 红绿灯区域跟着深色走
-  setTheme: (theme) => ipcRenderer.send('window:set-theme', theme),
+  // 外观偏好 → 原生 vibrancy / 红绿灯跟着明暗走；
+  // 传的是偏好（auto/light/dark），主进程在 auto 时设 nativeTheme.themeSource='system'
+  setAppearance: (appearance) => ipcRenderer.send('window:set-appearance', appearance),
 
   // 首次启动向导 / 模型目录
   getSetupState: () => ipcRenderer.invoke('setup:get'),
@@ -105,8 +108,19 @@ contextBridge.exposeInMainWorld('kikusub', {
       on('menu:export', () => cb({ type: 'export' })),
       on('menu:inspector', () => cb({ type: 'inspector' })),
       on('menu:sidebar', () => cb({ type: 'sidebar' })),
-      on('menu:theme', () => cb({ type: 'theme' })),
+      on('menu:appearance', () => cb({ type: 'appearance' })),
+      on('menu:save-draft', () => cb({ type: 'save-draft' })),
+      on('menu:restore-draft', () => cb({ type: 'restore-draft' })),
+      on('menu:import-subtitle', () => cb({ type: 'import-subtitle' })),
+      on('menu:import-translation', () => cb({ type: 'import-translation' })),
+      on('menu:proxy', () => cb({ type: 'proxy' })),
+      on('menu:import-proxy', () => cb({ type: 'import-proxy' })),
+      on('menu:clear-original', () => cb({ type: 'clear-original' })),
+      on('menu:clear-translation', () => cb({ type: 'clear-translation' })),
+      on('menu:history', () => cb({ type: 'history' })),
       on('menu:find', () => cb({ type: 'find' })),
+      // 主进程早就发了 menu:punct，但这里一直没转 → 菜单里的「清理标点…」是死键（2026-11-25 修）
+      on('menu:punct', () => cb({ type: 'punct' })),
       on('menu:play', () => cb({ type: 'play' })),
       on('menu:prev-cue', () => cb({ type: 'prev-cue' })),
       on('menu:next-cue', () => cb({ type: 'next-cue' })),

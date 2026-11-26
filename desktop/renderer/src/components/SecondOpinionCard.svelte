@@ -411,12 +411,15 @@
     gap: var(--sp-2);
     min-width: 0;
   }
+  /* 分区标题与「质检速览 / 任务报告」同一档：11px + 字距，不是 12px 粗体 ——
+     检查器里只有台词是主角，分区标题不该和它抢字号。 */
   .so-head b {
     flex: 0 0 auto;
-    font-size: 12px;
+    font-size: var(--fs-label);
     line-height: 16px;
     font-weight: 600;
-    color: var(--ink-2);
+    letter-spacing: 0.06em;
+    color: var(--ink-3);
     white-space: nowrap;
   }
   .so-pick {
@@ -713,35 +716,40 @@
     padding: 0 var(--sp-2);
   }
 
+  /* 复核 CTA：二级按钮（纸面 + 发丝线），不是一条通栏的蓝底横幅。
+     一屏只有一个主操作（「更新此行」），蓝色填充留给它；这里靠位置与字数说明
+     「这一块可以开始复核」。 */
   .so-run {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
+    align-self: flex-start;
     gap: 5px;
-    width: 100%;
-    height: 28px;
+    height: var(--ctl-h);
     padding: 0 10px;
-    border: 1px solid var(--accent-line);
-    border-radius: 7px;
-    background: var(--accent-soft);
-    color: var(--accent-hover);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-control);
+    background: var(--surface);
+    color: var(--ink);
     font: inherit;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;
     transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
   }
-  .so-run:hover:not(:disabled) {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent-soft) 70%, var(--raise));
+  .so-run :global(svg) {
+    color: var(--ink-3);
   }
-  .so-run:active:not(:disabled) {
-    transform: scale(0.99);
+  .so-run:hover:not(:disabled) {
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+  .so-run:hover:not(:disabled) :global(svg) {
+    color: var(--accent-text);
   }
   .so-run:disabled {
-    color: var(--text-3);
+    color: var(--ink-muted);
     border-color: var(--line-2);
     background: var(--fill);
     cursor: default;

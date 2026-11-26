@@ -61,9 +61,11 @@
         title={item.hint}
         onclick={() => onchange(item.id)}
       >
-        <!-- 每个类别一枚彩色小图标：颜色只用来「分得开」，不承载状态语义 -->
-        <span class="nav-icon c-{item.id}" aria-hidden="true">
-          <Icon name={item.icon} size={13} />
+        <!-- 线图标，与主侧栏同一套语法：不涂彩色底、不靠色相区分类别。
+             2026-11-25（Step 4.3）：四种高饱和色块（蓝 / 紫 / 橙 / 青）是旧皮肤的残留，
+             Cue Script 里一屏唯一的饱和色是蓝铅笔，类别靠「名字 + 位置」认，不靠色。 -->
+        <span class="nav-icon" aria-hidden="true">
+          <Icon name={item.icon} size={14} />
         </span>
         <span class="nav-label">{item.label}</span>
         {#if item.id === 'engines' && engineCount}
@@ -122,27 +124,13 @@
     display: grid;
     place-items: center;
     flex: 0 0 auto;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    color: var(--on-accent);
+    width: 16px;
+    height: 16px;
+    color: var(--ink-3);
   }
-  /* 四种类别的色相：与内容区的主色互不冲突（都是中低饱和） */
-  .c-engines {
-    background: #5b7cfa;
-  }
-  .c-appearance {
-    background: #c263c9;
-  }
-  .c-ai {
-    background: #d98324;
-  }
-  .c-env {
-    background: #4f9d8c;
-  }
+  /* 选中时图标跟标签一起转蓝铅笔（与主侧栏的 active 同一条规则）；未选中是第三级墨。 */
   .nav-item[aria-selected='true'] .nav-icon {
-    /* 选中时不要靠加深颜色区分——图标本身就够认了 */
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22) inset;
+    color: var(--accent);
   }
   .nav-label {
     overflow: hidden;

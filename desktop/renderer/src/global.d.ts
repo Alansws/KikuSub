@@ -32,7 +32,16 @@ export interface MenuEvent {
     | 'export'
     | 'inspector'
     | 'sidebar'
-    | 'theme'
+    | 'appearance'
+    | 'history'
+    | 'save-draft'
+    | 'restore-draft'
+    | 'import-subtitle'
+    | 'import-translation'
+    | 'proxy'
+    | 'import-proxy'
+    | 'clear-original'
+    | 'clear-translation'
     | 'play'
     | 'prev-cue'
     | 'next-cue'
@@ -64,6 +73,8 @@ declare global {
       getSidecar(): Promise<SidecarHandshake | null>;
       onSidecarReady(cb: (payload: SidecarHandshake) => void): () => void;
       onSidecarDown(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
+      /** 手动重启内核（崩溃自动重连用完之后的手动出口）。 */
+      restartSidecar(): Promise<boolean>;
       pickMedia(): Promise<string | null>;
       pickSubtitle(defaultDir?: string, title?: string): Promise<string | null>;
       /** TTS 克隆音色的参考音频（wav/mp3/…），返回绝对路径。 */
@@ -140,7 +151,7 @@ declare global {
       openPath(target: string): Promise<string>;
       setTitle(title: string): void;
       setDocumentEdited(dirty: boolean): void;
-      setTheme(theme: 'light' | 'dark' | 'mincho'): void;
+      setAppearance(appearance: 'auto' | 'light' | 'dark'): void;
       getSetupState(): Promise<SetupState>;
       completeSetup(modelsDir: string): Promise<{ ok: boolean; modelsDir: string }>;
       pickModelsDir(): Promise<string | null>;

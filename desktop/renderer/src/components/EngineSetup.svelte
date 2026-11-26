@@ -355,13 +355,16 @@
     display: grid;
     place-items: center;
     padding: var(--sp-8);
-    background: var(--bg-content);
+    /* 遮罩 = 页面地面（--canvas），卡片 = 抬升层（--raise）。
+       三修前两者都读 --bg-content，于是暗色下卡片直接溶进遮罩里看不见了。 */
+    background: var(--canvas);
     -webkit-app-region: drag;
     overflow-y: auto;
   }
   .setup-card {
     width: min(660px, 100%);
-    background: var(--bg-content);
+    background: var(--raise);
+    box-shadow: var(--shadow-pop);
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--shadow-pop);

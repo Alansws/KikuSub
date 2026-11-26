@@ -1,4 +1,18 @@
 <script lang="ts">
+  /**
+   * 标题栏（44px，横跨整窗）。
+   *
+   * 结构照 Cue Script 原型：左侧「本次文档」（片名 + 规格 + 代理状态），
+   * 中间「我在哪」（段号 / 页名 / 这一页的状态），右侧「这一屏能做什么」。
+   *
+   * 为什么标题栏横跨整窗而不是停在侧栏右缘：macOS 的红绿灯是原生绘制、
+   * DOM 量不到，一旦标题栏从半腰开始，就得靠 `--tl-safe-x` 反算内边距、
+   * 再给侧栏顶部铺一条「连续的顶带」，任何一处不同步就会出现「竖线穿过
+   * 黄绿灯」。横跨整窗之后，红绿灯永远在标题栏的左侧安全区里，几何问题消失。
+   *
+   * 收起/展开侧栏的开关现在常驻标题栏最左（红绿灯右侧），不再有「收起态
+   * 换位置」的分支。
+   */
   import Icon from './Icon.svelte';
   import EngineSwitch from './EngineSwitch.svelte';
   import SidebarToggle from './SidebarToggle.svelte';
@@ -17,12 +31,14 @@
     setView,
     startProxyJob,
     toggleCueHistory,
-    toggleTheme,
     undo,
   } from '../lib/store.svelte';
   import { loadChapters } from '../lib/chapters.svelte';
   import { formatBytes, formatDuration } from '../lib/time';
   import { closePunctPanel, openPunctPanel, punctPanel } from '../lib/punctuationPanel.svelte';
+  import { stageOf } from '../lib/viewMeta';
+  import { appearanceName } from '../lib/themes';
+  import { toggleAppearance } from '../lib/appearanceState.svelte';
 
   function clock(seconds: number) {
     return new Date(seconds * 1000).toLocaleTimeString('zh-CN', {
@@ -35,28 +51,85 @@
 
   let { engine = $bindable('whisper') }: { engine?: string } = $props();
 
-  /** 核对台顶部的「⋯」菜单：把低频但重要的一次性动作收起来，工具栏留给主路径。 */
+  /** 低频但重要的一次性动作收在「⋯」里，标题栏留给主路径。 */
   let moreOpen = $state(false);
 
   const proxyBusy = $derived(
-    app.jobKind === 'proxy' &&
-      (app.job?.status === 'running' || app.job?.status === 'queued'),
+    app.jobKind === 'proxy' && (app.job?.status === 'running' || app.job?.status === 'queued'),
   );
-  const jobBusy = $derived(
-    app.job?.status === 'running' || app.job?.status === 'queued',
-  );
+  const jobBusy = $derived(app.job?.status === 'running' || app.job?.status === 'queued');
   const proxyPct = $derived(app.jobKind === 'proxy' ? (app.job?.percent ?? 0) : 0);
   const proxyLabel = $derived(
     proxyBusy ? '压制中…' : app.media?.proxy_ready ? '代理已就绪' : '压制代理',
   );
   const proxyHint = $derived(
     proxyBusy
-      ? '正在后台压制 480p 监看代理（进度见顶部蓝色进度条）'
+      ? '正在后台压制 480p 监看代理（进度见标题栏右侧的胶囊）'
       : app.media?.proxy_ready
         ? '480p 监看代理已就绪，无需再压'
         : '为高码率 / 特殊编码视频压制 480p 监看代理，拖动进度条更流畅',
   );
   const hasTranslation = $derived(Boolean(app.translations[app.trackLang]));
+
+  /** 文档规格：片长 · 编码 · 帧率。放标题栏左侧，属于「这份稿是什么片子」。 */
+  const mediaMeta = $derived.by(() => {
+    const m = app.media;
+    if (!m) return '拖入视频或字幕开始';
+    const parts = [formatDuration(m.duration)];
+    if (m.video_codec) parts.push(m.video_codec);
+    if (m.video_fps && m.video_fps > 0) parts.push(`${m.video_fps.toFixed(3)} fps`);
+    return parts.filter(Boolean).join(' · ');
+  });
+
+  const crumb = $derived(stageOf(app.view));
+
+  /** 这一页「此刻在做什么」：一句话，和页面主体说的是同一件事。 */
+  const crumbNote = $derived.by(() => {
+    const m = app.media;
+    const n = app.cues.length;
+    switch (app.view) {
+      case 'import':
+        return m ? `${formatBytes(m.size)} · ${formatDuration(m.duration)}` : '继续上次工程，或换一部片';
+      case 'transcribe':
+        return app.job?.status === 'running'
+          ? `转写中 ${app.job.percent}%`
+          : n
+            ? `${n} 条主稿`
+            : '待转写';
+      case 'review':
+        return n ? `${n} 条 · ${formatDuration(m?.duration ?? 0)}` : '还没有字幕';
+      case 'dual':
+        return '只读比较 · 编辑回核对台';
+      case 'polish':
+        return '时间轴锁定 · 只改文字';
+      case 'reshape':
+        return '会改条数与时间码';
+      case 'translate':
+        return '译文平行轨 · 不改原文';
+      case 'export':
+        return n ? `${n} 条 · 字幕 / 成片` : '字幕 / 成片';
+      case 'report':
+        return app.report ? `${n} 条 · 任务详报` : '任务详报';
+      case 'prompts':
+        return '单击选中 · 双击编辑';
+      case 'settings':
+        return '外观 · 引擎 · 路径 · 日志';
+      default:
+        return '';
+    }
+  });
+
+  /**
+   * 外观按钮是**两态开关**：图标 = 现在就是夜间（月亮）/ 现在就是日间（太阳），
+   * 标题 = 点下去会变成什么。`auto` 不再有自己的第三个图标——按钮只回答
+   * 「从眼前的画面翻到另一面」，跟随系统在设置 → 外观里。
+   */
+  const appearanceIcon = $derived(app.theme === 'dark' ? 'moon' : 'sun');
+  const appearanceTitle = $derived(
+    `现在：${app.theme === 'dark' ? appearanceName('dark') : appearanceName('light')} · 点击切到${
+      app.theme === 'dark' ? appearanceName('light') : appearanceName('dark')
+    }（⇧⌘A）`,
+  );
 
   function runProxy() {
     moreOpen = false;
@@ -100,69 +173,26 @@
     cueHistory.items.map((item) => ({ item, index: item.id })).reverse(),
   );
 
-  // 设置页可以停用引擎；工具栏只显示启用的那几个，引擎变多也不会挤爆。
+  // 设置页可以停用引擎；标题栏只显示启用的那几个。
   const engines = $derived((app.config?.engines ?? []).filter((e) => e.enabled));
 
   /**
-   * 引擎胶囊只属于「要选识别引擎」的两页：转写（这次用哪个引擎跑）与核对台
-   * （重转此句 / 质检补录读 app.engine）。
-   *
-   * 导入、设置与 AI 处理页与引擎无关，胶囊在那儿只是顶栏中央的一块常驻杂音
-   * （2026-11-21 「顶栏去噪」）。隐藏的是 UI，不是状态：`app.engine` 仍由
-   * App.svelte 的 $effect 同步，切回转写 / 核对台时胶囊按同一份引擎列表重建。
+   * 引擎胶囊只属于「要选识别引擎」的两页：转写与核对台。
+   * 其余页面与引擎无关，胶囊在那儿只是常驻杂音。
    */
   const engineVisible = $derived(app.view === 'transcribe' || app.view === 'review');
-
-  const sub = $derived.by(() => {
-    const m = app.media;
-    if (!m) return '拖入即用';
-    switch (app.view) {
-      case 'import':
-        return `${formatBytes(m.size)} · ${formatDuration(m.duration)} · ${m.video_codec || '—'}`;
-      case 'transcribe':
-        return app.job?.status === 'running'
-          ? `转写中 ${app.job.percent}%`
-          : app.cues.length
-            ? `${app.cues.length} 条主稿`
-            : '待转写';
-      case 'review':
-        return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
-      case 'dual':
-        return '双引擎对照 · 只读比较，编辑回核对台';
-      case 'polish':
-        return '润色 · 单源 / 双源对照';
-      case 'reshape':
-        return '断句重排 · 可改条数与时间码';
-      case 'translate':
-        return '翻译 · 原文定稿后生成译文轨';
-      case 'prompts':
-        return '提示词库 · 单击选中 / 双击编辑';
-      case 'export':
-        return `${app.cues.length} 条字幕 · 字幕 / 成片导出`;
-      case 'report':
-        return app.report ? `${app.cues.length} 条字幕 · 任务详报` : '任务详报';
-      case 'settings':
-        return '引擎与模型 · 文件夹路径 · 日志与诊断';
-      default:
-        return '';
-    }
-  });
 </script>
 
-<header class="toolbar" class:rail-collapsed={sidebarPrefs.collapsed}>
-  <!-- 侧栏收起后，它的展开开关挂到顶栏最左。这里**必须让出红绿灯的安全区**
-       （`--tl-safe-x` 87px）：收起态顶栏从 52px 起，红绿灯右缘在 71px，
-       只留 16px 内边距的话开关正好落在 x=68，压在绿灯上（2026-11-24 修）。
-       展开态由左栏自己那一颗负责，这里不重复。 -->
-  {#if sidebarPrefs.collapsed || app.compact}
-    <SidebarToggle />
-  {/if}
-  <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>
-  <div class="tb-sub">{sub}</div>
+<header class="titlebar">
+  <SidebarToggle />
+  <span class="tb-sep tb-sep-lead"></span>
 
-  <!-- 监看代理状态与切换入口（2026-11-24：从舞台状态条搬来）。
-       轻量、只在核对屏出现；压制中显示百分比，就绪后可点开「⋯ → 压制代理」，
-       需要代理时给的是同一个入口的快捷方式。 -->
+  <div class="doc" title={app.media?.path ?? ''}>
+    <span class="doc-title">{app.media?.name ?? 'KikuSub'}</span>
+    <span class="doc-meta">{mediaMeta}</span>
+  </div>
+
+  <!-- 监看代理状态：轻量胶囊，只在核对屏出现 -->
   {#if app.view === 'review' && app.media}
     <button
       class="proxy-state"
@@ -188,352 +218,404 @@
     </button>
   {/if}
 
-  {#if engineVisible}
-    <div class="tb-sep tb-sep-lead"></div>
-
-    {#if engines.length}
-      <EngineSwitch bind:engine {engines} onmanage={manageEngines} />
-    {:else}
-      <button class="btn ghost" onclick={() => setView('settings')}>
-        <Icon name="warn" size={12} />没有启用的引擎
-      </button>
+  <!-- 我在哪：段号 / 页名 / 这一页的状态。居中，是标题栏唯一的「导航」信息 -->
+  <div class="crumb">
+    {#if crumb.stage}
+      <span class="crumb-stage">{crumb.stage}</span>
+      <span class="crumb-sep" aria-hidden="true">/</span>
     {/if}
-  {/if}
+    <span class="crumb-current">{crumb.label}</span>
+    {#if crumbNote}
+      <span class="crumb-note">{crumbNote}</span>
+    {/if}
+  </div>
 
-  {#if proxyBusy}
-    <div
-      class="proxy-chip"
-      title={proxyHint}
-      role="progressbar"
-      aria-label="代理压制进度"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow={proxyPct}
-    >
-      <Icon name="film" size={11} />
-      <span class="pc-label">代理</span>
-      <div class="pc-track"><i style="width:{Math.max(2, proxyPct)}%"></i></div>
-      <b>{proxyPct}%</b>
-    </div>
-  {/if}
+  <div class="top-actions">
+    {#if proxyBusy}
+      <div
+        class="proxy-chip"
+        title={proxyHint}
+        role="progressbar"
+        aria-label="代理压制进度"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={proxyPct}
+      >
+        <Icon name="film" size={11} />
+        <span class="pc-label">代理</span>
+        <div class="pc-track"><i style="width:{Math.max(2, proxyPct)}%"></i></div>
+        <b>{proxyPct}%</b>
+      </div>
+    {/if}
 
-  <div class="tb-spacer"></div>
+    {#if engineVisible}
+      {#if engines.length}
+        <EngineSwitch bind:engine {engines} onmanage={manageEngines} />
+      {:else}
+        <button class="btn ghost" onclick={() => setView('settings')}>
+          <Icon name="warn" size={12} />没有启用的引擎
+        </button>
+      {/if}
+      <span class="tb-sep"></span>
+    {/if}
 
-  {#if app.view === 'review'}
-    <div class="punct-wrap">
+    {#if app.view === 'review'}
+      <div class="punct-wrap">
+        <button
+          class="btn ghost top-act"
+          class:on={punctPanel.open}
+          data-punct-trigger
+          aria-expanded={punctPanel.open}
+          onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
+          title="清理整轨里多余的标点（可只清原文 / 只清译文 / 两轨一起；译文的句中语义标点保留，只清行尾与重复；条数与时间轴不变；⌘⇧L）"
+          aria-label="清理标点"
+        >
+          <Icon name="punct" size={12} /><span class="act-label">清理标点</span>
+        </button>
+        <PunctCleanPanel />
+      </div>
       <button
         class="btn ghost top-act"
-        class:on={punctPanel.open}
-        data-punct-trigger
-        aria-expanded={punctPanel.open}
-        onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
-        title="清理整轨里多余的标点（可只清原文 / 只清译文 / 两轨一起；译文的句中语义标点保留，只清行尾与重复；条数与时间轴不变；⌘⇧L）"
-        aria-label="清理标点"
+        onclick={() => setView('polish')}
+        title="锁轴润色：按全片语境修正识别错误，只改文字、不动时间轴"
+        aria-label="锁轴润色"
       >
-        <Icon name="punct" size={12} /><span class="act-label">清理标点</span>
+        <Icon name="pencil" size={12} /><span class="act-label">锁轴润色</span>
       </button>
-      <PunctCleanPanel />
-    </div>
-    <button
-      class="btn ghost top-act"
-      onclick={() => setView('polish')}
-      title="按全片语境修正识别错误：左原文、右 AI 建议，时间码不变"
-      aria-label="润色"
-    >
-      <Icon name="sparkle" size={12} /><span class="act-label">润色</span>
-    </button>
-    <button
-      class="btn ghost top-act"
-      onclick={() => setView('export')}
-      title="把当前时间轴导出为字幕或带字幕的成片"
-      aria-label="导出"
-    >
-      <Icon name="export" size={12} /><span class="act-label">导出</span>
-    </button>
-
-    <div class="more-wrap">
       <button
-        class="btn icon ghost more"
-        class:on={moreOpen}
-        aria-label="更多"
-        aria-expanded={moreOpen}
-        title="更多：代理 / 原文轨 / 译文轨"
-        onclick={() => (moreOpen = !moreOpen)}
-        >⋯</button
+        class="btn ghost top-act"
+        onclick={() => setView('export')}
+        title="把当前时间轴导出为字幕或带字幕的成片"
+        aria-label="导出"
       >
-      {#if moreOpen}
+        <Icon name="export" size={12} /><span class="act-label">导出</span>
+      </button>
+
+      <div class="more-wrap">
         <button
-          class="menu-backdrop"
-          aria-label="关闭更多菜单"
-          onclick={() => (moreOpen = false)}
+          class="btn icon ghost more"
+          class:on={moreOpen}
+          aria-label="更多"
+          aria-expanded={moreOpen}
+          title="更多：代理 / 原文轨 / 译文轨"
+          onclick={() => (moreOpen = !moreOpen)}
+          >⋯</button
+        >
+        {#if moreOpen}
+          <button
+            class="menu-backdrop"
+            aria-label="关闭更多菜单"
+            onclick={() => (moreOpen = false)}
+          ></button>
+          <div class="more-menu" role="menu" aria-label="更多操作">
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={runProxy}
+              disabled={jobBusy || Boolean(app.media?.proxy_ready) || !app.media}
+              title={proxyHint}
+            >
+              <Icon name="film" size={12} />
+              <span class="mi-label">{proxyLabel}</span>
+              <span class="mi-sub">{app.media?.proxy_ready ? '已就绪' : '480p'}</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={importProxy}
+              disabled={jobBusy || !app.media}
+              title={app.media?.proxy_ready
+                ? '选择另一份已经压好的代理文件，替换当前监看代理（不再重新压制）'
+                : '选择已经压好的代理文件，直接挂到当前媒体，不再重新压制'}
+            >
+              <Icon name="tray" size={12} />
+              <span class="mi-label">导入代理…</span>
+              <span class="mi-sub">{app.media?.proxy_ready ? '替换现有' : '已有文件'}</span>
+            </button>
+
+            <div class="mi-sep" role="separator"></div>
+
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={importSubtitle}
+              disabled={jobBusy}
+              title="从导出文件夹选择原文字幕，导入核对台作为基线"
+            >
+              <Icon name="doc" size={12} />
+              <span class="mi-label">导入原文字幕…</span>
+              <span class="mi-sub">SRT / VTT</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={importTranslation}
+              disabled={jobBusy || !app.cues.length}
+              title="选择与当前原文逐条对齐的译文 SRT / VTT，原文与时间轴不动"
+            >
+              <Icon name="quote" size={12} />
+              <span class="mi-label">导入译文字幕…</span>
+              <span class="mi-sub">逐条对齐</span>
+            </button>
+
+            <div class="mi-sep" role="separator"></div>
+
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={deleteOriginal}
+              disabled={jobBusy || !app.cues.length}
+              title="删除全部原文字幕与时间轴；所有译文轨会一起清空，⌘Z 可撤回"
+            >
+              <Icon name="trash" size={12} />
+              <span class="mi-label">删除原文字幕</span>
+              <span class="mi-sub">{app.cues.length} 条</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={deleteTranslation}
+              disabled={jobBusy || !hasTranslation}
+              title="只删除当前语种的译文轨，原文与时间轴保留"
+            >
+              <Icon name="trash" size={12} />
+              <span class="mi-label">删除译文字幕</span>
+              <span class="mi-sub">{hasTranslation ? app.trackLang : '当前语种无译文'}</span>
+            </button>
+          </div>
+        {/if}
+      </div>
+
+      <span class="tb-sep"></span>
+    {/if}
+
+    <button
+      class="btn icon ghost"
+      onclick={undo}
+      disabled={!undoInfo.label}
+      title={undoInfo.label ? `撤回：${undoInfo.label}（⌘Z）` : '没有可撤回的操作'}
+      aria-label="撤回"
+    >
+      <Icon name="undo" size={14} />
+    </button>
+    <button
+      class="btn icon ghost"
+      onclick={redo}
+      disabled={!redoInfo.label}
+      title={redoInfo.label ? `重做：${redoInfo.label}（⇧⌘Z）` : '没有可重做的操作'}
+      aria-label="重做"
+    >
+      <Icon name="redo" size={14} />
+    </button>
+
+    <div class="history-wrap">
+      <button
+        class="btn icon ghost"
+        class:on={cueHistory.open}
+        aria-pressed={cueHistory.open}
+        onclick={() => toggleCueHistory()}
+        title="撤销 / 重做历史（所有操作共用一条时间线，可点任意一步跳回）"
+        aria-label="撤销历史"
+      >
+        <Icon name="history" size={14} />
+      </button>
+
+      {#if cueHistory.open}
+        <button
+          class="hist-backdrop"
+          aria-label="关闭历史列表"
+          onclick={() => toggleCueHistory(false)}
         ></button>
-        <div class="more-menu" role="menu" aria-label="更多操作">
-          <button
-            class="menu-item"
-            role="menuitem"
-            onclick={runProxy}
-            disabled={jobBusy || Boolean(app.media?.proxy_ready) || !app.media}
-            title={proxyHint}
-          >
-            <Icon name="film" size={12} />
-            <span class="mi-label">{proxyLabel}</span>
-            <span class="mi-sub">{app.media?.proxy_ready ? '已就绪' : '480p'}</span>
-          </button>
-          <button
-            class="menu-item"
-            role="menuitem"
-            onclick={importProxy}
-            disabled={jobBusy || !app.media}
-            title={app.media?.proxy_ready
-              ? '选择另一份已经压好的代理文件，替换当前监看代理（不再重新压制）'
-              : '选择已经压好的代理文件，直接挂到当前媒体，不再重新压制'}
-          >
-            <Icon name="tray" size={12} />
-            <span class="mi-label">导入代理…</span>
-            <span class="mi-sub">{app.media?.proxy_ready ? '替换现有' : '已有文件'}</span>
-          </button>
-
-          <div class="mi-sep" role="separator"></div>
-
-          <button
-            class="menu-item"
-            role="menuitem"
-            onclick={importSubtitle}
-            disabled={jobBusy}
-            title="从导出文件夹选择原文字幕，导入核对台作为基线"
-          >
-            <Icon name="doc" size={12} />
-            <span class="mi-label">导入原文字幕…</span>
-            <span class="mi-sub">SRT / VTT</span>
-          </button>
-          <button
-            class="menu-item"
-            role="menuitem"
-            onclick={importTranslation}
-            disabled={jobBusy || !app.cues.length}
-            title="选择与当前原文逐条对齐的译文 SRT / VTT，原文与时间轴不动"
-          >
-            <Icon name="quote" size={12} />
-            <span class="mi-label">导入译文字幕…</span>
-            <span class="mi-sub">逐条对齐</span>
-          </button>
-
-          <div class="mi-sep" role="separator"></div>
-
-          <button
-            class="menu-item"
-            role="menuitem"
-            onclick={deleteOriginal}
-            disabled={jobBusy || !app.cues.length}
-            title="删除全部原文字幕与时间轴；所有译文轨会一起清空，⌘Z 可撤回"
-          >
-            <Icon name="trash" size={12} />
-            <span class="mi-label">删除原文字幕</span>
-            <span class="mi-sub">{app.cues.length} 条</span>
-          </button>
-          <button
-            class="menu-item"
-            role="menuitem"
-            onclick={deleteTranslation}
-            disabled={jobBusy || !hasTranslation}
-            title="只删除当前语种的译文轨，原文与时间轴保留"
-          >
-            <Icon name="trash" size={12} />
-            <span class="mi-label">删除译文字幕</span>
-            <span class="mi-sub">{hasTranslation ? app.trackLang : '当前语种无译文'}</span>
-          </button>
+        <div class="hist-panel" role="dialog" aria-label="撤销与重做历史">
+          <div class="hist-head">
+            <span>撤销 / 重做历史</span>
+            <span class="hist-sub">全部操作 {cueSteps}/50</span>
+          </div>
+          <div class="hist-list">
+            {#if !cueHistory.items.length}
+              <div class="hist-empty">
+                {cueHistory.loading ? '正在读取历史…' : '还没有可回溯的操作'}
+              </div>
+            {/if}
+            {#each historyRows as row (row.index)}
+              <button
+                class="hist-item"
+                class:current={row.item.state === 'current'}
+                class:undone={row.item.state === 'undone'}
+                onclick={() => {
+                  void jumpCueHistory(row.item.id);
+                  void loadChapters(true);
+                }}
+                title={row.item.state === 'current'
+                  ? '当前状态'
+                  : row.item.state === 'undone'
+                    ? '点击重做到这一步'
+                    : '点击回到这一步'}
+              >
+                <span class="hist-icon">
+                  {#if row.item.state === 'current'}
+                    <Icon name="check" size={10} />
+                  {:else if row.item.state === 'undone'}
+                    <Icon name="redo" size={10} />
+                  {:else}
+                    <Icon name="undo" size={10} />
+                  {/if}
+                </span>
+                <span class="hist-label">{row.item.label}</span>
+                <span class="hist-time">{clock(row.item.at)}</span>
+              </button>
+            {/each}
+          </div>
+          <div class="hist-foot">点任意一步回到该状态；⌘Z 撤回最近一次操作</div>
         </div>
       {/if}
     </div>
 
-    <div class="tb-sep"></div>
-  {/if}
-
-  <button
-    class="btn icon ghost"
-    onclick={undo}
-    disabled={!undoInfo.label}
-    title={undoInfo.label ? `撤回：${undoInfo.label}（⌘Z）` : '没有可撤回的操作'}
-  >
-    <Icon name="undo" size={14} />
-  </button>
-  <button
-    class="btn icon ghost"
-    onclick={redo}
-    disabled={!redoInfo.label}
-    title={redoInfo.label ? `重做：${redoInfo.label}（⇧⌘Z）` : '没有可重做的操作'}
-  >
-    <Icon name="redo" size={14} />
-  </button>
-
-  <div class="history-wrap">
     <button
       class="btn icon ghost"
-      class:on={cueHistory.open}
-      aria-pressed={cueHistory.open}
-      onclick={() => toggleCueHistory()}
-      title="撤销 / 重做历史（所有操作共用一条时间线，可点任意一步跳回）"
+      onclick={toggleAppearance}
+      title={appearanceTitle}
+      aria-label={appearanceTitle}
     >
-      <Icon name="history" size={14} />
+      <Icon name={appearanceIcon} size={14} />
     </button>
-
-    {#if cueHistory.open}
-      <button
-        class="hist-backdrop"
-        aria-label="关闭历史列表"
-        onclick={() => toggleCueHistory(false)}
-      ></button>
-      <div class="hist-panel" role="dialog" aria-label="撤销与重做历史">
-        <div class="hist-head">
-          <span>撤销 / 重做历史</span>
-          <span class="hist-sub">全部操作 {cueSteps}/50</span>
-        </div>
-        <div class="hist-list">
-          {#if !cueHistory.items.length}
-            <div class="hist-empty">
-              {cueHistory.loading ? '正在读取历史…' : '还没有可回溯的操作'}
-            </div>
-          {/if}
-          {#each historyRows as row (row.index)}
-            <button
-              class="hist-item"
-              class:current={row.item.state === 'current'}
-              class:undone={row.item.state === 'undone'}
-              onclick={() => {
-                void jumpCueHistory(row.item.id);
-                void loadChapters(true);
-              }}
-              title={row.item.state === 'current'
-                ? '当前状态'
-                : row.item.state === 'undone'
-                  ? '点击重做到这一步'
-                  : '点击回到这一步'}
-            >
-              <span class="hist-icon">
-                {#if row.item.state === 'current'}
-                  <Icon name="check" size={10} />
-                {:else if row.item.state === 'undone'}
-                  <Icon name="redo" size={10} />
-                {:else}
-                  <Icon name="undo" size={10} />
-                {/if}
-              </span>
-              <span class="hist-label">{row.item.label}</span>
-              <span class="hist-time">{clock(row.item.at)}</span>
-            </button>
-          {/each}
-        </div>
-        <div class="hist-foot">点任意一步回到该状态；⌘Z 撤回最近一次操作</div>
-      </div>
-    {/if}
+    <button
+      class="btn icon ghost"
+      onclick={() => (app.inspectorOpen = !app.inspectorOpen)}
+      title="显示/隐藏检查器（⌥⌘I）"
+      aria-label="显示/隐藏检查器"
+      disabled={app.view !== 'review'}
+    >
+      <Icon name="sidebar" size={14} />
+    </button>
   </div>
-
-  <button class="btn icon ghost" onclick={toggleTheme} title="切换外观（⇧⌘A）">
-    <Icon name="moon" size={14} />
-  </button>
-  <button
-    class="btn icon ghost"
-    onclick={() => (app.inspectorOpen = !app.inspectorOpen)}
-    title="显示/隐藏检查器（⌥⌘I）"
-    disabled={app.view !== 'review'}
-  >
-    <Icon name="sidebar" size={14} />
-  </button>
 </header>
 
 <style>
-  .toolbar {
-    /* backdrop-filter 会建立层叠上下文；不给 z-index 的话，历史下拉会被
-       后面的检查器盖住（用户看到的是半截面板）。 */
+  .titlebar {
     position: relative;
     z-index: 30;
-    /* 单行顶栏 40px（2026-11-24 Phase 1）：文件名 / 条数 / 引擎在左，
-       全局动作在右。原来 52px 多出来的 12px 没有承担任何信息，
-       只是把视频监看区往下推。
-       高度走 `--topbar-h`（app.css）：收起态的侧栏顶部要把同样的 40px
-       铺成一整块底色，两处必须同一个数值，否则交界处会露出 1px 的缝。 */
     height: var(--topbar-h);
     flex: 0 0 var(--topbar-h);
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 0 var(--sp-4);
-    /* 发丝线用 inset shadow 而不是 border：border 会吃掉 1px 内容高度，
-       52 高工具栏里的 18px 标题就会落在 16.5px 上（半像素发虚）。 */
-    box-shadow: inset 0 -1px 0 var(--separator);
+    gap: var(--sp-2);
+    /* 红绿灯是原生绘制的：标题栏横跨整窗，所以恒定让出安全区。
+       右侧 12px 是与窗口右缘的呼吸。 */
+    padding: 0 12px 0 var(--tl-safe-x);
+    box-shadow: inset 0 -1px 0 var(--line);
     background: var(--bg-toolbar);
     backdrop-filter: saturate(180%) blur(20px);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     -webkit-app-region: drag;
   }
-  /* 用 :global 才能命中子组件（EngineSwitch 等）的根节点；Svelte 会把普通
-     `.toolbar > *` 编译成带本组件作用域哈希的选择器，子组件根节点匹配不上，
-     那个区域的点击就会被系统当成拖动窗口。 */
-  .toolbar > :global(*) {
+  /* 只有**真正可点的东西**断开拖拽。不能一刀切成 `.titlebar > * { no-drag }`：
+     那样片名、面包屑与它们之间的空白都不再能拖窗口，标题栏只剩几像素可以抓。
+     （子组件里的按钮也要覆盖，所以用 :global。） */
+  .titlebar :global(button),
+  .titlebar :global(a),
+  .titlebar :global(input),
+  .titlebar :global(select),
+  .titlebar :global(textarea) {
     -webkit-app-region: no-drag;
   }
-
-  /* 收起态：顶栏从侧栏右缘起，而红绿灯右缘在 71px —— 首个控件必须让到
-     `--tl-safe-x`（87px = 19 + 52 + 16 呼吸）之后。
-     **基准用 `--sb-collapsed-w`（52）而不是 `--sb-rail-w`**：收起态在紧凑模式下
-     同样是 52（`.sidebar.collapsed` 比媒体查询里的 `.sidebar` 多一个类、优先级更高），
-     用 56 去减会少让 4px。反算内边距：87 − 52 = 35px。
-     红绿灯是原生绘制、DOM 量不到，所以这个数字与 `main.cjs` 的
-     `trafficLightPosition.x` 绑死，取值理由写在 app.css 的 `--tl-safe-x` 注释里。 */
-  .toolbar.rail-collapsed {
-    padding-left: calc(var(--tl-safe-x) - var(--sb-collapsed-w));
-  }
-  /* 4px 光学校正（2026-11-24）：顶栏 40px，控件按盒模型居中后中线在 y=20，
-     而三颗灯的中线在 y=24（`trafficLightPosition.y` 18 + 灯高 12 / 2）。
-     不校正的话开关会「微微悬在三个点上面」，与 MacWhisper 的同一行读感不一致。
-     这里只把开关本体下移 4px，不动顶栏的行高；顶栏里只会有这一颗开关
-     （收起态或紧凑模式，展开态它挂在左栏），所以不必再加限定类。 */
-  .toolbar > :global(.sb-toggle) {
-    position: relative;
-    top: 4px;
+  .titlebar > :global(.sb-toggle) {
+    flex: 0 0 auto;
   }
 
-  .tb-title {
+  .doc {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+  .doc-title {
     font-size: var(--fs-body);
-    line-height: 18px;
     font-weight: 600;
+    letter-spacing: -0.005em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 300px;
+    max-width: 260px;
   }
-  .tb-sub {
-    font-size: var(--fs-label);
-    line-height: 16px;
-    color: var(--text-2);
+  .doc-meta {
+    font-size: 11px;
+    color: var(--text-3);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .toolbar .btn.on {
+
+  /* 面包屑是标题栏唯一的导航信息：段号 / 页名 / 状态，居中且可省略 */
+  .crumb {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 var(--sp-2);
+  }
+  .crumb-stage {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+    flex: 0 0 auto;
+  }
+  .crumb-sep {
+    font-size: 11px;
+    color: var(--text-3);
+    flex: 0 0 auto;
+  }
+  .crumb-current {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .crumb-note {
+    font-size: 11px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+
+  .top-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  .tb-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--line);
+    flex: 0 0 1px;
+  }
+
+  .titlebar .btn.on {
     background: var(--accent-soft);
     color: var(--accent);
   }
-  .tb-sep {
-    width: 1px;
-    height: 18px;
-    background: var(--separator);
-    flex: 0 0 1px;
-  }
-  .tb-spacer {
-    flex: 1;
-  }
 
-  /* 代理压制在后台跑：工具栏常驻一条紧凑进度条，切换到别的页面也能看到。 */
+  /* 代理压制在后台跑：标题栏常驻一条紧凑进度条，切到别的页面也看得见 */
   .proxy-chip {
     display: flex;
     align-items: center;
     gap: 6px;
     height: 24px;
     padding: 0 var(--sp-2);
-    border-radius: 6px;
+    border-radius: var(--rad-control);
     background: var(--accent-soft);
-    color: var(--accent);
-    font-size: 11.5px;
+    color: var(--accent-text);
+    font-size: 11px;
     flex: 0 0 auto;
     white-space: nowrap;
   }
@@ -541,7 +623,7 @@
     font-weight: 600;
   }
   .pc-track {
-    width: 42px;
+    width: 40px;
     height: 3px;
     border-radius: 2px;
     background: var(--fill-strong);
@@ -557,40 +639,32 @@
   .proxy-chip b {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
-    min-width: 30px;
+    min-width: 28px;
     text-align: right;
   }
 
   /* 核对台主路径：文字按钮，不抢图标按钮的安静感 */
   .top-act {
-    height: 28px;
-    padding: 0 9px;
+    height: 26px;
+    padding: 0 var(--sp-2);
     color: var(--text-2);
     gap: 5px;
   }
-  .top-act:hover:not(:disabled) {
-    background: var(--line-2);
-    border-color: transparent;
-    color: var(--text);
-  }
   .more {
-    font-size: 16px;
+    font-size: 15px;
     line-height: 1;
     color: var(--text-2);
   }
 
-  .more-wrap {
+  .more-wrap,
+  .punct-wrap,
+  .history-wrap {
     position: relative;
     display: flex;
     align-items: center;
   }
-  /* 清理标点的浮层从按钮正下方展开：与「⋯ 更多」同一套锚点，不再另起一层 */
-  .punct-wrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-  .menu-backdrop {
+  .menu-backdrop,
+  .hist-backdrop {
     position: fixed;
     inset: 0;
     z-index: 60;
@@ -612,10 +686,10 @@
     gap: 1px;
     background: var(--raise);
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--rad-card);
     box-shadow: var(--shadow-pop);
     -webkit-app-region: no-drag;
-    animation: menuIn 140ms var(--ease);
+    animation: menuIn 120ms var(--ease);
   }
   @keyframes menuIn {
     from {
@@ -631,7 +705,7 @@
     font: inherit;
     font-size: 12.5px;
     width: 100%;
-    height: 30px;
+    height: var(--row-h);
     padding: 0 var(--sp-2);
     border-radius: 4px;
     display: flex;
@@ -642,7 +716,7 @@
   }
   .menu-item:hover:not(:disabled) {
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .menu-item:disabled {
     opacity: 0.45;
@@ -655,33 +729,18 @@
     text-overflow: ellipsis;
   }
   .mi-sub {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
   }
   .mi-sep {
     height: 1px;
     margin: var(--sp-1) 6px;
-    background: var(--separator-soft);
+    background: var(--line-2);
   }
 
-  .history-wrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-  .hist-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    border: 0;
-    padding: 0;
-    background: transparent;
-    cursor: default;
-    -webkit-app-region: no-drag;
-  }
   .hist-panel {
-    animation: histIn 160ms var(--ease);
+    animation: histIn 140ms var(--ease);
     position: absolute;
     top: calc(100% + 7px);
     right: 0;
@@ -690,9 +749,9 @@
     max-height: min(420px, 64vh);
     display: flex;
     flex-direction: column;
-    background: var(--bg-content);
-    border: 1px solid var(--separator);
-    border-radius: 8px;
+    background: var(--raise);
+    border: 1px solid var(--line);
+    border-radius: var(--rad-card);
     box-shadow: var(--shadow-pop);
     overflow: hidden;
     -webkit-app-region: no-drag;
@@ -711,10 +770,10 @@
     padding: 10px var(--sp-3) var(--sp-2);
     font-size: 12.5px;
     font-weight: 600;
-    border-bottom: 1px solid var(--separator-soft);
+    border-bottom: 1px solid var(--line);
   }
   .hist-sub {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 400;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
@@ -749,7 +808,7 @@
     cursor: default;
   }
   .hist-item.current .hist-label {
-    color: var(--accent);
+    color: var(--accent-text);
     font-weight: 600;
   }
   .hist-item.undone {
@@ -775,10 +834,10 @@
   }
   .hist-time {
     flex: 0 0 auto;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-3);
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   }
   .hist-empty {
     padding: 18px var(--sp-3);
@@ -788,45 +847,12 @@
   }
   .hist-foot {
     padding: var(--sp-2) var(--sp-3) 9px;
-    border-top: 1px solid var(--separator-soft);
-    font-size: 12px;
+    border-top: 1px solid var(--line);
+    font-size: 11px;
     color: var(--text-3);
   }
 
-  /* 紧凑模式（≤900px）：标题让位给主路径，副标与引擎分段先后收起，
-     「润色 / 翻译 / 导出」只留图标（title + aria-label 仍在）。 */
-  @media (max-width: 900px) {
-    .toolbar {
-      gap: 6px;
-      /* 紧凑模式图标轨 56px（收起时是 52，见 `.toolbar.rail-collapsed`），
-         顶栏从轨右缘起；默认 16px 内边距会让标题落在 x=72，距红绿灯右缘（71）
-         只剩 1px。左右统一遵守安全区：右边保持紧凑模式的 10px 呼吸。 */
-      padding: 0 10px 0 calc(var(--tl-safe-x) - var(--sb-rail-w));
-    }
-    .tb-sub {
-      display: none;
-    }
-    .tb-title {
-      min-width: 0;
-      max-width: 40vw;
-    }
-    .top-act {
-      width: 28px;
-      padding: 0;
-      justify-content: center;
-    }
-    .act-label {
-      display: none;
-    }
-  }
-  @media (max-width: 760px) {
-    /* 引擎胶囊已经比平铺分段省空间；只收起标题后的分隔线，给主路径让位 */
-    .tb-sep-lead {
-      display: none;
-    }
-  }
-
-  /* 监看代理状态：22px 高的小胶囊，和文件名同一行；不抢引擎胶囊的注意力 */
+  /* 监看代理状态：22px 高的小胶囊，和片名同一行 */
   .proxy-state {
     appearance: none;
     flex: 0 0 auto;
@@ -835,15 +861,17 @@
     gap: 5px;
     height: 22px;
     padding: 0 var(--sp-2);
-    border: 1px solid var(--line-2);
+    border: 1px solid var(--line);
     border-radius: 11px;
     background: transparent;
     color: var(--text-3);
     font: inherit;
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1;
     white-space: nowrap;
-    transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+    transition:
+      border-color var(--dur-fast) var(--ease),
+      color var(--dur-fast) var(--ease);
   }
   .proxy-state:hover {
     border-color: var(--accent-line);
@@ -873,5 +901,37 @@
   .proxy-state.busy {
     color: var(--accent-text);
     border-color: var(--accent-line);
+  }
+
+  /* 窄窗：先收「文档规格」与动作文字，保住面包屑与主路径 */
+  @media (max-width: 1240px) {
+    .doc-meta {
+      display: none;
+    }
+    .act-label {
+      display: none;
+    }
+    .top-act {
+      width: 26px;
+      padding: 0;
+      justify-content: center;
+    }
+  }
+  @media (max-width: 1040px) {
+    .crumb-note {
+      display: none;
+    }
+    .doc-title {
+      max-width: 150px;
+    }
+  }
+  @media (max-width: 900px) {
+    .titlebar {
+      gap: 6px;
+      padding-right: 10px;
+    }
+    .doc {
+      display: none;
+    }
   }
 </style>

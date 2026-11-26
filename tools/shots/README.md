@@ -46,11 +46,21 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh \
 
 - `tools/shots/readme-seed.json`：12 条演示台词 + 一版中文译文 + 一份「另一引擎」结果，时间挪到
   《言叶之庭》约 2:00 的那座桥——不挪的话首帧是黑场，首屏截图会是一整块黑。
-- 主图 `review`、`transcribe`、`translate`、`export` 用上面第 5 条命令；双引擎 / 润色 / 断句重排用
-  `capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual" --size 1440x900`。
+- **片源要给浏览器放得出来的容器**。原素材 `测试用_言叶之庭.mkv` 是 MKV + FLAC，Chromium 打不开，
+  截出来顶栏会挂一枚「需代理」徽标；README 主图先无损转成 MP4 再拍：
+  ```bash
+  ffmpeg -i 测试用_言叶之庭.mkv -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 192k \
+    -movflags +faststart /tmp/kikusub-readme-demo.mp4
+  ```
+- 主图 `review`、`transcribe`、`translate`、`export` 用上面第 5 条命令，**加 `KIKUSUB_SHOT_MEDIA`
+  指向转好的 MP4**；双引擎 / 润色 / 断句重排用
+  `capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual" --size 1440x880`。
 - 设置页两张（引擎与模型 / AI 与技能折叠态）单独一个脚本——要等引擎注册表落地，否则会截到
-  半透明骨架屏：`bash tools/shots/capture_settings_pages.sh /tmp/readme-settings`
+  半透明骨架屏：`bash tools/shots/capture_settings_pages.sh docs/images/shots/baseline`
   （加 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 可在沙箱里跑）。
+- **视口用 1440×880，不要 1440×900**：macOS 可视工作区扣掉菜单栏与 Dock 后通常只有 885pt，
+  请求 900 会被系统压回 885，文件名却还写着 900——本项目踩过「文件名一直骗人」的亏。
+  设置页脚本已把默认值改成 `1440x880`，可用 `KIKUSUB_SETTINGS_SHOT_SIZE` 覆盖。
 - 落盘是 2× Retina PNG，转 JPG 用 `sips -Z 2000 -s format jpeg -s formatOptions 82`。
 
 ## AI 三页专用矩阵
@@ -72,9 +82,12 @@ node tools/shots/capture_ai_workbench.mjs --out /tmp/ai-current --no-sandbox
 node tools/shots/capture_ai_workbench.mjs --out /tmp/ai-current --compare docs/images/shots/baseline
 ```
 
-状态：`polish-dual`（A 12 / B 9 / AI 终稿）、`reshape-draft`（粘入 9 条新稿后的新旧对照）、
+状态：`polish-dual`（A 12 / B 9 / AI 终稿）、`polish-paste`（锁轴页展开粘贴框）、
+`reshape-draft`（粘入 9 条新稿后的新旧对照）、`reshape-paste`（重排页展开粘贴框）、
+`translate-proposal`（双语翻译已有译文提案）、`translate-paste`（翻译页展开粘贴框）、
 `dual`（双引擎差异表）。输出名 `<state>-<theme>-<1360x838>.png`，与 `capture_matrix.sh` 一致。
 夹具在系统临时目录生成，固定了提案与 B 版边车的时间戳，因此同一台机器上可逐像素复现。
+`translate-proposal` / `translate-paste` 需要 `media.zh-Hans.ai-translate.json` 夹具（脚本自动生成）。
 
 ## 断句重排分段计划回归
 
@@ -110,6 +123,38 @@ node tools/shots/verify_phase2_shell.mjs
 还断言它与红绿灯的**横向净空 ≥16px、中线差 ≤1px**，以及顶部 40px 是一整块底色
 （竖分割线从 y=40 起，不横穿红绿灯）。口径见
 `docs/contracts/review-console.md` §3.4.13。
+
+## 导入页结构回归（第二阶段 Batch 1）
+
+导入页在第二阶段回到「大拖放区是唯一主视觉」：第一阶段那张「继续核对 ⌘3 / 换片…」卡与
+12px 换片提示已整张删除，顺序恢复为 拖放区 → MKV/HEVC 代理说明 → 导出文件夹 → 最近打开。
+这个脚本把口径冻成 15 条断言（**不点任何会开原生对话框的按钮**）：
+
+```bash
+node tools/shots/verify_import_page.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_import_page.mjs
+```
+
+断言的是：有片时拖放区仍是 760 宽（不被收窄）、`.resume` / `.drop-hint` 不存在、
+三块顺序与分区标题、五个扩展名 chip、本页按钮无尾 `…`、列表 / 网格切换仍可用。
+截图落在系统临时目录的 `kikusub-import-verify/import.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.28，批次记录见 `docs/frontend-refactor-2026-11.md` §8.10。
+
+## AI 工作台控件可见性回归（第二阶段 Batch 2）
+
+亮色 `--well-line` 曾是 `transparent`，而 `--well #F2F2F7` 与工具栏 `--paper #F5F5F7` 只差两个
+色阶，于是所有 `<select>` / 数字框在灰底上隐身，只剩一枚三角。这个脚本**读计算样式**而不是
+看截图，把整类问题冻住（亮 / 暗各 11 条）：
+
+```bash
+node tools/shots/verify_ai_toolbar_controls.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_ai_toolbar_controls.mjs
+```
+
+断言：`--well-line` alpha ≥0.10；`--font-cue` 以 Hiragino Sans 起头；`.aiw-page` / `.aiw-head`
+与 `--canvas` 同色、`.aiw-cmd-row` 透明且只有 1px 发丝线；`.aiw-head` 里每个下拉 / 输入控件都
+有 ≥1px、alpha ≥0.10 的边线（或与真实台面 ≥0.025 明度差）；纸白键同样有边线；下拉框与按钮
+同为 28px；工具栏动作按钮无尾 `…`。批次记录见 `docs/frontend-refactor-2026-11.md` §8.11。
 
 ## 清理标点回归
 
@@ -334,6 +379,56 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_layout.
 > 应用没有缩放菜单，200% 的视口只有 680×419，布局必然塌。它**不是**验收条件，
 > 不要在脚本里加 `zoom200` / `KIKUSUB_ZOOM=2` 用例（只会稳定报假红）。
 > `KIKUSUB_ZOOM` 取证开关仍在，但要手动看一眼时才用。
+
+## 转写页执行栏三态（2026-11-26 真机实测收口）
+
+`capture_transcribe_states.mjs`。`capture_matrix.sh` 的 `transcribe` 只能截到「待开始」，
+而用户真机反馈的关键两态（**运行中的水平进度条**、**失败报错**）要真跑一次 Anime Whisper
+才出现。脚本用 `KIKUSUB_DEV_SEED` 的 `job` 字段灌一份任务快照（页面走的仍是真实的
+`TranscribeView` → `RunDock` 渲染），一次拍三张并断言：
+
+- 运行中：`.dock .meter` 存在、`aria-valuenow=47`、填充宽 / 轨宽 ≈ 47%（±2%）、
+  主按钮是「中途打断」；
+- 失败：`.status.err` 存在、失败原因可见、**没有**进度条（不假装还在跑）、主按钮仍可重跑；
+- 底部栏几何：色带（`.dock-wrap`）与内容区左右同宽（不是内缩贴片）、
+  贴住内容区底缘、内容列与 `.page-wrap` 同一左缘（±1px）。
+
+```bash
+node tools/shots/capture_transcribe_states.mjs --out /tmp/transcribe-states
+node tools/shots/capture_transcribe_states.mjs --theme dark --size 1440x960
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/capture_transcribe_states.mjs
+```
+
+## 朗读 ⚙ 面板在 348px 检查器里不溢出（2026-11-26 真机报障）
+
+`verify_tts_panel_fit.mjs`。真机有 OmniVoice 克隆音色时点开 `朗读 ⚙`，面板 363px 撑出
+348px 检查器右缘被裁掉（最右按钮只剩半截）。根因是 `.tts-panel` 的 `flex: 1 0 100%`
+遇上了 flex 项的自动最小尺寸（min-content），修复是 `min-width: 0` + 动作按钮拆两行。
+
+脚本在 1080×680（最小窗口）下断言：`scrollWidth <= clientWidth`（面板 / 检查器 / 滚动区
+三处）、面板内每个按钮与下拉框的 boundingBox 都在检查器左右缘内、
+「音色库 1」「管理」真的可见、「4.7s 参考 · 克隆 · 音量已对齐」没被截成「音量已…」。
+种子只往 `tts` 里灌一个假克隆音色——真建一个要装 3.3GB OmniVoice 权重。
+
+```bash
+node tools/shots/verify_tts_panel_fit.mjs
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_tts_panel_fit.mjs
+```
+
+## 核对台检查器取证（徽标 / 朗读面板 / 底部收尾区）
+
+`capture_review_inspector.mjs`。2026-11-26 真机报障的三件事同框取证：
+「质检待核 4」朱红微胶囊、展开的朗读 ⚙ 面板、被 `margin-top: auto` 钉在底缘的
+`.meta-foot` 收尾区（真空洞不再吊在最后一行下面）。
+
+断言：徽标显示 4 且颜色不是 `--ink-3` 灰、有底色、圆角 ≥ 7px（胶囊）；
+面板内按钮全在检查器内；检查器无横向溢出；收尾区存在且贴底（与滚动区底缘差 ≤ 18px）、
+漏检 / 低置信 chips 与「任务报告」入口都在收尾区里。
+
+```bash
+node tools/shots/capture_review_inspector.mjs --out /tmp/review-inspector
+node tools/shots/capture_review_inspector.mjs --theme dark --size 1360x838
+```
 
 ## 基线
 
