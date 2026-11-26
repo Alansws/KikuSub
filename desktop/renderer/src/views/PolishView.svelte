@@ -377,16 +377,16 @@
       >{aiBatchActive() ? '复制本批提示词' : ai.longMode ? '复制本段提示词' : '复制提示词'}</button>
       <span class="aiw-arrow" aria-hidden="true">→</span>
       <button
-        class="btn ghost"
+        class="btn"
         onclick={togglePaste}
         disabled={!app.cues.length}
         title={aiBatchActive() || ai.longMode ? '粘贴当前分段的模型回复' : '粘贴模型返回的 SRT，解析后走同一套三栏对照'}
       >{ai.pasteOpen ? '收起粘贴' : '粘贴回复'}</button>
       <button
-        class="btn ghost"
+        class="btn"
         onclick={importAiProposal}
         title="导入外部工具 / Agent 写好的建议文件"
-      >导入建议文件…</button>
+      >导入建议文件</button>
     {/snippet}
 
     {#snippet note()}
@@ -524,7 +524,7 @@
             : ai.longMode
               ? '解析并回填本段'
               : '解析成建议'}</button>
-        <button class="btn ghost" onclick={() => (ai.pasteOpen = false)}>取消</button>
+        <button class="btn" onclick={() => (ai.pasteOpen = false)}>取消</button>
         <div class="aiw-spacer"></div>
         <span class="aiw-hint">条数不符整段拒绝</span>
       </div>
@@ -639,7 +639,7 @@
               <div class="pin-cell">
                 {#if ai.proposal}
                   <button
-                    class="pin"
+                    class="aiw-pin"
                     class:on={row.accepted}
                     onclick={() => toggleAiAccept(row.i)}
                     title={row.accepted ? '已采纳（点击排除）' : '已排除（点击采纳）'}
@@ -724,7 +724,7 @@
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    padding: 6px 14px;
+    padding: 6px var(--sp-6);
     font-size: 12px;
     line-height: 1.5;
     border-bottom: 1px solid var(--separator-soft);
@@ -738,13 +738,15 @@
     color: var(--warn);
   }
 
+  /* 外部手动粘贴区：纸白台面上的一块独立输入段，
+     上沿靠说明 / 告警条的发丝线、下沿靠 --separator 收口，不再铺灰底。 */
   .paste {
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
-    padding: 10px 14px;
+    padding: var(--sp-3) var(--sp-6) 14px;
     border-bottom: 1px solid var(--separator);
-    background: var(--bg-inspector);
+    background: transparent;
     flex: 0 0 auto;
   }
   .paste-head {
@@ -758,20 +760,22 @@
   .paste-head b {
     color: var(--text);
   }
+  /* 粘贴框是「输入框」：台本纸底 + 1px 清晰边线，留白比消息流更宽。 */
   .paste-box {
     width: 100%;
-    min-height: 118px;
+    min-height: 132px;
     max-height: 34vh;
     resize: vertical;
     font-family: var(--font-mono);
     font-size: 12px;
-    line-height: 1.55;
-    padding: var(--sp-2) 10px;
+    line-height: 1.6;
+    padding: 10px var(--sp-3);
     border-radius: var(--rad-card);
     border: 1px solid var(--well-line);
-    background: var(--well);
+    background: var(--well-focus);
     color: var(--text);
     outline: none;
+    transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
   }
   .paste-box:focus {
     border-color: var(--accent);
@@ -782,6 +786,10 @@
     align-items: center;
     gap: var(--sp-2);
     flex-wrap: wrap;
+    min-height: 28px;
+  }
+  .paste-actions .aiw-hint {
+    color: var(--text-3);
   }
 
   .aiw-cols,
@@ -819,15 +827,20 @@
   .aiw-row.off {
     opacity: 0.42;
   }
+  /* 终稿是这一页的「台本纸」：常态与台面同色，有改动才浮出一层
+     极淡蓝并加 1px accent-line 勾边；不再是整格一块饱和蓝。 */
   .final-cell {
-    border-radius: 4px;
-    padding: 1px var(--sp-1);
-    margin: -1px -4px;
+    border-radius: 5px;
+    padding: 2px 6px;
+    margin: -2px -6px;
     cursor: text;
-    min-height: 18px;
+    min-height: 20px;
+    border: 1px solid transparent;
+    transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
   }
   .aiw-row.changed .final-cell {
     background: var(--accent-soft);
+    border-color: var(--accent-line);
   }
   .final-cell textarea {
     width: 100%;
@@ -852,14 +865,18 @@
     color: var(--text-2);
     white-space: nowrap;
   }
+  /* 待生成不是「一个虚线空框」，而是一句很轻的占位：
+     没有边框，只有一个比正文更淡的短横。 */
   .pending-cell {
-    border: 1px dashed var(--separator);
-    border-radius: 4px;
     min-height: 20px;
     display: flex;
     align-items: center;
     padding: 0 6px;
     margin: -1px 0;
+  }
+  .pending-cell .aiw-placeholder {
+    color: color-mix(in srgb, var(--text-3) 46%, transparent);
+    letter-spacing: 0.08em;
   }
   .note-inline {
     display: block;
@@ -875,25 +892,9 @@
     place-items: center;
     min-height: 20px;
   }
-  .pin {
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    border: 1px solid var(--separator);
-    background: transparent;
-    color: var(--text-3);
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-  }
-  .pin.on {
-    border-color: transparent;
-    background: var(--accent);
-    color: var(--on-accent);
-  }
   .pin-slot {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 20px;
   }
   .empty-actions {
     display: flex;

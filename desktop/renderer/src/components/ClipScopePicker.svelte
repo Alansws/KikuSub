@@ -181,8 +181,10 @@
     border-radius: 6px;
     background: var(--well);
   }
+  /* 紧凑版是页内工具栏的一格：外圈不再画框，但**里面的 select 必须自带边线**，
+     这一点由 .clip-select 的 --well-line 负责。 */
   .clip-scope.compact {
-    padding: 1px var(--sp-1);
+    padding: 0;
     border-color: transparent;
     background: transparent;
   }
@@ -198,12 +200,18 @@
   .clip-select {
     font: inherit;
     font-size: 12px;
+    height: 28px;
     max-width: 260px;
-    padding: 2px 5px;
-    border-radius: 4px;
+    padding: 0 var(--sp-2);
+    border-radius: var(--rad-control);
     border: 1px solid var(--well-line);
     background: var(--well);
     color: var(--text);
+    transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  }
+  .clip-select:hover {
+    border-color: var(--btn-line-hover);
+    background: var(--well-hover);
   }
   .clip-custom {
     display: inline-flex;
@@ -211,11 +219,12 @@
     gap: 3px;
   }
   .clip-time {
-    width: 62px;
+    width: 66px;
+    height: 28px;
     font: inherit;
     font-size: 12px;
-    padding: 2px 5px;
-    border-radius: 4px;
+    padding: 0 7px;
+    border-radius: var(--rad-control);
     border: 1px solid var(--well-line);
     background: var(--well);
     color: var(--text);

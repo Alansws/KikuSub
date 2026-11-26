@@ -50,7 +50,7 @@
           onSaveAs();
         }}
         disabled={saving}
-      >另存…</button>
+      >另存</button>
       <button
         class="danger"
         role="menuitem"

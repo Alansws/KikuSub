@@ -1256,7 +1256,7 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--sp-3);
-    margin: 0 var(--sp-4) var(--sp-2);
+    margin: 0 24px var(--sp-2);
     padding: var(--sp-2) var(--sp-3);
     border: 1px solid var(--accent-line);
     border-radius: var(--r-2);
@@ -1276,7 +1276,7 @@
     display: flex;
     align-items: flex-start;
     gap: 6px;
-    padding: 6px 14px;
+    padding: 6px var(--sp-6);
     font-size: 12px;
     line-height: 1.5;
     border-bottom: 1px solid var(--separator-soft);
@@ -1290,7 +1290,7 @@
     align-items: center;
     background: var(--warn-soft);
     color: var(--warn);
-    padding: var(--sp-2) 14px;
+    padding: var(--sp-2) 24px;
   }
   .note-text {
     flex: 1;
@@ -1302,12 +1302,14 @@
     gap: 6px;
   }
 
+  /* 页内工作区整体落在纸白台面上：左边步骤卡是 well，右边预览是画布，
+     两条分栏只靠一条发丝线——没有 --paper 灰带。 */
   .body {
     flex: 1;
     min-height: 0;
     display: grid;
     grid-template-columns: minmax(350px, 40%) minmax(0, 1fr);
-    background: var(--paper);
+    background: var(--canvas);
   }
   .side {
     min-height: 0;
@@ -1315,7 +1317,7 @@
     flex-direction: column;
     align-items: stretch;
     gap: var(--sp-2);
-    padding: var(--sp-3);
+    padding: var(--sp-3) var(--sp-6) 14px;
     border-right: 1px solid var(--separator);
     background: var(--canvas);
     overflow-y: auto;
@@ -1515,14 +1517,14 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background: var(--paper);
+    background: var(--canvas);
   }
   .preview-head {
     flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    padding: 9px 14px 7px;
+    padding: 10px var(--sp-6) var(--sp-2);
     border-bottom: 1px solid var(--separator-soft);
     flex-wrap: wrap;
     min-width: 0;
@@ -1706,6 +1708,7 @@
       border-right: 0;
       border-bottom: 1px solid var(--separator);
       min-height: 420px;
+      padding: var(--sp-3) 14px 14px;
     }
     .preview {
       min-height: 460px;

@@ -58,7 +58,7 @@
   </span>
   {#if !hasB && onimport}
     <button class="aiw-link" onclick={onimport} title="导入一份已经做好的 SRT / VTT 作为第二版">
-      导入 B…
+      导入 B
     </button>
   {/if}
 </div>

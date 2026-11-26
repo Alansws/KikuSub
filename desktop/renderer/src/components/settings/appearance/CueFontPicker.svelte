@@ -18,7 +18,7 @@
 
   /** 示例行必须按「选项自己的字体」渲染，不能读当前偏好。 */
   function fontOf(id: CueFontId): string {
-    return id === 'mincho' ? 'var(--font-cue-mincho)' : 'var(--font-sans)';
+    return id === 'mincho' ? 'var(--font-cue-mincho)' : 'var(--font-cue-sans)';
   }
 </script>
 

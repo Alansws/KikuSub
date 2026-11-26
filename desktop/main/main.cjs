@@ -98,6 +98,18 @@ const SHOT_PATH =
 const SHOT_DELAY_MS = Number(process.env.KIKUSUB_SHOT_DELAY || 5500);
 // 开发截图用：KIKUSUB_WIN_SIZE=1440x900 覆盖默认窗口尺寸，方便按设计稿视口核对。
 const WIN_SIZE = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.KIKUSUB_WIN_SIZE || '');
+/**
+ * 截图取证的窗口尺寸可以**低于生产最小窗宽**（2026-11-26 Batch 2）。
+ *
+ * 生产窗口最小 1080×680（DESIGN.md / lifecycle §3.7）；紧凑模式媒体查询是
+ * `max-width: 900px`，若截图也受 1080 下限约束，`verify_phase2_shell.mjs`
+ * 的 880px 用例永远只会量到 1080，断言「侧栏 52px」必红。生产下限不改，
+ * 只在 `--screenshot`（透明窗口、show:false、用户看不见）路径里放宽到
+ * 请求尺寸；人类窗口与打包版仍然 1080×680 起。
+ */
+const SHOT_SIZE = IS_DEV && SHOT_PATH && WIN_SIZE
+  ? { width: Number(WIN_SIZE[1]), height: Number(WIN_SIZE[2]) }
+  : null;
 
 // 无窗口铁律（AGENTS.md §0.5）：开发模式默认不弹窗，截图模式永不弹窗。
 // 判定本身是纯函数（desktop/main/windowmode.cjs），这里只负责按结果执行。
@@ -914,8 +926,8 @@ function createWindow() {
   win = new BrowserWindow({
     width: IS_DEV && WIN_SIZE ? Number(WIN_SIZE[1]) : 1360,
     height: IS_DEV && WIN_SIZE ? Number(WIN_SIZE[2]) : 838,
-    minWidth: 1080,
-    minHeight: 680,
+    minWidth: SHOT_SIZE ? Math.min(1080, SHOT_SIZE.width) : 1080,
+    minHeight: SHOT_SIZE ? Math.min(680, SHOT_SIZE.height) : 680,
     show: false,
     // 半透明 + vibrancy：侧栏的 backdrop-filter 才有东西可透
     backgroundColor: '#00000000',

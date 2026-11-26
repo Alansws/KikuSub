@@ -28,8 +28,14 @@
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Hiragino Sans GB', 'Hiragino Sans', 'Noto Sans SC', sans-serif;
   --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* 字幕正文的字体角色：只有「字幕字体」偏好会换它 */
-  --font-cue: var(--font-sans);
+  /* 字幕正文的字体角色：只有「字幕字体」偏好会换它。
+     2026-11-26 Batch 2：sans 态也把日文字体排在 PingFang 前面——
+     `PingFang SC` 的假名与部分汉字是中文骨架（「直」「骨」「步」都会歪），
+     而 Hiragino 才是这条产品线里日文台本的本字面。中文仍由后面的
+     `PingFang SC` 兜住，不需要按语种切字体。 */
+  --font-cue-sans: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'SF Pro Text',
+    'PingFang SC', sans-serif;
+  --font-cue: var(--font-cue-sans);
   /* 明朝字体栈单独一个与当前偏好无关的别名：设置页缩略图要在「当前是黑体」时
      也能渲染出明朝那一张，不能读当前的 --font-cue */
   --font-cue-mincho: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Songti SC', serif;
@@ -106,14 +112,17 @@
   /* ---------- 表面：纸台面 / 窗口铬件 / 凹陷填充 ----------
      2026-11-26（第二次视觉重塑）：把「灰底贴白框」整条语法翻过来。
 
-       台面（--canvas）   = 干净高明度的纸白。页面内容直接落在它上面。
-       铬件（--paper）    = 侧栏 / 标题栏 / 底栏 / 时间轴坞，一档中性浅灰。
+       台面（--canvas）   = 干净高明度的纸白。页面内容与**页内工具栏**都直接落在它上面。
+       铬件（--paper）    = 只给窗口外壳：侧栏 / 标题栏 / 底栏 / 时间轴坞。
        检查器             = 两档之间的一条窄带（--bg-inspector），让三块并排时能分区。
-       凹陷填充（--well） = 未选中的选项块 / 信息条 / 输入区：**无边框**的极淡中性灰。
+       凹陷填充（--well） = 未选中的选项块 / 信息条 / 输入区：极淡中性灰；
+                            框形凹陷（输入 / 下拉）另加 1px --well-line。
        台本纸（--raise）  = 真正的纸：台本表、输入框、浮层、面板。
 
      规则：白底只允许出现在「台本纸 / 浮层 / 输入框」三类对象上；页内分区一律是
-     「标题 + 发丝线」或「凹陷填充」，全站不再有白框叠白框、也没有灰底贴白框。 */
+     「标题 + 发丝线」或「凹陷填充」。**页内命令栏不是铬件**：它落在 --canvas 上、
+     只用 1px 发丝线分隔，不许再把 --paper 铺成第二条灰带（灰底 + 白键的割裂感
+     就是从这里来的）。 */
   --canvas: #ffffff;
   /* 铬件去冷青：旧的 #f0f2f4 是一条偏蓝的工业灰，和蓝铅笔叠在一起会互相污染。
      Apple 的纯中性浅灰 #f5f5f7 只差一个色相（中性），但整页立刻从「冷灰控制台」
@@ -131,7 +140,18 @@
   --well: #f2f2f7;
   --well-hover: #eaeaef;
   --well-focus: #ffffff;
-  --well-line: transparent;
+  /* 框形凹陷的边线。**不许再是 transparent**（2026-11-26 Batch 2）：
+     亮色 --well (#F2F2F7) 与 --paper (#F5F5F7) 只差 2 个色阶，边线一透明，
+     `<select>` / 数字输入框在工具栏上就只剩一枚黑三角。0.14 黑是「看得出形状、
+     又不像描边」的最低档；暗色同步取 0.13 白，暗槽 #121214 才能在 #161618 /
+     #1D1D1F 上勾出轮廓。 */
+  --well-line: rgba(0, 0, 0, 0.14);
+  /* 普通次级按钮（.btn）的「键」：台面上一块纸白 + 清晰细边。
+     键底、悬停底与边线各自成令牌，组件不再自己挑 --raise / --line。 */
+  --btn-bg: #ffffff;
+  --btn-bg-hover: #f7f7f9;
+  --btn-line: var(--well-line);
+  --btn-line-hover: rgba(0, 0, 0, 0.24);
   /* 浅色里的「抬升层」就是纸本身：按钮 / 浮层 / 分段拇指都读这一档。
      暗色才有真正的抬升色（#313135），因此这两个令牌必须两套都声明。 */
   --raise-hover: #ffffff;
@@ -310,7 +330,14 @@ html[data-theme='dark'] {
   --well: #121214;
   --well-hover: #1a1a1d;
   --well-focus: #1a1a1d;
-  --well-line: rgba(255, 255, 255, 0.07);
+  /* 暗槽边线：0.07 白在炭黑上只有「一层雾」，看不出控件形状。
+     0.13 白与 --line 同档，槽口干脆，又不会亮成描边。 */
+  --well-line: rgba(255, 255, 255, 0.13);
+  /* 次级按钮在暗色是真正的抬升层（#313135），边线走同一档 0.13 白。 */
+  --btn-bg: var(--raise);
+  --btn-bg-hover: var(--raise-hover);
+  --btn-line: var(--well-line);
+  --btn-line-hover: rgba(255, 255, 255, 0.24);
 
   /* ---------- Studio 皇家钴蓝 ----------
      暗色主填充 #3467EB（白字 4.90:1），文字态 #6B96FF（铬件 5.96:1）。
@@ -545,8 +572,10 @@ body {
 .btn {
   appearance: none;
   /* 按钮是**抬升层**：暗色 #313135 之上再加一道极淡顶边高光，
-     于是它在炭黑板面里读成「凸起的一颗键」，而不是一块灰贴纸。 */
-  border: 1px solid var(--line);
+     于是它在炭黑板面里读成「凸起的一颗键」，而不是一块灰贴纸。
+     亮色里它是纸白 + 0.14 黑细边：白键落在白台面上仍有形状，
+     不再需要灰底衬托（那正是「灰底白框」的来源）。 */
+  border: 1px solid var(--btn-line);
   height: var(--ctl-h);
   padding: 0 10px;
   border-radius: var(--rad-control);
@@ -556,7 +585,7 @@ body {
   align-items: center;
   gap: 6px;
   cursor: default;
-  background: var(--raise);
+  background: var(--btn-bg);
   box-shadow: var(--raise-bevel);
   color: var(--text);
   transition:
@@ -566,8 +595,8 @@ body {
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
-  background: var(--raise-hover);
-  border-color: var(--accent-line);
+  background: var(--btn-bg-hover);
+  border-color: var(--btn-line-hover);
 }
 .btn:active:not(:disabled) {
   transform: translateY(0.5px);
@@ -713,9 +742,9 @@ body {
 .field {
   height: var(--ctl-h-lg);
   border-radius: var(--rad-control);
-  /* 输入区是**下沉的暗槽**：暗色 #121214 + 一圈 7% 白的极细边（FCP 的凹槽
-     就是这个关系——比周围更黑、靠一道细边勾出形状）。浅色 --well-line 是
-     transparent，落在纸上仍然是一块无边框的淡灰。 */
+  /* 输入区是**下沉的暗槽**：暗色 #121214 + 0.13 白细边（FCP 的凹槽就是这个
+     关系——比周围更黑、靠一道细边勾出形状）。浅色是 #F2F2F7 + 0.14 黑细边，
+     落在纸白台面上才看得见「这里可以输入」，而不是一块与背景同色的灰。 */
   border: 1px solid var(--well-line);
   background: var(--well);
   display: flex;
