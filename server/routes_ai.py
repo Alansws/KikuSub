@@ -23,10 +23,12 @@ from pydantic import BaseModel, Field
 
 from core import ai_arbitrate
 from core import ai_client
+from core import ai_gap
 from core import ai_local_model
 from core import ai_polish
 from core import ai_proposal as proposals
 from core import ai_translate
+from core import ai_translate_cue
 from core import prompts as prompt_store
 from core import settings as settings_store
 from core.subtitles import cues_to_srt
@@ -85,6 +87,13 @@ class ArbitrateRequest(BaseModel):
     hint: str = Field(default="", max_length=ai_arbitrate.MAX_HINT_CHARS)
     # 多轮追问记录；角色只认 user / assistant，具体轮数与字符预算由 core 裁剪。
     history: list[ArbitrateHistoryItem] = Field(default_factory=list)
+
+
+class TranslateCueRequest(BaseModel):
+    """单句补译：索引 + 目标语种；材料（原文 / 上下文 / 已有译文）由服务端取。"""
+
+    index: int = Field(ge=0)
+    lang: str = ""
 
 
 class AiJobRequest(BaseModel):
@@ -481,6 +490,102 @@ def arbitrate_cue(payload: ArbitrateRequest, request: Request) -> dict:
     }
 
 
+@router.post("/api/ai/translate-cue")
+def translate_cue(payload: TranslateCueRequest, request: Request, session: Session = Depends(get_session)) -> dict:
+    """把核对台第 ``index`` 条原文交给**单句判定模型**翻一句，只回文本。
+
+    与 ``/api/ai/arbitrate`` 同一约束：不落盘、不改字幕、不进历史。用户在检查器里
+    看一眼（可改）点「采纳」，才走既有的 ``updateTranslation()`` 压一步历史。
+
+    刻意默认走本地 LM Studio（``ai_arbitrate_base_url``）：这类片源云端模型会拒，
+    而本地那份已经为逐句复核加载着，不存在额外下载 / 计费。
+    """
+    settings = _ai_settings(request)
+    if not settings.get("ai_enabled"):
+        raise HTTPException(status_code=503, detail="AI 优化未启用：设置 → 实验功能里打开它")
+    cues = session.review_cues
+    if not 0 <= payload.index < len(cues):
+        raise HTTPException(status_code=404, detail=f"第 {payload.index + 1} 条不存在")
+    text = cues[payload.index].text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="这一句原文是空的，没有可翻译的内容")
+
+    lang = (payload.lang or "").strip()
+    if not lang:
+        lang = sorted(session.translations)[0] if session.translations else "zh-Hans"
+    track = session.translations.get(lang)
+
+    base_url, model, override = _arbitrate_target(settings)
+    key = (
+        request.headers.get("x-ai-arbitrate-key" if override else "x-ai-key") or ""
+    ).strip()
+    if override and not key and not ai_client.is_local_url(base_url):
+        key = (request.headers.get("x-ai-key") or "").strip()
+    config = ai_client.AiConfig(
+        base_url=base_url,
+        model=model,
+        api_key=key,
+        timeout_s=120.0,
+        allow_no_key=ai_client.is_local_url(base_url),
+    )
+    if not key and not config.allow_no_key:
+        raise HTTPException(
+            status_code=401,
+            detail="单句判定模型还没有配置 API Key" if override else "还没有配置 API Key",
+        )
+    try:
+        config.ensure_ready()
+    except ai_client.AiError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+
+    # 上下文只给这一句的邻居：前面的取最近 4 条，后面的取最近 4 条；已有译文当参考。
+    radius = ai_translate_cue.MAX_CONTEXT_CUES
+    start = max(0, payload.index - radius)
+    stop = min(len(cues), payload.index + radius + 1)
+    before = [cues[i].text for i in range(start, payload.index)]
+    after = [cues[i].text for i in range(payload.index + 1, stop)]
+    refs = []
+    if track is not None:
+        for i in range(start, stop):
+            if i == payload.index:
+                continue
+            dst = track.texts[i].strip() if i < len(track.texts) else ""
+            if dst:
+                refs.append({"src": cues[i].text, "dst": dst})
+
+    started = time.perf_counter()
+    try:
+        result = ai_translate_cue.translate_cue(
+            text,
+            config,
+            dst_lang=lang,
+            before=before,
+            after=after,
+            refs=refs,
+            # 与单句判定同一条 Qwen3 策略：不加 /no_think 时答案全进
+            # reasoning_content，content 为空，重试两次就报 502。
+            no_think="qwen" in config.model.lower() or "think" in config.model.lower(),
+        )
+    except ai_client.AiError as exc:
+        detail = (
+            f"模型服务拒绝鉴权（{exc.status}）：检查 API Key"
+            if exc.status in (401, 403)
+            else exc.message
+        )
+        raise HTTPException(
+            status_code=424 if exc.status in (401, 403) else 502, detail=detail
+        ) from exc
+    except ai_translate_cue.CueTranslateError as exc:
+        raise HTTPException(status_code=502, detail=f"模型返回格式不正确：{exc}") from exc
+
+    return {
+        **result,
+        "lang": lang,
+        "model": config.model,
+        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+    }
+
+
 @router.post("/api/ai/jobs", status_code=201)
 async def create_ai_job(
     payload: AiJobRequest,
@@ -587,6 +692,7 @@ def get_manual_prompt(
     to_index: int | None = None,
     range_from: int | None = None,
     range_to: int | None = None,
+    indices: str = "",
     session: Session = Depends(get_session),
 ) -> dict:
     """「一键复制提示词」：把当前字幕整成 SRT 塞进所选模板，供用户粘到任意聊天窗。
@@ -614,6 +720,66 @@ def get_manual_prompt(
         raise HTTPException(status_code=422, detail=f"片段范围不合法：第 {start}–{end} 条")
     full = (first, last) == (1, total)
     content_full = (start, end) == (first, last)
+
+    # 补译批次（2026-11-25）：只复制「待译」的 N 条，而不是整段。
+    # 序号用全片条号，回填才能按条号落位；模板仍然用用户当前选中的那一个。
+    try:
+        sparse = ai_gap.normalize_indices(indices, total) if (indices or "").strip() else []
+    except ai_gap.GapError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    if sparse:
+        if kind != "translate":
+            raise HTTPException(status_code=422, detail="补译批次只支持翻译；润色请走整段")
+        if any(index < first or index > last for index in sparse):
+            raise HTTPException(
+                status_code=422,
+                detail=f"补译条号超出当前处理范围（第 {first}–{last} 条）",
+            )
+        track = session.translations.get(lang)
+        track_texts = (
+            list(track.texts)
+            if track is not None and len(track.texts) == total
+            else None
+        )
+        scope_label = (
+            f"处理范围第 {first}–{last} 条，全片共 {total} 条"
+            if not full
+            else f"全片共 {total} 条"
+        )
+        gap_srt = ai_gap.gap_srt(cues, sparse)
+        hint = ai_gap.gap_instructions(total, sparse, scope_label)
+        prompt, template = prompt_store.render_prompt(
+            gap_srt,
+            ai_translate.lang_name(lang),
+            template_id=template_id or None,
+            category=prompt_store.CATEGORY_TRANSLATE,
+            range_text=hint,
+            settings_path=settings_path(request),
+        )
+        if template is None:
+            raise HTTPException(status_code=500, detail="提示词库为空")
+        context = ai_gap.context_block(cues, track_texts, sparse)
+        if context:
+            prompt = prompt.rstrip() + "\n\n" + context
+        return {
+            "prompt": prompt,
+            "count": len(sparse),
+            "total": total,
+            "lang": lang,
+            "chars": len(prompt),
+            "mode": "single",
+            "from": sparse[0],
+            "to": sparse[-1],
+            "range_from": first,
+            "range_to": last,
+            "indices": sparse,
+            "sparse": True,
+            "digest": ai_gap.digest_of(cues, sparse),
+            "template_id": template["id"],
+            "template_name": template["name"],
+            "category": prompt_store.CATEGORY_TRANSLATE,
+        }
+
     if kind == "polish":
         # 润色也支持「复制提示词 → 网页版模型 → 粘回来」；不绑定 AI 优化。
         indices = list(range(start - 1, end))
@@ -759,6 +925,51 @@ def proposal_from_pasted_srt(
         "range_to": last,
         "expected": end - start + 1,
         "alignment": alignment,
+    }
+
+
+class GapFromSrtRequest(BaseModel):
+    """补译回填的解析请求：条号集合 + 粘贴内容 +（可选）复制时的源指纹。"""
+
+    indices: list[int] = Field(min_length=1)
+    text: str = Field(min_length=1)
+    digest: str = ""
+
+
+@router.post("/api/ai/gap-from-srt")
+def gap_from_pasted_srt(
+    payload: GapFromSrtRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """把补译回复解析成 ``[{i, before, after}]``（**只解析，不落盘、不改字幕**）。
+
+    与 ``/api/ai/from-srt`` 的区别：这里按序号落位、条数严格 1:1，不做时间轴对齐。
+    时间轴对齐是「整段翻译」的容错通道，但它会猜槽位；补译的每一条都对应一个
+    明确的待译下标，猜错就会把 A 句译文写进 B 句。
+    """
+    cues = session.review_cues
+    if not cues:
+        raise HTTPException(status_code=409, detail="当前没有字幕")
+    total = len(cues)
+    try:
+        indices = ai_gap.normalize_indices(payload.indices, total)
+        if not indices:
+            raise ai_gap.GapError("补译批次是空的：先点「复制待译」再粘贴回复")
+        digest = ai_gap.digest_of(cues, indices)
+        if payload.digest and payload.digest != digest:
+            raise ai_gap.GapError(
+                "原文在复制之后改过了：请重新复制提示词，再把结果粘回来",
+                status=409,
+            )
+        items, warnings = ai_gap.parse_gap_reply(payload.text, cues, indices)
+    except ai_gap.GapError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "items": items,
+        "indices": indices,
+        "count": len(items),
+        "digest": digest,
+        "warnings": warnings,
     }
 
 

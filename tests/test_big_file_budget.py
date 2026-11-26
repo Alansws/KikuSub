@@ -40,9 +40,33 @@ SRC = REPO_ROOT / "desktop" / "renderer" / "src"
 #              ReviewView 3787 → 3748；再用腾出的行数接线「默认打开态」
 #              （`lib/reviewStart.ts`：长片 50× 视野 + 第 1 条 + 有译文轨默认双语）
 #              与字幕轨道 17 → 24px（连线后 3780）。净预算 3787 → 3780。
+# 2026-11-24（界面原生化 Phase 0）：核对台按「纯搬运、视觉零变化」拆出三个组件——
+#              走带 + 缩放行 → components/review/ReviewTransport.svelte，
+#              视频监看 → ReviewStage.svelte，波形/字幕轨道 → ReviewWaveTrack.svelte；
+#              同时删掉已被 SelectionBar 接管、在本文件里早已没有使用者的
+#              .sel-bar / .sel-info / .spin 死样式。每一步都用无窗口截图做像素比对
+#              （0.0000% 差异）后才继续。3780 → 3158。字幕表格与查找栏是 Phase 2
+#              真正要改列的地方，等那时连同纯逻辑一起抽（红线 11 的「先抽再改」）。
+# 2026-11-24（Phase 2）：先把表格的虚拟列表纯逻辑抽到 lib/reviewTable.ts（单独 commit，
+#              含 16 条单测，顺手修了 NaN 输入会算出空窗口的 bug），再把整块表格
+#              （表头 + 虚拟列表 + 查找栏）搬到 components/review/ReviewTable.svelte。
+#              两步都逐像素比对过（0.0000% 差异）。3780 → 3158 → 2644。
+# 2026-11-24（Phase 2 暗底舞台）：加「可拖高的监看区」时先抽 lib/stagePrefs.ts
+#              （高度偏好 + 上限 + 状态条文案，三条纯函数），再接线的；净 +30 行
+#              是舞台状态条与分隔条接线本身，预算按实测值 2645 记。
+# 2026-11-24（当日收口）：撤销表格「状态」列与舞台状态条，ReviewView 2645 → 2619；
+#              lib/reviewRowStatus.ts 与其 18 条单测一并删除（不留半套实现）。
+# 2026-11-25（播放头边缘自动滚动）：擦洗状态机 + 边缘推进器整段搬进 lib/scrub.ts
+#              （零运行时相对导入，`node --test` 直接加载），ReviewView 2619 → 2586；
+#              接线只多出 scrub/scrubPan 两个构造块，净减 33 行，预算随实测值下调。
+# 2026-11-25（章节端点拖动）：给 ChapterTrack 接 `onview` 要占一行，先把两处重复的
+#              `xPlayhead()` 换成 `xOf(play.time)` 内联（删 3 行），2586 → 2583。
+# 2026-11-25（译文轨三态 / 单句补译）：stale 判定搬进 `lib/translationStatus.ts`、
+#              「只动句读」的本地对齐搬进 `lib/translationBase.ts`，store 只留两行接线；
+#              3255 → 3252（下调，不是放宽）。
 BUDGET = {
-    "lib/store.svelte.ts": 3255,
-    "views/ReviewView.svelte": 3780,
+    "lib/store.svelte.ts": 3252,
+    "views/ReviewView.svelte": 2583,
 }
 
 

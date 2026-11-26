@@ -20,7 +20,7 @@ from core import export_naming
 from core import settings as settings_store
 from core.audit import load_audit_payload
 from core.clip_range import clip_tag, clip_window, safe_label, select_cues_in_range, shift_cues_to_clip
-from core.i18n import bilingual_entries, target_cues
+from core.i18n import bilingual_entries, merge_translation_texts, target_cues
 from core.subtitles import (
     SubtitleCue,
     cues_from_subtitle_file,
@@ -147,7 +147,12 @@ def _cache_disk_qa(session: Session) -> None:
         session.set_qa_payload(load_audit_payload(session.media_path))
 
 
-def _snapshot(session: Session, *, include_client_state: bool = False) -> dict:
+def _snapshot(
+    session: Session,
+    *,
+    include_client_state: bool = False,
+    rebased: dict[str, list[int]] | None = None,
+) -> dict:
     data = {
         "cues": _to_dicts(session.review_cues),
         "count": len(session.review_cues),
@@ -174,6 +179,9 @@ def _snapshot(session: Session, *, include_client_state: bool = False) -> dict:
         # 不回传，否则会用稍旧的导出设置覆盖用户刚在本地改好的值。
         data["export_ui"] = dict(session.export_ui)
         data["ai_draft"] = dict(session.ai_draft)
+    if rebased:
+        # 「只动句读」的改动被静默对齐的下标：渲染层只就地改本地 base。
+        data["rebased"] = {lang: list(idx) for lang, idx in rebased.items()}
     return data
 
 
@@ -254,8 +262,8 @@ def replace_cues(payload: CueList, session: Session = Depends(get_session)) -> d
         _validate(item.start, item.end)
         cues.append(SubtitleCue(start=item.start, end=item.end, text=item.text))
     label = (payload.label or "").strip() or f"替换全部字幕（{len(cues)} 条）"
-    session.replace_review(cues, label=label)
-    return _snapshot(session)
+    rebased = session.replace_review(cues, label=label)
+    return _snapshot(session, rebased=rebased)
 
 
 @router.post("/api/cues/import")
@@ -291,7 +299,7 @@ def import_cues(
             log.info("导入双语字幕：按行拆分 | file=%s | cues=%d", path.name, len(cues))
     label = f"导入字幕（{len(cues)} 条）"
     _cache_disk_qa(session)
-    session.replace_review(
+    rebased = session.replace_review(
         cues,
         label=label,
         source={
@@ -316,7 +324,7 @@ def import_cues(
             session.drop_translation(lang, record=False)
             log.info("导入字幕时丢弃错位的译文轨 | lang=%s", lang)
     session.record(label)
-    return {**_snapshot(session), "source": str(path)}
+    return {**_snapshot(session, rebased=rebased), "source": str(path)}
 
 
 # ---------------------------------------------------------------------------
@@ -422,9 +430,16 @@ def restore_draft(request: Request, session: Session = Depends(get_session)) -> 
                         len(cues),
                     )
 
+    # 上一版留下的「只动了标点」的 base 在这里一次清掉：用户重开工程时不该再看到
+    # 一整列其实没问题的「原文已改」。
+    rebased = session.rebase_translation_base()
     # 字幕 + 被丢弃的错位轨 + 恢复的译文轨都落定后，再压唯一的一步历史。
     session.record("恢复暂存草稿")
-    return {**_snapshot(session), "source": str(path), "translations": sorted(restored_langs)}
+    return {
+        **_snapshot(session, rebased=rebased),
+        "source": str(path),
+        "translations": sorted(restored_langs),
+    }
 
 
 @router.post("/api/cues/replace-all")
@@ -466,15 +481,37 @@ def replace_all(
                 detail=f"译文条数不符：{len(texts)} 条译文 / 轨道 {expected} 条",
             )
 
-    session.ensure_baseline()
-    if new_cues is not None:
-        session.replace_review(new_cues, label=label, record=False)
     if texts is not None and track is not None:
+        source_len = len(new_cues) if new_cues is not None else len(session.review_cues)
+        if len(track.texts) != source_len:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{lang} 译文轨与原文条数不一致（{len(track.texts)} / {source_len}）；"
+                    "不能在同一步里改条数并写译文"
+                ),
+            )
+
+    session.ensure_baseline()
+    rebased: dict[str, list[int]] = {}
+    if new_cues is not None:
+        rebased = session.replace_review(new_cues, label=label, record=False)
+    if texts is not None and track is not None:
+        # 整轨替换的每一格都是最终值（允许清空），但 base 只对**真正改过**的条目
+        # 重设：批量清标点 / 查找替换不该顺手把整条轨的「原文已改」标记抹掉。
+        merged_texts, merged_base, _changed, _kept = merge_translation_texts(
+            [cue.text for cue in session.review_cues],
+            track.texts,
+            track.base,
+            {index: text for index, text in enumerate(texts)},
+            skip_empty=False,
+            sync_unchanged_base=False,
+        )
         session.set_translation(
             TranslationTrack(
                 lang=lang,
-                texts=texts,
-                base=[cue.text for cue in session.review_cues],
+                texts=merged_texts,
+                base=merged_base,
                 created_at=track.created_at,
                 entry=track.entry,
             ),
@@ -483,7 +520,7 @@ def replace_all(
             remember=False,
         )
     session.record(label)
-    return _snapshot(session)
+    return _snapshot(session, rebased=rebased)
 
 
 # ---------------------------------------------------------------------------
@@ -598,8 +635,8 @@ def patch_cue(index: int, payload: CuePatch, session: Session = Depends(get_sess
     if start != current.start or end != current.end:
         parts.append("时间")
     label = (payload.label or "").strip()[:120] or f"修改第 {index + 1} 条{'与'.join(parts)}"
-    session.update_cue(index, start, end, text, label=label)
-    return _snapshot(session)
+    rebased = session.update_cue(index, start, end, text, label=label) or {}
+    return _snapshot(session, rebased=rebased)
 
 
 @router.delete("/api/cues/{index}")

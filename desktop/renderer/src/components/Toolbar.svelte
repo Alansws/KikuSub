@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import EngineSwitch from './EngineSwitch.svelte';
+  import SidebarToggle from './SidebarToggle.svelte';
+  import { sidebarPrefs } from '../lib/sidebarPrefs.svelte';
   import PunctCleanPanel from './PunctCleanPanel.svelte';
   import {
     app,
@@ -120,7 +122,9 @@
       case 'transcribe':
         return app.job?.status === 'running'
           ? `转写中 ${app.job.percent}%`
-          : `${app.cues.length} 条 · 待转写`;
+          : app.cues.length
+            ? `${app.cues.length} 条主稿`
+            : '待转写';
       case 'review':
         return `${app.cues.length} 条 · ${formatDuration(m.duration)}`;
       case 'dual':
@@ -145,9 +149,44 @@
   });
 </script>
 
-<header class="toolbar">
+<header class="toolbar" class:rail-collapsed={sidebarPrefs.collapsed}>
+  <!-- 侧栏收起后，它的展开开关挂到顶栏最左。这里**必须让出红绿灯的安全区**
+       （`--tl-safe-x` 87px）：收起态顶栏从 52px 起，红绿灯右缘在 71px，
+       只留 16px 内边距的话开关正好落在 x=68，压在绿灯上（2026-11-24 修）。
+       展开态由左栏自己那一颗负责，这里不重复。 -->
+  {#if sidebarPrefs.collapsed || app.compact}
+    <SidebarToggle />
+  {/if}
   <div class="tb-title" title={app.media?.path ?? ''}>{app.media?.name ?? 'KikuSub'}</div>
   <div class="tb-sub">{sub}</div>
+
+  <!-- 监看代理状态与切换入口（2026-11-24：从舞台状态条搬来）。
+       轻量、只在核对屏出现；压制中显示百分比，就绪后可点开「⋯ → 压制代理」，
+       需要代理时给的是同一个入口的快捷方式。 -->
+  {#if app.view === 'review' && app.media}
+    <button
+      class="proxy-state"
+      class:busy={proxyBusy}
+      class:ready={!proxyBusy && app.media.proxy_ready}
+      class:warn={!proxyBusy && !app.media.proxy_ready && app.media.needs_proxy}
+      onclick={() => {
+        moreOpen = true;
+      }}
+      title={proxyHint}
+      aria-label={proxyLabel}
+    >
+      <i class="ps-dot" aria-hidden="true"></i>
+      {#if proxyBusy}
+        <span>代理 {proxyPct}%</span>
+      {:else if app.media.proxy_ready}
+        <span>监看代理</span>
+      {:else if app.media.needs_proxy}
+        <span>需代理</span>
+      {:else}
+        <span>原始画面</span>
+      {/if}
+    </button>
+  {/if}
 
   {#if engineVisible}
     <div class="tb-sep tb-sep-lead"></div>
@@ -188,7 +227,7 @@
         data-punct-trigger
         aria-expanded={punctPanel.open}
         onclick={() => (punctPanel.open ? closePunctPanel() : openPunctPanel())}
-        title="清理整轨原文里多余的 、，。…（句中直接删掉、行尾省略号一并清；只动原文，条数与时间轴不变；⌘⇧L）"
+        title="清理整轨里多余的标点（可只清原文 / 只清译文 / 两轨一起；译文的句中语义标点保留，只清行尾与重复；条数与时间轴不变；⌘⇧L）"
         aria-label="清理标点"
       >
         <Icon name="punct" size={12} /><span class="act-label">清理标点</span>
@@ -244,12 +283,14 @@
             class="menu-item"
             role="menuitem"
             onclick={importProxy}
-            disabled={jobBusy || Boolean(app.media?.proxy_ready) || !app.media}
-            title="选择已经压好的代理文件，直接挂到当前媒体，不再重新压制"
+            disabled={jobBusy || !app.media}
+            title={app.media?.proxy_ready
+              ? '选择另一份已经压好的代理文件，替换当前监看代理（不再重新压制）'
+              : '选择已经压好的代理文件，直接挂到当前媒体，不再重新压制'}
           >
             <Icon name="tray" size={12} />
             <span class="mi-label">导入代理…</span>
-            <span class="mi-sub">已有文件</span>
+            <span class="mi-sub">{app.media?.proxy_ready ? '替换现有' : '已有文件'}</span>
           </button>
 
           <div class="mi-sep" role="separator"></div>
@@ -406,11 +447,16 @@
        后面的检查器盖住（用户看到的是半截面板）。 */
     position: relative;
     z-index: 30;
-    height: 52px;
-    flex: 0 0 52px;
+    /* 单行顶栏 40px（2026-11-24 Phase 1）：文件名 / 条数 / 引擎在左，
+       全局动作在右。原来 52px 多出来的 12px 没有承担任何信息，
+       只是把视频监看区往下推。
+       高度走 `--topbar-h`（app.css）：收起态的侧栏顶部要把同样的 40px
+       铺成一整块底色，两处必须同一个数值，否则交界处会露出 1px 的缝。 */
+    height: var(--topbar-h);
+    flex: 0 0 var(--topbar-h);
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
     padding: 0 var(--sp-4);
     /* 发丝线用 inset shadow 而不是 border：border 会吃掉 1px 内容高度，
        52 高工具栏里的 18px 标题就会落在 16.5px 上（半像素发虚）。 */
@@ -425,6 +471,26 @@
      那个区域的点击就会被系统当成拖动窗口。 */
   .toolbar > :global(*) {
     -webkit-app-region: no-drag;
+  }
+
+  /* 收起态：顶栏从侧栏右缘起，而红绿灯右缘在 71px —— 首个控件必须让到
+     `--tl-safe-x`（87px = 19 + 52 + 16 呼吸）之后。
+     **基准用 `--sb-collapsed-w`（52）而不是 `--sb-rail-w`**：收起态在紧凑模式下
+     同样是 52（`.sidebar.collapsed` 比媒体查询里的 `.sidebar` 多一个类、优先级更高），
+     用 56 去减会少让 4px。反算内边距：87 − 52 = 35px。
+     红绿灯是原生绘制、DOM 量不到，所以这个数字与 `main.cjs` 的
+     `trafficLightPosition.x` 绑死，取值理由写在 app.css 的 `--tl-safe-x` 注释里。 */
+  .toolbar.rail-collapsed {
+    padding-left: calc(var(--tl-safe-x) - var(--sb-collapsed-w));
+  }
+  /* 4px 光学校正（2026-11-24）：顶栏 40px，控件按盒模型居中后中线在 y=20，
+     而三颗灯的中线在 y=24（`trafficLightPosition.y` 18 + 灯高 12 / 2）。
+     不校正的话开关会「微微悬在三个点上面」，与 MacWhisper 的同一行读感不一致。
+     这里只把开关本体下移 4px，不动顶栏的行高；顶栏里只会有这一颗开关
+     （收起态或紧凑模式，展开态它挂在左栏），所以不必再加限定类。 */
+  .toolbar > :global(.sb-toggle) {
+    position: relative;
+    top: 4px;
   }
 
   .tb-title {
@@ -732,7 +798,10 @@
   @media (max-width: 900px) {
     .toolbar {
       gap: 6px;
-      padding: 0 10px;
+      /* 紧凑模式图标轨 56px（收起时是 52，见 `.toolbar.rail-collapsed`），
+         顶栏从轨右缘起；默认 16px 内边距会让标题落在 x=72，距红绿灯右缘（71）
+         只剩 1px。左右统一遵守安全区：右边保持紧凑模式的 10px 呼吸。 */
+      padding: 0 10px 0 calc(var(--tl-safe-x) - var(--sb-rail-w));
     }
     .tb-sub {
       display: none;
@@ -755,5 +824,54 @@
     .tb-sep-lead {
       display: none;
     }
+  }
+
+  /* 监看代理状态：22px 高的小胶囊，和文件名同一行；不抢引擎胶囊的注意力 */
+  .proxy-state {
+    appearance: none;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 var(--sp-2);
+    border: 1px solid var(--line-2);
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text-3);
+    font: inherit;
+    font-size: 11.5px;
+    line-height: 1;
+    white-space: nowrap;
+    transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  }
+  .proxy-state:hover {
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+  .proxy-state:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
+  }
+  .ps-dot {
+    width: 5px;
+    height: 5px;
+    flex: 0 0 5px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.55;
+  }
+  .proxy-state.ready {
+    color: var(--success);
+  }
+  .proxy-state.ready .ps-dot {
+    opacity: 1;
+  }
+  .proxy-state.warn {
+    color: var(--warn);
+  }
+  .proxy-state.busy {
+    color: var(--accent-text);
+    border-color: var(--accent-line);
   }
 </style>

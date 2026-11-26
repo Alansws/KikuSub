@@ -13,8 +13,8 @@ Gradio 规则（错误的文档比没有文档更可怕）。本页只留**定�
 
 1. 先读本页「红线」与「改动纪律」；
 2. 按要改的域打开 `docs/contracts/` 里对应的那一份，**别凭记忆改**；
-3. 动手前先让基线变绿：`pytest -q` + `python -m core.smoke`。
-   **用 `python`（3.12，依赖齐全），不要用 `python3`**——本机 `python3` 是 3.14，连 pytest 都没装。
+3. 动手前先让基线变绿：`pytest -q` + `python -m core.smoke`。用 `python`（3.12），
+   不要用 `python3`——本机 `python3` 是 3.14，连 pytest 都没装。
 4. 全程**不许在本机弹出窗口**（§0.5）。验证一律走无窗口路径，截图落盘后用 `read_image` 看。
 
 ## 0.5 无窗口铁律（2026-11-16 用户红线）
@@ -143,14 +143,16 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
     再用 `--screenshot` + `KIKUSUB_DEV_EVAL` 静默断言实际页面（单击跳转、抖动单击不建选区、缩放、保存），
     或跑 `node tools/shots/verify_reshape_flow.mjs` / `verify_review_transport.mjs`；
     只看编译通过不算验证。**「手点一遍」不许成为打开窗口的理由**（§0.5）。
-11. **两个大文件只许变短**（`lib/store.svelte.ts` 3255 行 / `views/ReviewView.svelte` 3780 行）：
-    改它们前，先把**这次功能要用到的**纯逻辑抽到 `lib/`（单独一个 commit，行为不变），再接线。
-    界面重构（Step 3/5/6）拆出的检查器 / 工作条 / 设置折叠都在 `components/` 下，预算未放宽。守卫是 `tests/test_big_file_budget.py`，抽完把预算下调。
+11. **两个大文件只许变短**（`lib/store.svelte.ts` 3255 / `views/ReviewView.svelte` 2619 行）：
+    改它们前先把**这次要用到的**纯逻辑抽到 `lib/`（单独 commit，行为不变）再接线；
+    守卫 `tests/test_big_file_budget.py`，抽完把预算下调。
 12. **新增引擎只改两处**：元信息进 `core/engines.py`（含 `family` / `file_tag` / `reviewable`），推理对象与分派进 `core/pipeline.py`；
-    `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护一份引擎 key 白名单
-    （加中文引擎时踩过：`if payload.engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
+    `server/routes_jobs.py` 按 `family` 选配置，报告/质检按 `family` 选口径。**禁止**在别处再维护引擎 key 白名单
+    （踩过：`if engine == "qwen": ... else: whisper` 会把未知引擎静默当 Whisper）。
 13. **不许弹窗**：任何验证都走无窗口路径（§0.5）。`npx electron .`、`npm start`、`open *.app`、
     `rebuild.sh --open` 只允许用户自己做，不许代劳；截完图用 `read_image` 看，不要摆到桌面上。
+14. **不管 200% 页面缩放**（2026-11-24）：无缩放菜单，布局必塌属正常，禁止加断点或
+    `zoom200`/`KIKUSUB_ZOOM=2` 用例。见 lifecycle §3.7.1，守卫 test_no_zoom200_policy。
 
 ## 5. 改动纪律（提交流程）
 
@@ -181,7 +183,7 @@ sidecar 也可以单独启动：`source .venv/bin/activate && python -m server -
 | 改了 Python（`core/` `server/`） | 上面 + `bash tools/pack/build_sidecar.sh` | `bash tools/pack/rebuild.sh --no-open` |
 | 发版 | — | `bash tools/release/preflight.sh --with-tests` |
 
-单屏取证也可以用 `KIKUSUB_DEV_SEED` + `--screenshot`，见 [tools/shots/README.md](tools/shots/README.md)。
+单屏取证可用 `KIKUSUB_DEV_SEED` + `--screenshot`，见 [tools/shots/README.md](tools/shots/README.md)。
 
 
 ## 6. 发版

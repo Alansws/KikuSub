@@ -5,8 +5,9 @@ H.264 代理。这份代理是「拖动进度条流畅秒开」的前提。
 
 从 `app.py` 的 `manual_transcode_proxy_generator` 抽出编排，保留全部工程约束：
 
-- **标准路径失败要回退**：VideoToolbox 全硬解 → 软解 + VideoToolbox 编码 → libx264 CPU，
-  三条命令依次尝试；实时压制失败后再走一次非实时的 `create_proxy`。
+- **标准路径失败要回退**：默认多核 CPU（软解 + libx264）→ VideoToolbox 全硬解 →
+  软解 + VideoToolbox 编码 → libx264 CPU；实时压制失败后再走一次非实时的 `create_proxy`。
+  默认不是硬件，原因见 `build_streaming_cmd()` 的实测记录。
 - **写 `*.part.mp4` 再原子 rename**：半成品绝不能被下一次「历史代理」当成成品复用。
 - **进度只认单调值**：ffmpeg 偶发回退 `out_time_us` 时进度条不许倒走；探不到时长
   就用 `percent=None` 的不确定进度态，不凭空造百分比。
@@ -118,7 +119,10 @@ def install_existing_proxy(
 
     优先硬链接（同盘、零拷贝），跨盘时用符号链接；两者都不可用时才退回复制。
     正式文件由临时名原子 rename，半成品不会被 ``get_existing_proxy()`` 当成成片。
-    目标路径已存在且大小正常时直接复用，不覆盖用户已有的代理。
+
+    **已有代理时也替换**（2026-11-25 用户报障）：用户点「导入代理…」就是明确要换一份，
+    不能因为旧文件还在就静默复用——否则按钮会变成永远无效的死路。用户选中的若正是
+    当前代理文件，则直接复用，不做无意义的 rename。
     """
     media_path = Path(media_path)
     source = Path(source_path).expanduser()
@@ -130,10 +134,8 @@ def install_existing_proxy(
         raise ValueError(f"不是普通文件：{source}")
 
     standard, _ = proxy_paths(media_path, output_dir)
-    if standard.exists() and standard.stat().st_size > MIN_PROXY_BYTES:
-        return standard
     if source == standard:
-        if standard.exists() and standard.stat().st_size > 1024:
+        if standard.exists() and standard.stat().st_size > MIN_PROXY_BYTES:
             return standard
         raise ValueError("代理文件为空或过小，无法作为监看画面")
 
@@ -159,37 +161,38 @@ def install_existing_proxy(
 
 
 def build_streaming_cmd(media_path: Path, dest: Path) -> tuple[list[str], str, str]:
-    """实时压制命令：返回 `(命令, 阶段文案, 备注)`。macOS 优先 VideoToolbox。"""
-    if sys.platform == "darwin":
-        return (
-            [
-                ffmpeg_bin(), "-y", "-nostdin",
-                "-hwaccel", "videotoolbox",
-                "-i", str(media_path),
-                "-vf", "scale=-2:480,format=yuv420p",
-                "-c:v", "h264_videotoolbox",
-                "-b:v", "2200k",
-                "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart",
-                "-progress", "pipe:1",
-                str(dest),
-            ],
-            "正在启动 VideoToolbox 硬件压制…",
-            "VideoToolbox 硬件加速中",
-        )
+    """实时压制命令：返回 `(命令, 阶段文案, 备注)`。
+
+    **默认走多核 CPU（软解 + libx264 ultrafast）**，这不是「退回旧方案」：
+
+    2026-11-25 在 M4 Pro 上用同一段 1080p H.264 片源实测 120 秒：
+
+    - `-hwaccel videotoolbox` 硬解 + `h264_videotoolbox` 编码：14.8×（约 9.9 s CPU /
+      8.1 s 墙钟），CPU/GPU 利用率都很低；
+    - 软解 + `h264_videotoolbox` 编码：29.9×（约 18.6 s CPU / 4.0 s 墙钟）；
+    - 软解 + `libx264 -preset ultrafast -crf 28`：51×，但 480p 只有 ~0.9 Mbps，
+      画面偏软；
+    - 软解 + `libx264 -preset ultrafast -crf 20`：约 48×（60 秒样本 11.6 s CPU /
+      1.26 s 墙钟），约 2.1 Mbps，和旧 VideoToolbox 2200k 的画面 / 体积同档。
+
+    VideoToolbox 的固定功能硬件在「1080p 解码 → 480p 缩放」这一档反而不如 CPU：
+    硬解帧还要下载回系统内存再做 scale，而 M4 Pro 的软解 + x264 可以并行吃满多核。
+    因此这里先走 CPU；硬件方案仍保留在 `create_proxy()` 的回退链里，遇到 x264 不可用
+    或特殊片源时仍会自动尝试。**不要为了「用上硬件」改回 `-hwaccel videotoolbox`**。
+    """
     return (
         [
             ffmpeg_bin(), "-y", "-nostdin", "-threads", "0",
             "-i", str(media_path),
             "-vf", "scale=-2:480,format=yuv420p",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             "-progress", "pipe:1",
             str(dest),
         ],
-        "正在启动 libx264 CPU 压制…",
-        "libx264 CPU 编码中",
+        "正在启动多核 CPU 压制…",
+        "libx264 CPU 多核编码中",
     )
 
 

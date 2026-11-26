@@ -137,7 +137,7 @@ const EVAL = String.raw`
     // 3) 选区设为章节：先框选 20–34s，再点按钮
     await dragSelect(20, 34);
     const hasSelection = Boolean(document.querySelector('.sel-bar'));
-    buttonByText(document.querySelector('.chapters-panel'), '选区设为章节')?.click();
+    buttonByText(document.querySelector('.chapters-panel'), '选区章节')?.click();
     await waitFor(() => items().length === 2);
     await sleep(200);
     const afterRange = {
@@ -155,7 +155,8 @@ const EVAL = String.raw`
 
     // 5) 编辑标题 + 回车
     const firstItem = items().find((el) => el.textContent.includes('倒计时开始'));
-    firstItem?.querySelector('.iconbtn')?.click();
+    // 按 aria-label 找「编辑」，不按位置：时刻点行还多了「补起点 / 补终点」两枚按钮
+    firstItem?.querySelector('[aria-label="编辑标记"]')?.click();
     await sleep(250);
     const editTitle = document.querySelector('.chapters-panel .e-title');
     editTitle.focus();
@@ -337,7 +338,11 @@ function check(name, condition, detail) {
 ensureMedia();
 const result = run();
 
-check('空态提示说明两种添加方式', (result.emptyText || '').includes('插时刻点'), result.emptyText);
+check(
+  '空态提示说明两种添加方式',
+  (result.emptyText || '').includes('时刻点') && (result.emptyText || '').includes('选区'),
+  result.emptyText,
+);
 check('回车在播放头添加时刻点', result.afterPoint.count === 1, result.afterPoint);
 check(
   '时刻点显示为 ◆ 并带标题',
@@ -346,7 +351,7 @@ check(
   result.afterPoint,
 );
 check('时间轴出现章节旗标', result.afterPoint.flags === 1, result.afterPoint);
-check('框选后可用「选区设为章节」', result.hasSelection === true);
+check('框选后可用「选区章节」', result.hasSelection === true);
 check('选区添加为章节区间', result.afterRange.count === 2, result.afterRange);
 check(
   '区间显示为 ▭ → 结束时间',
@@ -396,7 +401,8 @@ check(
   chapters.length === 3 &&
     chapters[0]?.tags?.title === '开场' &&
     chapters[1]?.tags?.title === '倒计时开始' &&
-    chapters[2]?.tags?.title === '场景 00:20–00:34',
+    // 选区设为章节时没给标题 → 按位置自动命名（§3.4.9）
+    chapters[2]?.tags?.title === '章节一',
   chapters.map((c) => ({ title: c.tags?.title, start: c.start_time, end: c.end_time })),
 );
 check(

@@ -87,15 +87,26 @@ const EVAL = String.raw`
       hasTranslation: Boolean(document.querySelector('.track-meta .link')),
       scrollH: scroll.scrollHeight,
       clientH: scroll.clientHeight,
-      // 操作区：显示模式 → AI 判定；保存栏在滚动区之外
+      // 操作区：显示模式 → AI 判定。检查器里已经没有保存卡片了
+      // （2026-11-24 Phase 1：暂存移到底栏），所以滚动区本身就是判断基准。
       opsBottom: box('.second-opinion')?.bottom ?? null,
-      dockTop: box('.save-dock')?.top ?? null,
       actionTop: rowTops('.actions')[0] ?? null,
       listenTop: rowTops('.tts-listen')[0] ?? null,
       voiceTop: rowTops('.tts-select-wrap.voice')[0] ?? null,
       moreTop: rowTops('.tts-more')[0] ?? null,
       editRowTop: rowTops('.actions.edit-row')[0] ?? null,
       ttsPanel: Boolean(document.querySelector('.tts-panel')),
+      dockTop: box('.save-dock')?.top ?? null,
+    };
+
+    const statusbar = document.querySelector('.statusbar');
+    const statusDock = {
+      shown: Boolean(statusbar?.querySelector('.draft-dock')),
+      hasSave: [...(statusbar?.querySelectorAll('.draft-dock button') ?? [])].some((b) =>
+        (b.textContent || '').includes('暂存'),
+      ),
+      // 底栏不该把草稿状态藏起来（它不是折叠区）
+      label: (statusbar?.querySelector('.draft-dock .dd-state')?.textContent || '').trim(),
     };
 
     // 展开朗读面板：语速 / 上传 / 截取 / 音色库 / 管理都在这里，不常驻占高度
@@ -127,7 +138,7 @@ const EVAL = String.raw`
       playTime: text(document.querySelector('.tp-time')),
     };
 
-    return JSON.stringify({ before, panel, afterManualSource, afterReturn });
+    return JSON.stringify({ before, statusDock, panel, afterManualSource, afterReturn });
   })()
 `;
 
@@ -217,6 +228,7 @@ function check(name, condition, detail) {
 ensureMedia();
 const result = run();
 const before = result.before;
+const statusDock = result.statusDock;
 
 // ---- 1) 长片默认态：第 1 条字幕 + ~50× 视野，而不是全片 1.0× ----
 check('默认缩放在 ~50× 视野（不是全片 1.0×）', before.zoom === '50×', before.zoom);
@@ -234,9 +246,14 @@ check(
   { opsBottom: before.opsBottom, clientH: before.clientH },
 );
 check(
-  '操作区不会滑到底部保存条下面',
-  before.opsBottom !== null && before.dockTop !== null && before.opsBottom <= before.dockTop,
-  { opsBottom: before.opsBottom, dockTop: before.dockTop },
+  '检查器底部不再有保存卡片（暂存已移到底栏）',
+  before.dockTop === null,
+  { dockTop: before.dockTop },
+);
+check(
+  '底栏有暂存入口且只在核对屏出现',
+  statusDock.shown === true && statusDock.hasSave === true && statusDock.label.length > 0,
+  statusDock,
 );
 // 同一行 = 顶边相差不超过 3px（select 外壳比按钮矮 2px，垂直居中会差 1px）
 const sameRow = (value) => Math.abs(value - before.actionTop) <= 3;

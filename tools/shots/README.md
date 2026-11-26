@@ -93,6 +93,24 @@ node tools/shots/verify_reshape_flow.mjs --scenario stale
 同样走 `--screenshot` 静默路径（透明窗口 + `capturePage` + `app.exit`，桌面上不出现），
 断言失败退出码非 0。契约口径见 `docs/contracts/ai-proposal.md` §3.7.6。
 
+## 外壳几何与主题对比度（Phase 2）
+
+核对台改过外壳之后，有三件事既有脚本看不到：**52px 收起态与系统红绿灯的安全区**、
+**暗底监看舞台的比例与状态条**、**1px 分割线 / 状态条文字的对比度**。
+红绿灯是原生绘制、DOM 读不到，所以脚本量的是渲染层能负责的那一半（开关必须移出左栏
+且让出安全区、与三颗灯同一水平线、品牌图标与第一个导航项的位置）；对比度则按 CSS 令牌
+**实算** WCAG 比值，不靠肉眼。
+
+```bash
+node tools/shots/verify_phase2_shell.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_phase2_shell.mjs
+```
+
+40 条断言，亮 / 暗两套主题 + 紧凑模式（880px 真实窄窗）各跑一遍，失败退出码非 0。收起态除了「开关必须移出左栏」，
+还断言它与红绿灯的**横向净空 ≥16px、中线差 ≤1px**，以及顶部 40px 是一整块底色
+（竖分割线从 y=40 起，不横穿红绿灯）。口径见
+`docs/contracts/review-console.md` §3.4.13。
+
 ## 清理标点回归
 
 用户报障过的两类行（2026-11-17「句中顿号被换成空格」「行尾省略号点了不动」）有专门的
@@ -106,6 +124,22 @@ node tools/shots/verify_punct_clean.mjs
 
 截图落在 `/tmp/kikusub-punct-verify/punct-clean.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.4。
+
+## 译文轨三态与单句补译回归
+
+2026-11-25 用户报障的两件事：清理标点后译文区一堆「待更新」（其实内容没问题）、
+局部转写补一句把整条译文轨删掉。脚本在真实界面里断言：待译 / 原文已改两种计数分开、
+只改标点不过期、真改字才过期、待译行显示「待译」、AI 补译的草稿进输入框并能采纳、
+请求材料只带前后几行原文 + 邻居已有译文。AI 那一跳指向脚本自己起的假模型
+（独立进程），不需要 LM Studio 或网络。
+
+```bash
+node tools/shots/verify_translation_flow.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_translation_flow.mjs
+```
+
+截图落在系统临时目录的 `kikusub-translation-flow/translation-flow.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.20。
 
 ## 复制 / 粘贴字幕回归
 
@@ -135,6 +169,56 @@ node tools/shots/verify_review_transport.mjs
 
 截图落在系统临时目录的 `kikusub-review-transport/review-transport.png`。契约口径见
 `docs/contracts/review-console.md` §3.4.6。
+
+## 播放头拖到边缘自动滚动回归
+
+把播放头拖过波形左右缘后，视窗与播放头一起继续推进（指针压住不动也走）。脚本用
+合成 `PointerEvent` 覆盖：单击刻度条不自动滚、右缘推进时播放头钉住且缩放不变、
+松手立刻停、松手后画面落在最终位置、往左对称。
+
+```bash
+node tools/shots/verify_scrub_pan.mjs
+```
+
+截图落在系统临时目录的 `kikusub-scrub-pan/scrub-pan.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.6「拖到边缘自动滚动」。
+
+## 章节草稿（把时刻点补成区间）回归
+
+先找到场景结束（插时刻点），再回头找开始——两个端点分别落位，不用把 14 分钟塞进一屏。
+脚本覆盖：补起点 / 补终点、`I` / `O` 落端点、时间轴虚线预览、端点越界拦截、
+Esc 撤草稿、保存后 ⌘Z 退回时刻点。
+
+```bash
+node tools/shots/verify_chapter_draft.mjs
+```
+
+截图落在系统临时目录的 `kikusub-chapter-draft/chapter-draft.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.9「章节草稿」。
+
+## 章节页（自动命名 / 加入转写选区）回归
+
+章节页重做后的回归：新建区与行内操作、时刻点补成区间时的自动命名（章节二 / 章节三）、
+「加入转写选区」跳到转写页并填好起止、设置里改模板后新章节按新模板命名（场景四）。
+
+```bash
+node tools/shots/verify_chapter_panel.mjs
+```
+
+截图落在系统临时目录的 `kikusub-chapter-panel/chapter-panel.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.9「自动命名 / 加入转写选区」。
+
+## 章节区间端点拖动回归
+
+区间章节两端直接在 6px 色条上拖：旗标拖过 4px 改起点（单击仍是跳转），右端抓手改终点；
+拖到边缘时视窗自己平移。脚本覆盖拖动、⌘Z 撤销、压住右缘继续推进、拖动不 seek。
+
+```bash
+node tools/shots/verify_chapter_edge.mjs
+```
+
+截图落在系统临时目录的 `kikusub-chapter-edge/chapter-edge.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.9「端点拖动」。
 
 ## 点行选区与单句 AI 判定回归
 
@@ -224,6 +308,32 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_ai_fold
 `settings-ai-fold-configured.png`、`export-track-hint.png`、`export-bottom.png`。
 契约口径见 [ai-proposal.md](../../docs/contracts/ai-proposal.md) §3.7.7 与
 [export-and-prompt.md](../../docs/contracts/export-and-prompt.md) §3.8.2。
+
+## 设置四页布局回归（不越界 / 不重叠 / 不挤成竖条）
+
+2026-11-24 新增。用户报「设置每个子页都显示异常」时，真正坏的不是断点，是
+`.set-row-ctl { flex: 0 0 auto }` 让控件列永不收缩：一条「路径 + 徽标 + 三个按钮」
+把左侧说明压成 46–160px、9–11 行的竖条，音色克隆卡的步骤链还会压住右侧按钮。
+这个脚本不比较像素（字体微调就会红），只断言三条布局不变量：
+
+- 内容区里没有元素的右边界越过 `.set-content`；
+- 没有两块可见文字（按钮 / 徽标 / 步骤 / 标题 / 说明 / 输入框）互相压住；
+- 没有可见文字元素 `scrollWidth > clientWidth`（`.set-path` 的省略号是有意的，放行）。
+
+四页 × 三种视口条件（1440×900 / 1120×800 / 1000×700）；**不含 200% 缩放**（红线 14，见下），
+每个视口里都把折叠区展开再量。修复前会红 13 条。
+
+```bash
+node tools/shots/verify_settings_layout.mjs
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_settings_layout.mjs
+```
+
+契约口径见 [review-console.md](../../docs/contracts/review-console.md) §3.4.16。
+
+> **不看 200% 页面缩放**（2026-11-24，`AGENTS.md` 红线 14 / desktop-lifecycle §3.7.1）：
+> 应用没有缩放菜单，200% 的视口只有 680×419，布局必然塌。它**不是**验收条件，
+> 不要在脚本里加 `zoom200` / `KIKUSUB_ZOOM=2` 用例（只会稳定报假红）。
+> `KIKUSUB_ZOOM` 取证开关仍在，但要手动看一眼时才用。
 
 ## 基线
 

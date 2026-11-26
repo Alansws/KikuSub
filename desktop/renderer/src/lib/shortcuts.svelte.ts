@@ -119,6 +119,22 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     note: '当前字幕；服务端一步历史，⌘Z 可撤回',
   },
   {
+    id: 'review.chapterStart',
+    label: '章节：把播放头设为起点',
+    group: '核对台',
+    scope: 'review',
+    def: 'i',
+    note: '先把时刻点设为章末（章节面板「补起点」），再缩放到起点位置',
+  },
+  {
+    id: 'review.chapterEnd',
+    label: '章节：把播放头设为终点',
+    group: '核对台',
+    scope: 'review',
+    def: 'o',
+    note: '先把时刻点设为章首（章节面板「补终点」），再缩放到终点位置',
+  },
+  {
     id: 'review.splitAtPlayhead',
     label: '在播放头切割当前字幕',
     group: '核对台',

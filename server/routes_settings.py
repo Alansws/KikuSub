@@ -60,6 +60,8 @@ class SettingsPatch(BaseModel):
     # 空字符串表示恢复默认（应用输出目录 / 跟随字幕导出目录）。非空必须是绝对路径。
     export_dir: str | None = None
     video_export_dir: str | None = None
+    # 章节自动命名模板（{num} 中文数字 / {n} 阿拉伯数字）；空串恢复默认。
+    chapter_name_template: str | None = None
 
 
 class ClientLog(BaseModel):
@@ -216,6 +218,8 @@ def patch_settings(payload: SettingsPatch, request: Request) -> dict:
         patch["export_dir"] = _validate_dir(payload.export_dir, "导出文件夹")
     if payload.video_export_dir is not None:
         patch["video_export_dir"] = _validate_dir(payload.video_export_dir, "成片导出文件夹")
+    if payload.chapter_name_template is not None:
+        patch["chapter_name_template"] = payload.chapter_name_template
     if not patch:
         raise HTTPException(status_code=422, detail="没有需要更新的字段")
 

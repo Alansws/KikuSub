@@ -348,12 +348,25 @@ async def create_job(
             )
         else:
             transcribe_request = _build_request(request, payload)
-            # 只有「整片覆盖 + 核对台已有稿」才允许写第二列；区间/追加任务
-            # 写第二列只会得到一份残缺的「整片稿」，所以服务端直接忽略。
+            # 第二版不再限定整片：`set_alt_review(replace_range=…)` 会按区间合并
+            # （逐章转录的核心路径），`alt_review_range` 决定整列替换还是只换该段。
+            # 追加与第二版互斥：B 是一份独立的整表，无法按时间合并进来。
+            if payload.alt_review and payload.apply == "append":
+                raise HTTPException(
+                    status_code=422,
+                    detail="第二版不支持「追加」：它是一份独立的对照稿，请选覆盖或替换选区",
+                )
+            # 主稿为空时不允许走第二版——否则会被静默降级成写核对台。
+            if payload.alt_review and not session.review_cues:
+                raise HTTPException(
+                    status_code=422,
+                    detail="还没有主稿：第二版是对照稿，先转一版主稿再来",
+                )
             transcribe_request.alt_review = bool(
-                payload.alt_review
-                and payload.apply == "replace"
-                and session.review_cues
+                payload.alt_review and payload.apply in {"replace", "replace_range"}
+            )
+            transcribe_request.alt_review_range = bool(
+                transcribe_request.alt_review and payload.apply == "replace_range"
             )
             job = manager.start_transcribe(
                 transcribe_request,

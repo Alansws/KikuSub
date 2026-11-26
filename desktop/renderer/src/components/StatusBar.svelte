@@ -1,6 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import DraftDock from './DraftDock.svelte';
   import { app, qa, toggleQaPanel } from '../lib/store.svelte';
+  import { mediaResolution } from '../lib/stagePrefs';
 
   let { engine = '' }: { engine?: string } = $props();
 
@@ -13,6 +15,14 @@
     return found?.label ?? (key || '—');
   });
   const pendingQa = $derived<number>(qa.payload?.counts?.pending ?? 0);
+  /** 静态媒体规格：分辨率 · 编码 · fps（2026-11-24 从舞台状态条并入底栏）。 */
+  const spec = $derived.by(() => {
+    const m = app.media;
+    if (!m) return '';
+    const parts = [mediaResolution(m)];
+    if (m.video_fps && m.video_fps > 0) parts.push(`${m.video_fps.toFixed(3)} fps`);
+    return parts.filter(Boolean).join(' · ');
+  });
 </script>
 
 <footer class="statusbar">
@@ -24,9 +34,19 @@
   <span title="当前识别引擎">{engineLabel}</span>
   {#if app.media}
     <span><b>{app.cues.length}</b> 条 · <b>{chars}</b> 字</span>
+    {#if spec}
+      <!-- 静态度量放底栏空闲区：它不需要常驻在画面旁边，也不该占走一行高度。 -->
+      <span class="sb-spec" title="源视频分辨率 · 编码 · 帧率">{spec}</span>
+    {/if}
   {/if}
 
   <div class="right">
+    <!-- 工作草稿（防丢备份）常驻在核对屏底栏：它不属于任何单个字幕条目，
+         留在右侧检查器里既占高度又会被截断（Phase 1 搬到这里）。 -->
+    {#if app.view === 'review' && app.cues.length}
+      <DraftDock />
+      <span class="sb-sep" aria-hidden="true"></span>
+    {/if}
     {#if app.job?.status === 'running'}
       <span>{app.job.kind === 'proxy' ? '压制代理' : app.job.kind === 'export' ? '导出成片' : '转写'} {app.job.percent}%</span>
     {/if}
@@ -67,6 +87,19 @@
     align-items: center;
     gap: var(--sp-3);
     min-width: 0;
+  }
+  .sb-spec {
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+  }
+  .sb-sep {
+    width: 1px;
+    height: 14px;
+    flex: 0 0 1px;
+    background: var(--separator);
   }
   .qa {
     appearance: none;

@@ -60,6 +60,9 @@ class MediaInfo:
     has_video: bool = False
     # 是否已经存在压好的 480p 监看代理。由 MediaStore 在探测时刷新。
     proxy_ready: bool = False
+    # 代理文件版本（大小 + mtime_ns）：重新导入代理后 URL 上的 `v` 会变，
+    # 浏览器不会继续拿旧代理的缓存。空串表示没有代理。
+    proxy_version: str = ""
 
     @property
     def suffix(self) -> str:
@@ -100,6 +103,7 @@ class MediaInfo:
             "needs_proxy": self.needs_proxy,
             "proxy_reason": self.proxy_reason,
             "proxy_ready": self.proxy_ready,
+            "proxy_version": self.proxy_version,
         }
 
 
@@ -206,7 +210,7 @@ class MediaStore:
                 size=path.stat().st_size,
             )
             self._probe(info)
-            info.proxy_ready = self.proxy_path(info) is not None
+            self._refresh_proxy(info)
             self._items[media_id] = info
             return info
 
@@ -257,6 +261,24 @@ class MediaStore:
         except Exception:
             return None
 
+    def _refresh_proxy(self, info: MediaInfo) -> Path | None:
+        """刷新 ``proxy_ready`` 与 ``proxy_version``，返回当前代理路径。
+
+        `proxy_version` 取文件大小 + `mtime_ns`：用户重新导入一份代理后前端把
+        它拼到 `?proxy=1&v=…` 上，`<video>` 才会真正换源，而不是继续播旧缓存。
+        """
+        found = self.proxy_path(info)
+        info.proxy_ready = found is not None
+        info.proxy_version = ""
+        if found is not None:
+            try:
+                stat = found.stat()
+                info.proxy_version = f"{stat.st_size}-{stat.st_mtime_ns}"
+            except OSError:
+                # 文件恰好在这两次 stat 之间被换掉：先报 ready，下一次 describe 会修正。
+                pass
+        return found
+
     def attach_proxy(self, media_id: str, source_path: str | Path) -> MediaInfo:
         """把用户已有的代理文件挂到当前媒体上。
 
@@ -279,13 +301,13 @@ class MediaStore:
             proxy.install_existing_proxy(info.path, source, self._output_dir)
         except (OSError, ValueError) as exc:
             raise MediaError(f"导入代理失败：{exc}") from exc
-        info.proxy_ready = self.proxy_path(info) is not None
+        self._refresh_proxy(info)
         return info
 
     def describe(self, media_id: str) -> dict:
-        """对外描述：带上实时的 proxy_ready。"""
+        """对外描述：带上实时的 proxy_ready 与 proxy_version。"""
         info = self.get(media_id)
-        info.proxy_ready = self.proxy_path(info) is not None
+        self._refresh_proxy(info)
         return info.to_dict()
 
     def get(self, media_id: str) -> MediaInfo:

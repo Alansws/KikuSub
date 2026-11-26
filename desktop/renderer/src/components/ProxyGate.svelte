@@ -33,8 +33,11 @@
       {#if state === 'proxy-unavailable'}
         <b>代理已就绪，但画面仍无法播放</b>
         <span class="gate-body">
-          代理文件可能已损坏，或它的编码同样不受支持。可以在工具栏「⋯」里重新导入一份代理。
+          代理文件可能已损坏，或它的编码同样不受支持。重新导入一份可播放的代理。
         </span>
+        <div class="gate-actions">
+          <button class="gate-btn primary" onclick={onimport}>重新导入代理…</button>
+        </div>
       {:else}
         <b>无法显示这个视频的画面</b>
         <span class="gate-body">

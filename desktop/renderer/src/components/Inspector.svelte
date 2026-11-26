@@ -1,22 +1,22 @@
 <script lang="ts">
   /**
-   * 右侧检查器（348px）：页签 + 「当前条目 / 质检待核 / 章节」三页 + 常驻保存栏。
+   * 右侧检查器（348px）：页签 + 「当前条目 / 质检待核 / 章节」三页。
    *
-   * 2026-11-21（Step 3）拆成子组件后，这里只做三件事：页签、装页签内容、装保存栏
+   * 2026-11-21（Step 3）拆成子组件后，这里只做两件事：页签、装页签内容
    * （挂载点仍在 `App.svelte`：只有核对台显示它）。原来 2200 行的单文件让每次动
    * 排版都得先读完整个检查器。
    *
    * - 「当前条目」→ `inspector/CuePane.svelte`：编辑区 + 操作行 + 朗读控件 + 纠偏助手
    * - 「质检待核」→ `QaPanel mode="docked"`（不遮挡画面）
    * - 「章节」   → `ChaptersPanel.svelte`
-   * - 底部保存栏 → `inspector/SaveDock.svelte`（在滚动区之外，不会被内容顶掉）
+   * - 保存栏已移出检查器（2026-11-24 Phase 1）：暂存走底栏 `DraftDock`，
+ *   导出走顶栏「导出」与导出视图。检查器只留「与当前条目/队列/章节有关」的内容。
    */
   import Icon from './Icon.svelte';
   import QaPanel from './QaPanel.svelte';
   import ChaptersPanel from './ChaptersPanel.svelte';
   import CuePane from './inspector/CuePane.svelte';
   import InspectorMeta from './inspector/InspectorMeta.svelte';
-  import SaveDock from './inspector/SaveDock.svelte';
   import {
     app,
     loadTtsVoices,
@@ -92,7 +92,6 @@
       <CuePane />
       <InspectorMeta />
     </div>
-    <SaveDock />
   {:else}
     <QaPanel mode="docked" />
   {/if}

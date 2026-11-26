@@ -65,6 +65,26 @@
 
   /* 控件高度 */
   --ctl-h: 28px;
+  /* 侧栏收起态宽度：52px 正好是 16px 图标 + 两侧各 18px 的呼吸，
+     和「一条图标轨」的视觉重量一致，再窄就捏不住点击目标了。 */
+  --sb-collapsed-w: 52px;
+
+  /* 系统红绿灯的安全区（2026-11-24）：
+     19（右缘起点）+ 52（三颗 12px 灯 + 2×8 间距）+ 16（呼吸）= 87px。
+     **必须与 `desktop/main/main.cjs` 的 `trafficLightPosition.x` 同步**：
+     红绿灯是原生绘制的，DOM 读不到，改一处不同步另一处就会重新叠上
+     （收起态第一版就是这样把开关压在绿灯上：顶栏从 52px 起 + 16px 内边距 = 68px）。
+     收起态的顶栏用它让位，展开态顶栏从 236px 起、天然在安全区右侧。 */
+  --tl-safe-x: 87px;
+  /* 收起态图标轨的实际宽度。默认就是 `--sb-collapsed-w`，但 ≤900px 的紧凑模式
+     把轨加宽到 56px（点按目标要更大），顶栏的让位是按「轨宽」反算的，
+     所以这里单独提一个 token，紧凑模式覆盖它一处即可，不用在 Toolbar 里
+     再写一个 56 的魔法数。 */
+  --sb-rail-w: var(--sb-collapsed-w);
+  /* 顶栏高度：收起态侧栏顶部要把同样的 40px 铺成一整块连续底色（红绿灯背后
+     不能出现「两种底色 + 一条竖线」），所以顶栏与侧栏顶部共用这一个数值，
+     见 `.sidebar.collapsed` 一段。 */
+  --topbar-h: 40px;
   --ctl-h-lg: 32px;
   --ctl-h-xl: 36px;
   /* 设置页分段导航的段高（比普通控件高一档） */
@@ -139,6 +159,18 @@
   --hit: rgba(255, 214, 10, 0.4);
   --hit-row: rgba(255, 214, 10, 0.16);
   --caption-bg: rgba(13, 20, 36, 0.62);
+  /* 监看舞台（2026-11-24 Phase 2；同日二改）：
+     浅色主题下舞台不再是深黑——640×360 的 16:9 画面放在宽舞台上，
+     左右/底部会露出两条生硬的黑边，在浅色界面里读起来像「画面没铺满」。
+     改成柔和浅灰画布（比 --canvas 深一档、比 --paper 深两档），黑边变成
+     「画面浮在画布上」的一圈留白。暗色主题仍保持接近纯黑的舞台不变。
+     1px 分割线走 --stage-line，浅色下用 0.52 墨（对画布 3.15:1，可见但不抢眼），
+     原来是 0.34 白 —— 那是给深色舞台算的，放到浅灰上等于消失。 */
+  --stage-bg: #eef1f5;
+  --stage-line: rgba(27, 39, 64, 0.52);
+  /* 画面本体（16:9 的那一块）的 1px 细边：舞台是浅灰时靠它把画面与留白分开，
+     不能再用「0.06 白」那种只对深色成立的值。 */
+  --stage-frame: rgba(27, 39, 64, 0.16);
   --wave: #a3adbe;
 
   /* 波形底部字幕轨道。灰条时代和底色的对比只有 4%，几乎看不见；
@@ -240,6 +272,12 @@ html[data-theme='dark'] {
   --hit: rgba(255, 214, 10, 0.3);
   --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
+  /* 深色主题里舞台要比页面更暗，才能读成「监看区」；1px 分割线用 0.34 白
+     （0.14 实测只有 1.48:1，等于看不见）。 */
+  --stage-bg: #08090b;
+  --stage-line: rgba(255, 255, 255, 0.34);
+  /* 深色下画面本来就与舞台同色系，细边只需要「刚好不糊成一片」 */
+  --stage-frame: rgba(236, 241, 250, 0.09);
   --wave: #8f9db5;
 
   --cue-lane: rgba(236, 241, 250, 0.06);
@@ -344,6 +382,9 @@ html[data-theme='mincho'] {
   --scroll-thumb: rgba(21, 24, 27, 0.18);
   --scroll-thumb-hover: rgba(21, 24, 27, 0.3);
   --caption-bg: rgba(18, 20, 22, 0.66);
+  --stage-bg: #101112;
+  --stage-line: rgba(255, 255, 255, 0.33);
+  --stage-frame: rgba(236, 241, 250, 0.09);
   --wave: #9aa0a0;
 
   --cue-lane: rgba(21, 24, 27, 0.05);
@@ -424,9 +465,15 @@ body {
   position: relative;
   width: 236px;
   flex: 0 0 236px;
+  /* 收起态：52px 纯图标条（2026-11-24 Phase 1）。用 --sidebar-w 过渡，
+     折叠开关在 Sidebar 顶部红绿灯留白区，状态存在 localStorage。 */
+  transition: width var(--dur-panel) var(--ease), flex-basis var(--dur-panel) var(--ease);
   background: var(--bg-sidebar);
   backdrop-filter: saturate(180%) blur(24px);
   -webkit-backdrop-filter: saturate(180%) blur(24px);
+  /* 竖分割线：展开态侧栏 236px，整组红绿灯（x19–71）都在栏内，线在右缘不会
+     碰到任何一颗灯，所以照常从顶到底。收起态会横穿红绿灯，例外见下面的
+     `.sidebar.collapsed` 一段。 */
   border-right: 1px solid var(--separator);
   padding: 46px 12px 12px;
   display: flex;
@@ -444,6 +491,67 @@ body {
   inset: 0 0 auto 0;
   height: 46px;
   -webkit-app-region: drag;
+}
+
+/* ---------- 侧栏收起态（52px 图标条） ----------
+   红绿灯已经占掉窗口左上角，收起后剩下的空间只够放图标；
+   标签与计数不参与布局，title / 无障碍名仍在（与 ≤900px 紧凑模式同一套规则）。 */
+.sidebar.collapsed {
+  width: var(--sb-collapsed-w);
+  flex: 0 0 var(--sb-collapsed-w);
+
+  /* 顶栏那 40px 与顶栏连成一整块（2026-11-24）：
+     收起后顶栏从 52px 起、而红绿灯右缘在 71px，三颗灯横跨在「侧栏 + 顶栏」
+     两侧；若左栏照常带自己的底色和右边框，那条 1px 竖线正好从黄灯与绿灯之间
+     穿过去，视觉上把红黄绿劈成两半。
+     处理：顶部 40px 刷成与顶栏**完全相同的颜色**（`--paper`：顶栏是
+     `--bg-toolbar` 0.86 的同色叠在 `.main` 的 `--paper` 上，合成结果就是
+     `--paper` 本身，三套主题都成立），底部同一条发丝线；竖分割线（::after）
+     改从 y=40 起画，与顶栏底边在 (52,40) 接成直角。
+     主因记在 `docs/contracts/review-console.md` §3.4.13。 */
+  border-right-color: transparent;
+  /* 内容从顶栏底边起（40px），与上面那条「整块顶带」严丝合缝：
+     留 46px 会在 40–46 之间露出一条 6px 的侧栏色，正是要消掉的那种割裂。 */
+  padding-top: var(--topbar-h);
+}
+.sidebar.collapsed::before {
+  height: var(--topbar-h);
+  background: var(--paper);
+  box-shadow: inset 0 -1px 0 var(--separator);
+}
+.sidebar.collapsed::after {
+  content: '';
+  position: absolute;
+  top: var(--topbar-h);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--separator);
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+.sidebar.collapsed .sb-brand {
+  justify-content: center;
+  gap: 0;
+  /* 收起态只剩 27px 图标：下边距给到 14px，第一个导航项才不会贴着它
+     （实测差 2px 时读起来像两个控件粘在一起）。
+     上边距 6px：收起态的 padding-top 已经是 40（= 顶栏底边），
+     再给 6 就是图标从 y=46 起，与红绿灯区（y<30）留足 16px。 */
+  padding: 6px 0 14px;
+}
+.sidebar.collapsed .brand-text,
+.sidebar.collapsed .sb-label,
+.sidebar.collapsed .sb-count,
+.sidebar.collapsed .sb-key {
+  display: none;
+}
+.sidebar.collapsed .sb-item {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+.sidebar.collapsed .sb-item > span:not(.ico) {
+  display: none;
 }
 
 .main {
@@ -790,16 +898,25 @@ html[data-theme='dark'] .card {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
+  /* 折行后控件那一行离上面说明只留 6px：这里不是两个设置项之间的距离，
+     是同一个设置项内部的两段，用 --sp-4 会读成「另一条设置」。 */
+  row-gap: 6px;
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--inset-line);
   min-height: 46px;
+  /* 右侧控件放不下时**整行折行**，而不是把左边说明挤成一条 40px 宽的缝。
+     一条「路径 + 状态 + 三个按钮」就占 380–477px；若控件列永不收缩，
+     说明列会被压到 46–160px，正文变成 9–11 行的一根竖条
+     （2026-11-24 用户报障「每个设置子页显示都异常」）。 */
+  flex-wrap: wrap;
 }
 .set-row:last-child {
   border-bottom: 0;
 }
 .set-row-main {
   min-width: 0;
-  flex: 1 1 auto;
+  /* 240px 是「说明还能读成句子」的下限；低于它就让控件换行，别再压这句话。 */
+  flex: 1 1 240px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -816,13 +933,29 @@ html[data-theme='dark'] .card {
   line-height: 19px;
 }
 .set-row-ctl {
-  flex: 0 0 auto;
+  /* 控件列优先保持自己的一行整宽（放不下时由 .set-row 的 wrap 把它整体换下去），
+     但允许它先收缩到 min-content 再换行，所以必须带 `min-width: 0`。 */
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   justify-content: flex-end;
+  min-width: 0;
+  /* 控件列自己也折行：按钮串（「更改… + 恢复默认 + 打开」）在窄栏或放大字号下
+     比整行还宽时，往下排而不是戳出卡片右边缘。 */
+  flex-wrap: wrap;
+  /* 折行后贴着行右边缘，与上一行说明的右边界对齐。
+     `flex-grow: 1` 让它在独占一行时铺满整行，路径左对齐到行首——
+     否则「路径 + 徽标 + 按钮」会缩成一团飘在行中间。 */
+  margin-left: auto;
 }
 .set-row-ctl.grow {
+  /* 「路径 / 徽标 + 动作」那一列：可以占满折行后的整宽（路径左对齐到行首、
+     按钮右对齐到行尾），但**仍然可以收缩**。原来写 `flex: 0 0 auto`（不可收缩）
+     时，路径长了这条列就要求 max-content，超过行宽后直接戳出卡片右边缘
+     （200% 缩放实测溢出 22–81px）。现在允许收缩，路径本身有
+     `overflow: hidden; text-overflow: ellipsis`，拿不到宽度就省略，
+     按钮永远留在卡内。 */
   flex: 1 1 46%;
   min-width: 0;
 }
@@ -834,6 +967,9 @@ html[data-theme='dark'] .card {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  /* 路径是这一列里唯一「可以拿不到整宽」的东西：先让它按剩余空间伸缩并省略，
+     动作按钮保持原尺寸留在卡内。 */
+  flex: 1 1 auto;
 }
 /* AI 通道的输入与状态：AiPanel（核心配置）与 AiAdvancedFold（进阶折叠区）共用。 */
 /* 2026-11-21 分级折叠时从 AiPanel 提上来，两处不再各写一份。 */
@@ -959,15 +1095,39 @@ progress {
    内容区因此重新拿回整个宽度。
    ============================================================ */
 @media (max-width: 900px) {
+  :root {
+    /* 紧凑模式图标轨 56px：顶栏收起态的让位按这个宽度反算（见 Toolbar 注释） */
+    --sb-rail-w: 56px;
+  }
   .sidebar {
-    width: 56px;
-    flex: 0 0 56px;
-    padding: 46px 8px 10px;
+    width: var(--sb-rail-w);
+    flex: 0 0 var(--sb-rail-w);
+    /* 与收起态同一套「顶带连续」处理（见 `.sidebar.collapsed` 的注释）：
+       56px 的轨也窄于红绿灯右缘 71px，竖线照样会从黄灯与绿灯之间穿过去。 */
+    border-right-color: transparent;
+    padding: var(--topbar-h) 8px 10px;
+  }
+  .sidebar::before {
+    height: var(--topbar-h);
+    background: var(--paper);
+    box-shadow: inset 0 -1px 0 var(--separator);
+  }
+  .sidebar::after {
+    content: '';
+    position: absolute;
+    top: var(--topbar-h);
+    right: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--separator);
+    pointer-events: none;
+    -webkit-app-region: no-drag;
   }
   .sidebar .sb-brand {
     justify-content: center;
     gap: 0;
-    padding: 4px 0 12px;
+    /* 6px：图标从 y=46 起，与顶栏发丝线（y=40）留出呼吸 */
+    padding: 6px 0 12px;
   }
   .sidebar .brand-name,
   .sidebar .brand-sub,

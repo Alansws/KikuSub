@@ -7,35 +7,67 @@
    * 走「按钮 → 同款下拉浮层（带统计与三条前后对比）→ 主按钮」，与「⋯ 更多」菜单
    * 同一套手感，比纯模态轻、比即点即改稳。
    *
-   * 规则与提交都在 lib 里，这个组件只负责画和键盘；`app.cues` 一变（应用、⌘Z、
-   * 历史跳转）统计与预览会自动跟着重算。
+   * 2026-11-25：支持译文轨。浮层顶部多了「清理哪一轨」，两轨都清时统计与预览
+   * 分成两组（**同一套规则不可能同时适配日语与中文**，所以口径也分两组）。
+   *
+   * 规则与提交都在 lib 里，这个组件只负责画和键盘；`app.cues` /
+   * `app.translationsRevision` 一变（应用、⌘Z、历史跳转），统计与预览会自动重算。
    */
   import Icon from './Icon.svelte';
   import {
     applyPunctClean,
     closePunctPanel,
-    currentPunctPlan,
+    effectiveTracks,
+    hasTranslationTrack,
     punctOptions,
     punctPanel,
+    punctPlans,
     setPunctEllipsis,
     setPunctMid,
+    setPunctTargetCollapse,
+    setPunctTargetEllipsis,
+    setPunctTracks,
+    targetOptions,
   } from '../lib/punctuationPanel.svelte';
-  import { markedSpans } from '../lib/punctuation';
+  import { markedSpans, type CleanOptions } from '../lib/punctuation';
   import { app } from '../lib/store.svelte';
 
   const PREVIEW_LINES = 3;
 
   let panelEl: HTMLDivElement | undefined = $state();
 
-  const plan = $derived(currentPunctPlan());
-  const count = $derived(plan.changed.length);
-  const preview = $derived(
-    plan.changed.slice(0, PREVIEW_LINES).map((index) => ({
+  const plans = $derived(punctPlans());
+  const tracks = $derived(effectiveTracks());
+  const hasTrack = $derived(hasTranslationTrack());
+  const sourceCount = $derived(plans.source?.changed.length ?? 0);
+  const targetCount = $derived(plans.target?.changed.length ?? 0);
+  const count = $derived(sourceCount + targetCount);
+  const trackLen = $derived(plans.targetTexts.length);
+
+  interface PreviewLine {
+    index: number;
+    before: string;
+    after: string;
+    marks: { text: string; hit: boolean }[];
+  }
+
+  function previewOf(
+    plan: { changed: number[]; texts: string[] } | null,
+    texts: string[],
+    opts: CleanOptions,
+  ): PreviewLine[] {
+    if (!plan) return [];
+    return plan.changed.slice(0, PREVIEW_LINES).map((index) => ({
       index,
-      before: app.cues[index]?.text ?? '',
+      before: texts[index] ?? '',
       after: plan.texts[index] ?? '',
-      marks: markedSpans(app.cues[index]?.text ?? '', punctOptions()),
-    })),
+      marks: markedSpans(texts[index] ?? '', opts),
+    }));
+  }
+
+  const sourcePreview = $derived(previewOf(plans.source, plans.sourceTexts, punctOptions()));
+  const targetPreview = $derived(
+    previewOf(plans.target, plans.targetTexts, targetOptions()),
   );
 
   /** 把一行文本切成「普通 / 命中」的片段，供 `{#each}` 上色。 */
@@ -51,7 +83,7 @@
   }
 
   /**
-   * 「原文」行：只给**这次真要删掉**的字符上色（见 `markedSpans`）。
+   * 「清理后」行：只给换出来的空格上色。
    * 省略号与受保护的小数点由规则层判定，组件不再自己写一份正则。
    */
   const newSegments = (text: string) => segments(text, (ch) => ch === ' ' || ch === '\u3000');
@@ -105,91 +137,210 @@
     </div>
 
     <div class="pp-row">
-      <span class="pp-label">句中</span>
-      <div class="pp-seg" role="group" aria-label="句中标记处理方式">
+      <span class="pp-label">清理</span>
+      <div class="pp-seg" role="group" aria-label="清理哪一轨">
         <button
-          class:on={punctPanel.mid === 'delete'}
-          aria-pressed={punctPanel.mid === 'delete'}
-          title="直接删掉，不留空格（日语字幕不靠空格断句）"
-          onclick={() => setPunctMid('delete')}
+          class:on={tracks === 'source'}
+          aria-pressed={tracks === 'source'}
+          title="只清原文轨（日语规则，行为和以前一样）"
+          onclick={() => setPunctTracks('source')}
         >
-          删掉
+          原文
         </button>
         <button
-          class:on={punctPanel.mid === 'half'}
-          aria-pressed={punctPanel.mid === 'half'}
-          title="换成一个半角空格"
-          onclick={() => setPunctMid('half')}
+          class:on={tracks === 'target'}
+          aria-pressed={tracks === 'target'}
+          disabled={!hasTrack}
+          title={hasTrack
+            ? '只清当前译文轨：句中标点保留，只清行首行尾、折叠重复'
+            : '还没有译文轨：先在检查器导入或应用一版译文'}
+          onclick={() => setPunctTracks('target')}
         >
-          半角空格
+          译文
         </button>
         <button
-          class:on={punctPanel.mid === 'full'}
-          aria-pressed={punctPanel.mid === 'full'}
-          title="换成一个全角空格"
-          onclick={() => setPunctMid('full')}
+          class:on={tracks === 'both'}
+          aria-pressed={tracks === 'both'}
+          disabled={!hasTrack}
+          title={hasTrack
+            ? '两轨一起清：一次提交、⌘Z 一步撤回两轨'
+            : '还没有译文轨：先在检查器导入或应用一版译文'}
+          onclick={() => setPunctTracks('both')}
         >
-          全角空格
-        </button>
-      </div>
-    </div>
-
-    <div class="pp-row">
-      <span class="pp-label">省略号</span>
-      <div class="pp-seg" role="group" aria-label="省略号处理方式">
-        <button
-          class:on={punctPanel.ellipsis === 'trailing'}
-          aria-pressed={punctPanel.ellipsis === 'trailing'}
-          title="只清行尾的 …（句中的是语气，保留）"
-          onclick={() => setPunctEllipsis('trailing')}
-        >
-          行尾删
-        </button>
-        <button
-          class:on={punctPanel.ellipsis === 'all'}
-          aria-pressed={punctPanel.ellipsis === 'all'}
-          title="连句中的 … 一起清掉"
-          onclick={() => setPunctEllipsis('all')}
-        >
-          全部删
-        </button>
-        <button
-          class:on={punctPanel.ellipsis === 'keep'}
-          aria-pressed={punctPanel.ellipsis === 'keep'}
-          title="省略号全部保留"
-          onclick={() => setPunctEllipsis('keep')}
-        >
-          保留
+          两轨
         </button>
       </div>
     </div>
 
-    <div class="pp-stat">
-      <span><b>{count}</b> 条 / {app.cues.length} 条会改</span>
-      <span class="pp-sub">行尾 {plan.endMarks} 处 · 句中 {plan.midMarks} 处</span>
-    </div>
+    {#if tracks !== 'target'}
+      <div class="pp-split">原文 · 日语</div>
+      <div class="pp-row">
+        <span class="pp-label">句中</span>
+        <div class="pp-seg" role="group" aria-label="句中标记处理方式">
+          <button
+            class:on={punctPanel.mid === 'delete'}
+            aria-pressed={punctPanel.mid === 'delete'}
+            title="直接删掉，不留空格（日语字幕不靠空格断句）"
+            onclick={() => setPunctMid('delete')}
+          >
+            删掉
+          </button>
+          <button
+            class:on={punctPanel.mid === 'half'}
+            aria-pressed={punctPanel.mid === 'half'}
+            title="换成一个半角空格"
+            onclick={() => setPunctMid('half')}
+          >
+            半角空格
+          </button>
+          <button
+            class:on={punctPanel.mid === 'full'}
+            aria-pressed={punctPanel.mid === 'full'}
+            title="换成一个全角空格"
+            onclick={() => setPunctMid('full')}
+          >
+            全角空格
+          </button>
+        </div>
+      </div>
+
+      <div class="pp-row">
+        <span class="pp-label">省略号</span>
+        <div class="pp-seg" role="group" aria-label="省略号处理方式">
+          <button
+            class:on={punctPanel.ellipsis === 'trailing'}
+            aria-pressed={punctPanel.ellipsis === 'trailing'}
+            title="只清行尾的 …（句中的是语气，保留）"
+            onclick={() => setPunctEllipsis('trailing')}
+          >
+            行尾删
+          </button>
+          <button
+            class:on={punctPanel.ellipsis === 'all'}
+            aria-pressed={punctPanel.ellipsis === 'all'}
+            title="连句中的 … 一起清掉"
+            onclick={() => setPunctEllipsis('all')}
+          >
+            全部删
+          </button>
+          <button
+            class:on={punctPanel.ellipsis === 'keep'}
+            aria-pressed={punctPanel.ellipsis === 'keep'}
+            title="省略号全部保留"
+            onclick={() => setPunctEllipsis('keep')}
+          >
+            保留
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if tracks !== 'source' && hasTrack}
+      <div class="pp-split">译文 · {app.trackLang}</div>
+      <div class="pp-row">
+        <span class="pp-label">行尾省略号</span>
+        <div class="pp-seg" role="group" aria-label="译文行尾省略号处理方式">
+          <button
+            class:on={punctPanel.targetEllipsis}
+            aria-pressed={punctPanel.targetEllipsis}
+            title="行尾的 … / ... 一起清掉（句中的语气省略号无论如何都保留）"
+            onclick={() => setPunctTargetEllipsis(true)}
+          >
+            删
+          </button>
+          <button
+            class:on={!punctPanel.targetEllipsis}
+            aria-pressed={!punctPanel.targetEllipsis}
+            title="行尾省略号也保留，只清句读"
+            onclick={() => setPunctTargetEllipsis(false)}
+          >
+            留
+          </button>
+        </div>
+      </div>
+
+      <div class="pp-row">
+        <span class="pp-label">重复标点</span>
+        <div class="pp-seg" role="group" aria-label="译文重复标点处理方式">
+          <button
+            class:on={punctPanel.targetCollapse}
+            aria-pressed={punctPanel.targetCollapse}
+            title="把连写的 ，， / 。。 / 、、 折叠成一个（问号感叹号是强调，不动）"
+            onclick={() => setPunctTargetCollapse(true)}
+          >
+            折叠
+          </button>
+          <button
+            class:on={!punctPanel.targetCollapse}
+            aria-pressed={!punctPanel.targetCollapse}
+            title="重复标点原样保留"
+            onclick={() => setPunctTargetCollapse(false)}
+          >
+            不动
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if plans.source}
+      <div class="pp-stat">
+        <span><b>{sourceCount}</b> 条原文会改 / 共 {app.cues.length} 条</span>
+        <span class="pp-sub">行尾 {plans.source.endMarks} 处 · 句中 {plans.source.midMarks} 处</span>
+      </div>
+    {/if}
+    {#if plans.target}
+      <div class="pp-stat">
+        <span><b>{targetCount}</b> 条译文会改 / 共 {trackLen} 条</span>
+        <span class="pp-sub">行尾 {plans.target.endMarks} 处 · 重复 {plans.target.midMarks} 处</span>
+      </div>
+    {/if}
 
     {#if count}
       <div class="pp-preview">
-        {#each preview as item (item.index)}
-          <div class="pp-line">
-            <div class="pp-old">
-              {#each item.marks as seg}<span class:del={seg.hit}>{seg.text}</span>{/each}
+        {#if sourcePreview.length}
+          <div class="pp-group">原文</div>
+          {#each sourcePreview as item (item.index)}
+            <div class="pp-line">
+              <div class="pp-old">
+                {#each item.marks as seg}<span class:del={seg.hit}>{seg.text}</span>{/each}
+              </div>
+              <div class="pp-new">
+                {#each newSegments(item.after) as seg}<span class:sp={seg.hit}>{seg.text}</span>{/each}
+              </div>
             </div>
-            <div class="pp-new">
-              {#each newSegments(item.after) as seg}<span class:sp={seg.hit}>{seg.text}</span>{/each}
-            </div>
-          </div>
-        {/each}
-        {#if count > preview.length}
-          <div class="pp-more">…另 {count - preview.length} 条</div>
+          {/each}
+          {#if sourceCount > sourcePreview.length}
+            <div class="pp-more">…另 {sourceCount - sourcePreview.length} 条原文</div>
+          {/if}
+          {#if plans.source?.skipped.length}
+            <div class="pp-more">{plans.source.skipped.length} 条原文只有标点，已跳过</div>
+          {/if}
         {/if}
-        {#if plan.skipped.length}
-          <div class="pp-more">{plan.skipped.length} 条只有标点，已跳过</div>
+
+        {#if targetPreview.length}
+          <div class="pp-group">译文</div>
+          {#each targetPreview as item (item.index)}
+            <div class="pp-line">
+              <div class="pp-old">
+                {#each item.marks as seg}<span class:del={seg.hit}>{seg.text}</span>{/each}
+              </div>
+              <div class="pp-new">
+                {#each newSegments(item.after) as seg}<span class:sp={seg.hit}>{seg.text}</span>{/each}
+              </div>
+            </div>
+          {/each}
+          {#if targetCount > targetPreview.length}
+            <div class="pp-more">…另 {targetCount - targetPreview.length} 条译文</div>
+          {/if}
+          {#if plans.target?.skipped.length}
+            <div class="pp-more">{plans.target.skipped.length} 条译文只有标点，已跳过</div>
+          {/if}
         {/if}
       </div>
     {:else}
-      <div class="pp-empty">这一轨没有需要清理的标点</div>
+      <div class="pp-empty">
+        {tracks === 'source' ? '这一轨没有需要清理的标点' : '这两轨都没有需要清理的标点'}
+      </div>
     {/if}
 
     <div class="pp-foot">
@@ -213,7 +364,7 @@
     right: 0;
     z-index: 61;
     width: 340px;
-    max-height: min(560px, calc(100vh - 90px));
+    max-height: min(640px, calc(100vh - 90px));
     overflow-y: auto;
     padding: var(--sp-3);
     display: flex;
@@ -256,6 +407,16 @@
     background: var(--fill);
     color: var(--text);
   }
+  .pp-split {
+    font-size: 11px;
+    color: var(--text-3);
+    padding-top: var(--sp-1);
+    border-top: 1px solid var(--line-2);
+  }
+  .pp-split:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+  }
   .pp-row {
     display: flex;
     align-items: center;
@@ -264,7 +425,8 @@
   .pp-label {
     font-size: 12px;
     color: var(--text-2);
-    flex: 0 0 36px;
+    flex: 0 0 60px;
+    white-space: nowrap;
   }
   .pp-seg {
     display: flex;
@@ -285,6 +447,10 @@
     font-size: 11.5px;
     white-space: nowrap;
     cursor: default;
+  }
+  .pp-seg button:disabled {
+    color: var(--text-3);
+    opacity: 0.5;
   }
   .pp-seg button + button {
     border-left: 1px solid var(--line);
@@ -319,6 +485,10 @@
     padding: var(--sp-2);
     border-radius: 6px;
     background: var(--fill);
+  }
+  .pp-group {
+    font-size: 11px;
+    color: var(--text-3);
   }
   .pp-line {
     display: flex;

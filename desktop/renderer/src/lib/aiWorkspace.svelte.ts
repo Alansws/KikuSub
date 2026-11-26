@@ -926,16 +926,27 @@ export async function applyAiTranslation() {
   ai.applying = true;
   try {
     const items = ai.proposal.items.map((it) => ({ ...it, after: ai.edits[it.i] ?? it.after }));
-    const res = await api.applyTranslation({ lang, proposal: { ...ai.proposal, items } });
+    // 逐条取消采纳必须生效：只写勾选的条目，未勾选的保持原译文。
+    const accept = items.filter((it) => ai.accept[it.i] !== false).map((it) => it.i);
+    if (!accept.length) {
+      toast('一条都没有勾选：先勾选要写入的条目再应用', 'warn');
+      return;
+    }
+    const res = await api.applyTranslation({
+      lang,
+      proposal: { ...ai.proposal, items },
+      accept,
+    });
     await loadTranslations();
     await loadCueHistory();
     setTrackLang(lang);
     setTrackMode('both');
     scheduleDraftSave();
+    const keptNote = res.kept_empty ? ` · ${res.kept_empty} 个空槽位保留原译文` : '';
     toast(
       res.partial && res.range
-        ? `已局部应用第 ${res.range.from}–${res.range.to} 条译文（范围外保留原样），核对台已切到双语`
-        : `已应用 ${res.count} 条译文，核对台已切到双语`,
+        ? `已局部应用第 ${res.range.from}–${res.range.to} 条译文（范围外保留原样）${keptNote}，核对台已切到双语`
+        : `已应用 ${accept.length} 条译文${keptNote}，核对台已切到双语`,
     );
   } catch (err) {
     toast((err as Error).message, 'error');

@@ -5,6 +5,7 @@
    * 成片导出不要求用户先导出 SRT、再打开剪辑软件：当前时间轴与译文轨已经在内存里，
    * 这里直接选分辨率/码率/烧录或软字幕，跑完就得到一个可以发的文件。
    */
+  import { pickVideoExportDir } from '../lib/mediaPath';
   import { onMount } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import ClipScopePicker from '../components/ClipScopePicker.svelte';
@@ -14,7 +15,6 @@
     app,
     applyExportStylePreset,
     cancelExport,
-    defaultVideoExportDir,
     exportCues,
     exporter,
     loadExportOptions,
@@ -83,7 +83,7 @@
     void loadExportOptions();
     void loadExportStyles().then(() => scheduleStylePreview(80));
     void loadTranslations();
-    if (!exporter.outDir) exporter.outDir = defaultVideoExportDir();
+    if (!exporter.outDir) exporter.outDir = pickVideoExportDir(app.config);
     if (!exporter.plan) void refreshExportPlan();
     if (hasTranslations && !app.translations[app.trackLang]?.texts.length) {
       exporter.lang = translationLangs[0] ?? app.trackLang;
@@ -206,7 +206,7 @@
     try {
       const picked = await window.kikusub.pickDirectory({
         title: '选择成片导出文件夹',
-        defaultPath: exporter.outDir || defaultVideoExportDir(),
+        defaultPath: exporter.outDir || pickVideoExportDir(app.config),
       });
       if (!picked) return;
       setExportOutDir(picked);

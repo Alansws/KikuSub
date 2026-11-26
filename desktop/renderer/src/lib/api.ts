@@ -25,6 +25,8 @@ export interface MediaInfo {
   needs_proxy: boolean;
   proxy_reason: string;
   proxy_ready: boolean;
+  /** 代理文件版本（大小 + mtime）；重新导入代理后 URL 会带上它来避开缓存。 */
+  proxy_version?: string;
 }
 
 export interface EngineInfo {
@@ -57,6 +59,8 @@ export interface AppSettings {
   export_dir: string;
   /** 成片导出目录；空字符串表示跟随 export_dir。 */
   video_export_dir: string;
+  /** 章节自动命名模板：`{num}` 中文数字 / `{n}` 阿拉伯数字，默认 `章节{num}`。 */
+  chapter_name_template?: string;
 }
 
 export interface VadAsset {
@@ -330,6 +334,11 @@ export interface CueSnapshot {
   /** 只有撤销 / 重做 / 历史跳转才带：把导出设置与 AI 草稿一起回滚。 */
   export_ui?: Record<string, any>;
   ai_draft?: Record<string, any>;
+  /**
+   * 「只动了句读」的原文改动被服务端静默对齐的译文下标：`{语种: [i…]}`。
+   * 前端只就地改本地 base，不重拉译文轨（避免回灌正在编辑的输入框）。
+   */
+  rebased?: Record<string, number[]>;
 }
 
 /** 历史时间线上的一步。past=可点回去；current=当前状态；undone=可重做。 */
@@ -517,6 +526,8 @@ export interface TranslationTrack {
   texts: string[];
   base: string[];
   stale: number[];
+  /** 还没有译文的条数（服务端算；界面本地也算一份，见 lib/translationStatus.ts）。 */
+  pending?: number;
   created_at: number;
   entry: string;
 }
@@ -589,6 +600,15 @@ export interface AiArbitrationRequest {
 export interface AiArbitrationResult {
   text: string;
   note: string;
+  model: string;
+  elapsed_ms: number;
+}
+
+/** 单句补译（只读草稿，采纳才落轨）。 */
+export interface AiTranslateCueResult {
+  text: string;
+  note: string;
+  lang: string;
   model: string;
   elapsed_ms: number;
 }
@@ -941,9 +961,13 @@ if (typeof window !== 'undefined') {
  * `proxy=true` 时走 480p 监看代理——Chromium 解不开 MKV / HEVC，
  * 原片直接喂给 `<video>` 只会黑屏。
  */
-export function mediaUrl(mediaId: string, proxy = false) {
+export function mediaUrl(mediaId: string, proxy = false, version = '') {
   const q = new URLSearchParams({ token: TOKEN });
-  if (proxy) q.set('proxy', '1');
+  if (proxy) {
+    q.set('proxy', '1');
+    // 重新导入代理后文件内容变了但路径没变；带上版本号让 <video> 真正换源。
+    if (version) q.set('v', version);
+  }
   return `${BASE}/media/${mediaId}?${q}`;
 }
 
@@ -1357,6 +1381,7 @@ export const api = {
     enabled_engines?: string[];
     export_dir?: string;
     video_export_dir?: string;
+    chapter_name_template?: string;
   }) =>
     req<SettingsPayload>('/api/settings', {
       method: 'PATCH',
@@ -1529,6 +1554,8 @@ export const api = {
       to?: number;
       rangeFrom?: number;
       rangeTo?: number;
+      /** 补译批次：只复制这些全片 1 基条号（逗号拼接后发给服务端）。 */
+      indices?: number[];
     } = {},
   ) => {
     const q = new URLSearchParams({ kind, lang });
@@ -1538,6 +1565,7 @@ export const api = {
     if (opts.to !== undefined) q.set('to_index', String(opts.to));
     if (opts.rangeFrom !== undefined) q.set('range_from', String(opts.rangeFrom));
     if (opts.rangeTo !== undefined) q.set('range_to', String(opts.rangeTo));
+    if (opts.indices?.length) q.set('indices', opts.indices.join(','));
     return req<{
       prompt: string;
       count: number;
@@ -1552,6 +1580,11 @@ export const api = {
       category?: string;
       template_id: string;
       template_name: string;
+      /** 补译批次才有：本次只处理这些全片条号。 */
+      indices?: number[];
+      sparse?: boolean;
+      /** 复制时的源指纹；回填时带回，原文改过就 409。 */
+      digest?: string;
     }>(`/api/ai/prompt?${q}`);
   },
 
@@ -1612,6 +1645,16 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
+  /** 补译回复解析：只解析，不落盘、不改字幕；按序号落位、条数严格 1:1。 */
+  gapFromSrt: (body: { indices: number[]; text: string; digest?: string }) =>
+    req<{
+      items: { i: number; before: string; after: string }[];
+      indices: number[];
+      count: number;
+      digest: string;
+      warnings: string[];
+    }>('/api/ai/gap-from-srt', { method: 'POST', body: JSON.stringify(body) }),
+
   /** 把粘贴回来的 SRT 解析成提案（只解析，不落盘、不改字幕） */
   aiFromSrt: (body: {
     kind: 'translate' | 'polish';
@@ -1644,11 +1687,39 @@ export const api = {
   // ---- 译文平行轨 -----------------------------------------------------------
   getTranslations: () => req<TranslationsPayload>('/api/translations'),
 
-  applyTranslation: (body: { lang: string; texts?: string[]; proposal?: AiProposal }) =>
-    req<TranslationTrack & { partial?: boolean; applied?: number; range?: { from: number; to: number } }>(
-      '/api/translations',
-      { method: 'POST', body: JSON.stringify(body) },
-    ),
+  applyTranslation: (body: {
+    lang: string;
+    texts?: string[];
+    proposal?: AiProposal;
+    /** 逐条采纳的全片 1 基序号；缺省 = 全采纳。 */
+    accept?: number[];
+  }) =>
+    req<
+      TranslationTrack & {
+        partial?: boolean;
+        applied?: number;
+        changed?: number;
+        kept_empty?: number;
+        range?: { from: number; to: number };
+      }
+    >('/api/translations', { method: 'POST', body: JSON.stringify(body) }),
+
+  /**
+   * 补译回填：只写显式列出的下标，其余条目原样保留（服务端硬保证）。
+   * `before` 是复制时的原文；复制之后原文改过就 409，什么都不写。
+   */
+  applyGap: (body: {
+    lang: string;
+    items: { i: number; before: string; after: string }[];
+  }) =>
+    req<
+      TranslationTrack & {
+        gap?: boolean;
+        applied?: number;
+        kept?: number;
+        changed?: number;
+      }
+    >('/api/translations/gap', { method: 'POST', body: JSON.stringify(body) }),
 
   /** 按路径导入译文 SRT / VTT；按时间对齐到当前原文时间轴。 */
   importTranslation: (path: string, lang: string) =>
@@ -1757,6 +1828,21 @@ export const api = {
     },
   ) =>
     req<AiArbitrationResult>('/api/ai/arbitrate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: {
+        'X-AI-Key': opts.globalKey,
+        ...(opts.useArbitrate ? { 'X-AI-Arbitrate-Key': opts.arbitrateKey || '' } : {}),
+      },
+      signal: opts.signal,
+    }),
+
+  /** 让单句判定模型把第 index 条原文翻成 lang；不写轨、不进历史。 */
+  translateCue: (
+    payload: { index: number; lang?: string },
+    opts: { globalKey: string; arbitrateKey?: string; useArbitrate: boolean; signal?: AbortSignal },
+  ) =>
+    req<AiTranslateCueResult>('/api/ai/translate-cue', {
       method: 'POST',
       body: JSON.stringify(payload),
       headers: {

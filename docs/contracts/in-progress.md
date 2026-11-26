@@ -100,6 +100,19 @@
 - 取证：`--screenshot` 无窗口截图（1440×960 light/dark、1180×900 窄屏）逐张
   `read_image` 自查；断言「用 0.45」与交换主副在真实页面里生效（2026-11-22 推荐值上调后同步改的断言）。
 
+## 转写页任务编排重做（2026-11-25 收官）
+
+- 页面从「识别引擎 / 三个开关 / 结果与输出」三张卡 + 条件出现的「去向」，
+  改成 `产出 × 范围 × 引擎` 三个轴：产出=主稿 / 第二版 / 两版一起。
+- 第二版支持区间：`apply=replace_range + alt_review` 只替换该区间内的 B，
+  核对台一条不动（`alt_review_range`），逐章做双源不再需要整片重跑。
+- 范围跨切页保留（`lib/transcribeTask.svelte.ts`），带来源与「整片」出口；
+  `app.slice` 仍读走即清空。
+- 底栏任务条常驻主按钮，右栏「现在的稿」常驻主稿 / 第二版 / 最近一次。
+- 决策纯逻辑在 `lib/transcribePlan.ts` + `desktop/test/transcribePlan.test.mjs`（14 条）；
+  服务端三条回归在 `tests/test_server_alt_review.py`（区间合并 / 空主稿 422 / 追加 422）。
+- 取证：`--screenshot` 1360×838（light/dark）、`tools/shots/verify_transcribe_flow.mjs`。
+
 ## ASMR 耳语专项：切分器 / 阈值 / 上一句提示（2026-11-22）
 
 同一条 320s 日语耳语素材（`测试/01_…SEなし.wav`）、同一份 36 条 / 355 字人工参考。

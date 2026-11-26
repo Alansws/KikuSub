@@ -33,6 +33,9 @@ import {
   ttsAudioUrl,
 } from './api';
 import { aiBridge } from './aiBridge';
+import { applyRebasedBases } from './translationBase';
+import { countPending, cueIsStale } from './translationStatus';
+import type { SliceRequest } from './transcribeSlice';
 import {
   dualSelectionError,
   type TranscribeOptions,
@@ -61,6 +64,7 @@ import { optimisticTranscribeJob, rangeDoneText } from './transcribeJob';
 import { isThemeId, schemeOf, skinOf, type Scheme, type SkinId, type ThemeId } from './themes';
 import { changedParamValues, mergeParamValues, readSavedTuning } from './tuning';
 import { markExplicitJump } from './reviewViewport';
+import { isSubtitlePath, pickVideoExportDir } from './mediaPath';
 
 export type View =
   | 'import'
@@ -160,7 +164,7 @@ export const app = $state({
   },
 
   /** 从核对台「同步到转写页」带过去的区间；nonce 变一次，转写页就填一次。 */
-  slice: null as null | { start: string; end: string; nonce: number },
+  slice: null as null | SliceRequest,
 
   // 提示
   toast: '',
@@ -229,6 +233,8 @@ export function applyHistoryMeta(data: CueSnapshot) {
 export function applyCueSnapshot(data: CueSnapshot, opts: { applyClientState?: boolean } = {}) {
   app.cues = data.cues;
   app.cuesRevision += 1;
+  // 只动句读的改动：服务端已对齐译文 base，本地就地跟着改（不 bump revision）。
+  applyRebasedBases(app.translations, app.cues, data.rebased);
   app.canUndo = data.can_undo;
   app.canRedo = data.can_redo;
   // 来源与字幕一起回滚：导入字幕 / 撤销 / 历史跳转都会带新的来源。
@@ -1235,7 +1241,6 @@ export function setView(view: View) {
 // 媒体
 // ---------------------------------------------------------------------------
 
-const SUBTITLE_EXTS = ['.srt', '.vtt'];
 
 // 上次会话：只存路径与小整数，不复制媒体/字幕；重启后按真实链路重新导入。
 const LAST_MEDIA_KEY = 'kikusub.lastMedia';
@@ -1310,8 +1315,7 @@ export async function openMedia(
   // 换片前取消上一部片还没落地的草稿写入，避免把旧字幕写到新媒体的草稿名下
   clearTimeout(draftTimer);
   draftAgain = false;
-  const lower = path.toLowerCase();
-  if (SUBTITLE_EXTS.some((ext) => lower.endsWith(ext))) {
+  if (isSubtitlePath(path)) {
     await openSubtitle(path);
     return;
   }
@@ -1323,7 +1327,7 @@ export async function openMedia(
     // 换片：不把「重置导出面板」记成一次编辑；新会话的起始状态由下面的
     // 静默同步建立。
     resetExportPanel({ record: false });
-    exporter.outDir = defaultVideoExportDir();
+    exporter.outDir = pickVideoExportDir(app.config);
     // 让服务端基线记住新片的默认导出设置，第一次调字号之前 ⌘Z 才有正确的起点。
     void syncClientState(false);
     app.view = 'review';
@@ -1518,11 +1522,8 @@ export async function importProxyFromFile() {
     toast('已经有一个代理任务在跑，等它完成或先打断', 'warn');
     return;
   }
-  if (app.media.proxy_ready) {
-    toast('当前媒体已经有代理，无需重复导入', 'warn');
-    return;
-  }
   const mediaId = app.media.id;
+  const replacing = app.media.proxy_ready;
   const file = await window.kikusub.pickMedia();
   if (!file) return;
   app.busy = true;
@@ -1530,7 +1531,7 @@ export async function importProxyFromFile() {
     logEvent('info', 'proxy-import', file);
     await api.attachProxy(mediaId, file);
     await refreshMedia();
-    toast('代理已导入，监看画面会切换到该文件');
+    toast(replacing ? '已替换监看代理，画面已切换' : '代理已导入，监看画面会切换到该文件');
   } catch (err) {
     toast(`导入代理失败：${(err as Error).message}`, 'error');
   } finally {
@@ -1544,10 +1545,6 @@ export async function importProxyFromFile() {
 
 let exportPlanTimer: number | undefined;
 let exportPlanSeq = 0;
-
-export function defaultVideoExportDir(): string {
-  return app.config?.video_export_dir || app.config?.export_dir || app.config?.output_dir || '';
-}
 
 export async function loadExportOptions(force = false) {
   if (!app.connected) return;
@@ -2518,7 +2515,8 @@ export async function startTranscribe(
       end,
       keep_absolute_timeline: opts.absoluteTimeline,
       apply,
-      alt_review: !dualEngine && !isRange && Boolean(opts.altReview),
+      // 第二版不再限定整片：服务端会按区间合并（逐章做双源的核心路径）。
+      alt_review: !dualEngine && Boolean(opts.altReview),
       // 参数键就是 core.params 的规格键，服务端负责补默认 / 夹区间
       params: tuning.values[opts.engine] ?? {},
     });
@@ -2712,6 +2710,8 @@ async function onJobDone(job: JobSnapshot, kind: 'transcribe' | 'proxy' | 'expor
   }
   await refreshCues();
   await refreshQa();
+  // 局部转写会搬动译文轨（新句留空待译）：不重拉的话双语行会整体错位一条。
+  await loadTranslations();
   // 整片/区间转写都会改写核对表：写一份最新草稿，防丢
   scheduleDraftSave(0);
 
@@ -3050,24 +3050,20 @@ export function translationAt(index: number): string {
 }
 
 /**
- * 这一条的译文是否已经过期。
+ * 这一条的译文是否已经过期（有译文、但原文改过）。
  *
  * 本地按 `base`（生成译文时的原文快照）实时比较，而不是读服务端返回的 `stale`：
  * 用户改一句原文后界面要立刻变黄，不该等下一次请求。服务端那份仍保留给 API 消费者。
+ * 空译文是「待译」，由 `translationPendingCounts()` 单独计数（见 lib/translationStatus.ts）。
  */
 export function isTranslationStale(index: number): boolean {
-  const track = app.translations[app.trackLang];
-  if (!track) return false;
-  const base = track.base ?? [];
-  if (index >= base.length) return true;
-  return base[index] !== (app.cues[index]?.text ?? '');
+  return cueIsStale(app.translations[app.trackLang], index, app.cues);
 }
 
-export function staleTranslationCount(): number {
-  if (app.track === 'source' || !app.translations[app.trackLang]) return 0;
-  let count = 0;
-  for (let i = 0; i < app.cues.length; i += 1) if (isTranslationStale(i)) count += 1;
-  return count;
+/** 当前语种下「待译 / 原文已改」的条数；原文模式不计。 */
+export function translationPendingCounts() {
+  if (app.track === 'source') return { gap: 0, stale: 0 };
+  return countPending(app.translations[app.trackLang], app.cues);
 }
 
 export async function undoTranslation(lang = app.trackLang) {
@@ -3178,6 +3174,7 @@ export async function updateSettings(patch: {
   enabled_engines?: string[];
   export_dir?: string;
   video_export_dir?: string;
+  chapter_name_template?: string;
 }) {
   try {
     const data = await api.patchSettings(patch);

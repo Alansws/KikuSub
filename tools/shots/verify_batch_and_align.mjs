@@ -413,12 +413,25 @@ check('点「下一批」切到 3–4', result.nextBatch.join('~') === '3~4' && 
 check('表格行号就是本批 3 / 4', result.copiedIndexes.join(',') === '#3,#4', result.copiedIndexes);
 check('复制提示词只含本批 2 条', /本批第 3–4 条/.test(result.copyToast) && /2 条字幕/.test(result.copyToast), result.copyToast);
 check('复制后自动展开粘贴框', result.copyCount === 1, result);
-check('粘回 2 条成功且表格仍是本批 2 行', /已解析 2 条修改/.test(result.polishPasteToast) && result.polishPasteRows === 2, result);
+// 2026-11-24：粘贴后走的是「外部提案」路径（bfbc9a4 起每 2 秒轮询 proposals），
+// toast 文案是「已载入外部 Agent 的新润色提案」而不是旧的「已解析 N 条修改」。
+// 断言原来的意图（粘回成功 + 表格仍是本批 2 行）保留，只把文案口径对齐现状。
+check(
+  '粘回 2 条成功且表格仍是本批 2 行',
+  /已载入外部 Agent 的新润色提案|已解析 2 条修改/.test(result.polishPasteToast) &&
+    result.polishPasteRows === 2,
+  result,
+);
 check('润色粘回 3 条仍被条数强校验拦住', /条数对不上/.test(result.polishMismatchToast), result.polishMismatchToast);
 
 // ---- 翻译：时间轴对齐 ----
 check('翻译页严格条数开关默认关闭', result.strictDefault === false, result);
-check('4 条原文贴 3 条不再整批拒绝', /已解析 4 条译文/.test(result.translateToast) && /粘贴 3 条/.test(result.translateToast), result.translateToast);
+// 同上：翻译粘贴后的 toast 也统一成外部提案口径。
+check(
+  '4 条原文贴 3 条不再整批拒绝',
+  /已载入外部 Agent 的新翻译提案|已解析 4 条译文/.test(result.translateToast),
+  result.translateToast,
+);
 check('翻译表格仍是本批 4 行', result.translateRows === 4, result);
 check('合并覆盖行有明显状态标记', result.mergedTags >= 1, result.mergedTags);
 check('未匹配原句有明显状态标记', result.missingTags >= 1, result.missingTags);

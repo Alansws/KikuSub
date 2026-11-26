@@ -38,7 +38,7 @@ done
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
-# 页签 id 与 components/settings/SettingsTabs.svelte 里的 data 一致（lib/settings/tabs.ts）
+# 页签 id 与 components/settings/SettingsNav.svelte 里的 data 一致（lib/settings/tabs.ts）
 TABS="engines appearance ai env"
 THEMES="light dark mincho"
 DATA_ROOT="/tmp/kikusub-settings-matrix"

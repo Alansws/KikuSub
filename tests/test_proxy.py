@@ -316,3 +316,30 @@ def test_proxy_stream_serves_mp4_with_range(tmp_path):
     assert resp.status_code == 206
     assert len(resp.content) == 1024
     assert resp.headers["content-type"] == "video/mp4"
+
+
+def test_streaming_cmd_uses_multicore_cpu_not_videotoolbox():
+    """默认压制必须走多核 CPU。
+
+    2026-11-25 在 M4 Pro 实测：同样的 1080p H.264 120 秒，
+    `-hwaccel videotoolbox` 只有 14.8×，软解 + libx264 ultrafast 是 51×。
+    用户看到 CPU / GPU 都闲着，就是因为硬解固定功能块反而不如多核软解；
+    不要为了「看起来用了硬件」把它改回去。
+    """
+    cmd, stage, note = proxy.build_streaming_cmd(Path("clip.mp4"), Path("dest.mp4"))
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert cmd[cmd.index("-threads") + 1] == "0"
+    assert "-hwaccel" not in cmd
+    assert "CPU" in stage or "CPU" in note
+
+
+def test_install_existing_proxy_replaces_a_valid_existing_proxy(media, tmp_path):
+    """已有代理时再次导入必须替换，而不是静默复用旧文件（用户报障）。"""
+    old = _make(tmp_path / "outside" / "old-preview.mp4", size=60 * 1024)
+    standard = proxy.install_existing_proxy(media, old, tmp_path)
+    assert standard.stat().st_size == old.stat().st_size
+
+    new = _make(tmp_path / "outside" / "new-preview.mp4", size=70 * 1024)
+    replaced = proxy.install_existing_proxy(media, new, tmp_path)
+    assert replaced == standard
+    assert replaced.stat().st_size == new.stat().st_size

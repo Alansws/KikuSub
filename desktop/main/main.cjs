@@ -852,6 +852,11 @@ function createWindow() {
     vibrancy: 'sidebar',
     visualEffectState: 'followWindow',
     titleBarStyle: 'hiddenInset',
+    // 红绿灯位置。**渲染层有两个数值与它绑死**（见 app.css 的 `--tl-safe-x`
+    // 与 `--topbar-h`）：三颗 12px 灯 + 2×8 间距 = 52 宽，右缘落在 x=71；
+    // 收起态顶栏从侧栏右缘 52px 起，首个控件必须让到 87（71 + 16 呼吸），
+    // 且顶栏 40px 要比灯的中线 y=24 留出余量。改这里的 x/y 必须同步改
+    // `--tl-safe-x`，回归脚本 tools/shots/verify_phase2_shell.mjs 会拦。
     trafficLightPosition: { x: 19, y: 18 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -875,8 +880,9 @@ function createWindow() {
 
   // 渲染进程就绪后把已有握手补发一次（避免 sidecar 比页面先好的竞态）
   win.webContents.on('did-finish-load', () => {
-    // 开发用：KIKUSUB_ZOOM=2 把页面放大到 200%，用于缩放健壮性截图。
-    // 这是取证开关，不是产品功能（应用没有缩放菜单）。
+    // 开发用：KIKUSUB_ZOOM=2 把页面放大到 200%，仅手动取证时用。这是取证开关，
+    // 不是产品功能（应用没有缩放菜单）。**不要拿它做验收用例**：200% 下视口只有
+    // 680×419，布局必然塌（AGENTS.md 红线 14 / desktop-lifecycle §3.7.1）。
     if (IS_DEV && process.env.KIKUSUB_ZOOM) {
       const factor = Number(process.env.KIKUSUB_ZOOM);
       if (Number.isFinite(factor) && factor > 0) {
@@ -1132,6 +1138,7 @@ function buildMenu() {
         { label: '任务详报', click: send('menu:view', 'report') },
         { type: 'separator' },
         { label: '切换检查器', accelerator: 'CmdOrCtrl+Alt+I', click: send('menu:inspector') },
+        { label: '切换侧边栏', accelerator: 'Ctrl+CmdOrCtrl+S', click: send('menu:sidebar') },
         { label: '切换外观', accelerator: 'CmdOrCtrl+Shift+A', click: send('menu:theme') },
         { type: 'separator' },
         { role: 'togglefullscreen', label: '进入全屏幕' },
