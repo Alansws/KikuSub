@@ -47,7 +47,7 @@ typography:
     lineHeight: "19px"
     letterSpacing: "0"
   cue:
-    fontFamily: "'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Noto Sans JP', sans-serif"
+    fontFamily: "'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'SF Pro Text', 'PingFang SC', sans-serif"
     fontSize: "21px"
     fontWeight: 500
     lineHeight: "30px"
@@ -84,8 +84,9 @@ components:
     padding: "0 12px"
     height: "28px"
   button-secondary:
-    backgroundColor: "{colors.panel}"
+    backgroundColor: "{colors.sheet}"
     textColor: "{colors.ink}"
+    borderColor: "rgba(0, 0, 0, 0.14)"
     rounded: "{rounded.sm}"
     padding: "0 12px"
     height: "28px"
@@ -172,18 +173,25 @@ from `rgba(0,0,0,…)` in light and `rgba(255,255,255,…)` in dark, never from 
 - **Canvas** (`#FFFFFF`): the working stage. In daylight the page itself is **paper white** —
   the desk, not a grey felt under white cards. Every page ground, the cue sheet and the inspector
   live on this value or one step off it.
-- **Panel** (`#F5F5F7`): window chrome only — sidebar, titlebar, status bar, timeline dock.
-  Apple's pure neutral light grey. The previous `#F0F2F4` was a blue-leaning industrial grey that
-  contaminated the cobalt sitting next to it.
+- **Panel** (`#F5F5F7`): **window chrome only** — sidebar, titlebar, status bar, timeline dock.
+  It is never a page-internal command bar or filter strip; those sit on `--canvas` and are
+  separated by a 1 px hairline (see The Chrome Is Not a Page Toolbar Rule). Apple's pure neutral
+  light grey. The previous `#F0F2F4` was a blue-leaning industrial grey that contaminated the
+  cobalt sitting next to it.
 - **Inspector** (`#FBFBFD`, `--bg-inspector`): the third plane, half a step between paper and
   chrome. Three adjacent planes (sidebar / work / inspector) are each separable by value alone.
 - **Sheet / Surface** (`#FFFFFF`): the cue table, fields, popovers. Separated from the paper
   ground by a 1 px `--rule`, never by a grey wash.
 - **Well** (`#F2F2F7`, `--well`): the **recessed** fill for unselected option blocks, info strips,
   inputs, slider grooves and tag slots. In light it sits one step *below* the paper; in dark it
-  sits one step *below* the canvas (`#121214`, with a 7 % white hairline). Hover is `--well-hover`,
-  selection adds the blue pencil. **A well never lifts.** Lifting it was the 2026-11-25 mistake:
-  six raised wells per screen is exactly what "washed-out grey fog" looks like.
+  sits one step *below* the canvas (`#121214`). Hover is `--well-hover`, selection adds the blue
+  pencil. **A well never lifts.** Lifting it was the 2026-11-25 mistake: six raised wells per
+  screen is exactly what "washed-out grey fog" looks like.
+- **Well line** (`rgba(0,0,0,0.14)` light / `rgba(255,255,255,0.13)` dark, `--well-line`): the
+  1 px edge of a **box-shaped recess** — `<select>`, `<input>`, `<textarea>`, `.field`, `.ai-input`.
+  It may never be `transparent`: `#F2F2F7` on `#F5F5F7` differs by two levels, so without the
+  edge a dropdown collapses into a floating chevron. Blocks (`--well` option groups) still rely
+  on value alone; only fields carry the edge.
 - **Sumi** (`#15191C`; dark `#EDEDEF`): primary text, 16.2:1 / 14.4:1 on chrome.
 - **Graphite** (`#4B4B52`; dark `#B9B9BF`): secondary text, 7.1:1 / 8.6:1.
 - **Slate** (`#55555C`; dark `#A0A0A6`): 11 px labels, counts and units; 5.8:1 / 6.5:1 on the
@@ -236,6 +244,14 @@ a settings group, an empty state — is either a **title + a hairline** or a **w
 card on a grey ground, never a white frame inside a white frame, never a bordered box used as a
 section. On the dark side the same rule reads: a card is a carbon step, not a lighter box with a border.
 
+**The Chrome Is Not a Page Toolbar Rule (2026-11-26).** `--paper` belongs to the window shell —
+sidebar, titlebar, status bar, timeline dock. A **page-internal** command bar, filter strip or
+paste area (the three AI workbenches, export filters, settings toolbars) sits directly on
+`--canvas` and is separated by a 1 px hairline. Never stack a page ground, a grey command bar and
+a white table on top of each other: that is the "grey ground with white-framed buttons" pattern
+the user experiences as three dirty bands. Secondary buttons are paper-white (`--raise`) with a
+1 px `--well-line` edge, or a borderless `--well` soft fill; they are never white keys on a grey strip.
+
 **The Two-State Switch Rule (2026-11-26).** A switch in the chrome answers *"what happens if I
 press it"* in one press. The appearance button flips light ⇄ dark directly; `auto` (follow the
 system) is a Settings choice, never a third stop in a toolbar cycle. A two-state control that needs
@@ -264,9 +280,16 @@ that button's cycle.
 
 **Display Font:** SF Pro / system sans (with PingFang SC, Hiragino Sans)
 **Body Font:** SF Pro / system sans (with PingFang SC)
+**Cue Font (sans):** Hiragino Sans → Hiragino Kaku Gothic ProN → SF Pro Text → PingFang SC
+**Cue Font (mincho):** Hiragino Mincho ProN → Yu Mincho → Noto Serif JP → Songti SC
 **Label/Mono Font:** SF Mono (with ui-monospace, Menlo)
 
 **Character:** The voice is the macOS system voice, tuned like a printed cue sheet: tight display tracking, quiet body, Japanese set in Hiragino, and timecodes in tabular mono. No display face, no handwriting font, no type as costume.
+
+**The Japanese Face Comes First Rule.** The cue face puts Hiragino ahead of PingFang SC even in
+the `sans` preference. PingFang's kana and many kanji are drawn on a Chinese skeleton (「直」「骨」
+「步」 visibly differ); a Japanese cue sheet has to keep the Japanese glyphs. Chinese text is still
+covered by the PingFang fallback further down the stack, so no per-language font switch is needed.
 
 ### Hierarchy
 
@@ -357,8 +380,10 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 
 - **Shape:** 5 px radius, 28 px default height; 24 px inline, 32 px large, 36 px primary.
 - **Primary:** blue pencil fill, white text, no border, no bevel, one per view.
-- **Secondary:** `--raise` fill (raised) with a `inset 0 1px 0` top highlight in dark, 1 px
-  hairline, ink text. Buttons lift; that is the one place the dark theme goes *up*.
+- **Secondary:** `--raise` fill (paper white in light, `#313135` in dark) with a **1 px
+  `--well-line`** edge (`rgba(0,0,0,0.14)` / `rgba(255,255,255,0.13)`), ink text; in dark it also
+  carries an `inset 0 1px 0` top highlight. A white key needs a visible edge on a white page.
+  Buttons lift; that is the one place the dark theme goes *up*.
 - **Soft (tinted secondary, 2026-11-26):** `--well` fill (sunk), no border, no bevel, graphite
   text, hover `--well-hover`. This is the button for a **secondary action that lives on its own** — "去双语翻译"
   inside a notice strip, "管理引擎…" at the end of a list, page-header actions. A lone bare blue
@@ -387,10 +412,12 @@ The cue margin is the recurring geometry: 44 px wide, separated by a 1 px rule, 
 - **Shape:** 5 px radius, `--well` fill (**sunk**, in both appearances), **no border**.
   Hover `--well-hover`. Selected adds a 1 px `--accent-line` ring plus `--accent-soft`;
   hover never changes a border.
-- **Exception — text fields and dropdowns** carry `1 px solid var(--well-line)` (transparent in
-  light, `rgba(255,255,255,0.07)` in dark). A *block* is read from value alone; a *field* also
-  needs an edge to say "there is a caret in here". Focus moves the fill to `--well-focus`, never
-  up to `--raise`: raising a field would put it on the same layer as the buttons beside it.
+- **Exception — text fields and dropdowns** carry `1 px solid var(--well-line)`:
+  `rgba(0,0,0,0.14)` in light, `rgba(255,255,255,0.13)` in dark. A *block* is read from value
+  alone; a *field* also needs an edge to say "there is a caret in here". `transparent` is forbidden
+  — a field must be readable as a shape on both `--paper` and `--canvas`. Focus moves the fill to
+  `--well-focus` (paper white in light), never up to `--raise`: raising a field would put it on
+  the same layer as the buttons beside it.
 - **Rule:** one interactive layer. An option group is not a card, and never sits inside another
   outlined box. Explain the option in 13/19 `--ink-2`, never in a second tonal block.
 - **Where:** export mode / subtitle style / bitrate presets, engine rows, appearance and cue-font

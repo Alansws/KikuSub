@@ -1,6 +1,6 @@
 ---
 created: 2026-11-25 20:35
-updated: 2026-11-26 04:20
+updated: 2026-11-26 13:20
 ---
 # KikuSub 前端重塑（2026-11）
 
@@ -105,6 +105,7 @@ updated: 2026-11-26 04:20
 | **Step 7 导出页细节 + 居中** | ✅ 完成 | 发丝线呼吸、裸蓝字改 `.btn.soft`、单栏页面 `--measure-page` 居中；见 §7.10 五/六 |
 | **Step 7 死样式修复** | ✅ 完成 | 紧凑模式 `.player/.table-area/.transport` 从父组件搬回各自组件；ReviewView 1764；见 §7.10 七 |
 | **第二阶段 Batch 1 导入页融合** | ✅ 完成，待用户确认截图 | 删「继续核对 / 换片…」卡，恢复大拖放区主视觉；顺序回到 拖放区 → 代理说明 → 导出文件夹 → 最近打开；按钮去 `…`；见 §8.10 |
+| **第二阶段 Batch 2 令牌治本 + AI 三页** | ✅ 完成，待用户确认截图 | `--well-line` 亮 0.14 / 暗 0.13；页内工具栏回 `--canvas` + 发丝线；`--font-cue` 日语优先；锁轴 / 重排 / 双语三页去灰带、粘贴区与表格精修；新增 22 条控件可见性断言；见 §8.11 |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
@@ -1584,6 +1585,85 @@ git push -u origin feat/ui-redesign      # 只推分支，不推任何 tag
 > 「最近打开」的时长与体积就是文件本身的值——不编造 GB 级读数。与既有基线
 > `import-1360x838.png` 同视口（1360×838 @2x）。
 
+## 8.11 第二阶段 Batch 2：令牌治本 + AI 三页（2026-11-26）
+
+> 分支 **`feat/ui-redesign-p2`** 继续。`feat/ui-redesign` 冻结不动、`main` 不动、现役
+> `build/pack/KikuSub.app` 与 `~/Library/Application Support/KikuSub` 零触碰。
+> 本批次仍**不重打 1.4G 的 `.app`**（用户要求几批页面调完再统一打包）。
+
+用户把老版《翻译》（图 1）与本版《锁轴润色》（图 2）并排看后，定位到「不管怎么改，界面总有
+灰底白框按钮、甚至下拉框只看得见一个三角」不是组件问题，而是**设计系统令牌层的三处缺陷**。
+Batch 2 先治本、再精修 AI 三页，不改大布局。
+
+### 一、治本：三处设计系统缺陷
+
+| 缺陷 | 根因 | 修正 |
+| --- | --- | --- |
+| 下拉框 / 数字框隐身，只剩一枚三角 | 亮色 `--well-line: transparent`；`--well #F2F2F7` 与工具栏 `--paper #F5F5F7` 只差 2 个色阶 | 亮色 `--well-line: rgba(0,0,0,0.14)`；暗色 `rgba(255,255,255,0.13)`（原 `0.07`）。所有 `<select>` / `<input>` / `<textarea>` / `.field` / `.ai-input` 都走这一条线；`transparent` 被写进 DESIGN.md 的禁令 |
+| 满屏「灰底白框按钮」 | 页内命令栏铺 `--paper` / `--bg-inspector` 灰底，`.btn` 却读 `--raise` 白底；DESIGN.md YAML 的 `button-secondary` 写 `{colors.panel}`，正文写 `--raise` | **严格区分窗口外壳与页内工具栏**：`--paper` 只给侧栏 / 标题栏 / 底栏 / 时间轴坞；AI 三页的标题行、命令栏、粘贴区、应用条全部回到 `--canvas`，只用 1px 发丝线分隔。`.btn` 改用 `--btn-bg / --btn-bg-hover / --btn-line / --btn-line-hover` 四个令牌：亮色纸白 + 0.14 黑细边、悬停微浅中性底，暗色抬升层 + 0.13 白细边。DESIGN.md YAML 与正文同步 |
+| 日语汉字与假名呈中文字形 | `--font-cue` 继承 `--font-sans`，`PingFang SC` 排在 `Hiragino Sans` 前面 | sans 态的 `--font-cue` 固定为 `'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'SF Pro Text', 'PingFang SC', sans-serif`；mincho 态不动。中文仍由后置的 PingFang 兜底，不需要按语种切字体 |
+
+DESIGN.md 同时新增 **The Chrome Is Not a Page Toolbar Rule**，并把「well line 不许透明」写进
+Named Rules 与 Option blocks 的例外段；控制项边线、按钮边线与字体栈的说明都改成代码现值。
+
+**顺带修好的验证基建**：截图模式此前仍受生产最小窗宽 1080px 约束，`verify_phase2_shell`
+的 880px「紧凑模式」用例实际一直量到 1080px，「侧栏 52px」必红。现在只在 `--screenshot`
+（透明窗口 / `show:false`）路径把最小尺寸放宽到请求尺寸；人类窗口与打包版仍是 1080×680。
+
+### 二、AI 三页（锁轴 / 重排 / 双语翻译）
+
+| 区域 | 改动 |
+| --- | --- |
+| 顶部工具栏 | `.aiw-page / .aiw-head / .aiw-cmd-row` 全部改为 `--canvas`，命令栏去掉 `--bg-inspector` 灰底；标题行 / 说明行 / 命令栏 / 表格 / 底栏统一 **24px 页边**；下拉框与按钮统一 **28px** 高；`模板` / `处理范围` / `译为` / `1 ~ 246` / `每批 150 条` 全部有 1px 可见边线 |
+| 次要入口 | 动作按钮去掉尾部 `…`（`导入建议文件` / `粘贴结果` / `导入建议` / `另存` / `导入 B`）；页内指路 `断句本身错了？去重排润色 →` 改为 `--ink-2` 常态、悬停才上蓝的次级链接，和说明同排 |
+| 外部手动粘贴区 | 背景回台面；输入框用 `--well-focus` + 1px `--well-line`，留白 10/12；底部 `解析成建议` 主键 + `取消` 纸白键 + 右侧校验提示；`将替换当前建议` 仍是 warn 胶囊 |
+| 表格 | 表头 500 字重、24px 页边、更松的行距；空态 `—` 去掉虚线框，退成 46% 透明度的极轻占位；有提案时终稿改为「极淡蓝 + `accent-line` 1px 勾边」的文本卡片，采纳勾统一成 20px 方形小键（未选中是空格子，选中才是蓝底白勾） |
+| 重排页 | `body / side / preview` 三层灰带全部改为 `--canvas` + 1px 分栏线；步骤卡仍是 well，卡头不再另铺灰；粘贴 / 拖入区从虚线圈改成 1px 实线输入框，聚焦才上蓝环 |
+| 双语翻译 | 时间码从「每行都是蓝字」退回 `--ink-2`，hover 才上强调；译文列与润色页共用同一套终稿卡片语法；底部应用条与表格同台面 |
+
+### 三、新增守卫
+
+**`tools/shots/verify_ai_toolbar_controls.mjs`（新，22 条断言）** 不靠截图，在渲染进程里读计算样式：
+
+- `--well-line` 亮 / 暗 alpha ≥ 0.10；`--font-cue` 以 Hiragino Sans 起头；
+- `.aiw-page` / `.aiw-head` 与 `--canvas` 同色，`.aiw-cmd-row` 背景透明、只留 1px 发丝线；
+- `.aiw-head` 内 5 个 `<select>` / `<input>` 每一个都有 ≥1px 且 alpha ≥0.10 的边线（或与真实台面
+  ≥0.025 明度差）；纸白键同样必须有边线；
+- 下拉框与按钮同为 28px；工具栏动作按钮无尾部 `…`。
+
+`tests/style-drift.test.cjs` 的「间距必须用 `--sp-N`」一并被触发，新增的 24 / 12 / 8 / 4px
+全部改为令牌；`npm run test:main` 402/402。
+
+### 四、验证
+
+| 项 | 结果 |
+| --- | --- |
+| `npm run check`（tsc） | ✅ 0 错 |
+| `npm run check:svelte` | ✅ 4/4 与基线持平（4.7.8） |
+| `npm run build` | ✅ 通过 |
+| `npm run test:main` | ✅ 402/402（含 style-drift 三条） |
+| `node tools/shots/verify_ai_toolbar_controls.mjs` | ✅ 22/22（**新增**；亮 / 暗各 11 条） |
+| `node tools/shots/verify_phase2_shell.mjs` | ✅ |
+| `node tools/shots/verify_import_page.mjs` | ✅ 15/15（全局 `.btn` / `--well-line` 改动未回退 Batch 1） |
+| `node tools/shots/capture_ai_workbench.mjs --themes light,dark --states polish-dual,polish-paste,reshape-draft,reshape-paste,translate-proposal,translate-paste` | ✅ 12/12（新增 4 个状态：锁轴粘贴 / 重排粘贴 / 翻译提案 / 翻译粘贴） |
+| 关联回归（无窗口） | ✅ `verify_gap_fill` / `verify_clip_scope` / `verify_translation_flow` / `verify_batch_and_align` 全绿 |
+| `pytest -q tests/test_docs_health.py` | ✅ 6/6 |
+| 重打 `.app` | — 本轮**不做**，按用户要求等后续页面批次一起打包 |
+
+> 沙箱环境跑 Electron 需 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox`；这是既有约定，
+> 不是本次新增的窗口路径。全程 `--screenshot` 透明窗口取帧，未开任何可见窗口。
+
+### 五、取证截图（2608×1607 @2x，全部 `read_image` 自检）
+
+| 状态 | 日间 | 夜间 |
+| --- | --- | --- |
+| 锁轴 · 已有提案 | [p2-ai-polish-proposal-light.png](images/refactor-2026-11/p2-ai-polish-proposal-light.png) | [p2-ai-polish-proposal-dark.png](images/refactor-2026-11/p2-ai-polish-proposal-dark.png) |
+| 锁轴 · 展开粘贴框 | [p2-ai-polish-paste-light.png](images/refactor-2026-11/p2-ai-polish-paste-light.png) | [p2-ai-polish-paste-dark.png](images/refactor-2026-11/p2-ai-polish-paste-dark.png) |
+| 重排 · 已预检 | [p2-ai-reshape-draft-light.png](images/refactor-2026-11/p2-ai-reshape-draft-light.png) | [p2-ai-reshape-draft-dark.png](images/refactor-2026-11/p2-ai-reshape-draft-dark.png) |
+| 重排 · 展开粘贴框 | [p2-ai-reshape-paste-light.png](images/refactor-2026-11/p2-ai-reshape-paste-light.png) | [p2-ai-reshape-paste-dark.png](images/refactor-2026-11/p2-ai-reshape-paste-dark.png) |
+| 双语翻译 · 已有译文 | [p2-ai-translate-proposal-light.png](images/refactor-2026-11/p2-ai-translate-proposal-light.png) | [p2-ai-translate-proposal-dark.png](images/refactor-2026-11/p2-ai-translate-proposal-dark.png) |
+| 双语翻译 · 展开粘贴框 | [p2-ai-translate-paste-light.png](images/refactor-2026-11/p2-ai-translate-paste-light.png) | [p2-ai-translate-paste-dark.png](images/refactor-2026-11/p2-ai-translate-paste-dark.png) |
+
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
 > 本节此前是三个待问项；现已冻结为决定，后续会话不再重复询问。
@@ -1657,6 +1737,13 @@ git push -u origin feat/ui-redesign      # 只推分支，不推任何 tag
 | 2026-11-26 | 导入页顺序回到 拖放区 → 代理说明 → 导出文件夹 → 最近打开 | 老版结构更清楚；「上次的稿在哪」比「换哪一部」更贴本页 |
 | 2026-11-26 | 本页按钮一律不带尾部 `…`（含打开对话框的次级入口） | 用户：三个点不好看也不规范；本页两个按钮都是立即执行 |
 
+| 2026-11-26 | **`--well-line` 亮色改 `rgba(0,0,0,0.14)`、暗色 0.13；禁止 transparent** | 亮色 well 与 paper 只差 2 个色阶，透明边线让所有下拉 / 数字框只剩一枚三角 |
+| 2026-11-26 | **页内命令栏落 `--canvas`，`--paper` 只给窗口外壳** | 灰底 + 白键 = 用户反复报的「灰底白框按钮」；三层灰带同时消失 |
+| 2026-11-26 | **`--font-cue` sans 态把 Hiragino 排到 PingFang 前** | PingFang 的假名与部分汉字是中文骨架；日文台本必须用日文字形，中文由后置 fallback 覆盖 |
+| 2026-11-26 | **AI 三页：24px 页边 + 28px 控件 + 纸白键细边** | 老版对照后，工具栏控件左缘与标题不齐、边线隐身是最明显的「没做完」 |
+| 2026-11-26 | **待生成空态去掉虚线框；采纳勾未选只留空格子** | 虚线框套框读成没画完的表格；未选就画勾会让整列看起来已全选 |
+| 2026-11-26 | **新增 `verify_ai_toolbar_controls.mjs`，用计算样式而不是截图守可见性** | 截图只能证明这一次；计算样式能把「边线透明 / 灰底白键」整类问题冻住 |
+
 ## 11. 交接清单（新会话）
 
 1. `git status` 必须干净。第一阶段封板在 `feat/ui-redesign`（已冻结，只读）；
@@ -1671,5 +1758,6 @@ git push -u origin feat/ui-redesign      # 只推分支，不推任何 tag
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。第二阶段按页面分批推进
-   （Batch 1 导入页已完成，见 §8.10）；**用户明确要求几批调完再统一重打 `.app`**。
+   （**Batch 1 导入页 §8.10、Batch 2 AI 三页 §8.11 已完成，均待用户确认截图**）；
+   **用户明确要求几批调完再统一重打 `.app`**。
 6. 任何打包/试用动作先读 §0.1：现役 `.app`、配置文件、`userData` 一律不能覆盖。
