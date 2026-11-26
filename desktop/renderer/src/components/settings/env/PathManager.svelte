@@ -90,7 +90,7 @@
           <span class="path-badge">{badgeOf(row.key)}</span>
         {/if}
         <button class="btn sm" onclick={() => onChange(row.key)} disabled={busy}>
-          {busy ? '处理中…' : '更改…'}
+          {busy ? '处理中…' : '更改'}
         </button>
         {#if isCustom(row.key)}
           <button class="btn sm ghost" onclick={() => onReset(row.key)} disabled={busy}>恢复默认</button>

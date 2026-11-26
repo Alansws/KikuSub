@@ -146,7 +146,7 @@
         onclick={() => importTranslationFromExport()}
         disabled={!app.cues.length}
         title="选择与当前原文逐条对齐的译文 SRT / VTT"
-      >导入译文…</button>
+      >导入译文</button>
     {/if}
   </div>
 
@@ -157,7 +157,7 @@
         role="menuitem"
         onclick={() => run(() => importTranslationFromExport())}
         disabled={!app.cues.length}
-      >导入译文…</button>
+      >导入译文</button>
       <button role="menuitem" onclick={() => run(() => undoTranslation())}>撤销译文</button>
       <div class="tb-sep" role="separator"></div>
       <button

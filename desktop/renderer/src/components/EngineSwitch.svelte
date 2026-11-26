@@ -120,7 +120,7 @@
     >
       <div class="ec-head">
         <span>识别引擎</span>
-        <button class="ec-manage" onclick={manage}>管理…</button>
+        <button class="ec-manage" onclick={manage}>管理引擎</button>
       </div>
       <div class="ec-list">
         {#each engines as item (item.key)}

@@ -36,7 +36,7 @@
           代理文件可能已损坏，或它的编码同样不受支持。重新导入一份可播放的代理。
         </span>
         <div class="gate-actions">
-          <button class="gate-btn primary" onclick={onimport}>重新导入代理…</button>
+          <button class="gate-btn primary" onclick={onimport}>重新导入代理</button>
         </div>
       {:else}
         <b>无法显示这个视频的画面</b>
@@ -53,7 +53,7 @@
             {busy ? '正在压制…' : '压制代理'}
           </button>
           {#if !busy}
-            <button class="gate-btn quiet" onclick={onimport}>导入已有代理…</button>
+            <button class="gate-btn quiet" onclick={onimport}>导入已有代理</button>
           {/if}
         </div>
       {/if}

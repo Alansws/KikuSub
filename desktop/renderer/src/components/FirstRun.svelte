@@ -73,7 +73,7 @@
     <div class="path-box">
       <div class="path-head">
         <span>模型目录</span>
-        <button class="btn tiny" onclick={pick} disabled={busy}>选择其他位置…</button>
+        <button class="btn tiny" onclick={pick} disabled={busy}>选择其他位置</button>
       </div>
       <div class="path mono" title={chosen}>{chosen}</div>
       <div class="path-note">数据与输出目录：<span class="mono">{dataDir}</span></div>

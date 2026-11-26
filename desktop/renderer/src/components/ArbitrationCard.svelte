@@ -317,7 +317,7 @@
           title="空耳 / 罗马音都行：例「斯国一 / sugoi」。只发送文本，不发送时间轴、音频或截图"
           maxlength={MAX_HINT_CHARS}
           value={draft}
-          placeholder={hasResult ? '补充线索或继续追问…' : '例：斯国一 / sugoi / 像「やばい」'}
+          placeholder={hasResult ? '补充线索或继续追问' : '例：斯国一 / sugoi / 像「やばい」'}
           oninput={onHintInput}
           onkeydown={onHintKeydown}
         ></textarea>

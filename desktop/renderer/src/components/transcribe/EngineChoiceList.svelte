@@ -80,9 +80,12 @@
   {/if}
 
   {#if others.length}
+    <!-- 「其他已启用引擎」原来是一层厚灰底盒子、里面再塞白色小卡（2026-11-26 报障：
+         典型的灰底套白框）。按 DESIGN.md 的 No White Frame：它是**页面里的一个分区**，
+         所以只留「标题 + 一条发丝线」，胶囊自己带细边。 -->
     <div class="others">
       <div class="others-head">
-        <span>其他已启用引擎</span>
+        <span class="others-title">其他已启用引擎</span>
         <span class="others-hint">在设置里启用后保留入口；与标题栏引擎胶囊同步</span>
       </div>
       <div class="others-row">
@@ -95,6 +98,7 @@
             onclick={() => (engine = item.key)}
             title={item.description}
           >
+            <span class="radio" aria-hidden="true"></span>
             <span class="other-name">{item.label}</span>
             <span class="other-meta">
               {item.installed ? '已安装' : item.approx_label} · {item.purpose}
@@ -109,7 +113,7 @@
     <span>选择结果与标题栏的引擎胶囊是同一个值</span>
     {#if onmanage}
       <button class="btn soft sm" type="button" onclick={onmanage}>
-        <Icon name="gear" size={11} />管理引擎…
+        <Icon name="gear" size={11} />管理引擎
       </button>
     {/if}
   </div>
@@ -260,14 +264,14 @@
     color: var(--text-2);
   }
 
+  /* 分区 = 标题 + 发丝线（No White Frame）：不再是一层灰底盒子里面塞白卡。
+     灰底盒子配上里面的白胶囊，正是用户说的「厚灰底套白框」套娃。 */
   .others {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: var(--sp-2) var(--sp-3);
-    border: 0;
-    border-radius: var(--rad-card);
-    background: var(--fill);
+    gap: var(--sp-2);
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
     min-width: 0;
   }
   .others-head {
@@ -275,13 +279,20 @@
     align-items: baseline;
     gap: var(--sp-2);
     flex-wrap: wrap;
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--text-2);
+    min-width: 0;
+  }
+  .others-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
   }
   .others-hint {
     font-weight: 400;
     font-size: 11px;
+    line-height: 16px;
     color: var(--text-3);
   }
   .others-row {
@@ -290,26 +301,54 @@
     flex-wrap: wrap;
     min-width: 0;
   }
+  /* 单层质感控件：纸白键 + 1px 发丝边（与 .btn 同一套语法），
+     靠边线在白台面上读成「可以选」，而不是靠灰底衬托。 */
   .other-chip {
     appearance: none;
     display: inline-flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
     min-width: 0;
-    padding: 4px var(--sp-2);
-    border: 1px solid transparent;
+    height: 26px;
+    padding: 0 9px 0 7px;
+    border: 1px solid var(--btn-line);
     border-radius: var(--rad-control);
     background: var(--raise);
     color: var(--text);
     font: inherit;
     text-align: left;
+    box-shadow: var(--raise-bevel);
+    transition:
+      background var(--dur) var(--ease),
+      border-color var(--dur) var(--ease);
   }
   .other-chip:hover {
-    border-color: transparent;
+    border-color: var(--btn-line-hover);
   }
   .other-chip.on {
-    border-color: var(--accent-line);
+    border-color: var(--accent);
     background: var(--accent-soft);
+  }
+  /* 与主力引擎行同一颗单选圈：选中状态在这张表里只有一个语法。 */
+  .other-chip .radio {
+    width: 11px;
+    height: 11px;
+    flex: 0 0 11px;
+    margin-top: 0;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+  }
+  .other-chip.on .radio {
+    border-color: var(--accent);
+  }
+  .other-chip.on .radio::after {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
   }
   .other-name {
     font-size: 12px;

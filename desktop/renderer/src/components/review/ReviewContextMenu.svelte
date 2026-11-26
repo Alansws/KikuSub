@@ -75,7 +75,7 @@
     await insertCueAt(t);
   }
 
-  /** 右键「以此句音频新建音色…」：先给角色起名，再让后端精确切片。 */
+  /** 右键「以此句音频新建音色」：先给角色起名，再让后端精确切片。 */
   function openVoiceDialog(index: number) {
     menu = null;
     const cue = app.cues[index];
@@ -137,7 +137,7 @@
         role="menuitem"
       >
         <Icon name="speaker" size={12} />
-        <span class="ctx-label">以此句音频新建音色…</span>
+        <span class="ctx-label">以此句音频新建音色</span>
       </button>
       <button class="ctx-item" onclick={audition} role="menuitem">
         <Icon name="play" size={12} />

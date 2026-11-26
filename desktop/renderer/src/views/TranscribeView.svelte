@@ -384,6 +384,8 @@
 <div class="pane">
   <div class="pane-head">
     <PageHeader title="转写" {subtitle}>
+      <!-- 右上角两个功能入口：图标 + 文字，纸白键 + 发丝边（`PageHeader` 统一给）。
+           2026-11-26 报障：只有 5% 灰底时对比度太低，看着像不可点。 -->
       <button
         class="btn ghost sm"
         type="button"
@@ -391,10 +393,15 @@
         disabled={!app.report}
         title={app.report ? '查看本次转写的任务详报' : '跑完一次转写后才有报告'}
       >
-        任务报告
+        <Icon name="report" size={11} />任务报告
       </button>
-      <button class="btn ghost sm" type="button" onclick={() => (shortcuts.open = true)}>
-        快捷键
+      <button
+        class="btn ghost sm"
+        type="button"
+        onclick={() => (shortcuts.open = true)}
+        title="查看全部快捷键（⌘/）"
+      >
+        <Icon name="keyboard" size={11} />快捷键
       </button>
     </PageHeader>
   </div>
@@ -644,29 +651,13 @@
               {/if}
 
               {#if transcribeTask.target === 'both'}
+                <!-- 主 / 副的流向：分区用「小标题 + 发丝线」，不再套一层灰底盒子。
+                     原来这块灰底盒里塞着白底下拉框，正是用户报障的第二个「灰底白框」。 -->
                 <div class="duo">
-                  <div class="duo-row">
-                    <span class="duo-role">主引擎</span>
-                    <b class="duo-name">{currentEngine?.label ?? engine}</b>
-                    <span class="duo-arrow" aria-hidden="true">→</span>
-                    <span class="duo-dest">写进核对台（主稿）</span>
-                  </div>
-                  <div class="duo-row">
-                    <span class="duo-role">副引擎</span>
-                    <select class="duo-select" bind:value={secondaryEngine} aria-label="副引擎">
-                      {#each dualCandidates as item (item.key)}
-                        <option value={item.key}>{item.label}</option>
-                      {/each}
-                    </select>
-                    <span class="duo-arrow" aria-hidden="true">→</span>
-                    <span class="duo-dest">写进第二版（只读对照）</span>
-                  </div>
-                  <div class="duo-foot">
-                    <span class="duo-note">
-                      两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；副稿永远不改核对台。
-                    </span>
+                  <div class="duo-head">
+                    <span class="duo-title">两版一起 · 谁写哪里</span>
                     <button
-                      class="btn ghost sm"
+                      class="btn soft sm"
                       type="button"
                       onclick={swapRoles}
                       disabled={!secondaryEngine}
@@ -675,6 +666,28 @@
                       <Icon name="split" size={11} />交换主副
                     </button>
                   </div>
+                  <div class="duo-row">
+                    <span class="duo-role">主引擎</span>
+                    <b class="duo-name">{currentEngine?.label ?? engine}</b>
+                    <span class="duo-arrow" aria-hidden="true">→</span>
+                    <span class="duo-dest">写进核对台（主稿）</span>
+                  </div>
+                  <div class="duo-row">
+                    <span class="duo-role">副引擎</span>
+                    <span class="duo-field">
+                      <select class="duo-select" bind:value={secondaryEngine} aria-label="副引擎">
+                        {#each dualCandidates as item (item.key)}
+                          <option value={item.key}>{item.label}</option>
+                        {/each}
+                      </select>
+                      <Icon name="chevron-down" size={10} />
+                    </span>
+                    <span class="duo-arrow" aria-hidden="true">→</span>
+                    <span class="duo-dest">写进第二版（只读对照）</span>
+                  </div>
+                  <p class="duo-note">
+                    两遍顺序执行，切换前会释放上一个引擎（需 12GB 以上内存）；副稿永远不改核对台。
+                  </p>
                 </div>
               {/if}
 
@@ -916,17 +929,38 @@
     margin-top: var(--sp-3);
   }
 
-  /* 两版一起的流向：主角是「谁写哪里」，不靠一段长提示解释 */
+  /* 两版一起的流向：主角是「谁写哪里」。
+     分区语法 = 小标题 + 一条发丝线（DESIGN.md 的 No White Frame）：
+     这块原来是灰底盒子，里面套着白底下拉框——用户报障的「灰底套白框」第二个现场。 */
   .duo {
     border: 0;
-    border-radius: var(--rad-card);
-    background: var(--fill);
-    padding: var(--sp-2) 10px;
+    border-top: 1px solid var(--line);
+    padding: var(--sp-3) 0 0;
     display: flex;
     flex-direction: column;
     gap: 7px;
     min-width: 0;
     margin-top: var(--sp-3);
+  }
+  .duo-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+    margin-bottom: 2px;
+  }
+  .duo-title {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+  .duo-head .btn {
+    flex: 0 0 auto;
   }
   .duo-row {
     display: flex;
@@ -947,19 +981,45 @@
     text-overflow: ellipsis;
     max-width: 170px;
   }
+  /* 下拉框是**下沉的暗槽**（well + 1px --well-line），与输入框同一语法：
+     不再是一块浮在灰底上的纯白键。箭头是装饰，指针事件留给 select。 */
+  .duo-field {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    height: 26px;
+    border: 1px solid var(--well-line);
+    border-radius: var(--rad-control);
+    background: var(--well);
+    color: var(--text-3);
+    padding-right: 6px;
+  }
+  .duo-field:focus-within {
+    border-color: var(--accent);
+    background: var(--well-focus);
+  }
   .duo-select {
+    appearance: none;
     font: inherit;
     font-size: 12px;
     color: var(--text);
-    background: var(--raise);
-    border: 1px solid transparent;
+    background: transparent;
+    border: 0;
     border-radius: var(--rad-control);
-    padding: 2px 6px;
+    padding: 0 var(--sp-3) 0 var(--sp-2);
+    height: 24px;
     max-width: 190px;
     min-width: 120px;
   }
   .duo-select:focus {
-    border-color: var(--accent);
+    outline: none;
+  }
+  .duo-field :global(svg) {
+    position: absolute;
+    right: 6px;
+    pointer-events: none;
+    color: var(--text-3);
   }
   .duo-arrow {
     color: var(--text-3);
@@ -970,24 +1030,12 @@
     min-width: 0;
     overflow-wrap: break-word;
   }
-  .duo-foot {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    padding-top: 6px;
-    border-top: 1px solid var(--line-2);
-    min-width: 0;
-  }
   .duo-note {
-    flex: 1;
-    min-width: 0;
+    margin: 2px 0 0;
     font-size: 11px;
-    line-height: 1.45;
+    line-height: 1.5;
     color: var(--text-3);
     text-wrap: pretty;
-  }
-  .duo-foot .btn {
-    flex: 0 0 auto;
   }
 
   .seg button.danger-opt,

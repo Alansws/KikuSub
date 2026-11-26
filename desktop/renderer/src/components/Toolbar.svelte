@@ -329,7 +329,7 @@
                 : '选择已经压好的代理文件，直接挂到当前媒体，不再重新压制'}
             >
               <Icon name="tray" size={12} />
-              <span class="mi-label">导入代理…</span>
+              <span class="mi-label">导入代理</span>
               <span class="mi-sub">{app.media?.proxy_ready ? '替换现有' : '已有文件'}</span>
             </button>
 
@@ -343,7 +343,7 @@
               title="从导出文件夹选择原文字幕，导入核对台作为基线"
             >
               <Icon name="doc" size={12} />
-              <span class="mi-label">导入原文字幕…</span>
+              <span class="mi-label">导入原文字幕</span>
               <span class="mi-sub">SRT / VTT</span>
             </button>
             <button
@@ -354,7 +354,7 @@
               title="选择与当前原文逐条对齐的译文 SRT / VTT，原文与时间轴不动"
             >
               <Icon name="quote" size={12} />
-              <span class="mi-label">导入译文字幕…</span>
+              <span class="mi-label">导入译文字幕</span>
               <span class="mi-sub">逐条对齐</span>
             </button>
 

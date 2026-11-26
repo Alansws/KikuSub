@@ -125,7 +125,7 @@
         {option.title} · {formatClock(option.start)} → {formatClock(option.end)}
       </option>
     {/each}
-    <option value="custom">自定义起止时间…</option>
+    <option value="custom">自定义起止时间</option>
   </select>
 
   {#if editing || selectValue === 'custom'}

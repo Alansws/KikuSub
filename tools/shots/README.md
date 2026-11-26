@@ -33,6 +33,17 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh \
 下一节的专用脚本。
 
 状态名：`import` `transcribe` `review` `dual` `polish` `translate` `export` `settings` `prompts`。
+
+## 专项回归（改对应功能时跑）
+
+| 脚本 | 守什么 |
+| --- | --- |
+| `verify_dual_scope.mjs` | 双引擎复核的「对照范围」：多章节主稿 636 条 + 只有章节三的 B 220 条时默认聚焦章节三、统计只算本段、「用 B 替换当前范围」不伤前两章、⌘Z 一次退回。**片源必须长过最后一段**（脚本自带 3400s 的 1fps 占位片）。 |
+| `verify_transcribe_clean.mjs` | 转写页不再有「灰底套白框」（`.others` / `.duo` 背景透明 + 1px 发丝线、下拉与胶囊单层）、页头入口有轮廓且对比度达标、整页无尾省略号。 |
+| `verify_import_page.mjs` / `verify_ai_toolbar_controls.mjs` | 各自页面无尾省略号（全站口径的守卫是 `tests/test_ui_label_hygiene.py`）。 |
+
+两个新脚本都接受 `KIKUSUB_UI_COMBOS` / `KIKUSUB_SCOPE_COMBOS`（`色板/明暗` 逗号分隔，
+默认 `cobalt/light,catppuccin/light`），截图落在脚本打印的临时目录里。
 `--seed` 指定种子（默认 `tools/shots/seed.json`；`--seed tools/shots/readme-seed.json` 是 README 成品图那份）。
 **导入 / 转写 / 核对 / 翻译 / 导出这五个状态都用种子**：空态的转写与导出页只有一句「先导入媒体」，
 对验收和 README 都没信息量。其余状态靠 `KIKUSUB_DEV_EVAL` 点侧栏切换，截到的是真实页面而不是空壳。
