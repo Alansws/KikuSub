@@ -111,6 +111,22 @@ node tools/shots/verify_phase2_shell.mjs
 （竖分割线从 y=40 起，不横穿红绿灯）。口径见
 `docs/contracts/review-console.md` §3.4.13。
 
+## 导入页结构回归（第二阶段 Batch 1）
+
+导入页在第二阶段回到「大拖放区是唯一主视觉」：第一阶段那张「继续核对 ⌘3 / 换片…」卡与
+12px 换片提示已整张删除，顺序恢复为 拖放区 → MKV/HEVC 代理说明 → 导出文件夹 → 最近打开。
+这个脚本把口径冻成 15 条断言（**不点任何会开原生对话框的按钮**）：
+
+```bash
+node tools/shots/verify_import_page.mjs
+# 沙箱 / CI：KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox node tools/shots/verify_import_page.mjs
+```
+
+断言的是：有片时拖放区仍是 760 宽（不被收窄）、`.resume` / `.drop-hint` 不存在、
+三块顺序与分区标题、五个扩展名 chip、本页按钮无尾 `…`、列表 / 网格切换仍可用。
+截图落在系统临时目录的 `kikusub-import-verify/import.png`。契约口径见
+`docs/contracts/review-console.md` §3.4.28，批次记录见 `docs/frontend-refactor-2026-11.md` §8.10。
+
 ## 清理标点回归
 
 用户报障过的两类行（2026-11-17「句中顿号被换成空格」「行尾省略号点了不动」）有专门的
