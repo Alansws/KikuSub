@@ -26,7 +26,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import dual_review, export_naming
+from core import dual_review, dual_scope, export_naming
 from core.cues import _unique_sorted_cues
 from core.subtitles import cues_from_subtitle_file
 
@@ -47,10 +47,34 @@ class ImportAltRequest(BaseModel):
 class ReplacePrimaryRequest(BaseModel):
     # 覆盖成功后默认清空第二版（Q11）；想保留对照可显式传 false。
     clear_alt: bool = True
+    # 2026-11-26：``auto``（默认）= 给了 start/end 就按范围替换，否则整列覆盖；
+    # ``range`` = 只替换窗口内的核对台字幕（安全口径，界面默认）；
+    # ``all`` = 整列覆盖。``auto`` 只为兼容不带范围的老客户端。
+    # **B 只覆盖了局部时整列覆盖会被 :func:`dual_scope.would_trim` 拦下**，
+    # 需要 ``confirm_trim=True`` 才放行——这就是「绝不允许误操作清空第 1、2 章」。
+    mode: str = Field(default="auto", pattern="^(auto|range|all)$")
+    start: float | None = None
+    end: float | None = None
+    confirm_trim: bool = False
 
 
 def _output_dir(request: Request) -> Path:
     return Path(request.app.state.config.output_dir)
+
+
+def _mode_of(payload: ReplacePrimaryRequest) -> str:
+    """``auto`` 的落地口径：给了完整窗口就按范围替换，否则整列覆盖。
+
+    老客户端（转写 1.0.1 的渲染层）只发 ``{}`` 或 ``{"clear_alt": …}``，
+    它期待的是整列覆盖——``auto`` 因此退化成 ``all``，但**仍要过
+    :func:`dual_scope.would_trim` 那道闸**：B 是局部稿时旧按钮只会拿到 409，
+    绝不会静默丢掉前几章。
+    """
+    if payload.mode != "auto":
+        return payload.mode
+    if payload.start is not None and payload.end is not None:
+        return "range"
+    return "all"
 
 
 def _ensure_synced(request: Request, session: Session) -> str:
@@ -62,6 +86,71 @@ def _ensure_synced(request: Request, session: Session) -> str:
 
 def _cues_payload(alt: AltReview) -> list[dict]:
     return [{"start": cue.start, "end": cue.end, "text": cue.text} for cue in alt.cues]
+
+
+def _focus_payload(request: Request, session: Session, alt: AltReview | None, scope: str) -> dict:
+    """把范围解析成一份可直接渲染的 payload（含每项条数与默认口径）。
+
+    章节来自 ``session.chapters``（与章节页签同一份数据）；``duration`` 只用于
+    A 为空时的兜底跨度。
+    """
+    duration = 0.0
+    if session.media_id:
+        try:
+            info = request.app.state.media.get(session.media_id)
+            duration = float(getattr(info, "duration", 0.0) or 0.0)
+        except Exception:  # noqa: BLE001 - 拿不到片长不影响范围解析
+            duration = 0.0
+    a_cues = list(session.review_cues)
+    b_cues = list(alt.cues) if alt is not None else []
+    marks = list(getattr(session, "chapters", []) or [])
+    options = dual_scope.scope_options(a_cues, b_cues, marks, duration)
+    focus = dual_scope.resolve_focus(scope, a_cues, b_cues, marks, duration)
+    default = dual_scope.default_focus(a_cues, b_cues, marks, duration)
+    auto = str(scope or "").strip() in {"", "auto"}
+    hidden_a, hidden_b = dual_scope.hidden_counts(a_cues, b_cues, focus)
+    trim = dual_scope.would_trim(a_cues, b_cues)
+    # 可以对 B 执行「替换当前范围」的条件：B 在窗口内确有句子，且窗口不是全片
+    # （全片 = 整列覆盖，走 mode=all，两件事的语义不能混）。
+    in_b, _ = dual_scope.cues_in_window(b_cues, focus["start"], focus["end"])
+    partial = dual_scope.is_partial_b(a_cues, b_cues)
+    return {
+        **focus,
+        "auto": auto,
+        # 「B 所在区间」是不是局部产物：决定按钮默认文案与二次确认的口径
+        "partial_b": partial,
+        "options": options,
+        "hidden_a": hidden_a,
+        "hidden_b": hidden_b,
+        # 整列覆盖会丢多少条 A：0 = 安全，>0 必须显式确认
+        "would_trim": trim,
+        # 默认写回方式：范围可替换 → range；否则（B 盖住整片）→ all
+        "replace_mode": "range" if in_b and (partial or focus["key"] != dual_scope.ALL_KEY) else "all",
+        "replace_count": len(in_b),
+    }
+
+
+def _review_payload(
+    session: Session,
+    alt: AltReview,
+    focus: dict,
+    *,
+    diff: bool,
+    ignore_punct: bool,
+) -> dict:
+    """按范围切片对齐，下标仍指回整份字幕（见 ``core.dual_review`` 的 a_map）。"""
+    a_all = list(session.review_cues)
+    b_all = list(alt.cues)
+    a_cues, a_map = dual_scope.cues_in_window(a_all, focus["start"], focus["end"])
+    b_cues, b_map = dual_scope.cues_in_window(b_all, focus["start"], focus["end"])
+    review = dual_review.build_review(
+        a_cues,
+        b_cues,
+        ignore_punct=ignore_punct,
+        a_map=a_map,
+        b_map=b_map,
+    )
+    return review
 
 
 @router.post("/api/alt-review/import")
@@ -157,8 +246,15 @@ def get_alt_review(
     request: Request,
     diff: bool = False,
     ignore_punct: bool = True,
+    scope: str = "",
     session: Session = Depends(get_session),
 ) -> dict:
+    """第二版摘要 + 全量 cues + 当前对照范围的对齐结果。
+
+    ``scope``（2026-11-26）：``auto`` / 空 = 智能默认（B 只覆盖一段就聚焦那一段）；
+    ``all`` = 全片；``ch:<id>`` = 某段区间章节；``b`` = B 自己的跨度。
+    范围只影响**对齐、统计与徽标**，``cues`` 永远是整份 B（切范围不必重拉）。
+    """
     _ensure_synced(request, session)
     alt = session.alt_review
     if alt is None:
@@ -171,6 +267,7 @@ def get_alt_review(
             "cues": [],
             "stats": None,
             "rows": [],
+            "scope": None,
         }
     data = session.alt_review_summary()
     data["cues"] = _cues_payload(alt)
@@ -178,12 +275,19 @@ def get_alt_review(
     data["params"] = dict(alt.params)
     # 2026-11-21（Step 2）：``ignore_punct`` 默认开——只有标点 / 空白不同的行
     # 判为一致，不计入 ``~ 文本不同`` 与侧栏徽标；``?ignore_punct=0`` 回到严格比对。
-    review = dual_review.build_review(
-        session.review_cues, alt.cues, ignore_punct=ignore_punct
+    # 2026-11-26：对齐先按对照范围切片。统计与徽标只算当前范围，
+    # 不再拿范围外的章节凑出几百个假差异。
+    focus = _focus_payload(request, session, alt, scope)
+    review = _review_payload(
+        session, alt, focus, diff=diff, ignore_punct=ignore_punct
     )
     data["stats"] = review["stats"]
     data["ignore_punct"] = bool(ignore_punct)
-    # diff 模式返回全量行；否则只要统计（O(n)，不返回 rows，省传输）。
+    data["scope"] = focus
+    # 整份 A / B 的条数：页头「A 636 条 / B 220 条」与范围口径分开显示，避免混读。
+    data["total_a"] = len(session.review_cues)
+    data["total_b"] = len(alt.cues)
+    # diff 模式返回当前范围的全量行；否则只要统计（O(n)，不返回 rows，省传输）。
     data["rows"] = review["rows"] if diff else []
     return data
 
@@ -205,7 +309,18 @@ def replace_primary(
     request: Request,
     session: Session = Depends(get_session),
 ) -> dict:
-    """整列用第二版覆盖核对台：一次历史，时间码逐条取第二版自己的。"""
+    """用第二版写回核对台：**默认只替换当前范围**，整列覆盖必须显式确认。
+
+    2026-11-26 真机报障：A 累积了第 1–3 章 636 条、B 只有第 3 章 220 条，
+    旧接口只有一个「整列覆盖」——按下去就把前两章一起丢了。现在的口径：
+
+    - ``mode="range"``（默认）：只换 ``[start, end)`` 窗口内的 A，
+      窗口外一条不动（纯函数 ``core.dual_scope.replace_window``），
+      仍然只压一步历史、⌘Z 一次整批退回；
+    - ``mode="all"``：整列覆盖（B 是整片第二版时的正常口径）。
+      B 只覆盖了局部（``would_trim > 0``）时必须带 ``confirm_trim=True``，
+      否则 409 —— 这道闸门是「绝不允许误操作清空第 1、2 章」的最后防线。
+    """
     path = _ensure_synced(request, session)
     alt = session.alt_review
     if alt is None or not alt.cues:
@@ -217,8 +332,60 @@ def replace_primary(
     if source.get("kind") != "import":
         source["kind"] = "transcription"
         source["engine"] = alt.engine or source.get("engine", "")
-    source["apply"] = "replace"
+    source["apply"] = "replace" if _mode_of(payload) == "all" else "replace_range"
     source["at"] = source.get("at") or alt.created_at
+
+    mode = _mode_of(payload)
+    if mode == "range":
+        if payload.start is None or payload.end is None:
+            raise HTTPException(
+                status_code=422,
+                detail="范围替换需要 start / end：只想换一段就别做整列覆盖",
+            )
+        if float(payload.end) <= float(payload.start):
+            raise HTTPException(status_code=422, detail="范围终点必须大于起点")
+        merged, removed, inserted = dual_scope.replace_window(
+            session.review_cues, alt.cues, payload.start, payload.end
+        )
+        if inserted <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="这个范围里没有第二版的字幕：换个范围，或改用整列覆盖",
+            )
+        label = (
+            f"用第二版替换 {dual_scope.format_clock(payload.start)}–"
+            f"{dual_scope.format_clock(payload.end)}"
+            f"（{inserted} 条，替换掉 {removed} 条）"
+        )
+        # keep_translations：范围外条目的译文按位置搬移，新条目留空待译。
+        # 这正是「替换选区」在核对台的既有语义（见 Session.replace_review）。
+        session.replace_review(
+            merged,
+            label=label,
+            source=source,
+            keep_translations=True,
+        )
+        if payload.clear_alt:
+            # 范围替换后 B 的其余区间仍然有用（还有别的章节要对照），
+            # 默认保留；只有整列覆盖才清空。
+            pass
+        return {
+            **_snapshot(session),
+            "replaced": inserted,
+            "removed": removed,
+            "mode": "range",
+            "alt_cleared": False,
+        }
+
+    trim = dual_scope.would_trim(session.review_cues, alt.cues)
+    if trim > 0 and not payload.confirm_trim:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"第二版只覆盖了部分时间区间：整列覆盖会丢掉范围外的 {trim} 条字幕。"
+                "请改用「用 B 替换当前范围」，或显式确认整列覆盖"
+            ),
+        )
     label = (
         "整列采用导入的第二版" if source.get("kind") == "import" else "整列采用第二引擎稿"
     )
@@ -236,5 +403,7 @@ def replace_primary(
     return {
         **_snapshot(session),
         "replaced": len(alt.cues),
+        "removed": trim,
+        "mode": "all",
         "alt_cleared": bool(payload.clear_alt),
     }
