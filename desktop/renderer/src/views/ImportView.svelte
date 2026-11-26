@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import PageHeader from '../components/PageHeader.svelte';
-  import { app, openMedia, openSubtitle, setView, toast } from '../lib/store.svelte';
+  import { app, openMedia, openSubtitle, toast } from '../lib/store.svelte';
   import { mediaThumbUrl } from '../lib/api';
   import { formatBytes, formatDuration } from '../lib/time';
 
@@ -17,26 +17,11 @@
   type RecentView = 'list' | 'grid';
 
   /**
-   * 已经有工程时本页不该只有一块拖放区（Step 4.3 修的断层）：用户回来问的是
-   * 「我上次干到哪了、接着干还是换片」，所以顶部先给一张**继续当前工程**卡，
-   * 拖入降为第二动作（紧凑一条）。没有工程时才让拖放区当主视觉。
+   * 第二阶段 Batch 1（2026-11-26 用户拍板）：本页的核心心智只有「拖入新片源或字幕」。
+   * 第一阶段为「已有工程」加的那张**继续当前工程**卡（继续核对 ⌘3 / 换片…）已整张删除：
+   * 它把大拖放区挤成了次要点位，而「接着干」本来就有两条更顺的路径——点「最近打开」里的
+   * 那一条，或直接去核对台。所以**无论当前有没有工程，本页都保持同一块大拖放区**。
    */
-  const media = $derived(app.media);
-  const cueCount = $derived(app.cues.length);
-  /** 下次进入核对台时的落点：有字幕就接着核，没字幕先去转写。 */
-  const nextView = $derived(cueCount ? 'review' : 'transcribe');
-  const nextLabel = $derived(cueCount ? '继续核对' : '去转写');
-  const nextKey = $derived(cueCount ? '⌘3' : '⌘2');
-  const resumeMeta = $derived(
-    [
-      app.media?.duration ? formatDuration(app.media.duration) : '',
-      cueCount ? `${cueCount} 条字幕` : '还没有字幕',
-      app.report ? '任务报告已生成' : '',
-    ]
-      .filter(Boolean)
-      .join(' · '),
-  );
-
   let recents = $state<Recent[]>([]);
   /** 「最近打开」的呈现方式：列表（信息密度高）或图标（封面画廊）。 */
   let recentView = $state<RecentView>('list');
@@ -161,49 +146,39 @@
     subtitle="把视频拖进窗口，或按 ⌘O 选择文件。导入不会复制文件——只记录路径。"
   />
 
-  {#if media}
-    <!-- 顶部：继续当前工程。它回答「我上次干到哪了」，是回到本页唯一的主动作。 -->
-    <section class="resume" aria-label="当前工程">
-      <span class="resume-cover">
-        <Icon name="film" size={16} />
-        {#if thumbsReady}
-          <img
-            class="resume-img"
-            src={mediaThumbUrl(media.path, String(media.size))}
-            alt=""
-            loading="lazy"
-            draggable="false"
-            onerror={(e) => e.currentTarget.remove()}
-          />
-        {/if}
-      </span>
-      <span class="resume-main">
-        <span class="resume-name" title={media.path}>{media.name}</span>
-        <span class="resume-meta">{resumeMeta}</span>
-      </span>
-      <div class="resume-actions">
-        <button class="btn primary" onclick={() => setView(nextView)}>
-          {nextLabel}
-          <kbd class="key">{nextKey}</kbd>
-        </button>
-        <button class="btn ghost" onclick={pick} title="选择另一个视频（⌘O）">换片…</button>
-      </div>
-    </section>
+  <!-- 本页的主视觉：一块大虚线拖放区。无论当前有没有打开的工程，形态都不变——
+       导入页的心智是「拖入新片源或字幕」；要接着干上一部，点下面的最近打开或去核对台即可。 -->
+  <button class="dropzone" onclick={pick} title="拖入视频或字幕，或打开选择文件（⌘O）">
+    <span class="dz-ico"><Icon name="tray" size={20} /></span>
+    <span class="dz-title">拖入视频或字幕</span>
+    <span class="dz-sub">
+      <code>.mkv</code> <code>.mp4</code> <code>.mov</code> <code>.srt</code> <code>.vtt</code>
+    </span>
+  </button>
 
-    <!-- 2026-11-26 用户第三次报障：这里曾经还有一条与卡内「换片…」完全重复的
-         全宽灰条（+ 5 个大药丸）。功能重复、又把整页压成「四条灰砖」，已整条删除。
-         换片仍有三条路径：卡内「换片…」、整窗口拖放、⌘O；下面只留一句纯文本提示。 -->
-    <p class="drop-hint">
-      可随时拖入 .mkv / .mp4 / .mov / .srt / .vtt 替换片源，或按 ⌘O 选择。
-    </p>
-  {:else}
-    <button class="dropzone" onclick={pick}>
-      <span class="dz-ico"><Icon name="tray" size={20} /></span>
-      <span class="dz-title">拖入视频或字幕</span>
-      <span class="dz-sub">
-        <code>.mkv</code> <code>.mp4</code> <code>.mov</code> <code>.srt</code> <code>.vtt</code>
+  <!-- 代理能力说明：它回答「拖进来却放不出来怎么办」，紧跟主视觉下方一行，
+       不占卡片、不抢焦点。 -->
+  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
+    MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
+  </p>
+
+  {#if exportDir}
+    <div class="ins-h section-h">导出文件夹</div>
+    <div class="export-card">
+      <span class="ec-ico"><Icon name="folder" size={15} /></span>
+      <span class="ec-main">
+        <b>上次转写的字幕在这里</b>
+        <span class="ec-path mono" title={exportDir}>{exportDir}</span>
       </span>
-    </button>
+      <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
+        打开文件夹
+      </button>
+      <!-- 次级入口：导入原文是「接着上次的活干」，不是本页主流程（拖入素材才是），
+           所以用描边按钮，别和拖入区抢主操作的视觉重心。 -->
+      <button class="btn tiny" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台（可选，接着上次的活干）">
+        <Icon name="export" size={10} />导入原文
+      </button>
+    </div>
   {/if}
 
   {#if recents.length}
@@ -309,31 +284,6 @@
     {/if}
   {/if}
 
-  {#if exportDir}
-    <div class="ins-h section-h">导出文件夹</div>
-    <div class="export-card">
-      <span class="ec-ico"><Icon name="folder" size={15} /></span>
-      <span class="ec-main">
-        <b>上次转写的字幕在这里</b>
-        <span class="ec-path mono" title={exportDir}>{exportDir}</span>
-      </span>
-      <button class="btn tiny" onclick={openExportFolder} title="在访达中打开导出文件夹">
-        打开文件夹
-      </button>
-      <!-- 次级入口：导入原文是「接着上次的活干」，不是本页主流程（拖入素材才是），
-           所以用描边按钮，别和拖入区抢主操作的视觉重心。 -->
-      <button class="btn tiny" onclick={importFromExport} title="从导出文件夹选择原文字幕并导入核对台（可选，接着上次的活干）">
-        <Icon name="export" size={10} />导入原文…
-      </button>
-    </div>
-  {/if}
-
-  <!-- 播放能力的说明放在页脚：它回答的是「万一画面出不来怎么办」，
-       不该占住上半屏 —— 上半屏留给当前工程与最近打开。 -->
-  <p class="note" title="Chromium 解不开 MKV / HEVC；高码率 H.264 有时能播但拖动很卡。导入不会自动压制代理。">
-    MKV / HEVC 画面出不来时，核对台黑框中央会提示手动压制 480p 监看代理；能正常播放的视频不会自动压。
-  </p>
-
 </div>
 
 <style>
@@ -343,7 +293,7 @@
     overflow-y: auto;
     padding: var(--sp-8) var(--sp-10) var(--sp-12);
     display: grid;
-    /* 导入页是单栏页面的例外：内容列是 760 的「继续当前工程」卡，比 1040 窄，
+    /* 导入页是单栏页面的例外：内容列是 760，比 1040 窄（拖放区不需要满行），
        所以居中之后左右留白更大——这里刻意让它居中，而不是贴左。 */
     grid-template-columns: minmax(0, var(--measure-card));
     justify-content: center;
@@ -351,89 +301,7 @@
     background: var(--canvas);
   }
 
-  /* ---------- 继续当前工程（有片时本页唯一的主动作） ----------
-     2026-11-26 第三次修正：上一版把它也降成了 well，结果整页是
-     「继续卡 / 导出文件夹 / 最近打开」三块同色的灰砖 —— 没有焦点。
-     现在它是本页**唯一的台本纸**（--surface + 1px 发丝线），因为它承载的是
-     「你上次干到哪」+ 唯一的主按钮；下面两块退成**标题 + 发丝线**的分区，
-     不再是同色的横条。视觉焦点因此只剩两处：这张卡，和最近打开列表。 */
-  .resume {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-    padding: var(--sp-3);
-    background: var(--surface);
-    border: 1px solid var(--rule);
-    border-radius: var(--rad-card);
-    margin-top: var(--sp-1);
-  }
-  .resume-cover {
-    position: relative;
-    flex: 0 0 96px;
-    width: 96px;
-    height: 54px;
-    border-radius: 4px;
-    overflow: hidden;
-    background: var(--fill);
-    display: grid;
-    place-items: center;
-    color: var(--ink-3);
-  }
-  .resume-img {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .resume-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .resume-name {
-    font-size: 14px;
-    font-weight: 600;
-    line-height: 20px;
-    color: var(--ink);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  /* 读数（时长 / 条数 / 报告）走 Data 档：切页比对时数字要对得齐。 */
-  .resume-meta {
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--ink-3);
-    font-variant-numeric: tabular-nums;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .resume-actions {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-  }
-  /* 快捷键提示挂在主按钮里，写成 11px mono（与侧栏 kbd 同一套），不当副标题。 */
-  .key {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    line-height: 1;
-    padding: 2px var(--sp-1);
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.18);
-    color: inherit;
-    letter-spacing: 0;
-  }
-
-  /* 换片提示：一句 12px 的纯文本，落在继续卡下方 10px。
-     它不是一个控件——控件是卡内的「换片…」，整窗口拖放与 ⌘O 是另外两条路径。
-     写成一条全宽的灰色横条会让导入页变成「白底上硬堆四条灰砖」。 */
-  /* 分区标题：本页的两块辅助信息（最近打开 / 导出文件夹）共用同一条节奏：
+  /* 分区标题：拖放区之下的两块辅助信息（导出文件夹 / 最近打开）共用同一条节奏：
      标题 11px 标签 + 下方一条发丝线（在块自己的 border-top 上）。 */
   .section-h {
     margin-top: var(--sp-6);
@@ -441,18 +309,11 @@
     border-bottom: 0;
   }
 
-  .drop-hint {
-    margin: var(--sp-2) 0 0;
-    font-size: 12px;
-    line-height: 18px;
-    color: var(--ink-3);
-  }
-
   .note {
     font-size: var(--fs-label);
     line-height: 1.7;
     color: var(--text-3);
-    margin: 14px 0 0;
+    margin: var(--sp-3) 0 0;
     max-width: 640px;
   }
 
@@ -497,12 +358,14 @@
     font-size: var(--fs-label);
     color: var(--text-3);
   }
+  /* 扩展名走 Data 档（DESIGN.md typography.data）：等宽、中性、不做成药丸。 */
   code {
-    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
+    letter-spacing: 0.01em;
     background: var(--fill);
     padding: 1px var(--sp-1);
-    border-radius: 4px;
+    border-radius: var(--rad-control);
   }
 
   /* 导出文件夹：**一行**读数 + 两个动作，不再是一条灰色长条砖。
