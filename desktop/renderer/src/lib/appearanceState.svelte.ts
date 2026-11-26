@@ -16,20 +16,26 @@ import {
   readAppearancePrefs,
   writeAppearance,
   writeCueFont,
+  writePalette,
 } from './appearance';
 import {
+  DEFAULT_PALETTE,
   flipAppearance,
   isAppearanceId,
   isCueFontId,
+  isPaletteId,
   resolveTheme,
   type AppearanceId,
   type CueFontId,
+  type PaletteId,
   type ThemeId,
 } from './themes';
 
 export const appearance = $state({
   /** 用户偏好：'auto' 跟随系统。 */
   preference: 'auto' as AppearanceId,
+  /** 皮肤色板：与明暗、字幕字体都正交。 */
+  palette: DEFAULT_PALETTE as PaletteId,
   /** 字幕字体：与明暗正交。 */
   cueFont: 'sans' as CueFontId,
   /** 系统当前是否深色（`prefers-color-scheme`）。 */
@@ -49,7 +55,8 @@ function apply(next?: AppearanceId) {
   // 核对台的波形按主题重绘，只读 app.theme；保持这一条镜像关系。
   app.theme = theme;
   writeAppearance(localStorage, appearance.preference);
-  applyToDocument(theme, appearance.cueFont);
+  writePalette(localStorage, appearance.palette);
+  applyToDocument(theme, appearance.cueFont, appearance.palette);
   // 传**偏好**而不是解析值：主进程在 auto 时要设 nativeTheme.themeSource='system'
   window.kikusub?.setAppearance?.(appearance.preference);
 }
@@ -69,11 +76,21 @@ export function toggleAppearance() {
   apply(flipAppearance(app.theme));
 }
 
+/**
+ * 皮肤色板：只换基色（canvas / paper / ink / accent…），昼夜仍由 data-theme 决定。
+ * 立即写 DOM + localStorage，不需要重启，也不写任何共享配置文件。
+ */
+export function setPalette(id: PaletteId) {
+  appearance.palette = isPaletteId(id) ? id : DEFAULT_PALETTE;
+  writePalette(localStorage, appearance.palette);
+  applyToDocument(app.theme, appearance.cueFont, appearance.palette);
+}
+
 /** 字幕字体：黑体 / 明朝。只换 --font-cue，不动任何颜色。 */
 export function setCueFont(id: CueFontId) {
   appearance.cueFont = isCueFontId(id) ? id : 'sans';
   writeCueFont(localStorage, appearance.cueFont);
-  applyToDocument(app.theme, appearance.cueFont);
+  applyToDocument(app.theme, appearance.cueFont, appearance.palette);
 }
 
 /** 冷启动补齐状态 + 订阅系统外观；返回解绑函数。 */
@@ -82,6 +99,7 @@ export function initAppearance(): () => void {
   appearance.systemDark = mq.matches;
   const prefs = readAppearancePrefs(localStorage);
   appearance.preference = prefs.appearance;
+  appearance.palette = prefs.palette;
   appearance.cueFont = prefs.cueFont;
   clearLegacyKeys(localStorage);
   apply();

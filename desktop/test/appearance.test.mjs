@@ -5,11 +5,13 @@ import { flipAppearance } from '../renderer/src/lib/themes.ts';
 import {
   APPEARANCE_KEY,
   CUE_FONT_KEY,
+  PALETTE_KEY,
   applyToDocument,
   clearLegacyKeys,
   readAppearancePrefs,
   writeAppearance,
   writeCueFont,
+  writePalette,
 } from '../renderer/src/lib/appearance.ts';
 
 /**
@@ -31,10 +33,19 @@ function fakeStorage(entries) {
   };
 }
 
-test('没有存过任何偏好时默认跟随系统 + 黑体', () => {
+test('没有存过任何偏好时默认跟随系统 + cobalt 色板 + 黑体', () => {
   const prefs = readAppearancePrefs(fakeStorage({}));
   assert.equal(prefs.appearance, 'auto');
+  assert.equal(prefs.palette, 'cobalt');
   assert.equal(prefs.cueFont, 'sans');
+});
+
+test('色板偏好独立读取 / 落盘，非法值回落到 cobalt', () => {
+  const storage = fakeStorage({ [PALETTE_KEY]: 'everforest' });
+  assert.equal(readAppearancePrefs(storage).palette, 'everforest');
+  writePalette(storage, 'cinema-amber');
+  assert.equal(storage.getItem(PALETTE_KEY), 'cinema-amber');
+  assert.equal(readAppearancePrefs(fakeStorage({ [PALETTE_KEY]: 'midnight' })).palette, 'cobalt');
 });
 
 test('旧版的 light / dark 直接继承为显式覆盖', () => {
@@ -79,16 +90,22 @@ test('旧 key 读完即删（两套作废模型不留在盘上）', () => {
 test('写偏好只写新 key，不动别的 key', () => {
   const storage = fakeStorage({ 'kikusub.something': 'keep' });
   writeAppearance(storage, 'dark');
+  writePalette(storage, 'rose-pine');
   writeCueFont(storage, 'mincho');
   assert.equal(storage.getItem(APPEARANCE_KEY), 'dark');
+  assert.equal(storage.getItem(PALETTE_KEY), 'rose-pine');
   assert.equal(storage.getItem(CUE_FONT_KEY), 'mincho');
   assert.equal(storage.getItem('kikusub.something'), 'keep');
 });
 
-test('applyToDocument 只写两个 data 属性（主题走 data-theme，字体走 data-cue-font）', () => {
+test('applyToDocument 写三个正交 data 属性（theme / palette / cueFont）', () => {
   const root = { dataset: {} };
-  applyToDocument('dark', 'mincho', root);
-  assert.deepEqual(root.dataset, { theme: 'dark', cueFont: 'mincho' });
+  applyToDocument('dark', 'mincho', 'nord', root);
+  assert.deepEqual(root.dataset, { theme: 'dark', palette: 'nord', cueFont: 'mincho' });
+  // 不传色板时落到默认 cobalt，且非法值不会写进 DOM
+  const fallback = { dataset: {} };
+  applyToDocument('light', 'sans', 'not-a-palette', fallback);
+  assert.deepEqual(fallback.dataset, { theme: 'light', palette: 'cobalt', cueFont: 'sans' });
 });
 
 test('标题栏外观按钮是两态直切：日间 ⇄ 夜间（不再经过 auto）', () => {

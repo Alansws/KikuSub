@@ -7,6 +7,7 @@
  *
  * 存储约定（2026-11-25 起）：
  * - `kikusub.appearance`：'auto' | 'light' | 'dark'
+ * - `kikusub.palette`：六套色板 id（默认 'cobalt'）
  * - `kikusub.cueFont`：'sans' | 'mincho'
  * - 旧版的 `kikusub.theme`（'light' / 'dark' / 'mincho' / 'cool'）只读一次即迁，
  *   迁完删除；`kikusub.mode` 同样删除。
@@ -20,14 +21,18 @@
  * 项目里只有这一处这样写（tsconfig 开了 allowImportingTsExtensions）。
  */
 import {
+  DEFAULT_PALETTE,
   isAppearanceId,
   isCueFontId,
+  isPaletteId,
   type AppearanceId,
   type CueFontId,
+  type PaletteId,
   type ThemeId,
 } from './themes.ts';
 
 export const APPEARANCE_KEY = 'kikusub.appearance';
+export const PALETTE_KEY = 'kikusub.palette';
 export const CUE_FONT_KEY = 'kikusub.cueFont';
 const LEGACY_THEME_KEY = 'kikusub.theme';
 const LEGACY_MODE_KEY = 'kikusub.mode';
@@ -39,12 +44,15 @@ type WritableStorage = Pick<Storage, 'setItem' | 'removeItem'>;
 
 export interface AppearancePrefs {
   appearance: AppearanceId;
+  /** 皮肤色板：与 appearance / cueFont 都正交。 */
+  palette: PaletteId;
   cueFont: CueFontId;
 }
 
 export function readAppearancePrefs(storage: ReadableStorage): AppearancePrefs {
   const legacy = storage.getItem(LEGACY_THEME_KEY);
   const savedAppearance = storage.getItem(APPEARANCE_KEY);
+  const savedPalette = storage.getItem(PALETTE_KEY);
   const savedCue = storage.getItem(CUE_FONT_KEY);
 
   const appearance: AppearanceId = isAppearanceId(savedAppearance)
@@ -59,7 +67,9 @@ export function readAppearancePrefs(storage: ReadableStorage): AppearancePrefs {
       ? 'mincho'
       : 'sans';
 
-  return { appearance, cueFont };
+  const palette: PaletteId = isPaletteId(savedPalette) ? savedPalette : DEFAULT_PALETTE;
+
+  return { appearance, palette, cueFont };
 }
 
 /** 旧 key 读一次就删：它们代表两套已经作废的模型（青空 / 明朝墨）。 */
@@ -72,16 +82,27 @@ export function writeAppearance(storage: WritableStorage, appearance: Appearance
   storage.setItem(APPEARANCE_KEY, appearance);
 }
 
+export function writePalette(storage: WritableStorage, palette: PaletteId): void {
+  storage.setItem(PALETTE_KEY, palette);
+}
+
 export function writeCueFont(storage: WritableStorage, cueFont: CueFontId): void {
   storage.setItem(CUE_FONT_KEY, cueFont);
 }
 
-/** 偏好 × 系统外观 → 写进 `<html>` 的两个 data 属性。 */
+/**
+ * 偏好 × 系统外观 → 写进 `<html>` 的三个 data 属性。
+ *
+ * 三个属性彼此正交：theme 只管昼夜、palette 只管皮肤、cueFont 只管字幕面。
+ * 组件不读任何一个的值再分支；它们只读 CSS 令牌。
+ */
 export function applyToDocument(
   theme: ThemeId,
   cueFont: CueFontId,
+  palette: PaletteId = DEFAULT_PALETTE,
   root: HTMLElement = document.documentElement,
 ): void {
   root.dataset.theme = theme;
+  root.dataset.palette = isPaletteId(palette) ? palette : DEFAULT_PALETTE;
   root.dataset.cueFont = cueFont;
 }

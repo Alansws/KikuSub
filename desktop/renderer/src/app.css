@@ -4,10 +4,13 @@
    世界只借四件事：字体、色板、密度、一个签名动作（cue margin）。
    导航与控件仍是 macOS 标准件；见根目录 DESIGN.md。
 
-   **两套外观，两个字面值**：
+   **两套明暗 × 六套色板，彼此正交**：
    `html[data-theme]` 只承载**解析后**的 light / dark（偏好 auto / light / dark
-   在 store 里解析，见 lib/themes.ts）。明朝不是第三套配色，只换 `--font-cue`，
-   挂在 `html[data-cue-font='mincho']` 上。
+   在 store 里解析，见 lib/themes.ts）；`html[data-palette]` 承载皮肤色板
+   （cobalt / nord / rose-pine / everforest / catppuccin / cinema-amber，默认
+   cobalt）。明朝不是第三套配色，只换 `--font-cue`，挂在
+   `html[data-cue-font='mincho']` 上。加色板只写 CSS 基色块 + 注册表一条，
+   组件不写主题分支。
 
    真实应用里没有「假窗口」：窗口边框、红绿灯、阴影都由 macOS 提供，
    所以 body 是透明的，侧栏的 vibrancy 才能透出桌面。
@@ -109,159 +112,190 @@
   --measure-page: 1040px;
   --measure-card: 760px;
 
-  /* ---------- 表面：纸台面 / 窗口铬件 / 凹陷填充 ----------
-     2026-11-26（第二次视觉重塑）：把「灰底贴白框」整条语法翻过来。
+  /* ============================================================
+     色彩层：基色 × 明暗 × 色板，三层正交
 
-       台面（--canvas）   = 干净高明度的纸白。页面内容与**页内工具栏**都直接落在它上面。
-       铬件（--paper）    = 只给窗口外壳：侧栏 / 标题栏 / 底栏 / 时间轴坞。
-       检查器             = 两档之间的一条窄带（--bg-inspector），让三块并排时能分区。
-       凹陷填充（--well） = 未选中的选项块 / 信息条 / 输入区：极淡中性灰；
-                            框形凹陷（输入 / 下拉）另加 1px --well-line。
-       台本纸（--raise）  = 真正的纸：台本表、输入框、浮层、面板。
+       html[data-theme='light' | 'dark']  只回答"日间/夜间"（右上角直切与设置页
+                                          "跟随系统"解析出的结果，语义不变）
+       html[data-palette='cobalt' | … ]   只回答"皮肤色板"（默认 cobalt）
 
-     规则：白底只允许出现在「台本纸 / 浮层 / 输入框」三类对象上；页内分区一律是
-     「标题 + 发丝线」或「凹陷填充」。**页内命令栏不是铬件**：它落在 --canvas 上、
-     只用 1px 发丝线分隔，不许再把 --paper 铺成第二条灰带（灰底 + 白键的割裂感
-     就是从这里来的）。 */
+     1) 基色 = cobalt（:root 浅色 / html[data-theme='dark'] 深色），数值与第一阶段
+        封板值逐字一致；
+     2) 其余 5 套色板只在 `html[data-palette='…'][data-theme='…']` 里覆写**基色**
+        （canvas / paper / surface / raise / well / ink / rule / accent）；
+     3) 所有派生令牌（铬件、发丝线、选中洗色、暗槽边线、cue 轨道）都在下面用
+        color-mix(var(...)) 计算一次，色板换基色即自动接管，组件不写主题分支。
+
+     —— 加一套色板 = 一个 [data-palette] × 两个明暗块 + themes.ts 注册表一条。
+     ============================================================ */
+
+  /* ---------- 1. 基色：cobalt 浅色（第一阶段封板值） ---------- */
   --canvas: #ffffff;
-  /* 铬件去冷青：旧的 #f0f2f4 是一条偏蓝的工业灰，和蓝铅笔叠在一起会互相污染。
-     Apple 的纯中性浅灰 #f5f5f7 只差一个色相（中性），但整页立刻从「冷灰控制台」
-     变成「纸白桌面」。 */
   --paper: #f5f5f7;
   --raise: #ffffff;
-  /* 面板 / 台本纸层（--surface）：暗色里它是「浮在 canvas 上的一层」，
-     浅色里就是纸本身。单独立一个令牌，是因为抬升层（按钮 / 浮层）和它
-     在暗色已经分道：前者 #313135，后者 #242427。 */
   --surface: #ffffff;
-  /* 凹陷填充（well）= 输入框 / 滑块底槽 / 标签槽 / 选项块。
-     2026-11-26 第三次修正：**蹲在台面以下**，不再往白里提亮。
-     浅色 #f2f2f7（比纸白低一档），暗色 #121214（比 canvas 再低一档）。
-     --well-line 只给「框形凹陷」（输入框 / 下拉）用，选项块靠明度就够。 */
   --well: #f2f2f7;
   --well-hover: #eaeaef;
-  --well-focus: #ffffff;
-  /* 框形凹陷的边线。**不许再是 transparent**（2026-11-26 Batch 2）：
-     亮色 --well (#F2F2F7) 与 --paper (#F5F5F7) 只差 2 个色阶，边线一透明，
-     `<select>` / 数字输入框在工具栏上就只剩一枚黑三角。0.14 黑是「看得出形状、
-     又不像描边」的最低档；暗色同步取 0.13 白，暗槽 #121214 才能在 #161618 /
-     #1D1D1F 上勾出轮廓。 */
-  --well-line: rgba(0, 0, 0, 0.14);
-  /* 普通次级按钮（.btn）的「键」：台面上一块纸白 + 清晰细边。
-     键底、悬停底与边线各自成令牌，组件不再自己挑 --raise / --line。 */
-  --btn-bg: #ffffff;
-  --btn-bg-hover: #f7f7f9;
-  --btn-line: var(--well-line);
-  --btn-line-hover: rgba(0, 0, 0, 0.24);
-  /* 浅色里的「抬升层」就是纸本身：按钮 / 浮层 / 分段拇指都读这一档。
-     暗色才有真正的抬升色（#313135），因此这两个令牌必须两套都声明。 */
-  --raise-hover: #ffffff;
-  --raise-bevel: none;
-  --raise-seam: rgba(0, 0, 0, 0.12);
   --ink: #15191c;
   --ink-2: #4b4b52;
-  /* 标签 / 计数 / 单位 / 快捷键：5.9:1 on 铬件、6.4:1 on 纸白。
-     11px 是字号下限，所以这一档不许再浅。 */
   --ink-3: #55555c;
-  /* 禁用 / 不可用专用：弱到不像可读内容，但仍高于纯装饰（2.9:1） */
-  --ink-muted: #8e979c;
-
-  /* 发丝线保留 rgba：多个组件把 --line-2 当 hover 底色用，实色会变成灰块。
-     .14 是分隔线的最低可读档，不再回退到 5% 灰。 */
-  --line: rgba(0, 0, 0, 0.13);
-  --line-2: rgba(0, 0, 0, 0.09);
-  /* 明确的 1px 发丝线（cue 表、台本页边）：纯中性，不再带蓝味。
-     白纸上的一条线只要有形体就够，不需要压深灰把版面切开。 */
   --rule: #e2e2e7;
-
-  /* ---------- 蓝铅笔 / 朱笔 ----------
-     2026-11-26 第三次修正：上一版 #0B63E5 是老式网页蓝，和中性灰放在一起
-     像贴着一条链接色。换成 Studio 皇家钴蓝：底色更沉、色相偏靛，白字 5.57:1。
-     文字态（--accent-text）再压深一档 #2453D4，白纸上 6.44:1、铬件上 5.91:1；
-     小字与图标永远读这一个，实心填充读 --accent。 */
   --accent: #295ce6;
   --accent-hover: #1e4ed8;
   --accent-text: #2453d4;
-  --accent-soft: rgba(41, 92, 230, 0.08);
-  --accent-ring: rgba(41, 92, 230, 0.45);
-  --accent-line: rgba(41, 92, 230, 0.34);
+  --danger: #b8412f;
+  --warn: #7e5416;
+  --success: #356b52;
+  --bg-inspector: #fbfbfd;
+  --stage: #ededf0;
+  --stage-bg: #ededf0;
+  --wave: #8a8a90;
+
+  /* ---------- 2. 明暗方向参数（派生令牌只读这一组） ----------
+     亮色从黑墨里洗色、暗色从白墨里洗色；两套的 alpha 分开定，
+     但**方向**不变：well 永远蹲在 canvas 以下，raise 永远不低于 paper。 */
+  --neutral-wash: #000000;
+  --chrome-toolbar-a: 90%;
+  --chrome-status-a: 94%;
+  --chrome-sidebar-a: 74%;
+  --line-a: 13%;
+  --line-2-a: 9%;
+  --fill-a: 5%;
+  --fill-strong-a: 9%;
+  --row-hover-a: 3.5%;
+  --well-line-a: 14%;
+  --btn-line-hover-a: 24%;
+  --accent-soft-color: var(--accent);
+  --accent-soft-a: 8%;
+  --accent-ring-color: var(--accent);
+  --accent-ring-a: 45%;
+  --accent-line-color: var(--accent);
+  --accent-line-a: 34%;
+  --cue-edge-color: var(--accent);
+  --cue-lane-a: 5%;
+  --cue-wash-a: 3%;
+  --cue-block-a: 14%;
+  --cue-block-hover-a: 24%;
+  --cue-active-a: 88%;
+  --cue-edge-a: 92%;
+  --stage-line-a: 52%;
+  --stage-frame-a: 16%;
+  --scroll-thumb-a: 18%;
+  --scroll-thumb-hover-a: 30%;
+  --seg-track-a: 6%;
+  --seg-thumb-ring-a: 10%;
+  --meter-track-a: 7%;
+  --meter-muted-a: 28%;
+  --danger-soft-a: 10%;
+  --warn-soft-a: 10%;
+  --success-soft-a: 10%;
+
+  /* ---------- 3. 窗口铬件：从当前 --paper 派生 ----------
+     不再写死 rgba(245,245,247,…) / rgba(29,29,31,…)：色板一换，铬件跟着走，
+     而"半透明叠在 macOS vibrancy 上"的语法保持原样。 */
+  --bg-toolbar: color-mix(in srgb, var(--paper) var(--chrome-toolbar-a), transparent);
+  --bg-status: color-mix(in srgb, var(--paper) var(--chrome-status-a), transparent);
+  --bg-sidebar: color-mix(in srgb, var(--paper) var(--chrome-sidebar-a), transparent);
+  --bg-content: var(--raise);
+
+  /* ---------- 4. 发丝线 / 洗色 / 凹陷边线 ----------
+     --rule 是色板显式值（台本表、页边、分区线）；--line / --fill 是中性墨的
+     半透明洗色，随基色明暗翻转方向，但永不带蓝。 */
+  --line: color-mix(in srgb, var(--neutral-wash) var(--line-a), transparent);
+  --line-2: color-mix(in srgb, var(--neutral-wash) var(--line-2-a), transparent);
+  --well-line: color-mix(in srgb, var(--neutral-wash) var(--well-line-a), transparent);
+  --fill: color-mix(in srgb, var(--neutral-wash) var(--fill-a), transparent);
+  --fill-strong: color-mix(in srgb, var(--neutral-wash) var(--fill-strong-a), transparent);
+  --row-hover: color-mix(in srgb, var(--neutral-wash) var(--row-hover-a), transparent);
+  --well-focus: var(--raise);
+
+  /* ---------- 5. 按钮 / 抬升层 ----------
+     亮色的"键"是一块纸（--raise），暗色是再上一阶的 --raise；边线一律走
+     --well-line 的同一档，所以任意色板下"白键落在白台面上"仍有形状。 */
+  --raise-hover: #ffffff;
+  --raise-bevel: none;
+  --raise-seam: color-mix(in srgb, var(--neutral-wash) 12%, transparent);
+  --btn-bg: var(--raise);
+  --btn-bg-hover: color-mix(in srgb, var(--raise) 97%, var(--ink));
+  --btn-line: var(--well-line);
+  --btn-line-hover: color-mix(in srgb, var(--neutral-wash) var(--btn-line-hover-a), transparent);
   --btn-primary-bg: var(--accent);
   --btn-primary-hover: var(--accent-hover);
   --control-on: var(--accent);
   --on-accent: #ffffff;
 
-  --danger: #b8412f;
-  --danger-soft: rgba(184, 65, 47, 0.1);
-  --warn: #7e5416;
-  --warn-soft: rgba(126, 84, 22, 0.1);
-  --success: #356b52;
-  --success-soft: rgba(53, 107, 82, 0.1);
+  /* ---------- 6. 强调色派生：全部从当前 --accent / --accent-text 来 ---------- */
+  --accent-soft: color-mix(
+    in srgb,
+    var(--accent-soft-color) var(--accent-soft-a),
+    transparent
+  );
+  --accent-ring: color-mix(
+    in srgb,
+    var(--accent-ring-color) var(--accent-ring-a),
+    transparent
+  );
+  --accent-line: color-mix(
+    in srgb,
+    var(--accent-line-color) var(--accent-line-a),
+    transparent
+  );
 
-  --bg-content: var(--raise);
-  /* 检查器夹在铬件与台面之间的窄带：既不像侧栏那么灰，也不跟台面抢白。
-     三块并排时（侧栏 / 工作区 / 检查器）每两块之间都有可读的明度差。 */
-  --bg-inspector: #fbfbfd;
-  --bg-toolbar: rgba(245, 245, 247, 0.9);
-  --bg-status: rgba(245, 245, 247, 0.94);
-  /* 侧栏叠在 macOS vibrancy 上：留一点透，颜色仍由铬件灰决定 */
-  --bg-sidebar: rgba(245, 245, 247, 0.74);
+  --danger-soft: color-mix(in srgb, var(--danger) var(--danger-soft-a), transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) var(--warn-soft-a), transparent);
+  --success-soft: color-mix(in srgb, var(--success) var(--success-soft-a), transparent);
 
   --text: var(--ink);
   --text-2: var(--ink-2);
   --text-3: var(--ink-3);
+  /* 禁用 / 不可用：从当前墨与地面折中，不写死一个中性灰 */
+  --ink-muted: color-mix(in srgb, var(--ink) 47%, var(--canvas));
   --separator: var(--line);
   --separator-soft: var(--line-2);
 
-  /* --fill 只做「悬停/洗色」这类一层半透明，不再兼任凹陷填充（那是 --well）；
-     去掉蓝味之后，它和 --rule 出自同一个中性墨。 */
-  --fill: rgba(0, 0, 0, 0.05);
-  --fill-strong: rgba(0, 0, 0, 0.09);
-  --row-hover: rgba(0, 0, 0, 0.035);
-
-  /* 平面优先：卡片没有阴影；只有画面与真浮层有 */
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7);
-  /* 画面投影按所在房间取值：日间是浅灰画布上的一块屏幕（轻），
-     夜间配音间才是「唯一的亮面」（重）。同一份深影搬到浅色上会读成一圈黑边。 */
   --shadow-video: 0 10px 28px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   --shadow-btn: none;
   --shadow-seg: none;
 
-  --scroll-thumb: rgba(0, 0, 0, 0.18);
-  --scroll-thumb-hover: rgba(0, 0, 0, 0.3);
+  --scroll-thumb: color-mix(in srgb, var(--neutral-wash) var(--scroll-thumb-a), transparent);
+  --scroll-thumb-hover: color-mix(
+    in srgb,
+    var(--neutral-wash) var(--scroll-thumb-hover-a),
+    transparent
+  );
   --hit: rgba(255, 214, 10, 0.4);
   --hit-row: rgba(255, 214, 10, 0.16);
   --caption-bg: rgba(0, 0, 0, 0.62);
 
-  /* ---------- 遮罩（模态 / 对话框背后的那一层） ----------
-     2026-11-26 封板收口：遮罩原来是各弹窗各写一个 rgba，其中 `rgba(13,20,36,.26)`
-     还带蓝味（在纯中性画面上读成一层脏雾）。现在统一成两个中性令牌：
-       --scrim        挡住整窗的模态遮罩（快捷键表 / 通用确认浮层）
-       --scrim-soft   弹出小表（朗读音色这类 360px 小表）用的轻遮罩
-     它们只负责「让后面退后」，不承担任何颜色语义；卡片自己读 --raise。 */
+  /* 遮罩只负责"让后面退后"，不承担颜色语义；卡片自己读 --raise。 */
   --scrim: rgba(0, 0, 0, 0.22);
   --scrim-soft: rgba(0, 0, 0, 0.14);
 
-  /* 监看舞台：浅色下是「画面浮在柔和浅灰画布上」，不是两条黑边；
-     暗色下保持近黑，让画面成为唯一亮面。 */
-  --stage-bg: #ededf0;
-  --stage-line: rgba(0, 0, 0, 0.52);
-  --stage-frame: rgba(0, 0, 0, 0.16);
-  --wave: #8a8a90;
+  /* ---------- 7. 监看舞台 ---------- */
+  --stage-line: color-mix(in srgb, var(--neutral-wash) var(--stage-line-a), transparent);
+  --stage-frame: color-mix(in srgb, var(--neutral-wash) var(--stage-frame-a), transparent);
 
-  --cue-lane: rgba(0, 0, 0, 0.05);
-  --cue-wash: rgba(0, 0, 0, 0.03);
-  --cue-block: rgba(0, 0, 0, 0.14);
-  --cue-block-hover: rgba(0, 0, 0, 0.24);
-  --cue-block-active: rgba(41, 92, 230, 0.88);
-  --cue-edge: rgba(41, 92, 230, 0.92);
+  /* ---------- 8. 核对台轨道与 cue 记号 ---------- */
+  --cue-lane: color-mix(in srgb, var(--neutral-wash) var(--cue-lane-a), transparent);
+  --cue-wash: color-mix(in srgb, var(--neutral-wash) var(--cue-wash-a), transparent);
+  --cue-block: color-mix(in srgb, var(--neutral-wash) var(--cue-block-a), transparent);
+  --cue-block-hover: color-mix(
+    in srgb,
+    var(--neutral-wash) var(--cue-block-hover-a),
+    transparent
+  );
+  --cue-block-active: color-mix(in srgb, var(--accent) var(--cue-active-a), transparent);
+  --cue-edge: color-mix(in srgb, var(--cue-edge-color) var(--cue-edge-a), transparent);
 
-  /* ---------- 设置页令牌（分段 / Bento / 占用条 / Inset） ----------
-     分段选中态回到 macOS 原生语法：灰槽里一颗**纯白凸起胶囊**，
-     极轻投影 + 深墨文字；不再往槽里涂半透明蓝。
-     2026-11-26：Bento / Inset 从「白卡 + 描边」退成**凹陷填充**——
-     未选中的选项是台面上一块无边框的淡灰，选中才加蓝须。 */
-  --seg-track: rgba(0, 0, 0, 0.06);
-  --seg-thumb: #ffffff;
-  --seg-thumb-ring: rgba(0, 0, 0, 0.10);
+  /* ---------- 9. 设置页（分段 / Bento / 占用条 / Inset） ---------- */
+  --seg-track: color-mix(in srgb, #000000 var(--seg-track-a), transparent);
+  --seg-thumb: var(--raise);
+  --seg-thumb-ring: color-mix(
+    in srgb,
+    var(--neutral-wash) var(--seg-thumb-ring-a),
+    transparent
+  );
   --seg-thumb-shadow:
     0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px var(--seg-thumb-ring);
   --seg-ink: var(--text-2);
@@ -278,11 +312,11 @@
   --hero-bg: var(--well);
   --hero-border: transparent;
 
-  --meter-track: rgba(0, 0, 0, 0.07);
-  --meter-a: #295ce6;
-  --meter-b: #356b52;
-  --meter-c: #7e5416;
-  --meter-muted: rgba(0, 0, 0, 0.28);
+  --meter-track: color-mix(in srgb, var(--neutral-wash) var(--meter-track-a), transparent);
+  --meter-a: var(--accent);
+  --meter-b: var(--success);
+  --meter-c: var(--warn);
+  --meter-muted: color-mix(in srgb, var(--neutral-wash) var(--meter-muted-a), transparent);
   --meter-gap: var(--raise);
 
   --inset-bg: var(--well);
@@ -291,160 +325,301 @@
   --switch-knob: #ffffff;
 }
 
+/* ============================================================
+   2. cobalt 深色：纯中性炭黑 + 下沉暗槽（第一阶段封板值）
+   ============================================================ */
 html[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ---------- 纯中性深炭黑：FCP 检查器的语法（2026-11-26 第三次修正） ----------
-     上一版是「偏青灰的 #1A1C1F → #24272B → #2C3136 + 凹槽提亮 6.5%」，
-     结果整个界面浮着一层灰雾：底色本身带蓝味，而凹槽往白里提，
-     于是「里外都是亮的」，看不出哪一层在前哪一层在后。
-
-     这一版换成 **纯中性炭黑阶梯 + 下沉暗槽**，就是 FCP 检查器的反向关系：
-       --stage  #0C0C0E  画面所在的房间（全应用最深，唯一接近纯黑的值）
-       --canvas #161618  工作区地面
-       --paper  #1D1D1F  侧栏 / 标题栏 / 底栏 / 检查器（铬件）
-       --surface#242427  面板 / 卡片层（台本表也落这一层）
-       --raise  #313135  按钮 / 浮层（再往上提一档，悬停 #3A3A3F）
-       --well   #121214  输入框 / 滑块底槽 / 标签槽：**蹲到画布以下**，
-                         配一条 7% 白的极细边，读成「挖进去的一块」
-     三个色相全部是中性（R=G，B 只多一点），不再有一丝青灰；
-     字也不再偏暖，用中性近白，因为 FCP 的字就是中性白。 */
   --stage: #0c0c0e;
   --canvas: #161618;
   --paper: #1d1d1f;
   --surface: #242427;
   --raise: #313135;
   --raise-hover: #3a3a3f;
-
-  --ink: #ededef;
-  --ink-2: #b9b9bf;
-  /* 11px 标签：4.7:1 on 浮层、6.5:1 on 铬件 —— 抬到 A0 才不会在炭黑上糊掉 */
-  --ink-3: #a0a0a6;
-  --ink-muted: #6e6e74;
-
-  --line: rgba(255, 255, 255, 0.13);
-  --line-2: rgba(255, 255, 255, 0.075);
-  --rule: #303034;
-
-  /* 凹陷：往黑里沉，再配一条 7% 白的极细边。绝不往白里提亮。 */
   --well: #121214;
   --well-hover: #1a1a1d;
-  --well-focus: #1a1a1d;
-  /* 暗槽边线：0.07 白在炭黑上只有「一层雾」，看不出控件形状。
-     0.13 白与 --line 同档，槽口干脆，又不会亮成描边。 */
-  --well-line: rgba(255, 255, 255, 0.13);
-  /* 次级按钮在暗色是真正的抬升层（#313135），边线走同一档 0.13 白。 */
-  --btn-bg: var(--raise);
-  --btn-bg-hover: var(--raise-hover);
-  --btn-line: var(--well-line);
-  --btn-line-hover: rgba(255, 255, 255, 0.24);
-
-  /* ---------- Studio 皇家钴蓝 ----------
-     暗色主填充 #3467EB（白字 4.90:1），文字态 #6B96FF（铬件 5.96:1）。
-     悬停取 #3B6DEE 而不是指定值 #4274F2：后者配白字只有 4.19:1，
-     同一色相压 4 个色阶肉眼不可分辨，却把白字拉回 4.56:1。 */
+  --ink: #ededef;
+  --ink-2: #b9b9bf;
+  --ink-3: #a0a0a6;
+  --rule: #303034;
   --accent: #3467eb;
   --accent-hover: #3b6dee;
   --accent-text: #6b96ff;
-  --accent-soft: rgba(52, 103, 235, 0.16);
-  --accent-ring: rgba(107, 150, 255, 0.55);
-  --accent-line: rgba(107, 150, 255, 0.42);
-  --btn-primary-bg: var(--accent);
-  --btn-primary-hover: var(--accent-hover);
-  --control-on: var(--accent);
-  --on-accent: #ffffff;
-
   --danger: #e5776a;
-  --danger-soft: rgba(229, 119, 106, 0.14);
   --warn: #d6a460;
-  --warn-soft: rgba(214, 164, 96, 0.14);
   --success: #74b493;
-  --success-soft: rgba(116, 180, 147, 0.14);
-
-  /* 内容面 / 浮层 / 对话框读「抬升层」，所以在暗色是 #313135 —— 它就是
-     FCP 里那一层真正浮在面板之上的东西。页内分区不许用这张牌。 */
-  --bg-content: var(--raise);
   --bg-inspector: var(--paper);
-  --bg-toolbar: rgba(29, 29, 31, 0.92);
-  --bg-status: rgba(29, 29, 31, 0.96);
-  /* 侧栏叠在 macOS 原生 vibrancy 上；0.9 让桌面只透一点点 */
-  --bg-sidebar: rgba(29, 29, 31, 0.9);
+  --stage-bg: var(--stage);
+  --wave: #8e8e94;
 
-  --text: var(--ink);
-  --text-2: var(--ink-2);
-  --text-3: var(--ink-3);
-  --separator: var(--line);
-  --separator-soft: var(--line-2);
+  /* 暗色从白墨里洗色；凹陷边线抬到 13% 白才勾得出槽口。 */
+  --neutral-wash: #ffffff;
+  --line-2-a: 7.5%;
+  --well-line-a: 13%;
+  --accent-soft-color: var(--accent);
+  --accent-soft-a: 16%;
+  --accent-ring-color: var(--accent-text);
+  --accent-ring-a: 55%;
+  --accent-line-color: var(--accent-text);
+  --accent-line-a: 42%;
+  --cue-edge-color: var(--accent-text);
+  --cue-lane-a: 6%;
+  --cue-wash-a: 3.5%;
+  --cue-block-a: 13%;
+  --cue-block-hover-a: 21%;
+  --cue-active-a: 90%;
+  --cue-edge-a: 95%;
+  --stage-line-a: 34%;
+  --stage-frame-a: 10%;
+  --seg-track-a: 34%;
+  --meter-track-a: 8%;
+  --meter-muted-a: 30%;
+  --danger-soft-a: 14%;
+  --warn-soft-a: 14%;
+  --success-soft-a: 14%;
+  --chrome-toolbar-a: 92%;
+  --chrome-status-a: 96%;
+  --chrome-sidebar-a: 90%;
 
-  /* --fill 只做悬停/洗色这类一层半透明；凹陷填充是 --well（往黑里沉）。 */
-  --fill: rgba(255, 255, 255, 0.055);
-  --fill-strong: rgba(255, 255, 255, 0.1);
-  --row-hover: rgba(255, 255, 255, 0.04);
-
-  /* 浮层的立体关系：一条 1px 暗缝 + 一道极淡顶边高光，不用大面积阴影。 */
+  /* 暗槽聚焦只比 well 抬 4% 墨，绝不抬到 raise：输入框不是按钮。 */
+  --well-focus: color-mix(in srgb, var(--well) 96%, var(--ink));
+  --btn-bg-hover: var(--raise-hover);
   --raise-bevel: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --raise-seam: #0e0e10;
+
   --shadow-pop:
     0 0 0 1px var(--raise-seam), 0 14px 36px rgba(0, 0, 0, 0.62),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --shadow-video: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 22px 46px rgba(0, 0, 0, 0.6);
-  --shadow-btn: none;
-  --shadow-seg: none;
-
-  --scroll-thumb: rgba(255, 255, 255, 0.18);
-  --scroll-thumb-hover: rgba(255, 255, 255, 0.3);
+  --scroll-thumb-a: 18%;
+  --scroll-thumb-hover-a: 30%;
   --hit: rgba(255, 214, 10, 0.3);
   --hit-row: rgba(255, 214, 10, 0.1);
   --caption-bg: rgba(4, 6, 10, 0.66);
-
-  /* 暗色的遮罩比浅色重：底色已经接近纯黑了，纯黑 0.22 几乎看不见；
-     0.46 才把画布压到 --stage 那一档，抬升层的卡片立刻跳出来。 */
   --scrim: rgba(0, 0, 0, 0.46);
   --scrim-soft: rgba(0, 0, 0, 0.34);
 
-  --stage-bg: var(--stage);
-  --stage-line: rgba(255, 255, 255, 0.34);
-  --stage-frame: rgba(255, 255, 255, 0.1);
-  --wave: #8e8e94;
-
-  --cue-lane: rgba(255, 255, 255, 0.06);
-  --cue-wash: rgba(255, 255, 255, 0.035);
-  --cue-block: rgba(255, 255, 255, 0.13);
-  --cue-block-hover: rgba(255, 255, 255, 0.21);
-  --cue-block-active: rgba(52, 103, 235, 0.9);
-  --cue-edge: rgba(107, 150, 255, 0.95);
-
-  /* 分段：槽沉到画布以下、拇指是浮层那一档 —— FCP 里那颗凸起的小胶囊。 */
-  --seg-track: rgba(0, 0, 0, 0.34);
-  --seg-thumb: var(--raise);
   --seg-thumb-ring: var(--raise-seam);
   --seg-thumb-shadow:
     0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 0.5px var(--seg-thumb-ring),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --seg-ink: var(--text-2);
-  --seg-ink-on: var(--text);
 
   --bento-bg: var(--surface);
-  --bento-border: transparent;
-  --bento-border-on: var(--accent-line);
-  --bento-glow: transparent;
-  --bento-bg-on: var(--accent-soft);
-  --bento-shadow: none;
-  --bento-shadow-on: none;
-
   --hero-bg: var(--surface);
-  --hero-border: transparent;
-
-  --meter-track: rgba(255, 255, 255, 0.08);
-  --meter-a: var(--accent);
-  --meter-b: var(--success);
-  --meter-c: var(--warn);
-  --meter-muted: rgba(255, 255, 255, 0.3);
   --meter-gap: var(--surface);
-
-  --inset-bg: var(--well);
   --inset-line: var(--well-line);
-  --bg-inset: var(--inset-bg);
+}
+
+/* ============================================================
+   3. 色板：只覆写**基色**。派生令牌在色板块之前已经算过一次，
+      这里的基色变化会沿 var() 链自动带到铬件、边线、选中洗色与轨道。
+      cobalt 不需要块（它就是上面的 :root / dark），默认零成本。
+   ============================================================ */
+
+/* ---------- 北欧极夜 · Nord ---------- */
+html[data-palette='nord'][data-theme='light'] {
+  --canvas: #f7f9fc;
+  --paper: #eceff4;
+  --surface: #ffffff;
+  --raise: #ffffff;
+  --raise-hover: color-mix(in srgb, var(--raise) 96%, var(--ink));
+  --well: #e5e9f0;
+  --well-hover: #dce2ec;
+  --ink: #2e3440;
+  --ink-2: #434c5e;
+  --ink-3: #4c566a;
+  --rule: #d8dee9;
+  --accent: #456e9e;
+  --accent-hover: #395e8b;
+  --accent-text: #3b6291;
+  --bg-inspector: #f4f6fa;
+  --stage-bg: color-mix(in srgb, var(--canvas) 90%, var(--ink));
+}
+
+html[data-palette='nord'][data-theme='dark'] {
+  --stage: #1a1e26;
+  --canvas: #242933;
+  --paper: #2e3440;
+  --surface: #353c4a;
+  --raise: #434c5e;
+  --raise-hover: #4c566a;
+  --well: #1d222b;
+  --well-hover: color-mix(in srgb, var(--well) 96%, var(--ink));
+  --ink: #eceff4;
+  --ink-2: #d8dee9;
+  --ink-3: #b4c0d2;
+  --rule: #3b4252;
+  --accent: #4772a6;
+  --accent-hover: #3e6799;
+  --accent-text: #88c0d0;
+  /* Nord 的炭纸比钴蓝深色亮一档，默认朱红在 surface 上只有 4.27:1；
+     提亮 2 个色阶到 #ed8f84（paper 5.23 / surface 4.66）。 */
+  --danger: #ed8f84;
+}
+
+/* ---------- 玫瑰松木 · Rosé Pine ---------- */
+html[data-palette='rose-pine'][data-theme='light'] {
+  --canvas: #fffaf3;
+  --paper: #faf4ed;
+  --surface: #fffcf8;
+  --raise: #fffaf3;
+  --raise-hover: color-mix(in srgb, var(--raise) 96%, var(--ink));
+  --well: #f2e9e1;
+  --well-hover: #eae0d6;
+  --ink: #575279;
+  --ink-2: #6e6a86;
+  --ink-3: #625e7c;
+  --rule: #e4d8ce;
+  --accent: #286983;
+  --accent-hover: #1f566d;
+  --accent-text: #286983;
+  --danger: #b44b65;
+  --bg-inspector: #fdf7f0;
+  --stage-bg: color-mix(in srgb, var(--canvas) 90%, var(--ink));
+}
+
+html[data-palette='rose-pine'][data-theme='dark'] {
+  --stage: #110f1a;
+  --canvas: #191724;
+  --paper: #1f1d2e;
+  --surface: #26233a;
+  --raise: #312d48;
+  --raise-hover: #3b3656;
+  --well: #13111c;
+  --well-hover: color-mix(in srgb, var(--well) 96%, var(--ink));
+  --ink: #e0def4;
+  --ink-2: #bdb9d6;
+  --ink-3: #a29ec0;
+  --rule: #2e2a44;
+  --accent: #31748f;
+  /* 指定 hover #3982A0 配白字只有 4.31:1；同色相压到 #357C99（4.67:1）。 */
+  --accent-hover: #357c99;
+  --accent-text: #9ccfd8;
+  --danger: #eb6f92;
+}
+
+/* ---------- 暮森护眼 · Everforest ---------- */
+html[data-palette='everforest'][data-theme='light'] {
+  --canvas: #fcf8ec;
+  --paper: #f3ead3;
+  --surface: #fffdf5;
+  --raise: #fffdf5;
+  --raise-hover: color-mix(in srgb, var(--raise) 96%, var(--ink));
+  --well: #eae0c5;
+  --well-hover: #e2d6b8;
+  --ink: #424e54;
+  --ink-2: #536168;
+  --ink-3: #57645c;
+  --rule: #dfd5b7;
+  --accent: #277355;
+  --accent-hover: #1f6046;
+  --accent-text: #236b4e;
+  --bg-inspector: #f8f2df;
+  --stage-bg: color-mix(in srgb, var(--canvas) 90%, var(--ink));
+}
+
+html[data-palette='everforest'][data-theme='dark'] {
+  --stage: #14191c;
+  --canvas: #1e2428;
+  --paper: #272e33;
+  --surface: #2e373c;
+  --raise: #374248;
+  --raise-hover: #404c53;
+  --well: #171c1f;
+  --well-hover: color-mix(in srgb, var(--well) 96%, var(--ink));
+  --ink: #d3c6aa;
+  --ink-2: #b8ae96;
+  --ink-3: #ada998;
+  --rule: #374248;
+  --accent: #2b7e5e;
+  /* 指定 hover #318A68 配白字 4.23:1；压到 #2F8163（4.73:1）。 */
+  --accent-hover: #2f8163;
+  --accent-text: #83c092;
+  /* 暖纸比钴蓝深色亮：默认朱红在 surface 只有 4.15:1，提亮到 4.76。 */
+  --danger: #ed8f84;
+}
+
+/* ---------- 拿铁与摩卡 · Catppuccin ---------- */
+html[data-palette='catppuccin'][data-theme='light'] {
+  --canvas: #f7f8fc;
+  --paper: #eff1f5;
+  --surface: #ffffff;
+  --raise: #ffffff;
+  --raise-hover: color-mix(in srgb, var(--raise) 96%, var(--ink));
+  --well: #e6e9ef;
+  --well-hover: #dce0e8;
+  --ink: #4c4f69;
+  --ink-2: #5c5f77;
+  --ink-3: #63667e;
+  --rule: #dce0e8;
+  --accent: #1e66f5;
+  --accent-hover: #1755d4;
+  /* 指定文字态 #1E66F5 在 paper 上只有 4.34:1；同色相压 3 个色阶到
+     #1B61E8（paper 4.74 / canvas 5.05），11px 标签才过线。 */
+  --accent-text: #1b61e8;
+  --bg-inspector: #f4f5fa;
+  --stage-bg: color-mix(in srgb, var(--canvas) 90%, var(--ink));
+}
+
+html[data-palette='catppuccin'][data-theme='dark'] {
+  --stage: #11111b;
+  --canvas: #181825;
+  --paper: #1e1e2e;
+  --surface: #26273a;
+  --raise: #313244;
+  --raise-hover: #3b3c52;
+  --well: #13131e;
+  --well-hover: color-mix(in srgb, var(--well) 96%, var(--ink));
+  --ink: #cdd6f4;
+  --ink-2: #bac2de;
+  --ink-3: #a6adc8;
+  --rule: #313244;
+  --accent: #3b6ce2;
+  /* 指定 hover #4273EB 配白字 4.30:1；压到 #3D6DE4（4.66:1）。 */
+  --accent-hover: #3d6de4;
+  --accent-text: #89b4fa;
+}
+
+/* ---------- 暗房琥珀 · Cinema Amber ---------- */
+html[data-palette='cinema-amber'][data-theme='light'] {
+  --canvas: #fcfbf7;
+  --paper: #f4f1ea;
+  --surface: #ffffff;
+  --raise: #ffffff;
+  --raise-hover: color-mix(in srgb, var(--raise) 96%, var(--ink));
+  --well: #ece7dd;
+  --well-hover: #e2ddd1;
+  --ink: #1f1d1a;
+  --ink-2: #4f4b45;
+  --ink-3: #5c574f;
+  --rule: #e0dbd0;
+  --accent: #b45309;
+  --accent-hover: #9c4406;
+  --accent-text: #9a4506;
+  --danger: #b82d2d;
+  --bg-inspector: #f8f6f0;
+  --stage-bg: color-mix(in srgb, var(--canvas) 90%, var(--ink));
+}
+
+html[data-palette='cinema-amber'][data-theme='dark'] {
+  --stage: #090908;
+  --canvas: #141413;
+  --paper: #1b1b19;
+  --surface: #232320;
+  --raise: #2e2e2a;
+  --raise-hover: #383833;
+  --well: #0f0f0e;
+  --well-hover: color-mix(in srgb, var(--well) 96%, var(--ink));
+  --ink: #ecebe6;
+  --ink-2: #b8b5ac;
+  --ink-3: #9e9b92;
+  --rule: #2e2e2a;
+  --accent: #b8590c;
+  /* 指定 hover #C66310 配白字 4.04:1；压到 #B95D0E（4.53:1）。 */
+  --accent-hover: #b95d0e;
+  --accent-text: #f59e0b;
+  --danger: #e56b63;
 }
 
 /* ============================================================

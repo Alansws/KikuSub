@@ -9,9 +9,10 @@
    */
   import Icon from '../../Icon.svelte';
   import {
-    APPEARANCE_SHOTS,
     THEME_PREVIEW_CUE,
+    paletteShot,
     type AppearanceId,
+    type PaletteId,
     type ThemeId,
   } from '../../../lib/themes';
 
@@ -19,16 +20,19 @@
     current,
     resolved,
     systemDark,
+    palette,
     onselect,
   }: {
     current: AppearanceId;
     resolved: ThemeId;
     systemDark: boolean;
+    /** 当前皮肤色板：外观缩略图跟着它显示对应的日间 / 夜间色。 */
+    palette: PaletteId;
     onselect: (id: AppearanceId) => void;
   } = $props();
 
-  const light = APPEARANCE_SHOTS.find((shot) => shot.id === 'light')!;
-  const dark = APPEARANCE_SHOTS.find((shot) => shot.id === 'dark')!;
+  const light = $derived(paletteShot(palette, 'light'));
+  const dark = $derived(paletteShot(palette, 'dark'));
 
   const cards = $derived([
     {
@@ -41,14 +45,14 @@
     {
       id: 'light' as AppearanceId,
       name: '日间校样',
-      note: '中性浅灰铬件 · 纸白台面 · 皇家钴蓝；白天与交付前通读',
+      note: '明亮纸台面 · 墨 · 当前色板的强调色；白天与交付前通读',
       split: false,
       shot: light,
     },
     {
       id: 'dark' as AppearanceId,
       name: '夜间配音',
-      note: '纯中性深炭黑 · 下沉暗槽 · 中性近白字；画面是唯一亮面',
+      note: '深色台面 · 下沉暗槽 · 画面是唯一亮面；长时间夜间工作',
       split: false,
       shot: dark,
     },
@@ -62,7 +66,7 @@
         `--shot-card:${s.card}`,
         `--shot-ink:${s.ink}`,
         `--shot-accent:${s.accent}`,
-        `--shot-line:${s.line}`,
+        `--shot-rule:${s.rule}`,
       ].join(';');
     // auto 卡：左半日间、右半夜间，中间一条发丝线
     return split
@@ -159,7 +163,7 @@
     height: 104px;
     border-radius: var(--rad-shot);
     overflow: hidden;
-    border: 1px solid var(--shot-line);
+    border: 1px solid var(--shot-rule);
     background: var(--shot-canvas);
   }
   .shot.split {
@@ -173,7 +177,7 @@
     width: 38px;
     flex: 0 0 38px;
     background: var(--shot-paper);
-    border-right: 1px solid var(--shot-line);
+    border-right: 1px solid var(--shot-rule);
     padding: 6px var(--sp-1);
     display: flex;
     flex-direction: column;
@@ -221,7 +225,7 @@
     flex: 1;
     border-radius: 3px;
     background: var(--shot-card);
-    border: 1px solid var(--shot-line);
+    border: 1px solid var(--shot-rule);
     padding: 5px;
     display: flex;
     flex-direction: column;

@@ -11,14 +11,22 @@
   import AppearancePicker from '../../components/settings/appearance/AppearancePicker.svelte';
   import ChapterNaming from '../../components/settings/appearance/ChapterNaming.svelte';
   import CueFontPicker from '../../components/settings/appearance/CueFontPicker.svelte';
+  import PalettePicker from '../../components/settings/appearance/PalettePicker.svelte';
   import TtsPrefList from '../../components/settings/appearance/TtsPrefList.svelte';
   import { app } from '../../lib/store.svelte';
-  import { appearance, setAppearance, setCueFont } from '../../lib/appearanceState.svelte';
+  import {
+    appearance,
+    setAppearance,
+    setCueFont,
+    setPalette,
+  } from '../../lib/appearanceState.svelte';
   import {
     APPEARANCE_SHOTS,
     CUE_FONTS,
+    PALETTES,
     appearanceName,
     cueFontName,
+    paletteName,
     type ThemeId,
   } from '../../lib/themes';
 
@@ -37,7 +45,20 @@
       current={appearance.preference}
       resolved={app.theme as ThemeId}
       systemDark={appearance.systemDark}
+      palette={appearance.palette}
       onselect={(id) => setAppearance(id)}
+    />
+  </SettingsSection>
+
+  <SettingsSection
+    title="界面配色"
+    caption="六套双模色板，与上面的明暗正交：上面决定日间 / 夜间，这里决定这一面用哪套颜色。点一下立即生效，只换界面基色，不动字体、字号与布局。"
+    meta={`当前：${paletteName(appearance.palette)}（${PALETTES.length} 套 · 双模）`}
+  >
+    <PalettePicker
+      current={appearance.palette}
+      resolved={app.theme as ThemeId}
+      onselect={(id) => setPalette(id)}
     />
   </SettingsSection>
 

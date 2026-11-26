@@ -21,6 +21,8 @@ const prefs = readAppearancePrefs(localStorage);
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
 document.documentElement.dataset.theme = resolveTheme(prefs.appearance, systemDark ? 'dark' : 'light');
+// 色板与明暗正交：cobalt 是默认，没有偏好时也显式落属性，CSS 才能只写覆写块。
+document.documentElement.dataset.palette = prefs.palette;
 document.documentElement.dataset.cueFont = prefs.cueFont;
 window.kikusub?.setAppearance?.(prefs.appearance);
 

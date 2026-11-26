@@ -22,6 +22,20 @@ export type AppearanceId = 'auto' | ThemeId;
 /** 字幕字体偏好，写进 `html[data-cue-font]`。 */
 export type CueFontId = 'sans' | 'mincho';
 
+/**
+ * 皮肤色板，写进 `html[data-palette]`。
+ *
+ * 与 `data-theme` 正交：色板只回答"用哪套基色"，明暗仍由 `data-theme` 回答。
+ * 默认 `cobalt` 就是第一阶段封板的那套蓝/灰，不加任何覆写块。
+ */
+export type PaletteId =
+  | 'cobalt'
+  | 'nord'
+  | 'rose-pine'
+  | 'everforest'
+  | 'catppuccin'
+  | 'cinema-amber';
+
 /** 系统外观（`prefers-color-scheme`）的取值。 */
 export type SystemScheme = ThemeId;
 
@@ -64,6 +78,12 @@ export function isCueFontId(value: unknown): value is CueFontId {
   return value === 'sans' || value === 'mincho';
 }
 
+export function isPaletteId(value: unknown): value is PaletteId {
+  return PALETTES.some((palette) => palette.id === value);
+}
+
+export const DEFAULT_PALETTE: PaletteId = 'cobalt';
+
 /** 偏好 × 系统外观 → `data-theme`。 */
 export function resolveTheme(appearance: AppearanceId, system: SystemScheme): ThemeId {
   return appearance === 'auto' ? system : appearance;
@@ -74,6 +94,182 @@ export const appearanceName = (id: AppearanceId): string =>
 
 export const cueFontName = (id: CueFontId): string =>
   CUE_FONTS.find((item) => item.id === id)?.name ?? id;
+
+export const paletteName = (id: PaletteId): string =>
+  PALETTES.find((item) => item.id === id)?.name ?? id;
+
+
+/* ============================================================
+   色板注册表
+   ============================================================ */
+
+/**
+ * 一张色板缩略图要用的最小基色集合。
+ *
+ * 这里只放**缩略图确实要画的颜色**，不是全量令牌；全量令牌在 app.css。
+ * `desktop/test/theme-preview.test.mjs` 会把六个色板 × 两个明暗的这组值与
+ * app.css 对应块逐项对账，任何一边漂移都会红。
+ *
+ * `card` 读 `--surface`（台本纸 / 卡片层），`rule` 读 `--rule`（1px 发丝线）。
+ * 特意不读 `--line`：它是 color-mix 派生值，缩略图只需要一条能画出来的实色边。
+ */
+export interface PaletteShot {
+  canvas: string;
+  paper: string;
+  card: string;
+  ink: string;
+  accent: string;
+  rule: string;
+}
+
+export interface PaletteOption {
+  id: PaletteId;
+  name: string;
+  note: string;
+  light: PaletteShot;
+  dark: PaletteShot;
+}
+
+/**
+ * 六套双模色板。数值与 app.css 的基色块一一对应：
+ * `cobalt` 对应 `:root` / `html[data-theme='dark']`，其余对应
+ * `html[data-palette='…'][data-theme='…']`。
+ *
+ * 排序就是设置页卡片的顺序：默认钴蓝在最前，其余按冷暖/明暗气质排开。
+ */
+export const PALETTES: PaletteOption[] = [
+  {
+    id: 'cobalt',
+    name: '皇家钴蓝',
+    note: '净白纸台 · 纯中性炭黑；第一阶段封板的标准色板',
+    light: {
+      canvas: '#ffffff',
+      paper: '#f5f5f7',
+      card: '#ffffff',
+      ink: '#15191c',
+      accent: '#295ce6',
+      rule: '#e2e2e7',
+    },
+    dark: {
+      canvas: '#161618',
+      paper: '#1d1d1f',
+      card: '#242427',
+      ink: '#ededef',
+      accent: '#3467eb',
+      rule: '#303034',
+    },
+  },
+  {
+    id: 'nord',
+    name: '北欧极夜',
+    note: 'Snow Storm 冷调纸面 / Polar Night 极夜蓝灰',
+    light: {
+      canvas: '#f7f9fc',
+      paper: '#eceff4',
+      card: '#ffffff',
+      ink: '#2e3440',
+      accent: '#456e9e',
+      rule: '#d8dee9',
+    },
+    dark: {
+      canvas: '#242933',
+      paper: '#2e3440',
+      card: '#353c4a',
+      ink: '#eceff4',
+      accent: '#4772a6',
+      rule: '#3b4252',
+    },
+  },
+  {
+    id: 'rose-pine',
+    name: '玫瑰松木',
+    note: 'Dawn 暖手稿纸 / Main 黑胶紫墨',
+    light: {
+      canvas: '#fffaf3',
+      paper: '#faf4ed',
+      card: '#fffcf8',
+      ink: '#575279',
+      accent: '#286983',
+      rule: '#e4d8ce',
+    },
+    dark: {
+      canvas: '#191724',
+      paper: '#1f1d2e',
+      card: '#26233a',
+      ink: '#e0def4',
+      accent: '#31748f',
+      rule: '#2e2a44',
+    },
+  },
+  {
+    id: 'everforest',
+    name: '暮森护眼',
+    note: '暖纸米色 / 深林绿灰；长时间阅读更松弛',
+    light: {
+      canvas: '#fcf8ec',
+      paper: '#f3ead3',
+      card: '#fffdf5',
+      ink: '#424e54',
+      accent: '#277355',
+      rule: '#dfd5b7',
+    },
+    dark: {
+      canvas: '#1e2428',
+      paper: '#272e33',
+      card: '#2e373c',
+      ink: '#d3c6aa',
+      accent: '#2b7e5e',
+      rule: '#374248',
+    },
+  },
+  {
+    id: 'catppuccin',
+    name: '拿铁与摩卡',
+    note: 'Latte 清凉拿铁 / Mocha 紫调摩卡',
+    light: {
+      canvas: '#f7f8fc',
+      paper: '#eff1f5',
+      card: '#ffffff',
+      ink: '#4c4f69',
+      accent: '#1e66f5',
+      rule: '#dce0e8',
+    },
+    dark: {
+      canvas: '#181825',
+      paper: '#1e1e2e',
+      card: '#26273a',
+      ink: '#cdd6f4',
+      accent: '#3b6ce2',
+      rule: '#313244',
+    },
+  },
+  {
+    id: 'cinema-amber',
+    name: '暗房琥珀',
+    note: '暖白暗房纸 / 放映间琥珀；强调色偏胶片',
+    light: {
+      canvas: '#fcfbf7',
+      paper: '#f4f1ea',
+      card: '#ffffff',
+      ink: '#1f1d1a',
+      accent: '#b45309',
+      rule: '#e0dbd0',
+    },
+    dark: {
+      canvas: '#141413',
+      paper: '#1b1b19',
+      card: '#232320',
+      ink: '#ecebe6',
+      accent: '#b8590c',
+      rule: '#2e2e2a',
+    },
+  },
+];
+
+export const paletteShot = (id: PaletteId, theme: ThemeId): PaletteShot => {
+  const palette = PALETTES.find((item) => item.id === id) ?? PALETTES[0];
+  return theme === 'dark' ? palette.dark : palette.light;
+};
 
 /**
  * 标题栏按钮 / ⇧⌘A：**直接两态翻转**。
@@ -91,15 +287,12 @@ export function flipAppearance(current: ThemeId): ThemeId {
 }
 
 /**
- * 设置页三张外观缩略图的配色。
+ * 设置页外观缩略图的配色（日间 / 夜间两张，`auto` 卡用左右拼合）。
  *
- * 为什么颜色放在注册表而不是 app.css：三张缩略图要**同时**显示三套配色，
- * 组件读当前主题的令牌只能拿到一套。这里是「外观元信息」的唯一位置，
- * 组件只消费 `--shot-*` 变量，不写死色值。
- *
- * `desktop/test/theme-preview.test.mjs` 会把这些值与 app.css 对应块的
- * `--canvas / --paper / --raise / --ink / --accent / --line` 逐项对账，漂移就红。
- * `line` 与 app.css 一样保留 rgba：测试按字符串对账，换成等效实色会两边都读不出同一个值。
+ * 颜色从 `PALETTES` 的 cobalt 取，避免同一组色值维护两份；缩略图组件只消费
+ * `--shot-*` 变量。`theme-preview.test.mjs` 会把这三处（注册表 / app.css /
+ * 组件）钉在一起。`rule` 读 `--rule`：缩略图只需要一条画得出来的实色边，
+ * `--line` 是 color-mix 派生值，不参与缩略图。
  */
 export interface AppearanceShot {
   id: ThemeId;
@@ -107,35 +300,27 @@ export interface AppearanceShot {
   note: string;
   canvas: string;
   paper: string;
-  /** 台本纸 / 内容卡（= app.css 的 --raise）。 */
+  /** 台本纸 / 内容卡（= app.css 的 --surface）。 */
   card: string;
   ink: string;
   accent: string;
-  line: string;
+  rule: string;
 }
+
+const cobalt = PALETTES[0];
 
 export const APPEARANCE_SHOTS: AppearanceShot[] = [
   {
     id: 'light',
     name: '日间校样',
-    note: '纸白台面 · 中性浅灰铬件 · 皇家钴蓝',
-    canvas: '#ffffff',
-    paper: '#f5f5f7',
-    card: '#ffffff',
-    ink: '#15191c',
-    accent: '#295ce6',
-    line: 'rgba(0, 0, 0, 0.13)',
+    note: '明亮纸台面 · 墨 · 强调色；白天与交付前通读',
+    ...cobalt.light,
   },
   {
     id: 'dark',
     name: '夜间配音',
-    note: '纯中性深炭黑 · 下沉暗槽 · 中性近白字',
-    canvas: '#161618',
-    paper: '#1d1d1f',
-    card: '#242427',
-    ink: '#ededef',
-    accent: '#3467eb',
-    line: 'rgba(255, 255, 255, 0.13)',
+    note: '深色台面 · 下沉暗槽 · 画面是唯一亮面',
+    ...cobalt.dark,
   },
 ];
 

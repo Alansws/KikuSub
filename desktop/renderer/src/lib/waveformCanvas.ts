@@ -19,6 +19,37 @@ import {
   paintSelectedCueWash,
 } from './waveformDraw';
 
+/**
+ * 把 CSS 令牌解析成 Canvas 2d 认得的颜色。
+ *
+ * `--line` / `--cue-block` 这类派生令牌现在是 `color-mix(in srgb, …)` 或
+ * `var(--…)`：Canvas 2d 只接受具体颜色函数，直接喂 `fillStyle` 会静默保留上一次
+ * 颜色（整条轨道看起来"没画"）。这里复用一个隐藏探测元素让浏览器算成
+ * `rgb()/rgba()`；`color(srgb …)` 再归一化一层，避免旧 Canvas 解析器不认。
+ */
+let colorProbe: HTMLSpanElement | null = null;
+
+function resolveCssColor(raw: string): string {
+  if (!raw) return raw;
+  if (!/color-mix|var\(/i.test(raw)) return raw;
+  if (!colorProbe) {
+    colorProbe = document.createElement('span');
+    colorProbe.style.display = 'none';
+    colorProbe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(colorProbe);
+  }
+  colorProbe.style.color = raw;
+  const resolved = getComputedStyle(colorProbe).color || '';
+  const srgb = resolved.match(
+    /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?\)$/,
+  );
+  if (srgb) {
+    const [r, g, b] = [srgb[1], srgb[2], srgb[3]].map((n) => Math.round(Number(n) * 255));
+    return `rgba(${r}, ${g}, ${b}, ${srgb[4] ?? 1})`;
+  }
+  return resolved;
+}
+
 export interface WaveformPaintInput {
   canvas: HTMLCanvasElement;
   waveWrap: HTMLDivElement;
@@ -75,7 +106,8 @@ export function paintReviewCanvas(input: WaveformPaintInput): void {
   const xOf = (time: number) => ((time - viewStart) / (viewSpan || 1)) * w;
 
   const css = getComputedStyle(document.documentElement);
-  const token = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+  const token = (name: string, fallback: string) =>
+    resolveCssColor(css.getPropertyValue(name).trim()) || fallback;
   const sep = token('--separator-soft', 'rgba(0,0,0,.06)');
   const sepStrong = token('--separator', 'rgba(0,0,0,.1)');
   const waveColor = token('--wave', '#7b8a99');
