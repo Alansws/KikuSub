@@ -24,9 +24,21 @@
     loadAltDiff,
     refreshAltReview,
     replacePrimaryWithAlt,
+    setDualScope,
     setDualSort,
     setIgnorePunct,
   } from '../lib/dualReview.svelte';
+  import {
+    replaceConfirmText,
+    replaceIsDestructive,
+    replaceLabel,
+    scopeBanner,
+    scopeEmptyHint,
+    scopeName,
+    scopeRangeLabel,
+    scopeStatSuffix,
+    scopeTabLabel,
+  } from '../lib/dualScope';
   import { tcShort } from '../lib/time';
   import { recallScroll, rememberScroll } from '../lib/scrollMemory';
   import type { DualRow } from '../lib/api';
@@ -60,9 +72,21 @@
       : filteredRows,
   );
   const stats = $derived(dual.stats);
+  /** 页头两个数字是**当前对照范围**里的条数，不是整份 A/B 的条数。 */
   const aCount = $derived(stats?.a_count ?? app.cues.length);
   const bCount = $derived(stats?.b_count ?? dual.count);
   const countsDiffer = $derived(dual.exists && aCount !== bCount);
+  const scope = $derived(dual.scope);
+  const scoped = $derived(Boolean(scope && scope.kind !== 'all'));
+  const banner = $derived(scopeBanner(scope));
+  /** 整份 A / B 的条数：页头用「共 636 / 220」这种说法与之区分。 */
+  const totalA = $derived(dual.totalA || app.cues.length);
+  const totalB = $derived(dual.totalB || dual.count);
+  const replaceTitle = $derived(
+    scope?.replace_mode === 'range'
+      ? `只替换${scopeRangeLabel(scope)}窗口内的 A 字幕，其它章节一条不动；一步历史，⌘Z 可整批退回`
+      : '整列用第二版覆盖核对台；只压一步历史，⌘Z 可整批退回',
+  );
   const sourceLabel = $derived.by(() => {
     const name = String(dual.source?.name ?? '').trim();
     const at = dual.createdAt
@@ -176,13 +200,24 @@
     if (await deleteAltReview()) await refreshAltReview();
   }
 
+  /**
+   * 用 B 写回核对台。
+   *
+   * 这是用户报障里最危险的一步：A 累积了第 1–3 章 636 条、B 只有第 3 章 220 条，
+   * 旧版只有一颗「整列覆盖」——按下去前两章直接消失。现在：
+   *
+   * - 处于**局部范围对照**（章节 / B 所在区间）时，按钮是「用 B 替换当前范围」，
+   *   只换窗口内的 A，窗口外一条不动；
+   * - 只有 B 盖住整片（`replace_mode === 'all'`）才是整列覆盖，
+   *   且会丢掉范围外条目时把丢多少条写进二次确认。
+   */
   async function replaceAll() {
-    if (!window.confirm(
-      '用第二版整列覆盖核对台？\n\n' +
-        `核对台当前 ${app.cues.length} 条会被 ${dual.count} 条替换；\n` +
-        '这一步只压一次历史，⌘Z 可以整批退回。\n覆盖成功后第二版会被清空。',
-    )) return;
-    if (await replacePrimaryWithAlt(true)) {
+    const focus = dual.scope;
+    const mode = focus?.replace_mode ?? 'all';
+    if (!window.confirm(replaceConfirmText(focus, totalA, totalB))) return;
+    // 整列覆盖且会丢字：用户已经在上面那句确认里看过具体条数，这里显式放行。
+    const confirmTrim = mode === 'all' && (focus?.would_trim ?? 0) > 0;
+    if (await replacePrimaryWithAlt(true, { mode, confirmTrim })) {
       setView('review');
     }
   }
@@ -269,7 +304,12 @@
             <span class="ver b" title={altParamsLabel()}>
               <b>B</b> {altEngineLabel()} <i>{bCount}</i> 条
             </span>
-            {#if countsDiffer}
+            {#if scoped && (totalA !== aCount || totalB !== bCount)}
+              <span
+                class="count-note total"
+                title="整份条数：A {totalA} 条 / B {totalB} 条。页头这两个数字只算当前对照范围，不再把范围外的章节算成「仅 A」"
+              >本段 / 全片 {totalA} · {totalB}</span>
+            {:else if countsDiffer}
               <span
                 class="count-note"
                 title="两个引擎的断句本来就可能不同；复核页按逐条时间对齐，B 多出的句子会以 + 行单独显示"
@@ -296,7 +336,7 @@
               <button class="menu-backdrop" aria-label="关闭菜单" onclick={() => (moreOpen = false)}></button>
               <div class="menu" role="menu">
                 <button class="menu-item" role="menuitem" onclick={refresh}>刷新对照</button>
-                <button class="menu-item" role="menuitem" onclick={importB}>导入字幕替换 B 版…</button>
+                <button class="menu-item" role="menuitem" onclick={importB}>导入字幕替换 B 版</button>
                 <button class="menu-item danger" role="menuitem" onclick={discard}>丢弃第二版</button>
               </div>
             {/if}
@@ -311,9 +351,56 @@
       <div class="source-line" title={String(dual.source?.path ?? '')}>{sourceLabel}</div>
     {/if}
 
+    {#if dual.exists && scope}
+      <!-- 对照范围：多章节脚本里 A 是累积的、B 常常只覆盖一段，
+           整片对齐会把范围外的几百条全标成「仅 A」。这里先把范围说清楚。 -->
+      <div class="scope-row">
+        <div class="scope-tabs" role="group" aria-label="对照范围">
+          {#each scope.options as option (option.key)}
+            <button
+              type="button"
+              class="scope-tab"
+              class:on={scope.key === option.key}
+              aria-pressed={scope.key === option.key}
+              onclick={() => void setDualScope(option.key)}
+              title={`${scopeRangeLabel(option)}：A ${option.a_count} 条 / B ${option.b_count} 条`}
+            >
+              {scopeTabLabel(option)}
+            </button>
+          {/each}
+          {#if dual.scopeTouched}
+            <button
+              type="button"
+              class="scope-tab auto"
+              onclick={() => void setDualScope('auto')}
+              title="跟随第二版自动聚焦：B 只覆盖一段时自动框住那一段"
+            >
+              <Icon name="target" size={10} />自动聚焦
+            </button>
+          {/if}
+        </div>
+        <span class="scope-note" class:hint={scoped}>
+          {#if scoped}
+            A {totalA} 条里只有 {aCount} 条在这段；统计与徽标只算本段
+          {:else}
+            统计与徽标按全片口径
+          {/if}
+        </span>
+      </div>
+      <div class="scope-banner" class:focused={scoped}>
+        <Icon name="range" size={11} />
+        <span>{banner}</span>
+      </div>
+    {/if}
+
     {#if dual.exists}
       <div class="head-stats">
         <div class="stats">
+          {#if scoped}
+            <span class="scope-chip" title="下面四个统计片只算当前对照范围，不拿范围外的章节凑差异">
+              {scopeName(scope)} · {scopeStatSuffix(scope)}
+            </span>
+          {/if}
           <span class="chip same">= 一致 <b>{stats?.same ?? 0}</b></span>
           <span class="chip diff">~ 文本不同 <b>{stats?.diff ?? 0}</b></span>
           <span class="chip only-a">− 仅 A <b>{stats?.only_a ?? 0}</b></span>
@@ -327,7 +414,7 @@
         </div>
         <span
           class="legend"
-          title="逐条配对后，这一行内只出现在 A / 只出现在 B 的字。A 列只读，不会被改动；整列覆盖只有右侧按钮才会执行。"
+          title="逐条配对后，这一行内只出现在 A / 只出现在 B 的字。A 列只读，不会被改动；写回只有右侧按钮才会执行，且默认只替换当前范围。"
         >
           <i class="sw del"></i>本行 A 独有
           <i class="sw ins"></i>本行 B 独有
@@ -360,12 +447,15 @@
             按差异大小排
           </label>
           <button
-            class="btn ghost danger overwrite"
+            class="btn overwrite"
+            class:danger={replaceIsDestructive(scope)}
+            class:safe={!replaceIsDestructive(scope)}
             onclick={replaceAll}
             disabled={dual.loading || dual.replacing}
-            title="整列用第二版覆盖核对台；只压一步历史，⌘Z 可整批退回"
+            title={replaceTitle}
           >
-            {dual.replacing ? '覆盖中…' : '用 B 覆盖核对台…'}
+            <Icon name={scope?.replace_mode === 'range' ? 'range' : 'merge'} size={11} />
+            {replaceLabel(scope, dual.replacing)}
           </button>
         </div>
       </div>
@@ -385,7 +475,7 @@
       </div>
       <div class="ea">
         <button class="btn primary" onclick={goTranscribe}>去转写页生成第二版</button>
-        <button class="btn ghost" onclick={importB}>导入已有字幕作为 B 版…</button>
+        <button class="btn ghost" onclick={importB}>导入已有字幕作为 B 版</button>
       </div>
     </div>
   {:else}
@@ -398,7 +488,7 @@
     <div class="sheet">
     <div class="cols">
       <span class="c-time">时间码</span>
-      <span class="c-side">A · 核对台当前版本（只读）</span>
+      <span class="c-side">A · 核对台当前版本（只读）{#if scoped}<i class="col-scope">仅本段</i>{/if}</span>
       <span class="c-mark">对照</span>
       <span class="c-side">B · {altEngineLabel()}（只读参考）</span>
       <span class="c-act">听 / 采纳</span>
@@ -407,8 +497,14 @@
     {#if !rows.length}
       <div class="blank small">
         <Icon name="check" size={20} />
-        <div class="et">没有差异</div>
-        <div class="es">两份字幕逐条一致；取消「只看差异」可以看全量对照。</div>
+        <div class="et">{scoped ? `「${scopeName(scope)}」没有差异` : '没有差异'}</div>
+        <div class="es">
+          {#if scoped}
+            {scopeEmptyHint(scope)} 取消「只看差异」可以看本段的全量对照。
+          {:else}
+            两份字幕逐条一致；取消「只看差异」可以看全量对照。
+          {/if}
+        </div>
       </div>
     {:else}
       <div class="list" bind:this={listEl} onscroll={onListScroll}>
@@ -777,22 +873,160 @@
     user-select: none;
     white-space: nowrap;
   }
-  /* 覆盖是危险动作，但也是这一页唯一的整列写回入口：给它实心边界，
-     不再和旁边那些 ghost 链接挤成同一层。 */
-  .btn.ghost.overwrite {
+  /* 写回是这一页唯一的写入动作，但**危险度分两档**（2026-11-26）：
+     - `safe`（替换当前范围）：纸白键 + 1px 发丝边 + 蓝铅笔图标——它是安全动作，
+       不该用危险色吓人，也不该和旁边的复选框挤成同一层；
+     - `danger`（整列覆盖，且会丢范围外的条目）：朱红边 + 朱红字。
+     两档必须一眼分得开：用户报障里最危险的一步就是它们长得一样。 */
+  .btn.overwrite {
     white-space: nowrap;
     height: 26px;
     padding: 0 10px;
+    font-weight: 500;
+    gap: 5px;
+  }
+  .btn.overwrite.safe {
+    background: var(--raise);
+    border-color: var(--btn-line);
+    color: var(--text);
+    box-shadow: var(--raise-bevel);
+  }
+  .btn.overwrite.safe:hover:not(:disabled) {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+  .btn.overwrite.danger {
     background: var(--raise);
     border-color: color-mix(in srgb, var(--danger) 34%, var(--separator));
     color: var(--danger);
-    font-weight: 500;
-    box-shadow: var(--shadow-btn);
   }
-  .btn.ghost.overwrite:hover:not(:disabled) {
+  .btn.overwrite.danger:hover:not(:disabled) {
     background: var(--danger-soft);
     border-color: var(--danger);
     color: var(--danger);
+  }
+
+  /* ---------- 对照范围（2026-11-26） ----------
+     一条发丝线下面挂「范围胶囊 + 一句横幅」：多章节脚本里 A 是累积的、
+     B 常常只覆盖一段，整片对齐会把范围外的几百条全标成「仅 A」。
+     胶囊用 --well（下沉槽）而不是白卡：这是页面内的命令条，不是卡片。 */
+  .scope-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .scope-tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .scope-tab {
+    appearance: none;
+    height: 23px;
+    padding: 0 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--well);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 11.5px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: default;
+    transition:
+      background var(--dur) var(--ease),
+      color var(--dur) var(--ease),
+      border-color var(--dur) var(--ease);
+  }
+  .scope-tab:hover {
+    background: var(--well-hover);
+    color: var(--text);
+  }
+  .scope-tab.on {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+  .scope-tab.auto {
+    background: transparent;
+    border-color: var(--line-2);
+    color: var(--text-3);
+  }
+  .scope-tab.auto:hover {
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+  .scope-note {
+    font-size: 11px;
+    line-height: 22px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .scope-note.hint {
+    color: color-mix(in srgb, var(--warn) 82%, var(--text-3));
+  }
+  /* 横幅：只在「聚焦到一段」时上色——它是在解释「为什么这里只有 220 条」，
+     不是装饰。全片时保持中性，别让每一页都挂一条警告条。 */
+  .scope-banner {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--rad-control);
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--text-2);
+    background: var(--fill);
+    min-width: 0;
+  }
+  .scope-banner.focused {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+  .scope-banner span {
+    min-width: 0;
+    overflow-wrap: break-word;
+  }
+  /* 统计片前的口径标签：说明「下面这几个数字只算本段」。 */
+  .scope-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 999px;
+    border: 1px solid var(--accent-line);
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .col-scope {
+    margin-left: 5px;
+    padding: 0 5px;
+    border-radius: 3px;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .count-note.total {
+    color: var(--accent-text);
+    background: var(--accent-soft);
   }
   /* 第 5 列是行内「试听 / 采用 B」：固定 118px，两枚 20px 高的轻按钮并排。
      宽度是按 11px 字号量出来的（试听 ≈47 + 采用 B ≈59 + gap 4），
