@@ -112,6 +112,7 @@ updated: 2026-11-26 14:10
 | **第二阶段 Batch 1 导入页融合** | ✅ 完成 | 删「继续核对 / 换片…」卡，恢复大拖放区主视觉；顺序回到 拖放区 → 代理说明 → 导出文件夹 → 最近打开；按钮去 `…`；见 §8.10 |
 | **第二阶段 Batch 2 令牌治本 + AI 三页** | ✅ 完成 | `--well-line` 亮 0.14 / 暗 0.13；页内工具栏回 `--canvas` + 发丝线；`--font-cue` 日语优先；锁轴 / 重排 / 双语三页去灰带、粘贴区与表格精修；新增 22 条控件可见性断言；见 §8.11 |
 | **第二阶段 Batch 3 六套双模色板 + 打包推送** | ✅ 完成 | `data-palette` 与 `data-theme` 正交；6 套 × 2 明暗；18 组派生令牌改 `color-mix`；设置页「界面配色」6 张卡；Canvas 2d `color-mix` 解析；12 组合全量对比度；见 §8.12 |
+| **合入前收尾：基线刷新 + README 换装** | ✅ 完成 | 21 张像素基线按第二阶段界面重拍（AI 9/9、设置 2/2 逐像素一致；其余 ≥45.5dB）；9 张 README 宣传图与中英文案同步（锁轴润色 / 重排润色 / 双语翻译、6 套色板、Cue Script）；设置页视口修正为 1440×880；见 §8.13 |
 | 骨架回归 | ✅ 全绿 | `verify_phase2_shell`（46 项）+ `verify_transcribe_flow`（21 项） |
 | 核对台 | ✅ 4.2.1 完成 | 页边 / 表格 / 检查器 / 走带 / 浮层按 Cue Script 重排；整轨区并成一行；见 §7.5 / §7.5.1 |
 | 旧文档指针 | ✅ 已加 | [ui-refactor-plan.md](ui-refactor-plan.md) / [界面设计优化分析-2026-11.md](界面设计优化分析-2026-11.md) 顶部 |
@@ -1860,6 +1861,75 @@ git push -u origin feat/ui-redesign-p2   # 只推分支，不推 tag，不碰 ma
 - CI 触发面：`on.push.branches: [main, app/macos]`，推 `feat/ui-redesign-p2` 不触发任何 job；
   `--force` 未使用。最终 Commit SHA 以 `git log -1 --format=%H feat/ui-redesign-p2` 为准。
 
+## 8.13 合入前收尾：基线整体刷新 + README 换装（2026-11-26）
+
+> 分支 **`feat/ui-redesign-p2`**。本批**只做纯本地准备**：刷新像素基线、换 README 宣传图与文案，
+> 不动 `main`、不打 tag、不碰现役 `.app` 与本机数据根。合入 `main` 与发版仍等用户拍板。
+
+### 一、为什么这一批必须先做
+
+Batch 1/2/3 都明确写过「基线待统一刷新」「README 本轮不动」。到这一批，两件事同时到期：
+
+1. **像素基线已经欠了三批账**。`capture_matrix.sh --compare` 当时红在 `import`（PSNR 21.3 dB），
+   AI 三页与设置页也没跟上，任何人下次改样式都拿不到可信基线。
+2. **README 的宣传图还是旧版界面**（旧三栏「润色 / 断句重排 / 翻译」）。版本一旦转正，
+   README 就是所有人对「新版长什么样」的第一印象，图不对等于承诺不实。
+
+### 二、基线刷新（21 张，全部逐像素可复现）
+
+```bash
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh --out /tmp/shots-new
+node tools/shots/capture_ai_workbench.mjs --out /tmp/shots-ai --no-sandbox \
+  --states "polish-dual,reshape-draft,dual"
+KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_settings_pages.sh docs/images/shots/baseline
+```
+
+| 组 | 张数 | 复跑 `--compare` 结果 |
+| --- | --- | --- |
+| `capture_matrix` 10 个状态 | 10 | `transcribe` / `review` / `dual` / `polish` / `reshape` / `translate` / `prompts` **7 张 PSNR `inf`（逐像素一致）**；`import` 52.7 dB、`export` 64.2 dB、`settings` 45.5 dB |
+| AI 三页 × 明暗/明朝 | 9 | **9/9 PSNR `inf`** |
+| 设置两页（引擎 / AI） | 2 | **2/2 PSNR `inf`** |
+
+三张非 `inf` 的图都远高于 `tools/shots/README.md` 的 35 dB 判坏线，且逐块量过差异来源：
+`import` 只差「最近打开」的相对时间文案（`今天 14:36` → `今天 14:37`），`export` 差在样式预览
+取回的那一帧与体积估算，`settings` 差在实时内存/进程读数——都是运行时文本，不是布局回归。
+这正是 `tools/shots/README.md` 早就写过的既有口径（`settings` 页「PSNR 会落在 85–99dB 之间波动」）。
+
+**顺手修掉一处「文件名骗人」**：设置页两屏原先写死 `1440x900`，但 macOS 可视工作区扣掉菜单栏与
+Dock 后只有 **885pt**，请求 900 会被系统压回 885，落盘文件名却还写着 900。现在
+`capture_settings_pages.sh` 默认 **1440×880**（新增 `KIKUSUB_SETTINGS_SHOT_SIZE` 覆盖），
+基线文件相应改名为 `settings-{engines,ai}-1440x880.png`，重跑两次确认逐像素一致。
+
+### 三、README 换装（中文 + 英文同步）
+
+| 改了什么 | 依据 |
+| --- | --- |
+| 9 张宣传图全部重出（`workbench` / `transcribe` / `translate-view` / `export` / `polish-view` / `reshape-view` / `dual-view` / `settings` / `settings-ai`） | 旧图是旧版三栏界面；新图走无窗口 `--screenshot`，2× Retina PNG → `sips -Z 2000` JPEG q82，与既有 2000×1233 规格同档（新图为 2000×1222，视口 1440×880） |
+| 新增「02 原文」三页小节：**锁轴润色 / 重排润色 / 双语翻译** | `lib/viewMeta.ts` 是展示名唯一来源；README 之前还在用「润色 / 断句重排 / 翻译」旧名 |
+| 新增外观三轴说明：明暗 / **6 套双模色板** / 字幕字体 | Batch 3 的正交配色架构（§8.12）；`themes.ts` 的 `PALETTES` 与 `APPEARANCES` |
+| 对比表新增「界面」一行；AI 一行改为三条独立车道 | 用户在真机上反复报的正是「换字体被迫换整套配色」 |
+| 顶部加一段 **Cue Script** 视觉语言与四段导航说明 | §7.1 / DESIGN.md 的视觉世界命名 |
+
+**片源换了容器（关键细节）**：原素材 `测试用_言叶之庭.mkv` 是 MKV + FLAC，Chromium 打不开，
+直接拍会在顶栏挂一枚「需代理」徽标。README 主图先用
+`ffmpeg -c:v copy -c:a aac -movflags +faststart` 无损转成 MP4 再拍，画面与旧图同帧，
+徽标消失。这条已写进 `tools/shots/README.md`，下次重出不会踩第二次。
+
+### 四、验证
+
+| 项 | 结果 |
+| --- | --- |
+| `pytest -q` | ✅ **1097 passed / 1 skipped**（skip 为 OmniVoice 权重） |
+| `python -m core.smoke` | ✅ 通过 |
+| `npm run check`（tsc） | ✅ 0 错 |
+| `npm run check:svelte` | ✅ 4/4 与基线持平（4.7.8） |
+| `npm run test:main` | ✅ **405/405** |
+| `capture_matrix.sh --compare docs/images/shots/baseline` | ✅ 无一项低于 35 dB；7/10 逐像素一致 |
+| `capture_ai_workbench.mjs --compare …` | ✅ 9/9 `inf` |
+| `capture_settings_pages.sh` 复跑 | ✅ 2/2 `inf` |
+| `pytest -q tests/test_docs_health.py` | ✅ 6/6（README / tools 文档新链接全部可解析） |
+| 无窗口 | ✅ 全程 `--screenshot`（透明窗口 + `capturePage`）；未执行 `open` / `npm start` / `npx electron .` 裸跑 |
+
 ## 9. 已拍板（2026-11-25 用户正式确认）
 
 > 本节此前是三个待问项；现已冻结为决定，后续会话不再重复询问。
@@ -1954,6 +2024,7 @@ git push -u origin feat/ui-redesign-p2   # 只推分支，不推 tag，不碰 ma
 4. 每次改 `.svelte`：`npm run check` + `check:svelte` + `build`；视觉走 `capture_matrix.sh`。
 5. 每步结束：更新本文的 §1 状态表与 §7 状态列；截图放
    `docs/images/refactor-2026-11/`；停在你确认，不跨步。第二阶段按页面分批推进
-   （**Batch 1 导入页 §8.10、Batch 2 AI 三页 §8.11、Batch 3 六套色板 §8.12 已完成**）；
-   Batch 3 已按用户要求统一重打 `build/pack-next/KikuSub-Next.app`。
+   （**Batch 1 导入页 §8.10、Batch 2 AI 三页 §8.11、Batch 3 六套色板 §8.12、
+   合入前收尾 §8.13 已完成**）；Batch 3 已按用户要求统一重打 `build/pack-next/KikuSub-Next.app`。
+   **§8.13 之后像素基线与 README 都已对齐第二阶段界面**，合入 `main` 只差用户拍板版本号与迁移清单。
 6. 任何打包/试用动作先读 §0.1：现役 `.app`、配置文件、`userData` 一律不能覆盖。

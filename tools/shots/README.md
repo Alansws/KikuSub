@@ -46,11 +46,21 @@ KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox bash tools/shots/capture_matrix.sh \
 
 - `tools/shots/readme-seed.json`：12 条演示台词 + 一版中文译文 + 一份「另一引擎」结果，时间挪到
   《言叶之庭》约 2:00 的那座桥——不挪的话首帧是黑场，首屏截图会是一整块黑。
-- 主图 `review`、`transcribe`、`translate`、`export` 用上面第 5 条命令；双引擎 / 润色 / 断句重排用
-  `capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual" --size 1440x900`。
+- **片源要给浏览器放得出来的容器**。原素材 `测试用_言叶之庭.mkv` 是 MKV + FLAC，Chromium 打不开，
+  截出来顶栏会挂一枚「需代理」徽标；README 主图先无损转成 MP4 再拍：
+  ```bash
+  ffmpeg -i 测试用_言叶之庭.mkv -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 192k \
+    -movflags +faststart /tmp/kikusub-readme-demo.mp4
+  ```
+- 主图 `review`、`transcribe`、`translate`、`export` 用上面第 5 条命令，**加 `KIKUSUB_SHOT_MEDIA`
+  指向转好的 MP4**；双引擎 / 润色 / 断句重排用
+  `capture_ai_workbench.mjs --theme light --states "polish-dual,reshape-draft,dual" --size 1440x880`。
 - 设置页两张（引擎与模型 / AI 与技能折叠态）单独一个脚本——要等引擎注册表落地，否则会截到
-  半透明骨架屏：`bash tools/shots/capture_settings_pages.sh /tmp/readme-settings`
+  半透明骨架屏：`bash tools/shots/capture_settings_pages.sh docs/images/shots/baseline`
   （加 `KIKUSUB_SHOT_ELECTRON_ARGS=--no-sandbox` 可在沙箱里跑）。
+- **视口用 1440×880，不要 1440×900**：macOS 可视工作区扣掉菜单栏与 Dock 后通常只有 885pt，
+  请求 900 会被系统压回 885，文件名却还写着 900——本项目踩过「文件名一直骗人」的亏。
+  设置页脚本已把默认值改成 `1440x880`，可用 `KIKUSUB_SETTINGS_SHOT_SIZE` 覆盖。
 - 落盘是 2× Retina PNG，转 JPG 用 `sips -Z 2000 -s format jpeg -s formatOptions 82`。
 
 ## AI 三页专用矩阵
