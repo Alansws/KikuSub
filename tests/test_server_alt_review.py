@@ -746,3 +746,40 @@ def test_patch_cue_keeps_custom_history_label(make_client, tmp_path):
     plain = client.patch("/api/cues/0", headers=AUTH, json={"text": "おはよう"})
     assert plain.status_code == 200, plain.text
     assert plain.json()["undo_label"] == "修改第 1 条文本"
+
+
+def test_done_snapshot_always_carries_alt_review_fields(make_client, tmp_path):
+    """终态一旦对外可见，result 必须已经完整。
+
+    2026-11-26 CI 上 `test_alt_review_does_not_touch_primary` 偶发
+    `KeyError: 'alt_review'`：worker 先置 `status="done"` 再 `result.update(...)`，
+    轮询方看到 done 就去读 result，读到的是没写完的中间态。本机快一档，
+    窗口太窄没撞上——所以这条用例不依赖时序运气，而是**逐个轮询快照断言**：
+    任何一次看到 done 的 snapshot，字段都必须齐。
+    """
+    client = make_client([SubtitleCue(0, 1, "おはよう"), SubtitleCue(1, 2, "今日は飴だ")])
+    media_id = _new_media(client, tmp_path)
+    _bind(client, media_id)
+    _seed_primary(client)
+
+    created = client.post(
+        "/api/jobs", headers=AUTH, json={"media_id": media_id, "alt_review": True}
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+
+    deadline = time.time() + 10
+    saw_done = False
+    while time.time() < deadline:
+        snap = client.get(f"/api/jobs/{job_id}", headers=AUTH).json()
+        if snap["status"] == "done":
+            # 一看到 done，result 里这三个字段必须已经就位；缺一个就是竞态回来了。
+            assert "alt_review" in snap["result"], "status=done 但 result 还没有 alt_review"
+            assert "alt_count" in snap["result"], "status=done 但 result 还没有 alt_count"
+            assert "applied" in snap["result"], "status=done 但 result 还没有 applied"
+            saw_done = True
+            break
+        if snap["status"] in {"error", "cancelled"}:
+            pytest.fail(f"任务异常结束：{snap}")
+        time.sleep(0.005)
+    assert saw_done, "10 秒内没有看到终态"

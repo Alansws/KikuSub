@@ -348,11 +348,11 @@ class JobManager:
                 on_progress=on_progress,
                 cancel_event=job.token,
             )
-            job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.stage = "成片已导出"
             job.result = result
+            job.status = "done"
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info(
@@ -524,7 +524,6 @@ class JobManager:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             write_text_atomic(out_path, ai_proposal.dump_proposal(proposal))
 
-            job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.stage = "提案已生成"
@@ -542,6 +541,7 @@ class JobManager:
             if kind == "translate":
                 job.result["dst_lang"] = str(proposal.get("dst_lang") or "")
                 job.result["glossary"] = len(proposal.get("glossary") or [])
+            job.status = "done"
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info(
@@ -692,7 +692,6 @@ class JobManager:
             if monitor is not None:
                 monitor.join(timeout=2)
             size = size_fn()
-            job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.stage = f"{label}下载完成"
@@ -702,6 +701,7 @@ class JobManager:
                 "size_bytes": size,
                 "model_dir": str(directory),
             }
+            job.status = "done"
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info(
@@ -803,7 +803,6 @@ class JobManager:
                         progress_cb=on_window,
                         cancel_event=job.token,
                     )
-            job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.stage = f"{name} 复核完成"
@@ -816,6 +815,7 @@ class JobManager:
                 "separate": bool(separate_vocals),
                 "texts": texts,
             }
+            job.status = "done"
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info("复核完成 | job=%s | engine=%s | 条数=%s", job.id, engine_key, len(texts))
@@ -911,11 +911,11 @@ class JobManager:
                 cancel_event=job.token,
                 output_dir=self._output_dir,
             )
-            job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.stage = "代理已就绪"
             job.result = {"proxy": result.to_dict(), "media_id": media_id}
+            job.status = "done"
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             log.info("代理任务完成 | job=%s | %s", job.id, result.path.name)
@@ -970,7 +970,6 @@ class JobManager:
                     cancel_event=job.token,
                     output_dir=out_dir,
                 )
-            job.status = "done"
             job.ratio = 1.0
             job.percent = 100
             job.result = result.to_dict()
@@ -983,6 +982,11 @@ class JobManager:
                     job.result.update(self._apply_alt_review(session, request, result.cues, job))
                 else:
                     job.result.update(self._apply_cues(session, request, result.cues, apply, job))
+            # 终态必须在 result 填完之后才发布：轮询方看到 status=done 就会去读
+            # result，先置 done 会让它读到缺了 alt_review / cues 的中间态。
+            # 2026-11-26 CI 上 `test_alt_review_does_not_touch_primary` 偶发
+            # `KeyError: 'alt_review'` 就是这个竞态——本机快一档时窗口太小没撞上。
+            job.status = "done"
             job.finished_at = time.time()
             self._emit(job, {"type": "done", "job": job.snapshot()})
             # 空闲计时已由上面的 `hold` 退出时刷新，这里不再重复 touch。
